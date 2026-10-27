@@ -1,0 +1,6 @@
+{
+  "kind": "store_error",
+  "code": "STORE_SNAPSHOT_NOT_FOUND",
+  "message": "Snapshot 99 does not exist in the lake.",
+  "details": [{ "name": "snapshot", "value": "99" }]
+}

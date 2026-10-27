@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.invalid/store/v1/schema.json",
+  "title": "StoreMessage",
+  "description": "Messages of the store contract: where the lake is, statements and reads with bound parameters, snapshots, commit results and errors. Read results are Arrow record-batch streams (see README).",
+  "oneOf": [
+    { "$ref": "#/$defs/LakeLocation" },
+    { "$ref": "#/$defs/StatementRequest" },
+    { "$ref": "#/$defs/ReadRequest" },
+    { "$ref": "#/$defs/Snapshot" },
+    { "$ref": "#/$defs/CommitResult" },
+    { "$ref": "#/$defs/StoreError" }
+  ],
+  "$defs": {
+    "LakeLocation": {
+      "description": "A DuckLake lake with a local DuckDB-file catalog at <path>/catalog.ducklake and data files under <path>/data/.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "catalog", "path"],
+      "properties": {
+        "kind": { "const": "lake_location" },
+        "catalog": { "const": "local" },
+        "path": { "type": "string", "minLength": 1 }
+      }
+    },
+    "Parameter": {
+      "description": "A named parameter bound to `$name` in the SQL. The value is text converted to the declared DuckDB type; exact values are never JSON numbers.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "value"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+        "type": { "$ref": "#/$defs/ParameterType" },
+        "value": { "type": ["string", "null"] }
+      }
+    },
+    "ParameterType": {
+      "description": "DuckDB type of a parameter.",
+      "type": "string",
+      "pattern": "^(BOOLEAN|TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|UHUGEINT|DOUBLE|VARCHAR|DATE|TIMESTAMP|TIMESTAMPTZ|DECIMAL\\(([1-9]|[12][0-9]|3[0-8]),([0-9]|[12][0-9]|3[0-8])\\))$"
+    },
+    "StatementRequest": {
+      "description": "One SQL statement executed in a write transaction.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "sql", "parameters"],
+      "properties": {
+        "kind": { "const": "statement" },
+        "sql": { "type": "string", "minLength": 1 },
+        "parameters": { "type": "array", "items": { "$ref": "#/$defs/Parameter" } }
+      }
+    },
+    "ReadRequest": {
+      "description": "One SELECT statement read once, as of a snapshot, as an Arrow record-batch stream.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "sql", "parameters", "snapshot", "batch_size"],
+      "properties": {
+        "kind": { "const": "read" },
+        "sql": { "type": "string", "minLength": 1 },
+        "parameters": { "type": "array", "items": { "$ref": "#/$defs/Parameter" } },
+        "snapshot": { "type": "integer", "minimum": 0 },
+        "batch_size": { "type": "integer", "minimum": 1, "maximum": 1048576 }
+      }
+    },
+    "Snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "committed_at"],
+      "properties": {
+        "kind": { "const": "snapshot" },
+        "id": { "type": "integer", "minimum": 0 },
+        "committed_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "CommitResult": {
+      "description": "The snapshot a committed transaction created, or null when it changed nothing.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "snapshot"],
+      "properties": {
+        "kind": { "const": "commit_result" },
+        "snapshot": { "oneOf": [{ "$ref": "#/$defs/Snapshot" }, { "type": "null" }] }
+      }
+    },
+    "ErrorCode": {
+      "type": "string",
+      "enum": [
+        "STORE_SNAPSHOT_NOT_FOUND",
+        "STORE_STATEMENT_INVALID",
+        "STORE_QUERY_FAILED",
+        "STORE_PARAMETER_INVALID",
+        "STORE_LIMITS_REQUIRED",
+        "STORE_EXTENSION_UNAVAILABLE"
+      ]
+    },
+    "ErrorDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "value": { "type": "string" }
+      }
+    },
+    "StoreError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "message", "details"],
+      "properties": {
+        "kind": { "const": "store_error" },
+        "code": { "$ref": "#/$defs/ErrorCode" },
+        "message": { "type": "string", "minLength": 1 },
+        "details": { "type": "array", "items": { "$ref": "#/$defs/ErrorDetail" } }
+      }
+    }
+  }
+}

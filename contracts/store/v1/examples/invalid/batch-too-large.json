@@ -1,0 +1,1 @@
+{ "kind": "read", "sql": "SELECT 1", "parameters": [], "snapshot": 1, "batch_size": 2000000 }

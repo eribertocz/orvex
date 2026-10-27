@@ -5,13 +5,14 @@
 # Runtime dependencies of the workspace packages, pinned exactly; each package declares the same
 # pins (tests/workspace/test_lock_files.py checks both). Locked together with `dev`.
 runtime = [
+  "duckdb==2.0.0",
   "fastapi==0.162.0",
+  "pyarrow==26.0.0",
   "pydantic==2.14.1",
   "uvicorn==0.54.0",
 ]
 dev = [
   "datamodel-code-generator==0.86.0",
-  "duckdb==2.0.0",
   "httpx2==2.16.0",
   "hypothesis==6.170.12",
   "jsonschema==4.26.0",
@@ -77,3 +78,8 @@ pythonpath = ["."]
 testpaths = ["packages", "tests"]
 xfail_strict = true
 filterwarnings = ["error"]
+
+# pyarrow ships no type information (no py.typed); its values are typed as Any at the boundary.
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true

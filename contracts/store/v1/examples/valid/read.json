@@ -1,0 +1,7 @@
+{
+  "kind": "read",
+  "sql": "SELECT consumer_id, sum(kwh) AS kwh FROM staging.readings WHERE period >= $from GROUP BY ALL",
+  "parameters": [{ "name": "from", "type": "DATE", "value": "2026-01-01" }],
+  "snapshot": 12,
+  "batch_size": 65536
+}

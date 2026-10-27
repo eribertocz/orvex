@@ -13,3 +13,8 @@ reason = "SQLite project registry (module state, not analytical data): one row p
 file = "packages/server/src/orvex/server/instance.py"
 call = "fetchall"
 reason = "SQLite project registry (module state, not analytical data): the list of registered projects"
+
+[[allow]]
+file = "packages/store/src/orvex/store/lake.py"
+call = "fetchone"
+reason = "Lake metadata and SQL rewriting: one snapshot row or one serialized statement, never data rows"

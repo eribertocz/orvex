@@ -1,0 +1,5 @@
+{
+  "kind": "statement",
+  "sql": "DELETE FROM t WHERE amount = $a",
+  "parameters": [{ "name": "a", "type": "DECIMAL(39,2)", "value": "1.00" }]
+}
