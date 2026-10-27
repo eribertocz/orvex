@@ -180,48 +180,53 @@ class Lake:
         catalog = (folder / "catalog.ducklake").as_posix()
         data = (folder / "data").as_posix() + "/"
         # Paths come from the project configuration, not from query input; quoted as literals.
-        self._connection.execute(
+        self._connection.sql(
             f"ATTACH {_quote('ducklake:' + catalog)} AS {LAKE} (DATA_PATH {_quote(data)})"
         )
-        self._connection.execute(f"USE {LAKE}")
+        self._connection.sql(f"USE {LAKE}")
 
     def close(self) -> None:
         self._connection.close()
 
     def _cursor(self) -> duckdb.DuckDBPyConnection:
         cursor = self._connection.cursor()
-        cursor.execute(f"USE {LAKE}")
+        cursor.sql(f"USE {LAKE}")
         return cursor
 
-    def _snapshot(
-        self, cursor: duckdb.DuckDBPyConnection, snapshot_id: int | None
-    ) -> Snapshot | None:
+    def _one(self, sql: str, parameters: dict[str, object]) -> tuple[object, ...] | None:
+        """One metadata row on a short-lived cursor, so no unfinished result is left behind."""
+        cursor = self._cursor()
+        try:
+            row: tuple[object, ...] | None = cursor.execute(sql, parameters).fetchone()
+        finally:
+            cursor.close()
+        return row
+
+    def _snapshot(self, snapshot_id: int | None) -> Snapshot | None:
         where = "" if snapshot_id is None else "WHERE snapshot_id = $id"
         parameters = {} if snapshot_id is None else {"id": snapshot_id}
-        row = cursor.execute(
+        row = self._one(
             "SELECT snapshot_id, epoch_us(snapshot_time) FROM ducklake_snapshots($lake) "
             f"{where} ORDER BY snapshot_id DESC LIMIT 1",
             {"lake": LAKE, **parameters},
-        ).fetchone()
+        )
         if row is None:
             return None
         # Microseconds since the epoch, so no time-zone library is needed to read the instant.
-        committed = dt.datetime(1970, 1, 1, tzinfo=dt.UTC) + dt.timedelta(microseconds=int(row[1]))
-        return Snapshot(kind="snapshot", id=int(row[0]), committed_at=committed)
+        committed = dt.datetime(1970, 1, 1, tzinfo=dt.UTC) + dt.timedelta(
+            microseconds=int(str(row[1]))
+        )
+        return Snapshot(kind="snapshot", id=int(str(row[0])), committed_at=committed)
 
     def current_snapshot(self) -> Snapshot:
-        cursor = self._cursor()
-        try:
-            snapshot = self._snapshot(cursor, None)
-        finally:
-            cursor.close()
+        snapshot = self._snapshot(None)
         if snapshot is None:
             raise StoreError("STORE_SNAPSHOT_NOT_FOUND", "The lake has no snapshot.", {})
         return snapshot
 
-    def _pinned(self, cursor: duckdb.DuckDBPyConnection, sql: str, snapshot: int) -> str:
+    def _pinned(self, sql: str, snapshot: int) -> str:
         """The same SELECT with `AT (VERSION => snapshot)` on every lake table it references."""
-        serialized = cursor.execute("SELECT json_serialize_sql($sql)", {"sql": sql}).fetchone()
+        serialized = self._one("SELECT json_serialize_sql($sql)", {"sql": sql})
         tree = json.loads(serialized[0]) if serialized else {"error": True}
         if tree.get("error"):
             raise StoreError(
@@ -255,9 +260,7 @@ class Lake:
                     "literal": {"kind": "INTEGER", "text": str(int(snapshot))},
                 },
             }
-        rewritten = cursor.execute(
-            "SELECT json_deserialize_sql($tree)", {"tree": json.dumps(tree)}
-        ).fetchone()
+        rewritten = self._one("SELECT json_deserialize_sql($tree)", {"tree": json.dumps(tree)})
         return str(rewritten[0]) if rewritten else sql
 
     def read(self, request: ReadRequest) -> pa.RecordBatchReader:
@@ -270,25 +273,21 @@ class Lake:
                 {"statement": statement.type.name},
             )
         parameters = _bound(statement, request.parameters)
-        cursor = self._cursor()
-        if self._snapshot(cursor, request.snapshot) is None:
-            cursor.close()
+        if self._snapshot(request.snapshot) is None:
             raise StoreError(
                 "STORE_SNAPSHOT_NOT_FOUND",
                 f"Snapshot {request.snapshot} does not exist in the lake.",
                 {"snapshot": str(request.snapshot)},
             )
+        sql = self._pinned(request.sql, request.snapshot)
+        cursor = self._cursor()
         try:
-            sql = self._pinned(cursor, request.sql, request.snapshot)
             source = cursor.sql(sql, params=parameters).to_arrow_reader(request.batch_size)
         except duckdb.Error as error:
             cursor.close()
             raise StoreError(
                 "STORE_QUERY_FAILED", "DuckDB could not run the read.", {"duckdb": str(error)}
             ) from error
-        except StoreError:
-            cursor.close()
-            raise
 
         def batches() -> Iterator[pa.RecordBatch]:
             # The cursor lives as long as the stream; it is closed when the stream ends.
@@ -303,7 +302,7 @@ class Lake:
     def transaction(self) -> Iterator[Transaction]:
         """Statements inside the block commit together to one snapshot, or roll back on error."""
         cursor = self._cursor()
-        before = self._snapshot(cursor, None)
+        before = self._snapshot(None)
         cursor.begin()
         handle = Transaction(cursor)
         try:
@@ -320,7 +319,7 @@ class Lake:
             raise StoreError(
                 "STORE_QUERY_FAILED", "The transaction could not commit.", {"duckdb": str(error)}
             ) from error
-        after = self._snapshot(cursor, None)
+        after = self._snapshot(None)
         cursor.close()
         changed = after is not None and (before is None or after.id != before.id)
         handle.result = CommitResult(kind="commit_result", snapshot=after if changed else None)
@@ -343,7 +342,7 @@ class Transaction:
             )
         parameters = _bound(statement, request.parameters)
         try:
-            self._cursor.execute(request.sql, parameters)
+            self._cursor.sql(request.sql, params=parameters)
         except duckdb.Error as error:
             raise StoreError(
                 "STORE_QUERY_FAILED", "DuckDB could not run the statement.", {"duckdb": str(error)}

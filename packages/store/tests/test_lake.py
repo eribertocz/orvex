@@ -147,7 +147,7 @@ def test_exact_types_reach_arrow(lake: Lake) -> None:
 
 
 def test_read_runs_the_statement_once(lake: Lake) -> None:
-    lake._connection.execute("CREATE SEQUENCE memory.main.counter")
+    lake._connection.sql("CREATE SEQUENCE memory.main.counter")
     table = read(
         lake, "SELECT nextval('memory.main.counter') AS v FROM range(10000)", batch_size=1000
     )
