@@ -21,6 +21,9 @@
     },
     {
       "$ref": "#/$defs/StoreError"
+    },
+    {
+      "$ref": "#/$defs/ResultJson"
     }
   ],
   "$defs": {
@@ -173,7 +176,8 @@
         "STORE_TRANSACTION_CONFLICT",
         "STORE_SECRET_MISSING",
         "STORE_SECRET_INLINE",
-        "STORE_CATALOG_UNAVAILABLE"
+        "STORE_CATALOG_UNAVAILABLE",
+        "STORE_TYPE_UNSUPPORTED"
       ]
     },
     "ErrorDetail": {
@@ -291,6 +295,59 @@
           "$ref": "#/$defs/PostgresLakeLocation"
         }
       ]
+    },
+    "ResultColumn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "DuckDB type name, e.g. DECIMAL(18,4) or TIMESTAMP WITH TIME ZONE"
+        }
+      }
+    },
+    "ResultJson": {
+      "description": "A read result encoded as JSON without losing exactness (README: encoding rules). Rows are positional arrays matching columns.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "columns",
+        "rows"
+      ],
+      "properties": {
+        "kind": {
+          "const": "result_json"
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResultColumn"
+          }
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        }
+      }
     }
   }
 }

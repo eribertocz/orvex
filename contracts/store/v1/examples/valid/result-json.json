@@ -1,0 +1,14 @@
+{
+  "kind": "result_json",
+  "columns": [
+    { "name": "consumer_id", "type": "VARCHAR" },
+    { "name": "kwh", "type": "DECIMAL(12,3)" },
+    { "name": "readings", "type": "BIGINT" },
+    { "name": "last_read_at", "type": "TIMESTAMP WITH TIME ZONE" },
+    { "name": "estimated", "type": "BOOLEAN" }
+  ],
+  "rows": [
+    ["C0000001", "1520.500", "24", "2026-09-30T12:30:00.000000Z", false],
+    ["C0000002", null, "0", null, null]
+  ]
+}

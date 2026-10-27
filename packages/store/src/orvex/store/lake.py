@@ -576,14 +576,20 @@ class Lake:
         sql = self._pinned(_typed(request.sql, request.parameters), request.snapshot)
         cursor = self._cursor()
         try:
-            source = cursor.sql(sql, params=parameters).to_arrow_reader(request.batch_size)
+            relation = cursor.sql(sql, params=parameters)
+            names = list(relation.columns)
+            types = [str(kind) for kind in relation.types]
+            exact = exact_select(sql, names, types)
+            if exact is not None:
+                relation = cursor.sql(exact, params=parameters)
+            source = relation.to_arrow_reader(request.batch_size)
         except duckdb.Error as error:
             cursor.close()
             raise StoreError(
                 "STORE_QUERY_FAILED", "DuckDB could not run the read.", {"duckdb": str(error)}
             ) from error
 
-        schema = _utc_schema(source.schema)
+        schema = _with_duckdb_types(_utc_schema(source.schema), types)
 
         def batches() -> Iterator[pa.RecordBatch]:
             # The cursor lives as long as the stream; it is closed when the stream ends.
@@ -803,6 +809,39 @@ def _is_lake_table(
             return (parts[0], parts[1]) in tables
         return parts[0] == LAKE and ("main", parts[1]) in tables
     return len(parts) == 3 and parts[0] == LAKE and (parts[1], parts[2]) in tables
+
+
+def exact_select(sql: str, names: list[str], types: list[str]) -> str | None:
+    """`sql` with every UHUGEINT column cast to decimal text, or None when there is none.
+
+    Arrow has no exact 128-bit unsigned type: DuckDB would wrap large values into
+    decimal128(38,0) (the maximum becomes -1). Columns are addressed by position (`#n`), so
+    duplicate names are kept as they are and nothing else changes.
+    """
+    if "UHUGEINT" not in types:
+        return None
+    columns = ", ".join(
+        (f"CAST(#{index} AS VARCHAR)" if kind == "UHUGEINT" else f"#{index}")
+        + f" AS {_identifier(name)}"
+        for index, (name, kind) in enumerate(zip(names, types, strict=True), start=1)
+    )
+    return f"SELECT {columns} FROM ({sql})"
+
+
+def _identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _with_duckdb_types(schema: pa.Schema, types: list[str]) -> pa.Schema:
+    """Record each column's DuckDB type in its field metadata (`duckdb_type`).
+
+    Arrow alone cannot tell `HUGEINT` from `DECIMAL(38,0)`; consumers (P1-03) need the type.
+    """
+    fields = [
+        field.with_metadata({**(field.metadata or {}), b"duckdb_type": kind.encode()})
+        for field, kind in zip(schema, types, strict=True)
+    ]
+    return pa.schema(fields, metadata=schema.metadata)
 
 
 def _utc_schema(schema: pa.Schema) -> pa.Schema:

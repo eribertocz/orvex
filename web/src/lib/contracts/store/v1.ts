@@ -3,7 +3,7 @@
  * Messages of the store contract: where the lake is, statements and reads with bound parameters, snapshots, commit results and errors. Read results are Arrow record-batch streams (see README).
  */
 export type StoreMessage =
-	LakeLocation | StatementRequest | ReadRequest | Snapshot | CommitResult | StoreError;
+	LakeLocation | StatementRequest | ReadRequest | Snapshot | CommitResult | StoreError | ResultJson;
 /**
  * Where the lake is.
  */
@@ -22,7 +22,8 @@ export type ErrorCode =
 	| 'STORE_TRANSACTION_CONFLICT'
 	| 'STORE_SECRET_MISSING'
 	| 'STORE_SECRET_INLINE'
-	| 'STORE_CATALOG_UNAVAILABLE';
+	| 'STORE_CATALOG_UNAVAILABLE'
+	| 'STORE_TYPE_UNSUPPORTED';
 
 /**
  * A DuckLake lake with a local DuckDB-file catalog at <path>/catalog.ducklake and data files under <path>/data/ (one process).
@@ -96,4 +97,19 @@ export interface StoreError {
 export interface ErrorDetail {
 	name: string;
 	value: string;
+}
+/**
+ * A read result encoded as JSON without losing exactness (README: encoding rules). Rows are positional arrays matching columns.
+ */
+export interface ResultJson {
+	kind: 'result_json';
+	columns: ResultColumn[];
+	rows: (string | number | boolean | null)[][];
+}
+export interface ResultColumn {
+	name: string;
+	/**
+	 * DuckDB type name, e.g. DECIMAL(18,4) or TIMESTAMP WITH TIME ZONE
+	 */
+	type: string;
 }

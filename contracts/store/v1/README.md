@@ -15,6 +15,7 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 | `Snapshot` | A lake snapshot: `id` and `committed_at` (with offset) |
 | `CommitResult` | The one snapshot a committed transaction created, or `null` when it changed nothing |
 | `StoreError` | `code`, `message`, `details` |
+| `ResultJson` | A read result as JSON: `columns` (`name`, DuckDB `type`) and positional `rows`, encoded exactly (below) |
 
 ## PostgreSQL catalog (`PostgresLakeLocation`)
 
@@ -34,8 +35,32 @@ A read returns an Arrow record-batch stream. Arrow types follow DuckDB types exa
 | `BIGINT` | `int64` |
 | `TIMESTAMPTZ` | `timestamp[us, tz=UTC]` |
 | `NULL` (any type) | Arrow null |
+| `UHUGEINT` | `utf8` (decimal text; Arrow has no exact unsigned 128-bit type) |
 
-No value passes through a floating-point type unless its DuckDB type is `FLOAT` or `DOUBLE`. The JSON encoding of results is defined by P1-03.
+Each Arrow field carries its DuckDB type in the field metadata key `duckdb_type`.
+
+No value passes through a floating-point type unless its DuckDB type is `FLOAT` or `DOUBLE`.
+
+## JSON encoding (`ResultJson`)
+
+Every JSON response that carries data (HTTP API, MCP, exports) uses this encoding.
+
+| DuckDB type | JSON |
+|---|---|
+| `BOOLEAN` | `true` / `false` |
+| `TINYINT`, `SMALLINT`, `INTEGER`, `UTINYINT`, `USMALLINT`, `UINTEGER` | number |
+| `BIGINT`, `UBIGINT`, `HUGEINT`, `UHUGEINT` | string of digits, optional leading `-` |
+| `DECIMAL(p,s)` | string in plain notation with exactly `s` fraction digits (`"12.50"`, `"0.0000001000"`); negative zero is `"0.00"` |
+| `FLOAT`, `DOUBLE` | number (for `FLOAT`, the shortest decimal that reads back as the same 32-bit value); `"NaN"`, `"Infinity"`, `"-Infinity"` as strings |
+| `VARCHAR`, `UUID` | string |
+| `DATE` | `YYYY-MM-DD`; years outside 1–9999 use astronomical numbering with a sign and more digits (`-0044-03-15`, `29349-01-26`); `"infinity"` / `"-infinity"` |
+| `TIMESTAMP` | `YYYY-MM-DDTHH:MM:SS.ffffff` (no offset); same year rules; `"infinity"` / `"-infinity"` |
+| `TIMESTAMP WITH TIME ZONE` | `YYYY-MM-DDTHH:MM:SS.ffffffZ` (UTC); same year rules; `"infinity"` / `"-infinity"` |
+| `INTERVAL` | ISO 8601 duration `P<months>M<days>DT<seconds>S` (each part may be negative) |
+| `BLOB` | base64 |
+| any, `NULL` | `null` |
+
+Other types (lists, structs, maps, unions, `TIME`, geometry, …) are refused with `STORE_TYPE_UNSUPPORTED` before any row is produced.
 
 ## Guarantees
 
@@ -56,6 +81,7 @@ No value passes through a floating-point type unless its DuckDB type is `FLOAT` 
 | `STORE_TRANSACTION_CONFLICT` | Another writer committed a conflicting change first; nothing of this transaction was written |
 | `STORE_SECRET_MISSING` | The environment variable named in `password_env` is not set (the variable is named, never a value) |
 | `STORE_SECRET_INLINE` | The PostgreSQL `connection` contains a password or is a URI |
+| `STORE_TYPE_UNSUPPORTED` | A result column has a type with no JSON encoding yet |
 | `STORE_CATALOG_UNAVAILABLE` | The PostgreSQL catalog cannot be reached or refused the credentials |
 
 ## Compatibility

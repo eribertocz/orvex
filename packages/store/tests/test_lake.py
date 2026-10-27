@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import decimal
+import json
 import threading
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pyarrow as pa
 import pytest
 from orvex.contracts.store.v1 import LocalLakeLocation, Parameter, ReadRequest, StatementRequest
 from orvex.store.errors import StoreError
+from orvex.store.json_encoding import arrow_to_json
 from orvex.store.lake import Lake, Limits, open_lake
 
 LIMITS = Limits(memory_limit="1GB", threads=2)
@@ -478,3 +480,33 @@ def test_files_outside_the_lake_cannot_be_read_by_writes(
     sql = f"CREATE TABLE e AS SELECT * FROM '{outside.as_posix()}'"
     assert code_of(lambda: write(lake, statement(sql))) == "STORE_QUERY_FAILED"
     assert lake.current_snapshot().id == before
+
+
+def test_lake_results_encode_exactly_to_json(lake: Lake) -> None:
+    write(
+        lake,
+        statement(
+            "CREATE TABLE j AS SELECT 340282366920938463463374607431768211455::UHUGEINT AS u, "
+            "170141183460469231731687303715884105727::HUGEINT AS h, 12.50::DECIMAL(12,2) AS d"
+        ),
+    )
+    request = ReadRequest(
+        kind="read",
+        sql="SELECT u, h, d FROM j",
+        parameters=[],
+        snapshot=lake.current_snapshot().id,
+        batch_size=16,
+    )
+    document = json.loads("".join(arrow_to_json(lake.read(request))))
+    assert document["columns"] == [
+        {"name": "u", "type": "UHUGEINT"},
+        {"name": "h", "type": "HUGEINT"},
+        {"name": "d", "type": "DECIMAL(12,2)"},
+    ]
+    assert document["rows"] == [
+        [
+            "340282366920938463463374607431768211455",
+            "170141183460469231731687303715884105727",
+            "12.50",
+        ]
+    ]
