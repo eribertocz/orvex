@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orvex-transform"
-version = "0.0.0"
+version = "0.1.0"
 description = "Turn sources into tested tables: SQL models, incremental loads, write-audit-publish."
 readme = "README.md"
 license = "Apache-2.0"
