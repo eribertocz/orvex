@@ -95,7 +95,10 @@ def changed_paths(client: GitHubReader, pull_number: int) -> list[str]:
         files = list(client.paginate(f"/pulls/{pull_number}/files"))
     except GitHubApiError as error:
         raise GovernanceError("CHANGED_FILES_UNAVAILABLE", str(error)) from error
-    expected = int(pull["changed_files"])
+    try:
+        expected = int(pull["changed_files"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise GovernanceError("CHANGED_FILES_UNAVAILABLE", "no changed-file count") from error
     if expected > MAX_LISTED_FILES or len(files) != expected:
         raise GovernanceError(
             "CHANGED_FILES_UNAVAILABLE",
@@ -116,12 +119,19 @@ def current_labels(client: GitHubReader, pull_number: int) -> list[str]:
         raise GovernanceError("LABELS_UNAVAILABLE", str(error)) from error
 
 
+def read_rules_document(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise GovernanceError("GOVERNED_PATHS_NOT_FOUND", f"cannot read {path}: {error}") from error
+
+
 def main() -> int:
     rules_document = Path(os.environ["GOVERNANCE_DOCUMENT"])
     client = GitHubClient(os.environ["GITHUB_TOKEN"], os.environ["GITHUB_REPOSITORY"])
     pull_number = int(os.environ["PULL_NUMBER"])
     try:
-        governed = parse_governed_paths(rules_document.read_text(encoding="utf-8"))
+        governed = parse_governed_paths(read_rules_document(rules_document))
         blocking = evaluate(
             changed_paths(client, pull_number), current_labels(client, pull_number), governed
         )

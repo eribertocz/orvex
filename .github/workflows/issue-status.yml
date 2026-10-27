@@ -4,17 +4,18 @@ name: issue-status
 on:
   create:
   pull_request:
-    types: [opened, reopened, ready_for_review]
+    types: [opened, ready_for_review]
   issues:
     types: [closed]
 
 permissions:
   contents: read
   issues: write
-  pull-requests: read
 
 jobs:
   status:
+    # Dependabot and fork pull requests get a read-only token and quote unrelated issue numbers.
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

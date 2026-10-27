@@ -17,6 +17,9 @@ _LABEL_LINE = re.compile(
 )
 
 
+REQUIRED_LABEL = "owner-merge"
+
+
 class LabelFileError(Exception):
     pass
 
@@ -46,6 +49,10 @@ def parse_label_file(text: str) -> list[Label]:
         if match is None:
             raise LabelFileError(f"line {number} is not a label definition: {raw!r}")
         labels.append(Label(match["name"], match["color"].lower(), match["description"]))
+    if not labels:
+        raise LabelFileError("the label file defines no labels; refusing to delete every label")
+    if REQUIRED_LABEL not in {label.name for label in labels}:
+        raise LabelFileError(f"'{REQUIRED_LABEL}' is missing; the governance check depends on it")
     names = [label.name for label in labels]
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:

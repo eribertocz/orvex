@@ -10,6 +10,7 @@ from governance import (
     changed_paths,
     evaluate,
     parse_governed_paths,
+    read_rules_document,
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -50,6 +51,11 @@ class ParseTests(unittest.TestCase):
     def test_empty_block_fails_closed(self) -> None:
         with self.assertRaises(GovernanceError) as context:
             parse_governed_paths("### Governed paths\n```\n\n!docs/user/\n```\n")
+        self.assertEqual(context.exception.code, "GOVERNED_PATHS_NOT_FOUND")
+
+    def test_unreadable_document_fails_closed(self) -> None:
+        with self.assertRaises(GovernanceError) as context:
+            read_rules_document(REPOSITORY_ROOT / "does-not-exist.md")
         self.assertEqual(context.exception.code, "GOVERNED_PATHS_NOT_FOUND")
 
     def test_repository_document_is_parsable(self) -> None:

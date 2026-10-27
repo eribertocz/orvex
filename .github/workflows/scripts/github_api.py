@@ -31,14 +31,14 @@ class GitHubClient:
     def request(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
         url = path if path.startswith("https://") else f"{API_ROOT}/repos/{self.repository}{path}"
         response_body, _ = self._send(method, url, body)
-        return json.loads(response_body) if response_body else None
+        return _decode(response_body, url) if response_body else None
 
     def paginate(self, path: str) -> Iterator[Any]:
         separator = "&" if "?" in path else "?"
         url: str | None = f"{API_ROOT}/repos/{self.repository}{path}{separator}per_page=100"
         while url is not None:
             response_body, link_header = self._send("GET", url, None)
-            yield from json.loads(response_body)
+            yield from _decode(response_body, url)
             match = _NEXT_LINK.search(link_header)
             url = match.group(1) if match else None
 
@@ -55,5 +55,12 @@ class GitHubClient:
                 return response.read().decode(), response.headers.get("Link", "")
         except urllib.error.HTTPError as error:
             raise GitHubApiError(f"{method} {url} failed with HTTP {error.code}") from error
-        except urllib.error.URLError as error:
-            raise GitHubApiError(f"{method} {url} failed: {error.reason}") from error
+        except (urllib.error.URLError, OSError) as error:
+            raise GitHubApiError(f"{method} {url} failed: {error}") from error
+
+
+def _decode(body: str, url: str) -> Any:
+    try:
+        return json.loads(body)
+    except ValueError as error:
+        raise GitHubApiError(f"{url} returned invalid JSON") from error
