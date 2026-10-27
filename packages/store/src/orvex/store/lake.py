@@ -18,6 +18,7 @@ import shutil
 import tempfile
 import threading
 import time
+import weakref
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -814,6 +815,9 @@ class Lake:
                 finish()
 
         reader = pa.RecordBatchReader.from_batches(schema, batches())
+        # A stream dropped before its first batch never runs its generator, so its slot is
+        # released when the reader is collected (a started stream releases it when closed).
+        weakref.finalize(reader, release_if_idle)
         return ReadHandle(reader=reader, _guard=guard)
 
     @contextmanager
@@ -829,14 +833,20 @@ class Lake:
                 "A transaction cannot be opened inside another one in the same thread.",
                 {},
             )
-        self._admission.acquire(time.monotonic() + self._timeout_ms(None) / 1000)
+        deadline = time.monotonic() + self._timeout_ms(None) / 1000
+        self._admission.acquire(deadline)
         try:
-            yield from self._transaction()
+            yield from self._transaction(deadline)
         finally:
             self._admission.release()
 
-    def _transaction(self) -> Iterator[Transaction]:
-        with self._write_lock:
+    def _transaction(self, deadline: float) -> Iterator[Transaction]:
+        # Waiting for the writer ahead counts against the same time limit as the admission queue.
+        if not self._write_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise StoreError(
+                "STORE_TIMEOUT", "The transaction waited too long for the writer ahead.", {}
+            )
+        try:
             self._local.writing = True
             try:
                 cursor = self._cursor()
@@ -888,6 +898,8 @@ class Lake:
                 self._local.writing = False
             changed = after is not None and (before is None or after.id != before.id)
             handle.result = CommitResult(kind="commit_result", snapshot=after if changed else None)
+        finally:
+            self._write_lock.release()
 
 
 def _unpinnable_objects(cursor: duckdb.DuckDBPyConnection) -> int:
@@ -971,13 +983,15 @@ class Transaction:
         self._table_functions = table_functions
         self._timeout_ms = timeout_ms
         self._guard: Guard | None = None
+        self._lock = threading.Lock()
         self.cancelled = False
         self.result: CommitResult | None = None
 
     def cancel(self) -> None:
         """Cancel from any thread: a running statement is interrupted, and the block rolls back."""
-        self.cancelled = True
-        guard = self._guard
+        with self._lock:
+            self.cancelled = True
+            guard = self._guard
         if guard is not None:
             guard.cancel()
 
@@ -992,11 +1006,14 @@ class Transaction:
                 {"statement": statement.type.name},
             )
         parameters = _bound(statement, request.parameters)
-        if self.cancelled:
-            raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
         deadline = time.monotonic() + self._timeout_ms(request.timeout_ms) / 1000
         guard = Guard(self._cursor, deadline)
-        self._guard = guard
+        # Checked and published together, so a cancel either sees this guard or is seen here.
+        with self._lock:
+            if self.cancelled:
+                guard.stop()
+                raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
+            self._guard = guard
         try:
             self._cursor.sql(_typed(request.sql, request.parameters), params=parameters)
         except duckdb.Error as error:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import threading
 import time
 from collections.abc import Iterator
@@ -13,6 +14,7 @@ from orvex.contracts.store.v1 import (
     ReadRequest,
     StatementRequest,
 )
+from orvex.store import lake as lake_module
 from orvex.store.errors import StoreError
 from orvex.store.lake import Admission, Lake, Limits, open_lake
 
@@ -217,4 +219,66 @@ def test_concurrent_mixed_load(location: LocalLakeLocation | PostgresLakeLocatio
         assert len(snapshots) == 25
         assert len(set(snapshots)) == 25
     finally:
+        lake.close()
+
+
+def test_dropped_unread_reads_free_their_slots(lake: Lake) -> None:
+    first = lake.start_read(request(SLOW, lake))
+    second = lake.start_read(request(SLOW, lake))
+    del first, second
+    gc.collect()
+    started = time.monotonic()
+    assert lake.read(request("SELECT 1 AS x", lake, 2000)).read_all().to_pylist() == [{"x": 1}]
+    assert time.monotonic() - started < 1.0
+
+
+def test_cancel_at_the_start_of_a_statement_is_not_lost(
+    lake: Lake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = lake_module.Guard.__init__
+
+    def slow_start(self: lake_module.Guard, *args: object) -> None:
+        original(self, *args)  # type: ignore[arg-type]
+        time.sleep(0.3)  # the cancel arrives while the statement is being set up
+
+    def cancelled() -> None:
+        with lake.transaction() as transaction:
+            monkeypatch.setattr(lake_module.Guard, "__init__", slow_start)
+            threading.Timer(0.1, transaction.cancel).start()
+            transaction.execute(
+                StatementRequest(kind="statement", sql=f"CREATE TABLE e AS {SLOW}", parameters=[])
+            )
+
+    started = time.monotonic()
+    assert code_of(cancelled) == "STORE_CANCELLED"
+    assert time.monotonic() - started < 1.5
+
+
+def test_waiting_for_the_writer_ahead_counts_against_the_timeout(
+    location: LocalLakeLocation | PostgresLakeLocation,
+) -> None:
+    lake = open_lake(location, limits(max_concurrent=2, queue_size=1, timeout_ms=500))
+    holding = threading.Event()
+    release = threading.Event()
+
+    def writer() -> None:
+        with lake.transaction():
+            holding.set()
+            release.wait(5)
+
+    ahead = threading.Thread(target=writer)
+    ahead.start()
+    try:
+        assert holding.wait(5)
+        started = time.monotonic()
+
+        def second() -> None:
+            with lake.transaction():
+                pass
+
+        assert code_of(second) == "STORE_TIMEOUT"
+        assert time.monotonic() - started < 1.5
+    finally:
+        release.set()
+        ahead.join(5)
         lake.close()
