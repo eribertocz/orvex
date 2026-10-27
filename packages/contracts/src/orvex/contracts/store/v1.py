@@ -57,6 +57,8 @@ class ErrorCode(
             "STORE_BUSY",
             "SOURCE_NOT_FOUND",
             "STORE_SOURCE_INVALID",
+            "STORE_CONNECTION_FAILED",
+            "UNSUPPORTED_SOURCE_TYPE",
         ]
     ]
 ):
@@ -77,6 +79,8 @@ class ErrorCode(
         "STORE_BUSY",
         "SOURCE_NOT_FOUND",
         "STORE_SOURCE_INVALID",
+        "STORE_CONNECTION_FAILED",
+        "UNSUPPORTED_SOURCE_TYPE",
     ]
 
 
@@ -164,9 +168,9 @@ class ResultJson(BaseModel):
     rows: list[list[str | float | bool | None]]
 
 
-class SourceAttachment(BaseModel):
+class FileSourceAttachment(BaseModel):
     """
-    A file source the lake reads inside write transactions, by name: `<name>.data` for parquet and csv (every matching file as one table, columns united by name), `<name>.<schema>.<table>` (or `<name>.<table>` for `main`) for a DuckDB file attached read-only. Reads never see sources. Only the declared paths become readable.
+    A file source (Parquet, CSV, DuckDB) the lake reads inside write transactions, by name: `<name>.data` for parquet and csv (every matching file as one table, columns united by name), `<name>.<schema>.<table>` (or `<name>.<table>` for `main`) for a DuckDB file attached read-only. Reads never see sources. Only the declared paths become readable.
     """
 
     model_config = ConfigDict(
@@ -181,6 +185,59 @@ class SourceAttachment(BaseModel):
     path: Annotated[str, Field(max_length=4096, min_length=2, pattern="^(/|[A-Za-z]:[\\\\/])")]
     """
     Absolute path; parquet and csv may use a glob (`*`, `?`, `[...]`, `**`) in their file name or folders.
+    """
+
+
+class SqliteSourceAttachment(BaseModel):
+    """
+    A SQLite database file attached read-only: `<name>.<table>`. Columns declared DECIMAL or NUMERIC (stored by SQLite as floating point) are refused when a write reads them (`UNSUPPORTED_SOURCE_TYPE`).
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["source_attachment"]
+    name: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    """
+    The connection name; becomes a catalog name in SQL.
+    """
+    type: Literal["sqlite"]
+    path: Annotated[str, Field(max_length=4096, min_length=2, pattern="^(/|[A-Za-z]:[\\\\/])")]
+    """
+    Absolute path; parquet and csv may use a glob (`*`, `?`, `[...]`, `**`) in their file name or folders.
+    """
+
+
+class PostgresSourceAttachment(BaseModel):
+    """
+    A PostgreSQL database attached read-only (also `default_transaction_read_only` on its session): `<name>.<table>` when `schema` is given, otherwise `<name>.<schema>.<table>`. The password is read from the environment variable `password_env` and never appears in errors. Columns `numeric` without precision and `money` are refused when a write reads them (`UNSUPPORTED_SOURCE_TYPE`).
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["source_attachment"]
+    name: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    """
+    The connection name; becomes a catalog name in SQL.
+    """
+    type: Literal["postgres"]
+    host: Annotated[str, Field(max_length=253, min_length=1, pattern="^[A-Za-z0-9._:-]+$")]
+    port: Annotated[int, Field(ge=1, le=65535)]
+    database: Annotated[str, Field(max_length=128, min_length=1, pattern="^[^'\\\\\\s]+$")]
+    user: Annotated[str, Field(max_length=128, min_length=1, pattern="^[^'\\\\\\s]+$")]
+    password_env: Annotated[str, Field(pattern="^[A-Z_][A-Z0-9_]*$")]
+    schema_: Annotated[
+        str | None, Field(alias="schema", pattern="^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+    ] = None
+
+
+class SourceAttachment(
+    RootModel[FileSourceAttachment | SqliteSourceAttachment | PostgresSourceAttachment]
+):
+    root: FileSourceAttachment | SqliteSourceAttachment | PostgresSourceAttachment
+    """
+    A source the lake reads inside write transactions, by name; reads never see sources.
     """
 
 

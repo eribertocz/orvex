@@ -35,7 +35,14 @@ export type ErrorCode =
 	| 'STORE_CANCELLED'
 	| 'STORE_BUSY'
 	| 'SOURCE_NOT_FOUND'
-	| 'STORE_SOURCE_INVALID';
+	| 'STORE_SOURCE_INVALID'
+	| 'STORE_CONNECTION_FAILED'
+	| 'UNSUPPORTED_SOURCE_TYPE';
+/**
+ * A source the lake reads inside write transactions, by name; reads never see sources.
+ */
+export type SourceAttachment =
+	FileSourceAttachment | SqliteSourceAttachment | PostgresSourceAttachment;
 
 /**
  * A DuckLake lake with a local DuckDB-file catalog at <path>/catalog.ducklake and data files under <path>/data/ (one process).
@@ -134,9 +141,9 @@ export interface ResultColumn {
 	type: string;
 }
 /**
- * A file source the lake reads inside write transactions, by name: `<name>.data` for parquet and csv (every matching file as one table, columns united by name), `<name>.<schema>.<table>` (or `<name>.<table>` for `main`) for a DuckDB file attached read-only. Reads never see sources. Only the declared paths become readable.
+ * A file source (Parquet, CSV, DuckDB) the lake reads inside write transactions, by name: `<name>.data` for parquet and csv (every matching file as one table, columns united by name), `<name>.<schema>.<table>` (or `<name>.<table>` for `main`) for a DuckDB file attached read-only. Reads never see sources. Only the declared paths become readable.
  */
-export interface SourceAttachment {
+export interface FileSourceAttachment {
 	kind: 'source_attachment';
 	/**
 	 * The connection name; becomes a catalog name in SQL.
@@ -147,4 +154,36 @@ export interface SourceAttachment {
 	 * Absolute path; parquet and csv may use a glob (`*`, `?`, `[...]`, `**`) in their file name or folders.
 	 */
 	path: string;
+}
+/**
+ * A SQLite database file attached read-only: `<name>.<table>`. Columns declared DECIMAL or NUMERIC (stored by SQLite as floating point) are refused when a write reads them (`UNSUPPORTED_SOURCE_TYPE`).
+ */
+export interface SqliteSourceAttachment {
+	kind: 'source_attachment';
+	/**
+	 * The connection name; becomes a catalog name in SQL.
+	 */
+	name: string;
+	type: 'sqlite';
+	/**
+	 * Absolute path; parquet and csv may use a glob (`*`, `?`, `[...]`, `**`) in their file name or folders.
+	 */
+	path: string;
+}
+/**
+ * A PostgreSQL database attached read-only (also `default_transaction_read_only` on its session): `<name>.<table>` when `schema` is given, otherwise `<name>.<schema>.<table>`. The password is read from the environment variable `password_env` and never appears in errors. Columns `numeric` without precision and `money` are refused when a write reads them (`UNSUPPORTED_SOURCE_TYPE`).
+ */
+export interface PostgresSourceAttachment {
+	kind: 'source_attachment';
+	/**
+	 * The connection name; becomes a catalog name in SQL.
+	 */
+	name: string;
+	type: 'postgres';
+	host: string;
+	port: number;
+	database: string;
+	user: string;
+	password_env: string;
+	schema?: string;
 }

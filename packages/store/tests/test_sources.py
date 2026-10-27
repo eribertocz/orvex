@@ -11,10 +11,10 @@ from pathlib import Path
 import duckdb
 import pytest
 from orvex.contracts.store.v1 import (
+    FileSourceAttachment,
     LocalLakeLocation,
     PostgresLakeLocation,
     ReadRequest,
-    SourceAttachment,
     StatementRequest,
 )
 from orvex.store.errors import StoreError
@@ -28,8 +28,8 @@ REPOSITORY = Path(__file__).resolve().parents[3]
 type Location = LocalLakeLocation | PostgresLakeLocation
 
 
-def source(name: str, kind: str, path: Path | str) -> SourceAttachment:
-    return SourceAttachment(
+def source(name: str, kind: str, path: Path | str) -> FileSourceAttachment:
+    return FileSourceAttachment(
         kind="source_attachment",
         name=name,
         type=kind,  # type: ignore[arg-type]
