@@ -43,10 +43,14 @@ def test_every_locked_wheel_has_a_hash(lock_file: str) -> None:
 
 
 def test_package_dependencies_are_pinned_in_the_runtime_group() -> None:
+    """Third-party dependencies only; workspace packages are pinned to versions.toml instead."""
     groups = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text())["dependency-groups"]
     runtime = set(groups["runtime"])
+    slug = tomllib.loads((REPOSITORY_ROOT / "identity.toml").read_text())["product"]["slug"]
     for project in sorted((REPOSITORY_ROOT / "packages").glob("*/pyproject.toml")):
         for requirement in tomllib.loads(project.read_text())["project"]["dependencies"]:
+            if requirement.startswith(f"{slug}-"):
+                continue
             assert requirement in runtime, (
                 f"{project.parent.name}: {requirement} not in runtime group"
             )

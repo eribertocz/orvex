@@ -34,6 +34,13 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.15"
+      - name: The tag equals the product version in versions.toml
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          product=$(python -c "import tomllib; print(tomllib.load(open('versions.toml', 'rb'))['product'])")
+          test "$TAG" = "v$product" || { echo "RELEASE_TAG_MISMATCH: tag $TAG, versions.toml v$product"; exit 1; }
       - name: Build the web application
         working-directory: web
         run: |

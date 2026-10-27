@@ -1,6 +1,7 @@
 """Version manifest check (docs/process/versioning.md §3).
 
-`versions.toml` lists every distribution, each package's `[project].version` equals its entry, the
+`versions.toml` lists every distribution, each package's `[project].version` equals its entry
+(and so does every exact pin one package has on another), the
 server's packaged copy equals the root file, and every contract a module declares in its
 `contracts.toml` exists under `contracts/<name>/<vN>`.
 """
@@ -34,6 +35,7 @@ def declared_contracts(path: Path) -> list[tuple[str, str]]:
 
 def scan(root: Path) -> list[Finding]:
     namespace = identity(root)["python_namespace"]
+    slug = identity(root)["slug"]
     manifest_path = root / "versions.toml"
     manifest = tomllib.loads(manifest_path.read_text("utf-8"))
     findings = []
@@ -46,9 +48,21 @@ def scan(root: Path) -> list[Finding]:
         findings.append(Finding("VERSION_MISSING", "versions.toml has no `product`"))
     for module in sorted(MODULES):
         package = root / "packages" / module
-        version = tomllib.loads((package / "pyproject.toml").read_text("utf-8"))["project"][
-            "version"
-        ]
+        project = tomllib.loads((package / "pyproject.toml").read_text("utf-8"))["project"]
+        version = project["version"]
+        for requirement in project.get("dependencies", []):
+            name, _, pinned = requirement.partition("==")
+            if not name.startswith(f"{slug}-"):
+                continue
+            target = name.removeprefix(f"{slug}-")
+            if target not in manifest or pinned != manifest[target]:
+                findings.append(
+                    Finding(
+                        "VERSION_MISMATCH",
+                        f"{module} requires {requirement}; versions.toml says "
+                        f"{target} = {manifest.get(target)}",
+                    )
+                )
         if module not in manifest:
             findings.append(Finding("VERSION_MISSING", f"versions.toml has no entry for {module}"))
         elif manifest[module] != version:
