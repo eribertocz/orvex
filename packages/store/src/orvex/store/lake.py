@@ -227,7 +227,7 @@ class Lake:
     def _pinned(self, sql: str, snapshot: int) -> str:
         """The same SELECT with `AT (VERSION => snapshot)` on every lake table it references."""
         serialized = self._one("SELECT json_serialize_sql($sql)", {"sql": sql})
-        tree = json.loads(serialized[0]) if serialized else {"error": True}
+        tree = json.loads(str(serialized[0])) if serialized else {"error": True}
         if tree.get("error"):
             raise StoreError(
                 "STORE_QUERY_FAILED",
