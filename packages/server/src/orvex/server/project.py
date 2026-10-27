@@ -218,7 +218,8 @@ def _first_null(value: object, pointer: str) -> str | None:
 
 def _token(key: object) -> str:
     """A key as a JSON pointer reference token (RFC 6901)."""
-    return str(key).replace("~", "~0").replace("/", "~1")
+    text = "null" if key is None else str(key).lower() if isinstance(key, bool) else str(key)
+    return text.replace("~", "~0").replace("/", "~1")
 
 
 def _untoken(token: str) -> str:
@@ -304,6 +305,13 @@ class _Document:
             failure = self._yaml_failure(error)
         except RecursionError:
             failure = self._too_deep(None)
+        except (ValueError, OverflowError) as error:
+            # A scalar Python cannot build: an integer over 4300 digits, an impossible date.
+            failure = ProjectLoadError(
+                "PROJECT_YAML_INVALID",
+                f"{self.file}: a value cannot be read ({type(error).__name__}).",
+                file=self.file,
+            )
         finally:
             loader.dispose()
         if failure is not None:

@@ -434,3 +434,17 @@ def test_null_connection_fields_are_refused(tmp_path: Path, old: str, new: str, 
     error = failure(project(tmp_path, connections=CONNECTIONS.replace(old, new)))
     assert error.code == "PROJECT_SCHEMA_INVALID"
     assert error.error.details.path == path
+
+
+@pytest.mark.parametrize("file", ["project.yaml", "connections.yaml"])
+@pytest.mark.parametrize("value", ["1" * 4400, "2024-02-30"], ids=["huge-integer", "bad-date"])
+def test_values_python_cannot_build_are_refused(tmp_path: Path, file: str, value: str) -> None:
+    folder = project(tmp_path, connections="version: 1\nconnections: {}\n")
+    if file == "project.yaml":
+        (folder / file).write_text(PROJECT + f"extra: {value}\n", encoding="utf-8")
+    else:
+        (folder / file).write_text(f"version: 1\nconnections: {{}}\nx: {value}\n")
+    error = failure(folder)
+    assert error.code in {"PROJECT_YAML_INVALID", "PROJECT_SCHEMA_INVALID"}
+    assert error.error.details.file == file
+    assert error.__context__ is None
