@@ -35,7 +35,6 @@ A read returns an Arrow record-batch stream. Arrow types follow DuckDB types exa
 | `BIGINT` | `int64` |
 | `TIMESTAMPTZ` | `timestamp[us, tz=UTC]` |
 | `NULL` (any type) | Arrow null |
-
 | `UHUGEINT` | `utf8` (decimal text; Arrow has no exact unsigned 128-bit type) |
 
 Each Arrow field carries its DuckDB type in the field metadata key `duckdb_type`.
@@ -51,12 +50,12 @@ Every JSON response that carries data (HTTP API, MCP, exports) uses this encodin
 | `BOOLEAN` | `true` / `false` |
 | `TINYINT`, `SMALLINT`, `INTEGER`, `UTINYINT`, `USMALLINT`, `UINTEGER` | number |
 | `BIGINT`, `UBIGINT`, `HUGEINT`, `UHUGEINT` | string of digits, optional leading `-` |
-| `DECIMAL(p,s)` | string with exactly `s` fraction digits (`"12.50"`); negative zero is `"0.00"` |
-| `FLOAT`, `DOUBLE` | number; `"NaN"`, `"Infinity"`, `"-Infinity"` as strings |
+| `DECIMAL(p,s)` | string in plain notation with exactly `s` fraction digits (`"12.50"`, `"0.0000001000"`); negative zero is `"0.00"` |
+| `FLOAT`, `DOUBLE` | number (for `FLOAT`, the shortest decimal that reads back as the same 32-bit value); `"NaN"`, `"Infinity"`, `"-Infinity"` as strings |
 | `VARCHAR`, `UUID` | string |
-| `DATE` | `YYYY-MM-DD` |
-| `TIMESTAMP` | `YYYY-MM-DDTHH:MM:SS.ffffff` (no offset) |
-| `TIMESTAMP WITH TIME ZONE` | `YYYY-MM-DDTHH:MM:SS.ffffffZ` (UTC) |
+| `DATE` | `YYYY-MM-DD`; years outside 1–9999 use astronomical numbering with a sign and more digits (`-0044-03-15`, `29349-01-26`); `"infinity"` / `"-infinity"` |
+| `TIMESTAMP` | `YYYY-MM-DDTHH:MM:SS.ffffff` (no offset); same year rules; `"infinity"` / `"-infinity"` |
+| `TIMESTAMP WITH TIME ZONE` | `YYYY-MM-DDTHH:MM:SS.ffffffZ` (UTC); same year rules; `"infinity"` / `"-infinity"` |
 | `INTERVAL` | ISO 8601 duration `P<months>M<days>DT<seconds>S` (each part may be negative) |
 | `BLOB` | base64 |
 | any, `NULL` | `null` |

@@ -579,15 +579,9 @@ class Lake:
             relation = cursor.sql(sql, params=parameters)
             names = list(relation.columns)
             types = [str(kind) for kind in relation.types]
-            if "UHUGEINT" in types:
-                # Arrow has no exact 128-bit unsigned type: DuckDB would wrap large values into
-                # decimal128(38,0) (the maximum becomes -1). Such columns travel as decimal text.
-                casts = ", ".join(
-                    f"CAST({_identifier(name)} AS VARCHAR) AS {_identifier(name)}"
-                    for name, kind in zip(names, types, strict=True)
-                    if kind == "UHUGEINT"
-                )
-                relation = cursor.sql(f"SELECT * REPLACE ({casts}) FROM ({sql})", params=parameters)
+            exact = exact_select(sql, names, types)
+            if exact is not None:
+                relation = cursor.sql(exact, params=parameters)
             source = relation.to_arrow_reader(request.batch_size)
         except duckdb.Error as error:
             cursor.close()
@@ -815,6 +809,23 @@ def _is_lake_table(
             return (parts[0], parts[1]) in tables
         return parts[0] == LAKE and ("main", parts[1]) in tables
     return len(parts) == 3 and parts[0] == LAKE and (parts[1], parts[2]) in tables
+
+
+def exact_select(sql: str, names: list[str], types: list[str]) -> str | None:
+    """`sql` with every UHUGEINT column cast to decimal text, or None when there is none.
+
+    Arrow has no exact 128-bit unsigned type: DuckDB would wrap large values into
+    decimal128(38,0) (the maximum becomes -1). Columns are addressed by position (`#n`), so
+    duplicate names are kept as they are and nothing else changes.
+    """
+    if "UHUGEINT" not in types:
+        return None
+    columns = ", ".join(
+        (f"CAST(#{index} AS VARCHAR)" if kind == "UHUGEINT" else f"#{index}")
+        + f" AS {_identifier(name)}"
+        for index, (name, kind) in enumerate(zip(names, types, strict=True), start=1)
+    )
+    return f"SELECT {columns} FROM ({sql})"
 
 
 def _identifier(name: str) -> str:

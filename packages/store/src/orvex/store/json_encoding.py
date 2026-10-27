@@ -56,12 +56,76 @@ def _floats(column: pa.Array) -> list[JsonValue]:
     return values
 
 
+DATE_INFINITY = 2**31 - 1
+TIMESTAMP_INFINITY = 2**63 - 1
+MICROSECONDS_PER_DAY = 86_400_000_000
+
+
+def _civil(days: int) -> str:
+    """`YYYY-MM-DD` of a day count since 1970-01-01, for any year (proleptic Gregorian).
+
+    Integer arithmetic only (H. Hinnant's civil-from-days); years before 1 use astronomical
+    numbering with a sign (`-0043` is 44 BC), years above 9999 use more digits.
+    """
+    shifted = days + 719468
+    era = shifted // 146097
+    day_of_era = shifted - era * 146097
+    year_of_era = (
+        day_of_era - day_of_era // 1460 + day_of_era // 36524 - day_of_era // 146096
+    ) // 365
+    year = year_of_era + era * 400
+    day_of_year = day_of_era - (365 * year_of_era + year_of_era // 4 - year_of_era // 100)
+    shifted_month = (5 * day_of_year + 2) // 153
+    day = day_of_year - (153 * shifted_month + 2) // 5 + 1
+    month = shifted_month + 3 if shifted_month < 10 else shifted_month - 9
+    year += 1 if month <= 2 else 0
+    sign = "-" if year < 0 else ""
+    return f"{sign}{abs(year):04d}-{month:02d}-{day:02d}"
+
+
+def _dates(column: pa.Array) -> list[JsonValue]:
+    values: list[JsonValue] = []
+    for days in pc.cast(column, pa.int32()).to_pylist():
+        if days is None:
+            values.append(None)
+        elif days == DATE_INFINITY:
+            values.append("infinity")
+        elif days == -DATE_INFINITY:
+            values.append("-infinity")
+        else:
+            values.append(_civil(days))
+    return values
+
+
+def _timestamp_text(microseconds: int, zoned: bool) -> str:
+    days, rest = divmod(microseconds, MICROSECONDS_PER_DAY)
+    seconds, fraction = divmod(rest, 1_000_000)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    text = f"{_civil(days)}T{hours:02d}:{minutes:02d}:{seconds:02d}.{fraction:06d}"
+    return text + "Z" if zoned else text
+
+
 def _timestamps(column: pa.Array) -> list[JsonValue]:
-    # Arrow writes `YYYY-MM-DD HH:MM:SS.ffffff` (with `Z` when zoned in UTC).
-    texts: list[JsonValue] = pc.replace_substring(
-        pc.cast(column, pa.string()), " ", "T", max_replacements=1
-    ).to_pylist()
-    return texts
+    zoned = column.type.tz is not None
+    unit = {"s": 1_000_000, "ms": 1_000, "us": 1, "ns": None}[column.type.unit]
+    if unit is None:
+        raise StoreError(
+            "STORE_TYPE_UNSUPPORTED",
+            "Nanosecond timestamps have no JSON encoding yet.",
+            {"type": str(column.type)},
+        )
+    values: list[JsonValue] = []
+    for raw in column.cast(pa.int64()).to_pylist():
+        if raw is None:
+            values.append(None)
+        elif raw == TIMESTAMP_INFINITY:
+            values.append("infinity")
+        elif raw == -TIMESTAMP_INFINITY:
+            values.append("-infinity")
+        else:
+            values.append(_timestamp_text(raw * unit, zoned))
+    return values
 
 
 def _intervals(column: pa.Array) -> list[JsonValue]:
@@ -83,6 +147,35 @@ def _blobs(column: pa.Array) -> list[JsonValue]:
     ]
 
 
+def _decimals(column: pa.Array) -> list[JsonValue]:
+    """Plain notation with exactly the column's scale; negative zero becomes zero."""
+    values: list[JsonValue] = []
+    for value in column.to_pylist():
+        if value is None:
+            values.append(None)
+        else:
+            values.append(format(value.copy_abs() if value.is_zero() else value, "f"))
+    return values
+
+
+def _float32(column: pa.Array) -> list[JsonValue]:
+    """The shortest decimal that reads back as the same 32-bit float (0.1, not 0.1000000015)."""
+    texts = pc.cast(column, pa.string()).to_pylist()
+    values: list[JsonValue] = []
+    for text in texts:
+        if text is None:
+            values.append(None)
+        elif text in {"nan", "NaN"}:
+            values.append("NaN")
+        elif text in {"inf", "Infinity"}:
+            values.append("Infinity")
+        elif text in {"-inf", "-Infinity"}:
+            values.append("-Infinity")
+        else:
+            values.append(float(text))
+    return values
+
+
 def _plain(column: pa.Array) -> list[JsonValue]:
     values: list[JsonValue] = column.to_pylist()
     return values
@@ -91,12 +184,16 @@ def _plain(column: pa.Array) -> list[JsonValue]:
 def _converter(kind: str, column: str) -> Callable[[pa.Array], list[JsonValue]]:
     if kind in {"BOOLEAN", "VARCHAR", "UUID"} or kind in SMALL_INTEGERS:
         return _strings if kind == "UUID" else _plain
-    if kind in WIDE_INTEGERS or kind.startswith("DECIMAL("):
+    if kind in WIDE_INTEGERS:
         return _strings
-    if kind in {"FLOAT", "DOUBLE"}:
+    if kind.startswith("DECIMAL("):
+        return _decimals
+    if kind == "FLOAT":
+        return _float32
+    if kind == "DOUBLE":
         return _floats
     if kind == "DATE":
-        return _strings
+        return _dates
     if kind in {"TIMESTAMP", "TIMESTAMP WITH TIME ZONE"}:
         return _timestamps
     if kind == "INTERVAL":

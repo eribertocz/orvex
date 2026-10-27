@@ -13,7 +13,7 @@ from hypothesis import strategies as st
 from orvex.contracts.store.v1 import ResultJson
 from orvex.store.errors import StoreError
 from orvex.store.json_encoding import arrow_to_json
-from orvex.store.lake import _with_duckdb_types
+from orvex.store.lake import _with_duckdb_types, exact_select
 
 CASES = {
     "BOOLEAN": ["true", "false"],
@@ -33,10 +33,17 @@ CASES = {
     "DECIMAL(38,10)": ["9999999999999999999999999999.9999999999", "-0.0000000001"],
     "DECIMAL(12,2)": ["-0.00", "12.50"],
     "DOUBLE": ["1.5", "NaN", "Infinity", "-Infinity"],
+    "FLOAT": ["0.1", "-3.4028235e38", "NaN"],
     "VARCHAR": ["", 'ñandú "quoted"'],
-    "DATE": ["1850-01-01", "2150-12-31"],
-    "TIMESTAMP": ["1850-01-01 00:00:00", "2150-06-01 12:00:00.123456"],
-    "TIMESTAMPTZ": ["1850-01-01 00:00:00+00", "2150-06-01 08:00:00.5-04"],
+    "DATE": ["1850-01-01", "2150-12-31", "-0044-03-15", "29349-01-26", "infinity", "-infinity"],
+    "TIMESTAMP": ["1850-01-01 00:00:00", "2150-06-01 12:00:00.123456", "infinity", "-infinity"],
+    "TIMESTAMPTZ": [
+        "1850-01-01 00:00:00+00",
+        "2150-06-01 08:00:00.5-04",
+        "40000-01-01 00:00:00+00",
+        "infinity",
+        "-infinity",
+    ],
     "INTERVAL": ["1 year 2 months 3 days 04:05:06.789", "-1 day"],
     "UUID": ["2f1e0b8e-7a4d-4b8e-9c1a-0d2b3c4d5e6f"],
     "BLOB": ["\\x00\\xFFab"],
@@ -49,13 +56,9 @@ def encode(sql: str) -> dict[str, object]:
         connection.sql("SET TimeZone = 'UTC'")
         relation = connection.sql(sql)
         types = [str(kind) for kind in relation.types]
-        if "UHUGEINT" in types:
-            casts = ", ".join(
-                f"CAST({name} AS VARCHAR) AS {name}"
-                for name, kind in zip(relation.columns, types, strict=True)
-                if kind == "UHUGEINT"
-            )
-            relation = connection.sql(f"SELECT * REPLACE ({casts}) FROM ({sql})")
+        exact = exact_select(sql, list(relation.columns), types)
+        if exact is not None:
+            relation = connection.sql(exact)
         source = relation.to_arrow_reader(1000)
         schema = _with_duckdb_types(source.schema, types)
         reader = pa.RecordBatchReader.from_batches(schema, (b.cast(schema) for b in source))
@@ -132,6 +135,37 @@ def test_exact_shapes() -> None:
     assert document["columns"][0] == {"name": "d", "type": "DECIMAL(12,2)"}  # type: ignore[index]
 
 
+def test_text_shapes_are_exact() -> None:
+    document = encode(
+        "SELECT 0.0000001::DECIMAL(18,10) AS a, 0::DECIMAL(38,10) AS b, -0.00::DECIMAL(5,2) AS c, "
+        "0.1::FLOAT AS f, DATE '-0044-03-15' AS bc, 'infinity'::DATE AS forever, "
+        "TIMESTAMPTZ '40000-01-01 00:00:00+00' AS far, TIMESTAMP '1850-01-01 00:00:00' AS old"
+    )
+    assert document["rows"] == [
+        [
+            "0.0000001000",
+            "0.0000000000",
+            "0.00",
+            0.1,
+            "-0044-03-15",
+            "infinity",
+            "40000-01-01T00:00:00.000000Z",
+            "1850-01-01T00:00:00.000000",
+        ]
+    ]
+
+
+def test_duplicate_column_names_keep_their_values() -> None:
+    document = encode(
+        "SELECT 1::INTEGER AS x, 340282366920938463463374607431768211455::UHUGEINT AS x"
+    )
+    assert document["columns"] == [
+        {"name": "x", "type": "INTEGER"},
+        {"name": "x", "type": "UHUGEINT"},
+    ]
+    assert document["rows"] == [[1, "340282366920938463463374607431768211455"]]
+
+
 def test_wide_values_never_become_floats() -> None:
     document = encode(
         "SELECT 9007199254740993::BIGINT AS b, "
@@ -148,6 +182,20 @@ def test_unsupported_types_fail_before_rows(sql: str) -> None:
         encode(sql)
     assert raised.value.code == "STORE_TYPE_UNSUPPORTED"
     assert raised.value.details["column"] in {"l", "s", "t"}
+    assert raised.value.details["type"]
+
+
+def test_unsupported_type_fails_on_the_first_fragment() -> None:
+    connection = duckdb.connect()
+    try:
+        relation = connection.sql("SELECT 1 AS ok, [1] AS l")
+        source = relation.to_arrow_reader(10)
+        schema = _with_duckdb_types(source.schema, [str(kind) for kind in relation.types])
+        fragments = arrow_to_json(pa.RecordBatchReader.from_batches(schema, iter(())))
+        with pytest.raises(StoreError):
+            next(fragments)
+    finally:
+        connection.close()
 
 
 @settings(max_examples=200, deadline=None)
