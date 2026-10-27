@@ -170,7 +170,16 @@ def typescript_types(contract: ContractVersion, scratch: Path) -> str:
         [web_tool("prettier"), "--write", str(output), "--config", str(WEB / ".prettierrc")],
         cwd=WEB,
     )
-    return header(contract, "//") + output.read_text(encoding="utf-8")
+    types = output.read_text(encoding="utf-8")
+    if contract.is_openapi:
+        # The OpenAPI bundle itself is not a type; drop the open placeholder json2ts emits for it.
+        title = json_schema_bundle(contract)["title"]
+        types, removed = re.subn(
+            rf"export interface {title} \{{\n\t\[k: string\]: unknown;\n\}}\n", "", types
+        )
+        if removed != 1:
+            raise GenerationError(f"json2ts output changed: no placeholder '{title}' to remove")
+    return header(contract, "//") + types
 
 
 def generate_all() -> dict[Path, str]:

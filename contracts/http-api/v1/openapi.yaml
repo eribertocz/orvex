@@ -1,0 +1,107 @@
+openapi: 3.1.0
+info:
+  title: HTTP API
+  version: v1
+  description: >-
+    Public HTTP API served by the `server` module. Every non-2xx response uses ErrorEnvelope and
+    every response carries an X-Request-Id header. Later issues extend this contract compatibly.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+paths:
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      summary: The server is running.
+      responses:
+        "200":
+          description: The server is running.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/version:
+    get:
+      operationId: getVersion
+      summary: Product, module and contract versions.
+      responses:
+        "200":
+          description: Versions of the running product.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Version" }
+        default: { $ref: "#/components/responses/Error" }
+components:
+  headers:
+    RequestId:
+      description: Identifier of the request, also written to the server log.
+      schema: { type: string, minLength: 1 }
+  responses:
+    Error:
+      description: Any error. The body is always an ErrorEnvelope.
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+  schemas:
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, const: ok }
+    SemanticVersion:
+      type: string
+      pattern: "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+    ModuleVersion:
+      type: object
+      additionalProperties: false
+      required: [name, version]
+      properties:
+        name: { type: string, pattern: "^[a-z][a-z0-9-]*$" }
+        version: { $ref: "#/components/schemas/SemanticVersion" }
+    ContractVersion:
+      type: object
+      additionalProperties: false
+      required: [name, version]
+      properties:
+        name: { type: string, pattern: "^[a-z][a-z0-9-]*$" }
+        version: { type: string, pattern: "^v[1-9][0-9]*$" }
+    Version:
+      type: object
+      additionalProperties: false
+      required: [product, modules, contracts]
+      properties:
+        product: { $ref: "#/components/schemas/SemanticVersion" }
+        modules: { type: array, items: { $ref: "#/components/schemas/ModuleVersion" } }
+        contracts: { type: array, items: { $ref: "#/components/schemas/ContractVersion" } }
+    ErrorDetail:
+      type: object
+      additionalProperties: false
+      required: [name, value]
+      properties:
+        name: { type: string, minLength: 1 }
+        value: { type: string }
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message, details, request_id]
+      properties:
+        code:
+          description: Stable, machine-readable error code.
+          type: string
+          pattern: "^[A-Z][A-Z0-9_]*$"
+        message: { type: string, minLength: 1 }
+        details: { type: array, items: { $ref: "#/components/schemas/ErrorDetail" } }
+        request_id: { type: string, minLength: 1 }
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error: { $ref: "#/components/schemas/Error" }
