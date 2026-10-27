@@ -324,7 +324,12 @@ class Lake:
             )
         try:
             self._connection = duckdb.connect(
-                config={"memory_limit": limits.memory_limit, "threads": int(limits.threads)}
+                config={
+                    "memory_limit": limits.memory_limit,
+                    "threads": int(limits.threads),
+                    # Secrets saved on this machine are never loaded into a lake.
+                    "allow_persistent_secrets": False,
+                }
             )
         except (duckdb.Error, ValueError) as error:
             raise StoreError(
@@ -354,6 +359,7 @@ class Lake:
             self._sandbox(location)
         except BaseException:
             self._connection.close()
+            shutil.rmtree(self._spill, ignore_errors=True)
             raise
 
     def _names_of_table_functions(self) -> frozenset[str]:

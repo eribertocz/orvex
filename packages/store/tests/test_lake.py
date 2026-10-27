@@ -468,10 +468,13 @@ def test_reads_cannot_touch_the_catalog(lake: Lake) -> None:
     assert code_of(lambda: read(lake, sql)) == "STORE_STATEMENT_INVALID"
 
 
-def test_files_outside_the_lake_cannot_be_read_by_writes(lake: Lake) -> None:
+def test_files_outside_the_lake_cannot_be_read_by_writes(
+    lake: Lake, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Passes the statement check (a plain FROM path); only the file sandbox stops it."""
+    outside = tmp_path_factory.mktemp("outside") / "x.csv"
+    outside.write_text("x\n1\n", encoding="utf-8")
     before = lake.current_snapshot().id
-    code = code_of(
-        lambda: write(lake, statement("CREATE TABLE e AS SELECT * FROM '/proc/self/environ'"))
-    )
-    assert code in {"STORE_STATEMENT_INVALID", "STORE_QUERY_FAILED"}
+    sql = f"CREATE TABLE e AS SELECT * FROM '{outside.as_posix()}'"
+    assert code_of(lambda: write(lake, statement(sql))) == "STORE_QUERY_FAILED"
     assert lake.current_snapshot().id == before
