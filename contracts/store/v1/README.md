@@ -62,6 +62,10 @@ Every JSON response that carries data (HTTP API, MCP, exports) uses this encodin
 
 Other types (lists, structs, maps, unions, `TIME`, geometry, …) are refused with `STORE_TYPE_UNSUPPORTED` before any row is produced.
 
+## Time limits, cancellation and admission
+
+`ReadRequest` and `StatementRequest` accept `timeout_ms` (1–3,600,000; default set by the lake). A lake runs a bounded number of statements at once (reads until their stream ends, transactions until they commit or roll back); further requests wait in arrival order in a bounded queue, and are refused with `STORE_BUSY` when it is full. Waiting counts against the timeout. A statement past its time limit is interrupted (`STORE_TIMEOUT`); a read or a transaction can be cancelled from another thread (`STORE_CANCELLED`); an interrupted or cancelled transaction rolls back.
+
 ## Guarantees
 
 - A write transaction commits to exactly one snapshot, or rolls back and creates none.
@@ -81,6 +85,9 @@ Other types (lists, structs, maps, unions, `TIME`, geometry, …) are refused wi
 | `STORE_TRANSACTION_CONFLICT` | Another writer committed a conflicting change first; nothing of this transaction was written |
 | `STORE_SECRET_MISSING` | The environment variable named in `password_env` is not set (the variable is named, never a value) |
 | `STORE_SECRET_INLINE` | The PostgreSQL `connection` contains a password or is a URI |
+| `STORE_TIMEOUT` | The statement exceeded its time limit (waiting included); a transaction rolled back |
+| `STORE_CANCELLED` | The read or transaction was cancelled; a transaction rolled back |
+| `STORE_BUSY` | The lake is running its maximum number of statements and its queue is full |
 | `STORE_TYPE_UNSUPPORTED` | A result column has a type with no JSON encoding yet |
 | `STORE_CATALOG_UNAVAILABLE` | The PostgreSQL catalog cannot be reached or refused the credentials |
 

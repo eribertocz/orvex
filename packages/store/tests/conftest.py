@@ -16,7 +16,9 @@ import pytest
 from orvex.contracts.store.v1 import LocalLakeLocation, PostgresLakeLocation
 from orvex.store.lake import Lake, Limits, open_lake
 
-LIMITS = Limits(memory_limit="1GB", threads=2)
+LIMITS = Limits(
+    memory_limit="1GB", threads=2, max_concurrent=8, queue_size=64, default_timeout_ms=600_000
+)
 PASSWORD_ENV = "STORE_TEST_POSTGRES_PASSWORD"
 
 
