@@ -72,7 +72,7 @@ Development-only tools (linters, formatters, test runners) may come from smaller
 
 Runtime libraries maintained by a funded team of at least three active maintainers (for example Svelte Flow by xyflow) are acceptable at rank 3. Single-maintainer runtime libraries are allowed only as isolated exceptions recorded in ADR-0002 (currently Gridstack). Libraries for Excel and PDF export are chosen in their issues (P6-18, P6-19, P7-11) under this policy; a single-maintainer library there requires an ADR.
 
-Every new dependency requires one line in the pull request: problem, package, version, license, governance/maintainers, alternative considered, reason. Licenses must be permissive (Apache-2.0, MIT, BSD, ISC, MPL-2.0 for development tools only).
+Every new dependency requires one line in the pull request: problem, package, version, license, governance/maintainers, alternative considered, reason. Licenses must be permissive. Runtime dependencies may use Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause, ISC, 0BSD or PSF-2.0; development tools may also use MPL-2.0, MIT-0, BlueOak-1.0.0, CC0-1.0 or Python-2.0. The binding list is `tools/licenses/allowed.toml`, enforced by the `licenses` CI check; changing it needs this section updated in the same pull request.
 
 ## 6. Security
 
