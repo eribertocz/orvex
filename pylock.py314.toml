@@ -13,6 +13,17 @@ url = "https://files.pythonhosted.org/packages/c5/fa/da311559dd3dae9af5825cf2166
 sha256 = "9f99786e0d62082a5b121b3437f3167562133711df22128de1e9886f57f0b226"
 
 [[packages]]
+name = "duckdb"
+version = "2.0.0"
+
+[[packages.wheels]]
+name = "duckdb-2.0.0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/cc/33/01ad2535ee897db2bad70cbc800655167c53afd0b955eed84f0759c2f417/duckdb-2.0.0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+
+[packages.wheels.hashes]
+sha256 = "ab51ec57d329d6f3df37c0287b55d71c3fc07bb54b61d1afed09104f953b1431"
+
+[[packages]]
 name = "hypothesis"
 version = "6.170.12"
 
