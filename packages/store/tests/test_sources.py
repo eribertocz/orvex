@@ -84,6 +84,7 @@ def files(tmp_path_factory: pytest.TempPathFactory) -> Path:
     builder.sql(f"COPY (SELECT 'T1' AS tariff, 0.85 AS price) TO '{folder / 'tariffs.csv'}'")
     builder.sql(f"COPY (SELECT 'T2' AS tariff) TO '{folder / 'sibling.csv'}'")
     builder.sql(f"COPY (SELECT 42 AS hidden) TO '{folder / 'private' / 'secret.parquet'}'")
+    builder.sql(f"COPY (SELECT 'SECRET' AS s) TO '{folder / 'readings' / 'undeclared.csv'}'")
     builder.close()
     legacy = duckdb.connect(str(folder / "legacy.duckdb"))
     legacy.sql("CREATE TABLE consumers AS SELECT 'C1' AS consumer_id, 7::HUGEINT AS units")
@@ -165,26 +166,52 @@ def test_files_outside_the_declared_paths_stay_unreadable(sourced: Lake, files: 
         f"CREATE TABLE x AS SELECT * FROM read_parquet('{files / 'readings' / 'a.parquet'}')",
         f"CREATE TABLE x AS SELECT * FROM archive.data, '{files / 'readings' / 'a.parquet'}'",
     ]
+    undeclared = files / "readings" / "undeclared.csv"
+    attempts += [
+        f"CREATE TABLE x AS SELECT * FROM archive.data AS a, '{undeclared}'",
+        f"CREATE TABLE x AS SELECT * FROM archive.data a JOIN tariffs.data b ON true, "
+        f"'{undeclared}'",
+        f"MERGE INTO x USING '{undeclared}' AS u ON false WHEN NOT MATCHED THEN INSERT VALUES (1)",
+        f"CREATE TABLE x AS SELECT * FROM ('{undeclared}')",
+        f"CREATE TABLE x AS PIVOT '{undeclared}' ON s",
+        f"CREATE TABLE x AS SELECT * FROM (SUMMARIZE '{undeclared}')",
+        f"CREATE TABLE x AS SELECT * FROM (DESCRIBE '{undeclared}')",
+        f"CREATE TABLE x AS SELECT * FROM '{files}/readings/*.csv'",
+    ]
     for sql in attempts:
         assert code_of(lambda sql=sql: write(sourced, sql)) == "STORE_STATEMENT_INVALID", sql
 
 
 def test_sandbox_allows_only_declared_files(location: Location, files: Path) -> None:
-    """Behind the statement checks, DuckDB itself refuses undeclared files."""
+    """Behind the statement checks, DuckDB itself refuses every file that is not declared,
+    including files next to a glob's matches and paths leaving a declared folder."""
     (files.parent / "elsewhere.csv").write_text("x\n1\n", encoding="utf-8")
-    lake = open_lake(location, LIMITS, [source("tariffs", "csv", files / "tariffs.csv")])
+    lake = open_lake(
+        location,
+        LIMITS,
+        [
+            source("archive", "parquet", files / "readings" / "*.parquet"),
+            source("tariffs", "csv", files / "tariffs.csv"),
+        ],
+    )
     try:
         connection = lake._connection  # the raw connection: the sandbox, not the guard, decides
         allowed = connection.execute(f"SELECT count(*) FROM read_csv('{files / 'tariffs.csv'}')")
         assert allowed.fetchall() == [(1,)]
         for path in [
             files / "sibling.csv",
-            files / "private" / "secret.parquet",
+            files / "readings" / "undeclared.csv",
             files / "readings" / ".." / "sibling.csv",
+            files / "readings" / ".." / "private" / "secret.parquet",
             files.parent / "elsewhere.csv",
         ]:
             with pytest.raises(duckdb.Error):
                 connection.execute(f"SELECT * FROM '{path}'").fetchall()
+        # A file added after the lake opened is not readable either.
+        late = files / "readings" / "late.parquet"
+        duckdb.connect().sql(f"COPY (SELECT 3 AS reading_id) TO '{late}'")
+        with pytest.raises(duckdb.Error):
+            connection.execute(f"SELECT * FROM '{late}'").fetchall()
     finally:
         lake.close()
 
@@ -229,13 +256,20 @@ def test_reserved_source_names_are_refused(location: Location, files: Path, name
     assert raised.value.code == "STORE_SOURCE_INVALID"
 
 
-def test_duckdb_source_with_macros_is_refused(location: Location, files: Path) -> None:
-    with_macro = files / "macro.duckdb"
-    connection = duckdb.connect(str(with_macro))
-    connection.sql("CREATE MACRO twice(x) AS x * 2")
+@pytest.mark.parametrize(
+    "definition",
+    ["CREATE MACRO twice(x) AS x * 2", "CREATE VIEW everything AS SELECT 1 AS x"],
+    ids=["macro", "view"],
+)
+def test_duckdb_source_with_macros_or_views_is_refused(
+    location: Location, files: Path, definition: str
+) -> None:
+    with_object = files / "objects.duckdb"
+    connection = duckdb.connect(str(with_object))
+    connection.sql(definition)
     connection.close()
     with pytest.raises(StoreError) as raised:
-        open_lake(location, LIMITS, [source("legacy", "duckdb", with_macro)])
+        open_lake(location, LIMITS, [source("legacy", "duckdb", with_object)])
     assert raised.value.code == "STORE_SOURCE_INVALID"
 
 

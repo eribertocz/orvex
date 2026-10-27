@@ -10,6 +10,7 @@ from __future__ import annotations
 import collections
 import contextlib
 import datetime as dt
+import glob as globlib
 import json
 import math
 import os
@@ -64,32 +65,6 @@ _EXTERNAL_SQL_FUNCTIONS = frozenset(
 _SUSPICIOUS = re.compile(r"[./\\*?:]")
 RESERVED_SOURCE_NAMES = frozenset({LAKE, "main", "memory", "system", "temp"})
 _GLOB = re.compile(r"[*?\[]")
-# Keywords after which a quoted string would be read as a file (`FROM 'x.parquet'`).
-_FILE_POSITIONS = frozenset({"FROM", "JOIN"})
-_CLAUSES = frozenset(
-    {
-        "SELECT",
-        "FROM",
-        "JOIN",
-        "WHERE",
-        "GROUP",
-        "HAVING",
-        "ORDER",
-        "LIMIT",
-        "QUALIFY",
-        "WINDOW",
-        "ON",
-        "USING",
-        "SET",
-        "VALUES",
-        "RETURNING",
-        "UNION",
-        "INTERSECT",
-        "EXCEPT",
-        "INTO",
-        "AS",
-    }
-)
 EXTENSIONS = ("icu", "ducklake")
 WRITE_STATEMENTS = frozenset(
     {
@@ -330,31 +305,43 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
 def _refuse_file_names(
     sql: str, tokens: list[tuple[int, duckdb.token_type]], positions: list[int]
 ) -> None:
-    """Refuse a quoted string, or a quoted name that looks like a path, where a table belongs
-    (`FROM 'x.parquet'`, `JOIN "a/b.csv"`, `FROM t, '…'`): DuckDB would read it as a file. A
-    source is reached only by its name; the file sandbox is the boundary behind this check."""
-    clause: list[str] = [""]  # the clause keyword in force at each parenthesis depth
-    previous = ""
+    """Refuse a quoted string or quoted name that names an existing file or matches files.
+
+    DuckDB reads such a string as a file in many places (`FROM '…'`, `MERGE … USING '…'`,
+    `PIVOT '…'`, `SUMMARIZE '…'`, …); a model reaches a file only through its source name. The
+    file sandbox, which allows exactly the declared files, is the boundary behind this check.
+    """
     for position, kind in tokens:
         end = next(later for later in positions if later > position)
         text = sql[position:end].strip()
-        if kind == duckdb.token_type.keyword and text.upper() in _CLAUSES:
-            clause[-1] = text.upper()
-        elif (
-            kind == duckdb.token_type.string_const
-            # A quoted name with a dot or slash ("x.parquet") is also read as a file.
-            or (text.startswith('"') and _SUSPICIOUS.search(text.strip('"')) is not None)
-        ) and (previous in _FILE_POSITIONS or (previous == "," and clause[-1] in _FILE_POSITIONS)):
+        quoted = kind == duckdb.token_type.string_const or text.startswith('"')
+        if quoted and _names_a_file(text):
             raise StoreError(
                 "STORE_STATEMENT_INVALID",
                 "A file cannot be named in a statement; declare it as a source and use its name.",
                 {},
             )
-        elif text == "(":
-            clause.append("")
-        elif text == ")" and len(clause) > 1:
-            clause.pop()
-        previous = text.upper() if kind == duckdb.token_type.keyword else text
+
+
+def _names_a_file(token: str) -> bool:
+    quote = token[-1:]
+    start = token.find(quote)
+    content = token[start + 1 : -1].replace(quote * 2, quote) if start >= 0 else token
+    candidates = {content, content.removeprefix("file://")}
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = os.path.expanduser(candidate)
+        if os.path.isfile(path):
+            return True
+        looks_like_path = any(mark in candidate for mark in ("/", "\\", "."))
+        if (
+            looks_like_path
+            and _GLOB.search(candidate)
+            and any(os.path.isfile(match) for match in globlib.iglob(path))
+        ):
+            return True
+    return False
 
 
 def _single_statement(sql: str, table_functions: frozenset[str]) -> duckdb.Statement:
@@ -586,7 +573,7 @@ class Lake:
             self._connection.sql("SET autoinstall_known_extensions = false")
             self._connection.sql("SET autoload_known_extensions = false")
             self._table_functions = self._names_of_table_functions()
-            readable = [self._attach_source(source) for source in sources]
+            readable = [file for source in sources for file in self._attach_source(source)]
             self._sandbox(location, readable)
         except BaseException:
             self._connection.close()
@@ -606,8 +593,12 @@ class Lake:
         text = str(row[0]) if row and row[0] is not None else ""
         return frozenset(text.split("|")) - {""}
 
-    def _attach_source(self, source: SourceAttachment) -> tuple[str, str]:
-        """Attach one file source read-only; returns ("file" | "folder", path) to allow."""
+    def _attach_source(self, source: SourceAttachment) -> list[str]:
+        """Attach one file source read-only; returns the files the sandbox must allow.
+
+        For a glob, exactly the files it matches now: a file added later to the same folder,
+        or any other file there, stays unreadable.
+        """
         path = source.path
         if source.type == "duckdb":
             if not Path(path).is_file():
@@ -616,20 +607,24 @@ class Lake:
                 source, f"ATTACH {_quote(path)} AS {_identifier(source.name)} (READ_ONLY)"
             )
             macros = self._one(
-                "SELECT count(*) FROM duckdb_functions() WHERE database_name = $name "
-                "AND NOT internal AND function_type IN ('macro', 'table_macro')",
+                "SELECT (SELECT count(*) FROM duckdb_functions() WHERE database_name = $name "
+                "AND NOT internal AND function_type IN ('macro', 'table_macro')) "
+                "+ (SELECT count(*) FROM duckdb_views() WHERE database_name = $name "
+                "AND NOT internal)",
                 {"name": source.name},
             )
             if macros and int(str(macros[0])):
-                # A macro could read lake tables where a read's snapshot pinning cannot reach.
+                # A view or macro runs with the lake's connection: it could read lake tables or
+                # the lake's catalog database, which a source must never reach.
                 raise StoreError(
                     "STORE_SOURCE_INVALID",
-                    f"Source {source.name} defines macros, which a lake cannot attach.",
+                    f"Source {source.name} defines views or macros, which a lake cannot attach.",
                     {"source": source.name},
                 )
-            return ("file", Path(path).as_posix())
-        matched = self._one("SELECT count(*) FROM glob($path)", {"path": path})
-        if not matched or int(str(matched[0])) == 0:
+            return [Path(path).as_posix()]
+        matched = self._one("SELECT list(file ORDER BY file) FROM glob($path)", {"path": path})
+        matched_files = matched[0] if matched else None
+        if not isinstance(matched_files, list) or not matched_files:
             raise _source_not_found(source)
         # The view lives in its own small database file, attached read-only: nothing can be
         # created in, or dropped from, a source catalog.
@@ -639,8 +634,10 @@ class Lake:
         reader = "read_parquet" if source.type == "parquet" else "read_csv"
         builder = duckdb.connect(catalog)
         try:
+            # The files matched now, listed one by one: the sandbox allows exactly these.
+            listed = ", ".join(_quote(str(file)) for file in matched_files)
             builder.sql(
-                f"CREATE VIEW data AS SELECT * FROM {reader}({_quote(path)}, union_by_name = true)"
+                f"CREATE VIEW data AS SELECT * FROM {reader}([{listed}], union_by_name = true)"
             )
         except duckdb.Error as error:
             raise StoreError(
@@ -653,10 +650,7 @@ class Lake:
         self._source_sql(
             source, f"ATTACH {_quote(catalog)} AS {_identifier(source.name)} (READ_ONLY)"
         )
-        glob = _GLOB.search(path)
-        if glob is None:
-            return ("file", Path(path).as_posix())
-        return ("folder", path[: glob.start()].rsplit("/", 1)[0] + "/")
+        return [str(file) for file in matched_files]
 
     def _source_sql(self, source: SourceAttachment, sql: str) -> None:
         try:
@@ -671,7 +665,7 @@ class Lake:
     def _sandbox(
         self,
         location: LocalLakeLocation | PostgresLakeLocation,
-        readable: Sequence[tuple[str, str]] = (),
+        readable: Sequence[str] = (),
     ) -> None:
         """Limit file access to the lake's own folders and the declared source files, for good
         (DuckDB cannot undo it)."""
@@ -680,8 +674,7 @@ class Lake:
             folders.append(Path(location.path).resolve().as_posix())
         elif "://" not in location.data_path:
             folders.append(Path(location.data_path).resolve().as_posix())
-        folders += [path for kind, path in readable if kind == "folder"]
-        files = [path for kind, path in readable if kind == "file"]
+        files = list(readable)
         listed = ", ".join(_quote(folder.rstrip("/") + "/") for folder in folders)
         self._connection.sql(f"SET temp_directory = {_quote(self._spill)}")
         self._connection.sql(f"SET allowed_directories = [{listed}]")
