@@ -1,0 +1,39 @@
+# Canonical label list (docs/process/git-workflow.md §5). Applied in Phase 0 (P0-01).
+- { name: "type:feat",            color: "1f6feb", description: "New capability" }
+- { name: "type:fix",             color: "d73a4a", description: "Fix against a specification" }
+- { name: "type:bug",             color: "b60205", description: "Reported defect" }
+- { name: "type:perf",            color: "0e8a16", description: "Performance work" }
+- { name: "type:refactor",        color: "c5def5", description: "Internal restructuring without behavior change" }
+- { name: "type:test",            color: "bfd4f2", description: "Tests only" }
+- { name: "type:docs",            color: "0075ca", description: "Documentation" }
+- { name: "type:build",           color: "5319e7", description: "Build system and packaging" }
+- { name: "type:ci",              color: "5319e7", description: "Continuous integration" }
+- { name: "type:chore",           color: "ededed", description: "Maintenance" }
+- { name: "type:security",        color: "b60205", description: "Security work" }
+- { name: "type:adr",             color: "fbca04", description: "Architecture decision record" }
+- { name: "type:decision",        color: "e99695", description: "Product question for the Owner" }
+- { name: "type:release",         color: "006b75", description: "Release checklist" }
+- { name: "module:store",         color: "d4c5f9", description: "" }
+- { name: "module:transform",     color: "d4c5f9", description: "" }
+- { name: "module:semantic",      color: "d4c5f9", description: "" }
+- { name: "module:access",        color: "d4c5f9", description: "" }
+- { name: "module:dashboards",    color: "d4c5f9", description: "" }
+- { name: "module:mcp",           color: "d4c5f9", description: "" }
+- { name: "module:server",        color: "d4c5f9", description: "" }
+- { name: "module:web",           color: "d4c5f9", description: "" }
+- { name: "module:contracts",     color: "d4c5f9", description: "" }
+- { name: "module:conformance",   color: "d4c5f9", description: "" }
+- { name: "module:repo",          color: "d4c5f9", description: "" }
+- { name: "priority:p0",          color: "b60205", description: "Blocks the phase" }
+- { name: "priority:p1",          color: "d93f0b", description: "Needed for the phase" }
+- { name: "priority:p2",          color: "fbca04", description: "Nice to have in the phase" }
+- { name: "status:needs-spec",    color: "ededed", description: "Specification incomplete" }
+- { name: "status:spec-ready",    color: "0e8a16", description: "Ready to implement" }
+- { name: "status:in-progress",   color: "1d76db", description: "Being implemented" }
+- { name: "status:in-review",     color: "5319e7", description: "Pull request awaiting verification" }
+- { name: "status:blocked",       color: "000000", description: "Blocked by a dependency" }
+- { name: "status:needs-owner-decision", color: "e99695", description: "Waiting for the Owner" }
+- { name: "owner-merge",          color: "b60205", description: "Touches governed paths; only the Owner merges" }
+- { name: "contract-change",      color: "f9d0c4", description: "Touches a contract" }
+- { name: "breaking-change",      color: "b60205", description: "Incompatible contract change (requires ADR)" }
+- { name: "good-first-issue",     color: "7057ff", description: "" }
