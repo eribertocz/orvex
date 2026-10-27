@@ -1,0 +1,9 @@
+sales:
+  sale_id: int64
+  date: date
+  category: utf8
+  amount: 'decimal(18,2)'
+sales_month_category_rollup:
+  month: date
+  category: utf8
+  revenue: 'decimal(18,2)'

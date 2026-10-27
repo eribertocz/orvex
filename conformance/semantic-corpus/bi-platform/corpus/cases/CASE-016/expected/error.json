@@ -1,0 +1,7 @@
+{
+  "code": "AMBIGUOUS_RELATIONSHIP_PATH",
+  "evidence_contains": [
+    "billing_customer",
+    "shipping_customer"
+  ]
+}

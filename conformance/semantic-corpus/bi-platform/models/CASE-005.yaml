@@ -1,0 +1,96 @@
+version: '0.2.0.dev0'
+name: case-005
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0"}'
+datasets:
+  - name: sales
+    source: sales
+    primary_key:
+      - sale_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "sale"}'
+    fields:
+      - name: sale_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: sale_id
+      - name: store_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: store_id
+      - name: amount
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: amount
+  - name: store
+    source: store
+    primary_key:
+      - store_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "store"}'
+    fields:
+      - name: store_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: store_id
+      - name: region_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: region_id
+  - name: region
+    source: region
+    primary_key:
+      - region_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "region"}'
+    fields:
+      - name: region_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: region_id
+      - name: region_name
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: region_name
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "region"}'
+relationships:
+  - name: store
+    from: sales
+    to: store
+    from_columns:
+      - store_id
+    to_columns:
+      - store_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "optionality": "required"}'
+  - name: region
+    from: store
+    to: region
+    from_columns:
+      - region_id
+    to_columns:
+      - region_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "optionality": "required"}'
+metrics:
+  - name: revenue
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(sales.amount)'

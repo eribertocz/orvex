@@ -1,0 +1,8 @@
+orders:
+  order_id: int64
+  billing_customer_id: int64
+  shipping_customer_id: int64
+  amount: 'decimal(18,2)'
+customer:
+  customer_id: int64
+  country: utf8

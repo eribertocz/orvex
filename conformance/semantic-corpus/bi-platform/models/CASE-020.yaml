@@ -1,0 +1,43 @@
+version: '0.2.0.dev0'
+name: case-020
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0"}'
+datasets:
+  - name: balances
+    source: balances
+    primary_key:
+      - account_id
+      - month_end
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "account_month", "keys": [{"entity": "account", "fields": ["account_id"]}]}'
+    fields:
+      - name: account_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: account_id
+      - name: month_end
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: month_end
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "month_end", "time_role": "snapshot"}'
+      - name: balance
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: balance
+metrics:
+  - name: balance
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(balances.balance)'
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "aggregation": {"class": "semi_additive", "axes": [{"dimension": "month_end", "behavior": "forbidden"}, {"entity": "account", "behavior": "additive"}]}}'

@@ -1,0 +1,4 @@
+line_id,customer_id,product_id,quantity,unit_price
+1,10,100,2,10.00
+2,10,101,1,20.00
+3,20,100,3,10.00

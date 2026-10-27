@@ -1,0 +1,4 @@
+finance:
+  record_id: int64
+  amount_usd: 'decimal(18,2)'
+  amount_bob: 'decimal(18,2)'

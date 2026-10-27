@@ -1,0 +1,12 @@
+sales:
+  line_id: int64
+  customer_id: int64
+  product_id: int64
+  quantity: int64
+  unit_price: 'decimal(18,2)'
+customers:
+  customer_id: int64
+  region: utf8
+products:
+  product_id: int64
+  category: utf8

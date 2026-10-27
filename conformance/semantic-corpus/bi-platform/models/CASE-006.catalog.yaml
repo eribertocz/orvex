@@ -1,0 +1,4 @@
+orders:
+  order_id: int64
+  region: utf8
+  amount: 'decimal(18,2)'

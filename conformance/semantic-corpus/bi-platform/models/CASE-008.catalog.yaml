@@ -1,0 +1,4 @@
+activity:
+  activity_id: int64
+  customer_id: int64
+  region: utf8

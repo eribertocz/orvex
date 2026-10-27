@@ -1,0 +1,8 @@
+sales_monthly:
+  month: date
+  region: utf8
+  amount: 'decimal(18,2)'
+refunds_monthly:
+  month: date
+  region: utf8
+  amount: 'decimal(18,2)'

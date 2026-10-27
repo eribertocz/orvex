@@ -1,0 +1,10 @@
+orders:
+  order_id: int64
+  customer_id: int64
+  order_total: 'decimal(18,2)'
+order_items:
+  item_id: int64
+  order_id: int64
+customers:
+  customer_id: int64
+  region: utf8

@@ -1,0 +1,17 @@
+# Apache Ossie specification supported by this product (ADR-0009). Upgrading needs an issue and an ADR.
+
+repository = "https://github.com/apache/ossie"
+commit = "c721ffce76869cf941a1d9d8b9d01b607a87e838"
+date = "2026-10-26"
+specification_version = "0.2.0.dev0"
+license = "Apache-2.0"
+
+[files]
+"ossie-schema.json" = "core-spec/ossie-schema.json"
+LICENSE = "LICENSE"
+NOTICE = "NOTICE"
+
+[sha256]
+"LICENSE" = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+"NOTICE" = "cdd61e3d225833b912985567730c9043394ae21e3ecfe619ed63cff5f170c59a"
+"ossie-schema.json" = "2cf11e3c555b767b2612a4e479545e55485d81af62c3bf465a03f33a861aae4c"

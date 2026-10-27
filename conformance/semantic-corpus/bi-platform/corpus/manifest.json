@@ -1,0 +1,142 @@
+{
+  "corpus_version": "0.1.0",
+  "status": "normative-v0.1",
+  "date": "2026-09-27",
+  "case_count": 21,
+  "principles": [
+    "implementation-neutral",
+    "engine-neutral",
+    "no Ossie syntax is normative",
+    "no CSMIR/SQIR/SEIR syntax is normative",
+    "valid cases have exact expected results",
+    "invalid cases have stable semantic error categories"
+  ],
+  "cases": [
+    {
+      "id": "CASE-001",
+      "title": "Additive metric",
+      "category": "metric algebra",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-002",
+      "title": "One fact plus dimensions",
+      "category": "join correctness",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-003",
+      "title": "Declared many-to-one join",
+      "category": "join cardinality",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-004",
+      "title": "Fanout trap across one-to-many detail",
+      "category": "fanout reasoning",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-005",
+      "title": "Multi-hop dimensional path",
+      "category": "join path planning",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-006",
+      "title": "Ratio recomputation",
+      "category": "metric algebra",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-007",
+      "title": "Semi-additive period-end balance",
+      "category": "time semantics",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-008",
+      "title": "Distinct-count non-additivity",
+      "category": "metric algebra",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-009",
+      "title": "Multi-fact at the same grain",
+      "category": "multi-fact planning",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-010",
+      "title": "Multi-fact with different grains",
+      "category": "multi-fact planning",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-011",
+      "title": "Many-to-many bridge with allocation",
+      "category": "many-to-many semantics",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-012",
+      "title": "Time grain conversion",
+      "category": "time semantics",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-013",
+      "title": "Slowly changing dimension as-of join",
+      "category": "temporal relationship",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-014",
+      "title": "Null semantics",
+      "category": "expression semantics",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-015",
+      "title": "Mandatory row policy",
+      "category": "policy correctness",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-016",
+      "title": "Ambiguous relationship path rejection",
+      "category": "compile-time rejection",
+      "outcome": "compile_error"
+    },
+    {
+      "id": "CASE-017",
+      "title": "Incompatible units rejection",
+      "category": "semantic type system",
+      "outcome": "compile_error"
+    },
+    {
+      "id": "CASE-018",
+      "title": "Materialization semantic equivalence",
+      "category": "optimizer correctness",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-019",
+      "title": "Cross-engine decimal and timezone edge",
+      "category": "cross-engine conformance",
+      "outcome": "result"
+    },
+    {
+      "id": "CASE-020",
+      "title": "Illegal temporal reaggregation rejection",
+      "category": "compile-time rejection",
+      "outcome": "compile_error"
+    },
+    {
+      "id": "CASE-021",
+      "title": "Cumulative metric",
+      "category": "window/time metric",
+      "outcome": "result"
+    }
+  ]
+}

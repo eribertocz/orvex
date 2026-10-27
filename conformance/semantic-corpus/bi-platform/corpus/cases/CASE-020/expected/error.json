@@ -1,0 +1,7 @@
+{
+  "code": "ILLEGAL_TEMPORAL_REAGGREGATION",
+  "evidence_contains": [
+    "balance",
+    "time"
+  ]
+}

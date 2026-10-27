@@ -1,0 +1,7 @@
+invoices:
+  invoice_id: int64
+  customer_id: int64
+  amount: 'decimal(18,2)'
+customer:
+  customer_id: int64
+  segment: utf8

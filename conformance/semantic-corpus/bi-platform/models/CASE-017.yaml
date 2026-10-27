@@ -1,0 +1,46 @@
+version: '0.2.0.dev0'
+name: case-017
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0"}'
+datasets:
+  - name: finance
+    source: finance
+    primary_key:
+      - record_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "record"}'
+    fields:
+      - name: record_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: record_id
+      - name: amount_usd
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: amount_usd
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "unit": {"currency": "USD"}}'
+      - name: amount_bob
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: amount_bob
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "unit": {"currency": "BOB"}}'
+metrics:
+  - name: revenue_usd
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(finance.amount_usd)'
+  - name: revenue_bob
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(finance.amount_bob)'

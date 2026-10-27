@@ -1,0 +1,4 @@
+sale_id,tenant_id,region,amount
+1,A,North,100.00
+2,A,South,50.00
+3,B,North,999.00

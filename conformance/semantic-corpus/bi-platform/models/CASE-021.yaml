@@ -1,0 +1,39 @@
+version: '0.2.0.dev0'
+name: case-021
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0"}'
+datasets:
+  - name: sales_daily
+    source: sales_daily
+    primary_key:
+      - date
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "day", "grain": {"dimensions": ["date"]}}'
+    fields:
+      - name: date
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: '"date"'
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "date", "time_role": "event"}'
+      - name: amount
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: amount
+metrics:
+  - name: daily_revenue
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(sales_daily.amount)'
+  - name: cumulative_revenue
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(daily_revenue) OVER (ORDER BY "date" ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)'

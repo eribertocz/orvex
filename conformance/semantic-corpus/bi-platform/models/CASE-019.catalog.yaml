@@ -1,0 +1,4 @@
+events:
+  event_id: int64
+  event_time: timestamptz
+  amount: 'decimal(18,4)'

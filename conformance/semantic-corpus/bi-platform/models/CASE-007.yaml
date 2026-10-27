@@ -1,0 +1,76 @@
+version: '0.2.0.dev0'
+name: case-007
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0"}'
+datasets:
+  - name: balances
+    source: balances
+    primary_key:
+      - account_id
+      - snapshot_date
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "account_snapshot"}'
+    fields:
+      - name: account_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: account_id
+      - name: snapshot_date
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: snapshot_date
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "snapshot_date", "time_role": "snapshot"}'
+      - name: balance
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: balance
+  - name: accounts
+    source: accounts
+    primary_key:
+      - account_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "account"}'
+    fields:
+      - name: account_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: account_id
+      - name: region
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: region
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "region"}'
+relationships:
+  - name: account
+    from: balances
+    to: accounts
+    from_columns:
+      - account_id
+    to_columns:
+      - account_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "optionality": "required"}'
+metrics:
+  - name: balance
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(balances.balance)'
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "aggregation": {"class": "semi_additive", "axes": [{"dimension": "snapshot_date", "behavior": "period_end"}, {"entity": "account", "behavior": "additive"}]}, "time_behavior": {"axis": {"dimension": "snapshot_date"}, "rule": "period_end", "order_by": [{"field": "balances.snapshot_date"}], "selection_scope": {"entities": ["account"]}, "ties": {"unique_by_key": "account_snapshot"}}}'

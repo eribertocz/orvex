@@ -1,0 +1,4 @@
+invoice_id,date,region,amount
+1,2026-01-05,North,100.00
+2,2026-01-20,North,200.00
+3,2026-01-10,South,150.00

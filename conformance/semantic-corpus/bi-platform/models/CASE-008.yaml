@@ -1,0 +1,42 @@
+version: '0.2.0.dev0'
+name: case-008
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0"}'
+datasets:
+  - name: activity
+    source: activity
+    primary_key:
+      - activity_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "activity", "keys": [{"entity": "customer", "fields": ["customer_id"]}]}'
+    fields:
+      - name: activity_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: activity_id
+      - name: customer_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: customer_id
+      - name: region
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: region
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "region"}'
+metrics:
+  - name: active_customers
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'COUNT(DISTINCT activity.customer_id)'
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "aggregation": {"class": "non_additive", "axes": [{"dimension": "region", "behavior": "distinct_recompute"}]}}'

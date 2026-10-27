@@ -1,0 +1,7 @@
+balances:
+  account_id: int64
+  snapshot_date: date
+  balance: 'decimal(18,2)'
+accounts:
+  account_id: int64
+  region: utf8
