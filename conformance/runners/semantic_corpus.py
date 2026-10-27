@@ -181,7 +181,7 @@ def run(root: Path = ROOT) -> tuple[list[CaseReport], list[Finding]]:
     findings = check_sources(corpus) + check_vendored(root / OSSIE)
     try:
         validator = ossie_validator(root / OSSIE)
-    except (ValueError, jsonschema.SchemaError) as problem:
+    except (OSError, ValueError, jsonschema.SchemaError) as problem:
         # Without the pinned schema no model can be checked; the source finding names the file.
         return [], [*findings, Finding("CORPUS_SOURCE_CHANGED", OSSIE.as_posix(), str(problem))]
     manifest = json.loads((corpus / "corpus" / "manifest.json").read_text("utf-8"))

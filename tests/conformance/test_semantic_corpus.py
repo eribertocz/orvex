@@ -181,7 +181,7 @@ def test_changed_source_is_detected(tmp_path: Path, change: str) -> None:
     assert "CORPUS_SOURCE_CHANGED" in codes(root)
 
 
-@pytest.mark.parametrize("change", ["edit-schema", "add", "remove-license"])
+@pytest.mark.parametrize("change", ["edit-schema", "add", "remove-license", "remove-schema"])
 def test_changed_vendored_ossie_file_is_detected(tmp_path: Path, change: str) -> None:
     root = copy_repository(tmp_path)
     folder = root / OSSIE
@@ -190,8 +190,10 @@ def test_changed_vendored_ossie_file_is_detected(tmp_path: Path, change: str) ->
         path.write_text(path.read_text("utf-8") + "\n", encoding="utf-8")
     elif change == "add":
         (folder / "extra.json").write_text("{}", encoding="utf-8")
-    else:
+    elif change == "remove-license":
         (folder / "LICENSE").unlink()
+    else:
+        (folder / "ossie-schema.json").unlink()
     assert codes(root) == ["CORPUS_SOURCE_CHANGED"]
 
 
