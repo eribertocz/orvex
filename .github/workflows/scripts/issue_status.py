@@ -55,7 +55,7 @@ def changes_for_event(
         if pull_request.get("draft"):
             return []
         return [
-            LabelChange(issue, add=(IN_REVIEW,), remove=(IN_PROGRESS,))
+            LabelChange(issue, add=(IN_REVIEW,), remove=(IN_PROGRESS, SPEC_READY))
             for issue in closing_issues(pull_request.get("body"))
         ]
     if event_name == "issues" and event.get("action") == "closed":

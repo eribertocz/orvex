@@ -53,7 +53,7 @@ class PullRequestTests(unittest.TestCase):
         event = {"pull_request": {"draft": False, "body": "Closes #3"}}
         self.assertEqual(
             changes_for_event("pull_request", event, no_labels),
-            [LabelChange(3, add=(IN_REVIEW,), remove=(IN_PROGRESS,))],
+            [LabelChange(3, add=(IN_REVIEW,), remove=(IN_PROGRESS, SPEC_READY))],
         )
 
     def test_draft_pull_request_changes_nothing(self) -> None:
