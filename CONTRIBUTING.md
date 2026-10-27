@@ -27,8 +27,22 @@ On Windows PowerShell, replace the last line with:
 ruff format --check .
 ruff check .
 mypy -p sextant.store -p sextant.transform -p sextant.semantic -p sextant.access -p sextant.dashboards -p sextant.mcp -p sextant.server
-mypy packages/*/tests tests .github/workflows/scripts
+mypy packages/*/tests tests tools .github/workflows/scripts
 pytest
+```
+
+### Architecture and naming checks
+
+```bash
+python -m tools.checks.product_name   # PRODUCT_NAME_HARDCODED
+python -m tools.checks.boundaries     # MODULE_BOUNDARY_VIOLATION, MATERIALIZATION_IN_PYTHON
+```
+
+### Rename the product
+
+```bash
+python -m tools.rename.rename "New Name" new-slug --dry-run   # show what would change
+python -m tools.rename.rename "New Name" new-slug             # apply, then review git diff
 ```
 
 ### Update dependencies
