@@ -1,4 +1,4 @@
-# `sextant-store` — `sextant.store`
+# `orvex-store` — `orvex.store`
 
 Store and read analytical data in DuckLake through DuckDB.
 

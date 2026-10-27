@@ -1,4 +1,4 @@
-# `sextant-contracts` — `sextant.contracts`
+# `orvex-contracts` — `orvex.contracts`
 
 Python types generated from [`contracts/`](../../contracts/README.md) by `python -m tools.contracts.generate`. Every module may import this package; nothing here is written by hand.
 

@@ -3,11 +3,11 @@
 **Status:** Accepted (2026-10-26)
 
 ## Context
-DuckDB's appeal is that typing `duckdb` gives a working database. The Owner wants Sextant to follow that principle while also supporting a shared server for managers and department heads.
+DuckDB's appeal is that typing `duckdb` gives a working database. The Owner wants Orvex to follow that principle while also supporting a shared server for managers and department heads.
 
 ## Decision
-- `sextant` opens the UI on an in-memory project; `sextant <path>` opens or creates a persistent project. One process, no login, no Docker, local DuckLake catalog, local SQLite state.
-- `sextant <path> --server` (or the official Docker image) enables multi-user operation: authentication, multiple HTTP workers, transformation workers, DuckLake with a PostgreSQL catalog, PostgreSQL module state.
+- `orvex` opens the UI on an in-memory project; `orvex <path>` opens or creates a persistent project. One process, no login, no Docker, local DuckLake catalog, local SQLite state.
+- `orvex <path> --server` (or the official Docker image) enables multi-user operation: authentication, multiple HTTP workers, transformation workers, DuckLake with a PostgreSQL catalog, PostgreSQL module state.
 - One instance hosts multiple projects; projects are created from the UI or the CLI.
 
 ## Alternatives considered

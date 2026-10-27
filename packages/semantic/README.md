@@ -1,4 +1,4 @@
-# `sextant-semantic` — `sextant.semantic`
+# `orvex-semantic` — `orvex.semantic`
 
 Turn business meaning into correct results, or stable errors, with receipts.
 

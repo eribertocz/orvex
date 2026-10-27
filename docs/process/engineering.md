@@ -9,9 +9,9 @@ Applies to every pull request. These are default acceptance criteria of every is
 - TypeScript: `camelCase` for variables and functions, `PascalCase` for types and Svelte components.
 - No abbreviations except widely established ones (`id`, `sql`, `url`, `api`).
 - **Product name rule.** The display name and slug are read at runtime from `identity.toml` wherever they appear in behavior or UI (window titles, CLI help, the instance directory `~/.<slug>/`, the project directory `.<slug>/`, environment-variable prefix `<SLUG>_`, Ossie `vendor_name`, Docker image name). The CI check (P0-04) fails on hard-coded occurrences in source code and UI strings, **except**:
-  - Python namespace directories and distribution names (`sextant/`, `sextant-*`), which the rename script rewrites;
+  - Python namespace directories and distribution names (`orvex/`, `orvex-*`), which the rename script rewrites;
   - documentation (`*.md`), `NOTICE`, `.github/labels.yml`, `.github/ISSUE_TEMPLATE/`;
-  - the Agent's commit identity (`claude-code@sextant.invalid`) and test fixtures that assert the identity loader.
+  - the Agent's commit identity (`claude-code@orvex.invalid`) and test fixtures that assert the identity loader.
   The rename script updates every exempt location in one commit.
 
 ## 2. Architecture inside a module

@@ -1,7 +1,7 @@
 # Module pack — `store`
 
 **Responsibility:** store and read analytical data in DuckLake through DuckDB.
-**Distribution / import:** `sextant-store` / `sextant.store`.
+**Distribution / import:** `orvex-store` / `orvex.store`.
 
 ## Contracts
 - **Owns:** store interface for plans/SQL with bound parameters, write batches, transactions and snapshots (`contracts/store/v1`, created in P1).

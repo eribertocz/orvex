@@ -1,4 +1,4 @@
-# `sextant` — `sextant.server`
+# `orvex` — `orvex.server`
 
 Compose the modules; serve the HTTP API, the CLI and the web application.
 

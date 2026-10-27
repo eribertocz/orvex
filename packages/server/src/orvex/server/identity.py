@@ -42,7 +42,7 @@ def load_identity(path: Path | None = None) -> Identity:
     text = (
         path.read_text(encoding="utf-8")
         if path is not None
-        else files("sextant.server").joinpath("identity.toml").read_text(encoding="utf-8")
+        else files("orvex.server").joinpath("identity.toml").read_text(encoding="utf-8")
     )
     return parse_identity(text)
 

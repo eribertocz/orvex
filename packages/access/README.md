@@ -1,4 +1,4 @@
-# `sextant-access` — `sextant.access`
+# `orvex-access` — `orvex.access`
 
 Know who the caller is and what they may do: users, sessions, roles, audit.
 

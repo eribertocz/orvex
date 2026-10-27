@@ -18,5 +18,5 @@ USER 10001
 WORKDIR /home/app
 # Local mode binds to the loopback interface only, so until server mode (P9-08) the image's
 # default command reports the installed versions.
-ENTRYPOINT ["python", "-m", "sextant.server"]
+ENTRYPOINT ["python", "-m", "orvex.server"]
 CMD ["--version"]

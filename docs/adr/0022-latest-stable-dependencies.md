@@ -3,7 +3,7 @@
 **Status:** Accepted (2026-10-26)
 
 ## Context
-The Owner requires Sextant to always use the latest versions of DuckDB, DuckLake, FastAPI, Svelte, SvelteKit and every other library and runtime it uses. Unpinned versions break reproducibility; outdated versions accumulate security and compatibility debt.
+The Owner requires Orvex to always use the latest versions of DuckDB, DuckLake, FastAPI, Svelte, SvelteKit and every other library and runtime it uses. Unpinned versions break reproducibility; outdated versions accumulate security and compatibility debt.
 
 ## Decision
 1. **Latest stable, always.** Every runtime, library and tool is used at its latest **stable** release (no alpha, beta, release-candidate, nightly or development builds in `main`). This applies to Python, Node.js (latest LTS line), DuckDB, DuckLake, FastAPI, Pydantic, PyYAML, OpenTelemetry, `clickhouse-connect`, Svelte, SvelteKit, TypeScript, Tailwind CSS, Apache ECharts, Monaco, Gridstack, Svelte Flow, test tools and linters.

@@ -7,10 +7,10 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 from jsonschema import Draft202012Validator
+from orvex.server.app import create_app
+from orvex.server.versions import Versions
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
-from sextant.server.app import create_app
-from sextant.server.versions import Versions
 
 CONTRACT = Path(__file__).resolve().parents[3] / "contracts" / "http-api" / "v1" / "openapi.yaml"
 DOCUMENT = yaml.safe_load(CONTRACT.read_text())
@@ -114,7 +114,7 @@ def test_without_a_web_build_only_the_api_answers() -> None:
 def test_request_log_has_request_id_and_no_query_values(
     client: TestClient, caplog: pytest.LogCaptureFixture
 ) -> None:
-    caplog.set_level("INFO", logger="sextant.server.http")
+    caplog.set_level("INFO", logger="orvex.server.http")
     response = client.get("/api/v1/health", params={"token": "s3cr3t"})
     record = next(r for r in caplog.records if r.getMessage() == "request")
     assert record.__dict__["request_id"] == response.headers["X-Request-Id"]

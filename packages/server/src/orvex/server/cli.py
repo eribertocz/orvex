@@ -14,9 +14,9 @@ from importlib.resources import files
 from pathlib import Path
 
 import uvicorn
-from sextant.server.app import create_app
-from sextant.server.identity import Identity, load_identity
-from sextant.server.instance import (
+from orvex.server.app import create_app
+from orvex.server.identity import Identity, load_identity
+from orvex.server.instance import (
     Project,
     ProjectPathError,
     ProjectRegistry,
@@ -24,8 +24,8 @@ from sextant.server.instance import (
     instance_directory,
     open_project,
 )
-from sextant.server.logs import configure_logging
-from sextant.server.versions import (
+from orvex.server.logs import configure_logging
+from orvex.server.versions import (
     ContractVersionIncompatible,
     Versions,
     check_compatibility,
@@ -36,7 +36,7 @@ from sextant.server.versions import (
 LOCAL_HOST = "127.0.0.1"
 DEFAULT_PORT = 7878
 PORT_ATTEMPTS = 100
-log = logging.getLogger("sextant.server")
+log = logging.getLogger("orvex.server")
 
 
 def parser_for(identity: Identity) -> argparse.ArgumentParser:
@@ -70,7 +70,7 @@ def free_port(first: int, host: str = LOCAL_HOST, attempts: int = PORT_ATTEMPTS)
 
 def web_build_directory() -> Path | None:
     """The web build packaged with the server, or the repository's web/build during development."""
-    packaged = Path(str(files("sextant.server").joinpath("web")))
+    packaged = Path(str(files("orvex.server").joinpath("web")))
     if (packaged / "index.html").is_file():
         return packaged
     repository = Path(__file__).resolve().parents[5] / "web" / "build"

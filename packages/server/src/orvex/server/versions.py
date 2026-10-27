@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from importlib.metadata import distributions
 from importlib.resources import files
 
-from sextant.server.identity import Identity
+from orvex.server.identity import Identity
 
 CONTRACT_VERSION = re.compile(r"v[1-9][0-9]*")
 

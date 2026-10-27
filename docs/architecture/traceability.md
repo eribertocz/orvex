@@ -21,7 +21,7 @@ In the UI, every number offers **"Where does this come from?"**, which renders t
 ## 2. Lineage
 
 - `transform` emits OpenLineage events (jobs, runs, input and output datasets, column lineage where derivable) for external collectors.
-- Inside Sextant, `server` composes the full graph — source → model → semantic dataset → metric → visual — from the transform dependency graph, the semantic model and dashboard references, and serves it as `contracts/lineage-graph/v1` (P8-05).
+- Inside Orvex, `server` composes the full graph — source → model → semantic dataset → metric → visual — from the transform dependency graph, the semantic model and dashboard references, and serves it as `contracts/lineage-graph/v1` (P8-05).
 - The studio shows lineage from source table → models → semantic datasets → metrics → dashboards and visuals, with Svelte Flow.
 
 ## 3. Run records

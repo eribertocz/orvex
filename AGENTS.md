@@ -1,4 +1,4 @@
-# AGENTS.md — rules for the AI agent working on Sextant
+# AGENTS.md — rules for the AI agent working on Orvex
 
 This file is read by the AI coding agent (Claude Code). It is the operational summary of the governing documents; when it disagrees with a document ranked in [`docs/README.md`](docs/README.md), that document wins and this file is corrected.
 
@@ -12,7 +12,7 @@ This file is read by the AI coding agent (Claude Code). It is the operational su
 | **Agent** | Claude Code | **Specifies and implements**: creates milestones and issues, keeps the next three issues fully specified, implements one issue at a time, runs an independent Reviewer pass on critical work, merges pull requests outside governed paths, prepares releases and creates tags |
 | **Reviewer** | A subagent launched by the Agent with clean context and the instructions in [`docs/process/review.md`](docs/process/review.md) | Verifies tier A pull requests independently; posts a `[Reviewer]` verdict |
 
-The Agent works through the Owner's GitHub account; its commits carry the author `Claude Code <claude-code@sextant.invalid>`. The binding responsibility matrix is in [`docs/process/git-workflow.md`](docs/process/git-workflow.md#4-responsibility-matrix).
+The Agent works through the Owner's GitHub account; its commits carry the author `Claude Code <claude-code@orvex.invalid>`. The binding responsibility matrix is in [`docs/process/git-workflow.md`](docs/process/git-workflow.md#4-responsibility-matrix).
 
 ## 2. Before any session
 
@@ -46,7 +46,7 @@ Full rules: [`docs/process/engineering.md`](docs/process/engineering.md).
 
 - **English** for code, identifiers, commits, branches, issues, pull requests and repository documents. UI text goes through i18n (Spanish default, English).
 - **Laws first.** Every pull request lists the laws it touches and how it complies ([`docs/product/laws.md`](docs/product/laws.md)).
-- **Modules never import each other's internals**; they communicate through `contracts/`. Only the `server` module (distribution `sextant`) composes modules. CI enforces this.
+- **Modules never import each other's internals**; they communicate through `contracts/`. Only the `server` module (distribution `orvex`) composes modules. CI enforces this.
 - **Single enforcement point for data access:** every data path goes through the semantic engine with the caller's security context.
 - **Exact values:** `DECIMAL`, `BIGINT`, `UBIGINT` and `HUGEINT` never become floats; `NULL` is never zero; time zones are explicit.
 - **Dependencies:** latest stable versions, pinned (ADR-0022); selection policy in ADR-0002 and `engineering.md` §5. A new dependency needs one line in the pull request: problem, package, license, governance, alternative, reason.

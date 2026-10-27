@@ -2,7 +2,7 @@
 
 Este documento resume, en lenguaje llano, lo que dicen los documentos en inglés. **Si algo difiere, mandan los documentos en inglés** (orden de prioridad en `docs/README.md`).
 
-## 1. Qué es Sextant
+## 1. Qué es Orvex
 
 Una herramienta BI propia, de código abierto (Apache-2.0), que:
 
@@ -13,7 +13,7 @@ Una herramienta BI propia, de código abierto (Apache-2.0), que:
 - muestra dashboards con páginas, gráficos, KPIs, filtros y la **matriz**;
 - comparte por URL con roles, grupos y seguridad por página, fila y columna;
 - explica cada número ("¿De dónde sale?");
-- se usa tan fácil como DuckDB: `sextant` y listo.
+- se usa tan fácil como DuckDB: `orvex` y listo.
 
 ## 2. Usuarios
 
@@ -69,7 +69,7 @@ Cada modelo es un `.sql` puro más un `.yaml` opcional con la configuración (in
 
 ## 7. Quién hace qué
 
-Un solo agente, **Claude Code**, especifica **e** implementa. Trabaja con tu cuenta de GitHub y firma sus commits como `Claude Code <claude-code@sextant.invalid>`.
+Un solo agente, **Claude Code**, especifica **e** implementa. Trabaja con tu cuenta de GitHub y firma sus commits como `Claude Code <claude-code@orvex.invalid>`.
 
 | Acción | Tú (Owner) | Agente |
 |---|---|---|
@@ -129,7 +129,7 @@ Modelos Python y predicciones de machine learning (XGBoost, LightGBM, scikit-lea
 
 ## 13. Lo que tienes que hacer tú
 
-1. Crear en GitHub el repositorio **vacío** `eribertocz/sextant` (público, sin README ni licencia).
+1. Crear en GitHub el repositorio **vacío** `eribertocz/orvex` (público, sin README ni licencia).
 2. Revisar y fusionar el PR de fundación (`docs: project foundation`).
-3. En P0: buscar que el nombre “Sextant” no tenga conflictos de marca (es renombrable en minutos si hiciera falta) y aplicar la protección de `main` que el agente te deja preparada (incluida “no permitir saltarse las reglas”, también para administradores).
+3. En P0: buscar que el nombre “Orvex” no tenga conflictos de marca (es renombrable en minutos si hiciera falta) y aplicar la protección de `main` que el agente te deja preparada (incluida “no permitir saltarse las reglas”, también para administradores).
 4. Aprobar el lote de comportamientos nuevos al inicio de cada fase.

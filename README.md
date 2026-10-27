@@ -1,18 +1,18 @@
-# Sextant
+# Orvex
 
-**Business intelligence built on open standards.** Sextant connects raw data, transforms it with plain SQL, models business meaning in [Apache Ossie](https://github.com/apache/ossie), and serves governed dashboards, matrices and AI access — with every number traceable to its source.
+**Business intelligence built on open standards.** Orvex connects raw data, transforms it with plain SQL, models business meaning in [Apache Ossie](https://github.com/apache/ossie), and serves governed dashboards, matrices and AI access — with every number traceable to its source.
 
 > **Status:** pre-alpha. This repository currently contains the project foundation (product laws, architecture, decisions, roadmap and process). No product code exists yet. See [`docs/roadmap.md`](docs/roadmap.md).
 
-## Why Sextant
+## Why Orvex
 
-| Problem with incumbent BI tools | Sextant's answer |
+| Problem with incumbent BI tools | Orvex's answer |
 |---|---|
 | Sharing requires per-user licenses | Self-hosted, Apache-2.0, share by URL with roles |
 | Business logic locked in proprietary languages (DAX, LookML) | Plain SQL for transformations, Apache Ossie YAML for semantics |
 | Numbers that cannot be explained | Every number carries a **receipt**: definition, filters, policies, data version and lineage |
 | Silent wrong totals (non-additive metrics, fan-out joins) | A semantic engine that **proves** correctness or rejects the query with a stable error |
-| Heavy setup | `sextant` opens an in-memory project, like `duckdb`. Server mode is opt-in |
+| Heavy setup | `orvex` opens an in-memory project, like `duckdb`. Server mode is opt-in |
 
 ## Core technology
 
@@ -24,7 +24,7 @@ Start with [`docs/README.md`](docs/README.md). It defines which document governs
 
 | You want to… | Read |
 |---|---|
-| Understand what Sextant is and for whom | [`docs/product/vision.md`](docs/product/vision.md) |
+| Understand what Orvex is and for whom | [`docs/product/vision.md`](docs/product/vision.md) |
 | Know the non-negotiable rules | [`docs/product/laws.md`](docs/product/laws.md) |
 | Understand the architecture | [`docs/architecture/overview.md`](docs/architecture/overview.md) |
 | Understand the semantic engine (the core) | [`docs/architecture/semantic-engine.md`](docs/architecture/semantic-engine.md) |

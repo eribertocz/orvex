@@ -2,7 +2,7 @@
 
 ## 1. Stack
 
-SvelteKit with the static adapter (served by `server`, no Node.js at runtime), Svelte 5, TypeScript (strict), Tailwind CSS v4 (CSS-first configuration with `@theme` design tokens), Apache ECharts, Monaco, Gridstack (isolated), Svelte Flow, and Sextant's own matrix component. API types are generated from `contracts/http-api` (OpenAPI).
+SvelteKit with the static adapter (served by `server`, no Node.js at runtime), Svelte 5, TypeScript (strict), Tailwind CSS v4 (CSS-first configuration with `@theme` design tokens), Apache ECharts, Monaco, Gridstack (isolated), Svelte Flow, and Orvex's own matrix component. API types are generated from `contracts/http-api` (OpenAPI).
 
 ## 2. Design direction
 
@@ -28,7 +28,7 @@ Reference products: Vercel, Linear and Figma — and the goal is to surpass them
 | **KPI card** | Value, comparison, variance, sparkline | Comparison computed by the engine (S3) |
 | **Filters** | List, search, range, relative dates, hierarchical; scope visual / page / dashboard | Possible values from the engine (S2), authorized rows only |
 | **Interactions** | Cross-filtering, drill-down, drill-through | Drill paths declared in the semantic model |
-| **Dashboard canvas** | Pages, sidebar, grid layout | Gridstack inside one component; positions stored in Sextant YAML |
+| **Dashboard canvas** | Pages, sidebar, grid layout | Gridstack inside one component; positions stored in Orvex YAML |
 | **Explorer** | Ad hoc analysis on the semantic model | No SQL; semantic queries only |
 | **Receipt panel** | "Where does this come from?" on every number | Renders the receipt (traceability.md) |
 | **Export** | CSV, Excel (keeps matrix structure), PDF | Server-side, through the engine, audited |
@@ -85,7 +85,7 @@ dashboards/consumption/
 
 - Format: YAML validated by `contracts/dashboard/v1` (JSON Schema, published so editors autocomplete).
 - Visuals reference metrics and dimensions **by name**; dashboards never contain SQL or data.
-- Positions are stored as `{x, y, w, h}` in Sextant's format, never in Gridstack's.
+- Positions are stored as `{x, y, w, h}` in Orvex's format, never in Gridstack's.
 - Narrow screens reflow automatically to a single column; an optional `mobile_order` per page overrides the order. One design serves desktop, tablet and mobile.
 - Drafts are visible only to their author; publishing makes them visible to everyone allowed by roles and groups.
 - UI writes go through the project writer (ADR-0024): form edits change only the dashboard nodes they own, preserve comments and show a diff preview; code editors (Monaco) save models, the semantic model and `security.yaml` exactly as typed.

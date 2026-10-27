@@ -1,7 +1,7 @@
 # Module pack — `dashboards`
 
 **Responsibility:** read, validate and write dashboard and page definitions; decide page access.
-**Distribution / import:** `sextant-dashboards` / `sextant.dashboards`.
+**Distribution / import:** `orvex-dashboards` / `orvex.dashboards`.
 
 ## Contracts
 - **Owns:** `contracts/dashboard/v1`, `contracts/visual-spec/v1`.

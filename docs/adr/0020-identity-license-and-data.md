@@ -3,7 +3,7 @@
 **Status:** Accepted (2026-10-26)
 
 ## Context
-The Owner chose the name "Sextant" (an instrument that fixes an exact position against known references) but wants to be able to rename the product quickly. The repository is public.
+The Owner chose the name "Orvex" (an instrument that fixes an exact position against known references) but wants to be able to rename the product quickly. The repository is public.
 
 ## Decision
 - The product name exists only in `identity.toml`; a rename script and a CI check enforce it; previous Ossie vendor names remain accepted as aliases.

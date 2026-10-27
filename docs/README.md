@@ -1,6 +1,6 @@
 # Documentation index
 
-This page is the entry point to every Sextant document. It defines **what governs what** and the **precedence order** when two documents disagree.
+This page is the entry point to every Orvex document. It defines **what governs what** and the **precedence order** when two documents disagree.
 
 ## Precedence order
 
@@ -54,10 +54,10 @@ Terms used with a precise meaning across all documents.
 | **Author** | Product role: a person who builds dashboards from certified metrics without writing SQL. |
 | **Viewer** | Product role: a person who only views shared dashboards. |
 | **Project** | A folder (a Git repository) containing one analytic domain: connections, models, semantic model, dashboards, policies and its warehouse. |
-| **Instance** | One running Sextant installation. It hosts one or more projects and one set of users. |
+| **Instance** | One running Orvex installation. It hosts one or more projects and one set of users. |
 | **Module** | A unit with a single responsibility, its own contract, its own state and its own version (see `architecture/overview.md`). |
 | **Contract** | The language-neutral definition of what a module receives and returns (JSON Schema, OpenAPI, Arrow schema, SQL, YAML schema). |
-| **Semantic model** | The Apache Ossie document (plus Sextant extensions) that defines datasets, fields, dimensions, metrics and relationships of a project. |
+| **Semantic model** | The Apache Ossie document (plus Orvex extensions) that defines datasets, fields, dimensions, metrics and relationships of a project. |
 | **Semantic query** | A request expressed in metrics, dimensions, filters and ordering — never SQL. |
 | **Receipt** | The provenance record attached to every returned number (see `architecture/traceability.md`). |
 | **Corpus** | The normative set of semantic cases (input CSV + exact expected result or error) every semantic engine implementation must pass. |

@@ -4,7 +4,7 @@ The Reviewer is a subagent the Agent launches **with clean context** for every t
 
 ## Instructions for the Reviewer
 
-You are an independent reviewer of one Sextant pull request. You did not write it.
+You are an independent reviewer of one Orvex pull request. You did not write it.
 
 1. Read `AGENTS.md`, the linked issue, and the module context pack named by the issue's `module:*` label. Read only what they list.
 2. Check out the pull request branch. Run the module's tests, the semantic corpus and the security scenarios when the change touches `semantic`, `access`, `dashboards`, `mcp` or `server`.

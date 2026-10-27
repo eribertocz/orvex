@@ -1,4 +1,4 @@
-# Semantic engine (`semantic` module) — the core of Sextant
+# Semantic engine (`semantic` module) — the core of Orvex
 
 ## 1. Mission
 
@@ -6,13 +6,13 @@
 
 The engine is the single enforcement point for data access (law 3) and the single source of truth for business meaning (law 1). Every consumer — dashboards, matrix, explorer, exports, MCP, external API — uses it. No other path executes analytical SQL for consumers.
 
-**Quality bar:** full parity with SEF (the semantic engine of bi-platform) **plus** capabilities S1–S6 and Sextant-specific advantages. Nothing in this document is optional for v1.0.0.
+**Quality bar:** full parity with SEF (the semantic engine of bi-platform) **plus** capabilities S1–S6 and Orvex-specific advantages. Nothing in this document is optional for v1.0.0.
 
 ## 2. References studied
 
 | Reference | Adopted | Improved or rejected |
 |---|---|---|
-| **SEF (bi-platform)** | Staged compilation with typed intermediate representations; correctness separated from planning; facts, obligations and rejections; grain algebra; additivity classes; fan-out reasoning; canonical fingerprints; the normative corpus | Evidence starts "declared, unverified" in SEF; Sextant **verifies evidence against the data** after each load. SEF lacks S1–S6; Sextant includes them |
+| **SEF (bi-platform)** | Staged compilation with typed intermediate representations; correctness separated from planning; facts, obligations and rejections; grain algebra; additivity classes; fan-out reasoning; canonical fingerprints; the normative corpus | Evidence starts "declared, unverified" in SEF; Orvex **verifies evidence against the data** after each load. SEF lacks S1–S6; Orvex includes them |
 | **Power BI (DAX)** | Filter-context modification (`CALCULATE`, `ALLSELECTED`), calculation groups | No implicit context transitions; every scope is explicit and typed |
 | **Tableau** | Level-of-detail expressions (`FIXED`, `INCLUDE`, `EXCLUDE`); multiple facts related through shared dimensions | Statistical "explanations" are presented as hypotheses, never as causes |
 | **Looker** | Fan-out-safe aggregation; declared drill paths; aggregate awareness; freshness coordination (datagroups) | Exact per-fact aggregation instead of hashed symmetric-aggregate tricks |
@@ -20,11 +20,11 @@ The engine is the single enforcement point for data access (law 3) and the singl
 | **Cube** | Multi-stage measures; pre-aggregation matching; adversarial tests | No Cube dependency; own typed contracts |
 | **dbt MetricFlow** | Metrics defined once, SQL generated per request | Ossie as the native format, not a tool-specific one |
 
-## 3. Input: Apache Ossie plus `SEXTANT` extensions
+## 3. Input: Apache Ossie plus `ORVEX` extensions
 
-The semantic model is a valid Apache Ossie document (pinned specification commit; see ADR-0009). Ossie defines datasets, fields, dimensions, metrics, relationships and `ai_context`. What Ossie does not define is carried in `custom_extensions` entries with `vendor_name: SEXTANT`, whose `data` payload is validated by `contracts/ossie-extensions/v1` (JSON Schema).
+The semantic model is a valid Apache Ossie document (pinned specification commit; see ADR-0009). Ossie defines datasets, fields, dimensions, metrics, relationships and `ai_context`. What Ossie does not define is carried in `custom_extensions` entries with `vendor_name: ORVEX`, whose `data` payload is validated by `contracts/ossie-extensions/v1` (JSON Schema).
 
-| Element | `SEXTANT` extension fields |
+| Element | `ORVEX` extension fields |
 |---|---|
 | Dataset | `grain` (key columns that identify one row), `unique_keys`, `time_roles` (event time, validity interval, snapshot time), `evidence` (see §6), `cache` (`enabled`, `ttl`), `certification` |
 | Field | `semantic_type` (identifier, category, quantity, amount, ratio, instant, date…, and geographic: `geo_region` with a `geo_source` naming a project GeoJSON file under `assets/geo/` and its key property, `latitude`, `longitude`), `unit`, `currency`, `nullability` contract, `calendar` for date fields, `pii` classification |
@@ -34,8 +34,8 @@ The semantic model is a valid Apache Ossie document (pinned specification commit
 
 Rules:
 
-- Reading an Ossie model **without** `SEXTANT` extensions works: missing information takes the safest default, and any query that needs the missing information is **rejected** with a stable error explaining which declaration is missing. The engine never assumes additivity or cardinality.
-- Exporting to plain Ossie produces a valid document; the export report lists every `SEXTANT` semantic that the target cannot represent (law 12).
+- Reading an Ossie model **without** `ORVEX` extensions works: missing information takes the safest default, and any query that needs the missing information is **rejected** with a stable error explaining which declaration is missing. The engine never assumes additivity or cardinality.
+- Exporting to plain Ossie produces a valid document; the export report lists every `ORVEX` semantic that the target cannot represent (law 12).
 - Previous vendor names in `identity.toml` are accepted as aliases.
 
 ## 4. Compilation pipeline
@@ -95,7 +95,7 @@ Additional invariants:
 - **Nulls** follow each aggregate's declared null contract; `NULL` never becomes zero.
 - **Totals and subtotals** are computed by the engine (grouping sets) with the same correctness rules as the detail rows.
 
-## 6. Evidence: declared and verified (Sextant advantage)
+## 6. Evidence: declared and verified (Orvex advantage)
 
 Every relationship cardinality, dataset uniqueness, temporal non-overlap and bridge-weight total is **evidence** with a status:
 
@@ -191,13 +191,13 @@ The matrix (see `frontend.md`) sends a `MatrixQuery` (rows, columns, measures, t
 
 The engine is usable in three ways, all over the same contracts:
 
-1. **Library:** `sextant.semantic` Python API.
+1. **Library:** `orvex.semantic` Python API.
 2. **HTTP:** through `server` (`/api/v1/semantic/query`, `/explain`, `/catalog`, `/possible-values`, `/matrix`).
 3. **MCP:** through `mcp` (`describe_model`, `query`, `explain`, `list_dashboards`).
 
 ## 12. Error codes (initial set)
 
-`MEMBER_NOT_FOUND`, `AMBIGUOUS_RELATIONSHIP_PATH`, `NO_RELATIONSHIP_PATH`, `INCOMPATIBLE_UNITS`, `ILLEGAL_TEMPORAL_REAGGREGATION`, `ILLEGAL_GRAIN_TRANSITION`, `FANOUT_NOT_ISOLATABLE`, `MISSING_ADDITIVITY_DECLARATION`, `MISSING_CARDINALITY_DECLARATION`, `EVIDENCE_VIOLATED`, `BRIDGE_WEIGHTS_INVALID`, `TEMPORAL_MATCH_NOT_UNIQUE`, `DIVISION_POLICY_VIOLATION`, `DEPRECATED_METRIC` (warning), `METRIC_IN_USE` (deleting or renaming a metric that other metrics reference; for dashboard references, `server` asks `dashboards` before the project writer saves and returns the same code), `MEMBER_MASKED`, `COVERAGE_POLICY_REQUIRED`, `OSSIE_INVALID`, `UNSUPPORTED_OSSIE_VERSION`, `MISSING_SEXTANT_DECLARATION`, `POLICY_ATTRIBUTE_MISSING` (notice: the result has zero rows for that policy, never an error that reveals data; security §3.3), `QUERY_BUDGET_EXCEEDED`, `MATRIX_TOO_WIDE`, `UNSUPPORTED_OPERATION`.
+`MEMBER_NOT_FOUND`, `AMBIGUOUS_RELATIONSHIP_PATH`, `NO_RELATIONSHIP_PATH`, `INCOMPATIBLE_UNITS`, `ILLEGAL_TEMPORAL_REAGGREGATION`, `ILLEGAL_GRAIN_TRANSITION`, `FANOUT_NOT_ISOLATABLE`, `MISSING_ADDITIVITY_DECLARATION`, `MISSING_CARDINALITY_DECLARATION`, `EVIDENCE_VIOLATED`, `BRIDGE_WEIGHTS_INVALID`, `TEMPORAL_MATCH_NOT_UNIQUE`, `DIVISION_POLICY_VIOLATION`, `DEPRECATED_METRIC` (warning), `METRIC_IN_USE` (deleting or renaming a metric that other metrics reference; for dashboard references, `server` asks `dashboards` before the project writer saves and returns the same code), `MEMBER_MASKED`, `COVERAGE_POLICY_REQUIRED`, `OSSIE_INVALID`, `UNSUPPORTED_OSSIE_VERSION`, `MISSING_ORVEX_DECLARATION`, `POLICY_ATTRIBUTE_MISSING` (notice: the result has zero rows for that policy, never an error that reveals data; security §3.3), `QUERY_BUDGET_EXCEEDED`, `MATRIX_TOO_WIDE`, `UNSUPPORTED_OPERATION`.
 
 Each code has a stable identifier, a human message (i18n) and structured details. Codes are part of `contracts/semantic-error`; removing or changing the meaning of a code is a breaking change.
 
@@ -210,11 +210,11 @@ Each code has a stable identifier, a human message (i18n) and structured details
 
 ## 14. Parity and advantage summary
 
-| Topic | SEF today (code reviewed 2026-10-26) | Sextant v1.0.0 |
+| Topic | SEF today (code reviewed 2026-10-26) | Orvex v1.0.0 |
 |---|---|---|
 | Corpus | 17 of 18 valid cases executed against the oracle (distinct count missing); 3 rejection cases in correctness tests | **21 of 21**, plus CASE-101+ |
 | Evidence | Declared, unverified | **Verified against data after every load** |
 | S1–S6 | Proposed, not implemented | **Implemented** |
 | Column-level security | Pending | **Visible, masked, hidden** |
 | Receipt | Designed | Implemented and shown on every number |
-| Ossie | Adapter | Native format with `SEXTANT` extensions and loss-reporting export |
+| Ossie | Adapter | Native format with `ORVEX` extensions and loss-reporting export |

@@ -16,10 +16,10 @@ from tools.checks.product_name import scan as scan_product_name
 from tools.repository import REPOSITORY_ROOT
 
 IDENTITY = """[product]
-name = "Sextant"
-slug = "sextant"
-python_namespace = "sextant"
-ossie_vendor_name = "SEXTANT"
+name = "Orvex"
+slug = "orvex"
+python_namespace = "orvex"
+ossie_vendor_name = "ORVEX"
 previous_vendor_names = []
 """
 
@@ -35,29 +35,29 @@ def make_repository(root: Path, files: dict[str, str]) -> Path:
 
 class TestProductName:
     def test_hardcoded_name_in_python_is_reported(self, tmp_path: Path) -> None:
-        repository = make_repository(tmp_path, {"packages/store/src/x.py": 'TITLE = "Sextant"\n'})
+        repository = make_repository(tmp_path, {"packages/store/src/x.py": 'TITLE = "Orvex"\n'})
         findings = scan_product_name(repository)
         assert [(f.path, f.line) for f in findings] == [("packages/store/src/x.py", 1)]
         assert str(findings[0]).startswith("PRODUCT_NAME_HARDCODED: packages/store/src/x.py:1:")
 
     def test_hardcoded_name_in_web_source_is_reported(self, tmp_path: Path) -> None:
-        repository = make_repository(tmp_path, {"web/src/App.svelte": "<h1>sextant</h1>\n"})
+        repository = make_repository(tmp_path, {"web/src/App.svelte": "<h1>orvex</h1>\n"})
         assert len(scan_product_name(repository)) == 1
 
     def test_environment_prefix_is_reported(self, tmp_path: Path) -> None:
-        repository = make_repository(tmp_path, {"tools/x.py": 'HOME = "SEXTANT_HOME"\n'})
+        repository = make_repository(tmp_path, {"tools/x.py": 'HOME = "ORVEX_HOME"\n'})
         assert len(scan_product_name(repository)) == 1
 
     def test_documentation_is_exempt(self, tmp_path: Path) -> None:
-        repository = make_repository(tmp_path, {"docs/x.md": "Sextant is great.\n"})
+        repository = make_repository(tmp_path, {"docs/x.md": "Orvex is great.\n"})
         assert scan_product_name(repository) == []
 
     def test_namespace_paths_and_distribution_names_are_allowed(self, tmp_path: Path) -> None:
         source = (
-            "import sextant.store\n"
-            "from sextant.server import identity\n"
-            'NAME = "sextant-semantic"\n'
-            'PATH = "src/sextant/transform"\n'
+            "import orvex.store\n"
+            "from orvex.server import identity\n"
+            'NAME = "orvex-semantic"\n'
+            'PATH = "src/orvex/transform"\n'
         )
         repository = make_repository(tmp_path, {"packages/server/src/x.py": source})
         assert scan_product_name(repository) == []
@@ -72,28 +72,26 @@ def parse(source: str) -> ast.AST:
 
 class TestBoundaries:
     def test_module_importing_another_module_is_reported(self) -> None:
-        tree = parse("from sextant.semantic import engine\n")
-        findings = boundary_findings(tree, "transform", "sextant", "packages/transform/src/a.py")
+        tree = parse("from orvex.semantic import engine\n")
+        findings = boundary_findings(tree, "transform", "orvex", "packages/transform/src/a.py")
         assert [(f.code, f.line) for f in findings] == [("MODULE_BOUNDARY_VIOLATION", 1)]
         assert "packages/transform/src/a.py:1" in str(findings[0])
 
     def test_plain_import_is_reported(self) -> None:
-        findings = boundary_findings(parse("import sextant.access\n"), "store", "sextant", "f.py")
+        findings = boundary_findings(parse("import orvex.access\n"), "store", "orvex", "f.py")
         assert len(findings) == 1
 
     def test_from_namespace_import_module_is_reported(self) -> None:
-        findings = boundary_findings(
-            parse("from sextant import semantic\n"), "store", "sextant", "f"
-        )
+        findings = boundary_findings(parse("from orvex import semantic\n"), "store", "orvex", "f")
         assert len(findings) == 1
 
     def test_server_may_import_every_module(self) -> None:
-        tree = parse("import sextant.semantic\nfrom sextant.store import x\n")
-        assert boundary_findings(tree, "server", "sextant", "packages/server/src/a.py") == []
+        tree = parse("import orvex.semantic\nfrom orvex.store import x\n")
+        assert boundary_findings(tree, "server", "orvex", "packages/server/src/a.py") == []
 
     def test_own_module_contracts_and_third_party_are_allowed(self) -> None:
-        tree = parse("import sextant.store.core\nimport sextant.contracts.x\nimport duckdb\n")
-        assert boundary_findings(tree, "store", "sextant", "f.py") == []
+        tree = parse("import orvex.store.core\nimport orvex.contracts.x\nimport duckdb\n")
+        assert boundary_findings(tree, "store", "orvex", "f.py") == []
 
 
 class TestMaterialization:
@@ -113,12 +111,12 @@ class TestMaterialization:
         repository = make_repository(
             tmp_path,
             {
-                "packages/store/src/sextant/store/a.py": "def f(r):\n    return r.fetchall()\n",
+                "packages/store/src/orvex/store/a.py": "def f(r):\n    return r.fetchall()\n",
                 "packages/store/tests/test_a.py": "def g(r):\n    return r.fetchall()\n",
             },
         )
         findings = scan_boundaries(repository, set())
-        assert [f.path for f in findings] == ["packages/store/src/sextant/store/a.py"]
+        assert [f.path for f in findings] == ["packages/store/src/orvex/store/a.py"]
 
     def test_allow_list_entry_without_reason_is_rejected(self, tmp_path: Path) -> None:
         allow_list = tmp_path / "allow.toml"

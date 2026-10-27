@@ -2,6 +2,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 import venv
 from pathlib import Path
 
@@ -28,6 +29,15 @@ IGNORED = shutil.ignore_patterns(
 
 
 # Built at run time so that renaming the repository never rewrites this test's own text.
+PREVIOUS_VENDORS: list[str] = tomllib.loads((REPOSITORY_ROOT / "identity.toml").read_text())[
+    "product"
+]["previous_vendor_names"]
+
+
+def vendor_list(vendors: list[str]) -> str:
+    return "[" + ", ".join(f'"{vendor}"' for vendor in vendors) + "]"
+
+
 NEW_NAME = "Astro" + "labe"
 NEW_SLUG = NEW_NAME.lower()
 NEW_VENDOR = NEW_NAME.upper()
@@ -58,7 +68,7 @@ def test_rename_leaves_no_trace_of_the_old_name(copy: Path) -> None:
     rename(copy, NEW_NAME, NEW_SLUG)
 
     assert scan_product_name(copy) == []
-    old = re.compile(r"(?<![A-Za-z0-9])sextant(?![A-Za-z0-9])", re.IGNORECASE)
+    old = re.compile(r"(?<![A-Za-z0-9])orvex(?![A-Za-z0-9])", re.IGNORECASE)
     leftovers = [
         f"{path.relative_to(copy)}:{number}"
         for path in tracked_files(copy)
@@ -67,8 +77,9 @@ def test_rename_leaves_no_trace_of_the_old_name(copy: Path) -> None:
     ]
     assert leftovers == []
     identity = (copy / "identity.toml").read_text()
-    assert 'previous_vendor_names = ["SEXTANT"]' in identity
-    assert not list(copy.glob("packages/*/src/sextant"))
+    previous = [*PREVIOUS_VENDORS, "ORVEX"]
+    assert f"previous_vendor_names = {vendor_list(previous)}" in identity
+    assert not list(copy.glob("packages/*/src/orvex"))
 
 
 def test_renamed_packages_install_and_import(copy: Path, tmp_path: Path) -> None:
@@ -114,11 +125,12 @@ def test_renamed_packages_install_and_import(copy: Path, tmp_path: Path) -> None
 def test_rename_round_trip_restores_the_tree(copy: Path) -> None:
     original = snapshot(copy)
     rename(copy, NEW_NAME, NEW_SLUG)
-    rename(copy, "Sextant", "sextant")
+    rename(copy, "Orvex", "orvex")
     restored = snapshot(copy)
 
     identity_files = {name for name in original if name.endswith("identity.toml")}
     assert set(restored) == set(original)
     assert {name for name in original if original[name] != restored[name]} <= identity_files
     for name in identity_files:
-        assert f'previous_vendor_names = ["{NEW_VENDOR}"]' in restored[name].decode()
+        previous = [*PREVIOUS_VENDORS, NEW_VENDOR]
+        assert f"previous_vendor_names = {vendor_list(previous)}" in restored[name].decode()

@@ -1,7 +1,7 @@
 import re
 
-import sextant.access
+import orvex.access
 
 
 def test_version_comes_from_package_metadata() -> None:
-    assert re.fullmatch(r"\d+\.\d+\.\d+", sextant.access.__version__)
+    assert re.fullmatch(r"\d+\.\d+\.\d+", orvex.access.__version__)

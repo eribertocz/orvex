@@ -1,10 +1,10 @@
 from pathlib import Path
 
 import pytest
-from sextant.server.identity import IdentityError, load_identity, parse_identity
+from orvex.server.identity import IdentityError, load_identity, parse_identity
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-PACKAGED = REPOSITORY_ROOT / "packages/server/src/sextant/server/identity.toml"
+PACKAGED = REPOSITORY_ROOT / "packages/server/src/orvex/server/identity.toml"
 
 VALID = """
 [product]
@@ -12,7 +12,7 @@ name = "Quadrant"
 slug = "quadrant"
 python_namespace = "quadrant"
 ossie_vendor_name = "QUADRANT"
-previous_vendor_names = ["SEXTANT"]
+previous_vendor_names = ["ORVEX"]
 """
 
 
@@ -29,7 +29,7 @@ def test_load_identity_reads_the_packaged_file() -> None:
 def test_parse_valid_identity() -> None:
     identity = parse_identity(VALID)
     assert identity.name == "Quadrant"
-    assert identity.previous_vendor_names == ("SEXTANT",)
+    assert identity.previous_vendor_names == ("ORVEX",)
 
 
 @pytest.mark.parametrize(
@@ -42,7 +42,7 @@ def test_parse_valid_identity() -> None:
         (('python_namespace = "quadrant"', 'python_namespace = "my-name"'), "python_namespace"),
         (('ossie_vendor_name = "QUADRANT"', 'ossie_vendor_name = "astro"'), "ossie_vendor_name"),
         (
-            ('previous_vendor_names = ["SEXTANT"]', "previous_vendor_names = [1]"),
+            ('previous_vendor_names = ["ORVEX"]', "previous_vendor_names = [1]"),
             "previous_vendor_names",
         ),
     ],

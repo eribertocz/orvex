@@ -3,11 +3,11 @@
 **Status:** Accepted (2026-10-26)
 
 ## Context
-Sextant is specified and implemented by an AI agent. bi-platform used two agents with strict roles, but both shared one GitHub account, so formal approvals were impossible. A second account (a machine account or a GitHub App) adds setup and maintenance the Owner considers too complex. What matters is that quality does not depend on an agent approving itself.
+Orvex is specified and implemented by an AI agent. bi-platform used two agents with strict roles, but both shared one GitHub account, so formal approvals were impossible. A second account (a machine account or a GitHub App) adds setup and maintenance the Owner considers too complex. What matters is that quality does not depend on an agent approving itself.
 
 ## Decision
 - **Roles:** Owner (human), **Agent** (Claude Code: specifies **and** implements) and **Reviewer** (a subagent launched by the Agent with clean context and the instructions in `process/review.md`). Rules live in `AGENTS.md`.
-- **One account:** the Agent works through the Owner's GitHub account; its commits carry the author `Claude Code <claude-code@sextant.invalid>` so its work stays distinguishable.
+- **One account:** the Agent works through the Owner's GitHub account; its commits carry the author `Claude Code <claude-code@orvex.invalid>` so its work stays distinguishable.
 - **Specify ahead:** the Agent keeps the next three issues fully specified; a specification is frozen before its implementation branch exists and is never changed to fit the code.
 - **Control without a second account:**
   1. required automated checks (types, tests, semantic corpus, security scenarios) block merging;

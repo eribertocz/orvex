@@ -11,13 +11,13 @@ from pathlib import Path
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
-from sextant.contracts.http_api import v1
-from sextant.server.versions import Versions
+from orvex.contracts.http_api import v1
+from orvex.server.versions import Versions
 from starlette.exceptions import HTTPException
 
 REQUEST_ID_HEADER = "X-Request-Id"
 API_PREFIX = "/api/"
-log = logging.getLogger("sextant.server.http")
+log = logging.getLogger("orvex.server.http")
 
 
 def error_response(

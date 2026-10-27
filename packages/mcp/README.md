@@ -1,4 +1,4 @@
-# `sextant-mcp` — `sextant.mcp`
+# `orvex-mcp` — `orvex.mcp`
 
 Expose the semantic model to AI agents through the Model Context Protocol.
 
