@@ -85,7 +85,7 @@ def test_cancel_read_from_another_thread(lake: Lake) -> None:
     threading.Timer(0.2, handle.cancel).start()
     started = time.monotonic()
     assert code_of(handle.reader.read_all) == "STORE_CANCELLED"
-    assert time.monotonic() - started < 1.5
+    assert time.monotonic() - started < 1.2  # the cancel comes at 0.2 s
 
 
 def test_cancel_transaction_rolls_back(lake: Lake) -> None:
