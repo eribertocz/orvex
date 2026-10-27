@@ -5,19 +5,6 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel
 
 
-class LakeLocation(BaseModel):
-    """
-    A DuckLake lake with a local DuckDB-file catalog at <path>/catalog.ducklake and data files under <path>/data/.
-    """
-
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    kind: Literal["lake_location"]
-    catalog: Literal["local"]
-    path: Annotated[str, Field(min_length=1)]
-
-
 class ParameterType(RootModel[str]):
     root: Annotated[
         str,
@@ -60,6 +47,10 @@ class ErrorCode(
             "STORE_PARAMETER_INVALID",
             "STORE_LIMITS_REQUIRED",
             "STORE_EXTENSION_UNAVAILABLE",
+            "STORE_TRANSACTION_CONFLICT",
+            "STORE_SECRET_MISSING",
+            "STORE_SECRET_INLINE",
+            "STORE_CATALOG_UNAVAILABLE",
         ]
     ]
 ):
@@ -70,6 +61,10 @@ class ErrorCode(
         "STORE_PARAMETER_INVALID",
         "STORE_LIMITS_REQUIRED",
         "STORE_EXTENSION_UNAVAILABLE",
+        "STORE_TRANSACTION_CONFLICT",
+        "STORE_SECRET_MISSING",
+        "STORE_SECRET_INLINE",
+        "STORE_CATALOG_UNAVAILABLE",
     ]
 
 
@@ -89,6 +84,48 @@ class StoreError(BaseModel):
     code: ErrorCode
     message: Annotated[str, Field(min_length=1)]
     details: list[ErrorDetail]
+
+
+class LocalLakeLocation(BaseModel):
+    """
+    A DuckLake lake with a local DuckDB-file catalog at <path>/catalog.ducklake and data files under <path>/data/ (one process).
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["lake_location"]
+    catalog: Literal["local"]
+    path: Annotated[str, Field(min_length=1)]
+
+
+class PostgresLakeLocation(BaseModel):
+    """
+    A DuckLake lake whose catalog lives in PostgreSQL, so several processes can read and write it. The password is never part of the location: it is read from the environment variable named by password_env.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["lake_location"]
+    catalog: Literal["postgres"]
+    connection: Annotated[str, Field(min_length=1)]
+    """
+    libpq key=value connection string without a password, e.g. host=db port=5432 dbname=lake user=analytics
+    """
+    password_env: Annotated[str, Field(pattern="^[A-Z_][A-Z0-9_]*$")]
+    metadata_schema: Annotated[str | None, Field(pattern="^[a-z_][a-z0-9_]*$")] = None
+    """
+    PostgreSQL schema holding the catalog tables (default: public)
+    """
+    data_path: Annotated[str, Field(min_length=1)]
+
+
+class LakeLocation(RootModel[LocalLakeLocation | PostgresLakeLocation]):
+    root: LocalLakeLocation | PostgresLakeLocation
+    """
+    Where the lake is.
+    """
 
 
 class Parameter(BaseModel):

@@ -1,28 +1,18 @@
-"""P1-01: store contract v1 on DuckLake with a local catalog."""
+"""P1-01 and P1-02: store contract v1 on DuckLake, local and PostgreSQL catalogs."""
 
 from __future__ import annotations
 
 import decimal
 import threading
-from collections.abc import Iterator
 from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from orvex.contracts.store.v1 import LakeLocation, Parameter, ReadRequest, StatementRequest
+from orvex.contracts.store.v1 import LocalLakeLocation, Parameter, ReadRequest, StatementRequest
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, open_lake
 
 LIMITS = Limits(memory_limit="1GB", threads=2)
-
-
-@pytest.fixture
-def lake(tmp_path: Path) -> Iterator[Lake]:
-    opened = open_lake(
-        LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path)), LIMITS
-    )
-    yield opened
-    opened.close()
 
 
 def statement(sql: str, *parameters: tuple[str, str, str | None]) -> StatementRequest:
@@ -159,7 +149,7 @@ def test_read_runs_the_statement_once(lake: Lake) -> None:
 
 def test_large_read_streams_batch_by_batch(tmp_path: Path) -> None:
     """About 4 GB of results under a 512 MB limit: only streaming can pass."""
-    location = LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
+    location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
     small = open_lake(location, Limits(memory_limit="512MB", threads=2))
     try:
         request = ReadRequest(
@@ -236,13 +226,13 @@ def test_invalid_parameters(
 
 @pytest.mark.parametrize("limits", [Limits(None, 2), Limits("1GB", None)])
 def test_limits_are_required(tmp_path: Path, limits: Limits) -> None:
-    location = LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
+    location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
     assert code_of(lambda: open_lake(location, limits)) == "STORE_LIMITS_REQUIRED"
 
 
 def test_missing_extension_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("orvex.store.lake.EXTENSIONS", ("no_such_extension_xyz",))
-    location = LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
+    location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
     with pytest.raises(StoreError) as raised:
         open_lake(location, LIMITS)
     assert raised.value.code == "STORE_EXTENSION_UNAVAILABLE"
@@ -384,7 +374,7 @@ def test_error_while_streaming_is_a_store_error(lake: Lake) -> None:
 
 
 def test_invalid_limits_are_rejected(tmp_path: Path) -> None:
-    location = LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
+    location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
     assert code_of(lambda: open_lake(location, Limits("lots", 2))) == "STORE_LIMITS_REQUIRED"
 
 
@@ -449,4 +439,42 @@ def test_objects_outside_lake_tables_are_refused(lake: Lake, sql: str) -> None:
     write(lake, statement("CREATE TABLE a AS SELECT 1 AS x"))
     before = lake.current_snapshot().id
     assert code_of(lambda: write(lake, statement(sql))) == "STORE_STATEMENT_INVALID"
+    assert lake.current_snapshot().id == before
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "DROP SCHEMA __ducklake_metadata_lake.other CASCADE",
+        "DELETE FROM __ducklake_metadata_lake.ducklake_snapshot",
+        "CREATE TABLE x AS SELECT * FROM postgres_query('__ducklake_metadata_lake', 'SELECT 1')",
+        "INSERT INTO a SELECT 1 FROM query('SELECT 1')",
+        "INSERT INTO a SELECT 1 FROM query/**/('SELECT * FROM __duck' || 'lake_metadata_lake.t')",
+        "INSERT INTO a SELECT 1 FROM query_table -- comment\n('__duck' || 'lake_metadata_lake.t')",
+        "INSERT INTO a SELECT 1 FROM json_execute_serialized_sql(json_serialize_sql('SELECT 1'))",
+        "CREATE TABLE e AS SELECT content FROM read_text('/proc/self/environ')",
+        "CREATE TABLE e AS SELECT * FROM read_csv('/etc/hostname')",
+    ],
+)
+def test_writes_cannot_touch_the_catalog_or_run_outside_sql(lake: Lake, sql: str) -> None:
+    write(lake, statement("CREATE TABLE a (x INTEGER)"))
+    before = lake.current_snapshot().id
+    assert code_of(lambda: write(lake, statement(sql))) == "STORE_STATEMENT_INVALID"
+    assert lake.current_snapshot().id == before
+
+
+def test_reads_cannot_touch_the_catalog(lake: Lake) -> None:
+    sql = "SELECT * FROM __ducklake_metadata_lake.ducklake_snapshot"
+    assert code_of(lambda: read(lake, sql)) == "STORE_STATEMENT_INVALID"
+
+
+def test_files_outside_the_lake_cannot_be_read_by_writes(
+    lake: Lake, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Passes the statement check (a plain FROM path); only the file sandbox stops it."""
+    outside = tmp_path_factory.mktemp("outside") / "x.csv"
+    outside.write_text("x\n1\n", encoding="utf-8")
+    before = lake.current_snapshot().id
+    sql = f"CREATE TABLE e AS SELECT * FROM '{outside.as_posix()}'"
+    assert code_of(lambda: write(lake, statement(sql))) == "STORE_QUERY_FAILED"
     assert lake.current_snapshot().id == before

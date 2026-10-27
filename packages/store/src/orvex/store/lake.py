@@ -10,7 +10,10 @@ from __future__ import annotations
 import datetime as dt
 import json
 import math
+import os
 import re
+import shutil
+import tempfile
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -22,15 +25,36 @@ import pyarrow as pa
 from orvex.contracts.store.v1 import (
     CommitResult,
     LakeLocation,
+    LocalLakeLocation,
     Parameter,
+    PostgresLakeLocation,
     ReadRequest,
     Snapshot,
     StatementRequest,
 )
-from orvex.store.errors import StoreError
+from orvex.store.errors import StoreError, register_secret
 
 LAKE = "lake"
-METADATA = f"__ducklake_metadata_{LAKE}"
+METADATA_PREFIX = "__ducklake_metadata"
+METADATA = f"{METADATA_PREFIX}_{LAKE}"
+# Any password key (password=, sslpassword=, ?password=) and any URI form (user:pw@host) is
+# refused: the password may only come from `password_env`.
+_INLINE_SECRET = re.compile(r"password|://", re.IGNORECASE)
+_SCHEMA_NAME = re.compile(r"[a-z_][a-z0-9_]*")
+# Functions that run SQL or open connections outside the lake; never allowed in a statement.
+_EXTERNAL_SQL_FUNCTIONS = frozenset(
+    {
+        "postgres_query",
+        "postgres_execute",
+        "postgres_scan",
+        "postgres_scan_pushdown",
+        "postgres_attach",
+        "sqlite_query",
+        "sqlite_attach",
+        "query",
+        "query_table",
+    }
+)
 _SUSPICIOUS = re.compile(r"[./\\*?:]")
 EXTENSIONS = ("icu", "ducklake")
 WRITE_STATEMENTS = frozenset(
@@ -72,7 +96,70 @@ def _quote(text: str) -> str:
     return "'" + text.replace("'", "''") + "'"
 
 
-def _single_statement(sql: str) -> duckdb.Statement:
+def _postgres_password(location: PostgresLakeLocation) -> str:
+    """Refuse an unsafe PostgreSQL location, then read and register its password."""
+    if _INLINE_SECRET.search(location.connection):
+        raise StoreError(
+            "STORE_SECRET_INLINE",
+            "The connection must be key=value pairs without any password; use password_env.",
+            {},
+        )
+    if location.metadata_schema is not None and not _SCHEMA_NAME.fullmatch(
+        location.metadata_schema
+    ):
+        raise StoreError(
+            "STORE_STATEMENT_INVALID",
+            "metadata_schema must match [a-z_][a-z0-9_]*.",
+            {"metadata_schema": location.metadata_schema},
+        )
+    password = os.environ.get(location.password_env)
+    if not password:
+        raise StoreError(
+            "STORE_SECRET_MISSING",
+            f"The environment variable {location.password_env} is not set.",
+            {"variable": location.password_env},
+        )
+    register_secret(password)
+    return password
+
+
+def _guarded(sql: str, table_functions: frozenset[str]) -> None:
+    """Refuse SQL that names the catalog database or calls a table function other than generators.
+
+    Table functions read files, run SQL or open connections (`read_text`, `query`,
+    `postgres_execute`, …); only `range`, `generate_series` and `unnest` are allowed. Comments
+    between a name and its `(` are skipped. The catalog database (in PostgreSQL the whole
+    database, other lakes included) is only ever touched by DuckLake itself. The connection is
+    also sandboxed to the lake's folders (`Lake._sandbox`), so these checks are a first layer.
+    """
+    if METADATA_PREFIX in sql.lower():
+        raise StoreError(
+            "STORE_STATEMENT_INVALID",
+            "Statements may not reference the lake's catalog database.",
+            {},
+        )
+    tokens = [token for token in duckdb.tokenize(sql) if token[1] != duckdb.token_type.comment]
+    positions = [position for position, _ in duckdb.tokenize(sql)] + [len(sql)]
+    for index, (position, kind) in enumerate(tokens):
+        if kind not in {duckdb.token_type.identifier, duckdb.token_type.keyword}:
+            continue
+        end = next(later for later in positions if later > position)
+        name = sql[position:end].strip().strip('"').lower()
+        following = tokens[index + 1][0] if index + 1 < len(tokens) else len(sql)
+        if (
+            sql[following : following + 1] == "("
+            and name in table_functions
+            and name not in READ_TABLE_FUNCTIONS
+        ):
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "Only the table functions range, generate_series and unnest are allowed.",
+                {"function": name},
+            )
+
+
+def _single_statement(sql: str, table_functions: frozenset[str]) -> duckdb.Statement:
+    _guarded(sql, table_functions)
     try:
         statements = duckdb.extract_statements(sql)
     except duckdb.Error as error:
@@ -220,7 +307,15 @@ READ_TABLE_FUNCTIONS = frozenset({"range", "generate_series", "unnest"})
 class Lake:
     """One open lake. Reads may run concurrently; write transactions run one at a time."""
 
-    def __init__(self, location: LakeLocation, limits: Limits) -> None:
+    def __init__(
+        self, location: LakeLocation | LocalLakeLocation | PostgresLakeLocation, limits: Limits
+    ) -> None:
+        if isinstance(location, LakeLocation):
+            location = location.root
+        # Location checks come first: nothing is opened for a location that must be refused.
+        password = (
+            _postgres_password(location) if isinstance(location, PostgresLakeLocation) else ""
+        )
         if not limits.memory_limit or not limits.threads:
             raise StoreError(
                 "STORE_LIMITS_REQUIRED",
@@ -229,7 +324,12 @@ class Lake:
             )
         try:
             self._connection = duckdb.connect(
-                config={"memory_limit": limits.memory_limit, "threads": int(limits.threads)}
+                config={
+                    "memory_limit": limits.memory_limit,
+                    "threads": int(limits.threads),
+                    # Secrets saved on this machine are never loaded into a lake.
+                    "allow_persistent_secrets": False,
+                }
             )
         except (duckdb.Error, ValueError) as error:
             raise StoreError(
@@ -238,24 +338,60 @@ class Lake:
                 {"duckdb": str(error)},
             ) from error
         self._write_lock = threading.Lock()
+        # DuckDB spills to this folder when a query exceeds the memory limit.
+        self._spill = tempfile.mkdtemp(prefix="lake-spill-")
         self._local = threading.local()
         try:
-            self._prepare(Path(location.path))
+            self._load_extensions()
+            # Catalog tables: `<metadata database>[.<schema>]`; the schema name is validated by
+            # the contract pattern ([a-z_][a-z0-9_]*) before it reaches SQL.
+            self._metadata = METADATA
+            if isinstance(location, PostgresLakeLocation) and location.metadata_schema:
+                self._metadata = f"{METADATA}.{location.metadata_schema}"
+            if isinstance(location, LocalLakeLocation):
+                self._attach_local(Path(location.path))
+            else:
+                self._attach_postgres(location, password)
+            # Nothing may load code or reach data the lake did not ask for after this point.
+            self._connection.sql("SET autoinstall_known_extensions = false")
+            self._connection.sql("SET autoload_known_extensions = false")
+            self._table_functions = self._names_of_table_functions()
+            self._sandbox(location)
         except BaseException:
             self._connection.close()
+            shutil.rmtree(self._spill, ignore_errors=True)
             raise
 
-    def _prepare(self, folder: Path) -> None:
+    def _names_of_table_functions(self) -> frozenset[str]:
+        row = self._one(
+            # Names that are also scalar or aggregate functions (repeat, version, histogram, …)
+            # are generators or harmless in their table form, and their scalar form is common.
+            "SELECT string_agg(DISTINCT lower(function_name), '|') FROM duckdb_functions() "
+            "WHERE function_type IN ('table', 'table_macro', 'pragma') "
+            "AND lower(function_name) NOT IN (SELECT lower(function_name) FROM duckdb_functions() "
+            "WHERE function_type IN ('scalar', 'aggregate', 'macro'))",
+            {},
+        )
+        text = str(row[0]) if row and row[0] is not None else ""
+        return frozenset(text.split("|")) - {""}
+
+    def _sandbox(self, location: LocalLakeLocation | PostgresLakeLocation) -> None:
+        """Limit file access to the lake's own folders, for good (DuckDB cannot undo it)."""
+        folders = [self._spill]
+        if isinstance(location, LocalLakeLocation):
+            folders.append(Path(location.path).resolve().as_posix())
+        elif "://" not in location.data_path:
+            folders.append(Path(location.data_path).resolve().as_posix())
+        listed = ", ".join(_quote(folder.rstrip("/") + "/") for folder in folders)
+        self._connection.sql(f"SET temp_directory = {_quote(self._spill)}")
+        self._connection.sql(f"SET allowed_directories = [{listed}]")
+        self._connection.sql("SET enable_external_access = false")
+
+    def _load_extensions(self) -> None:
         for extension in EXTENSIONS:
-            try:
-                self._connection.install_extension(extension)
-                self._connection.load_extension(extension)
-            except duckdb.Error as error:
-                raise StoreError(
-                    "STORE_EXTENSION_UNAVAILABLE",
-                    f"The DuckDB extension {extension} could not be installed or loaded.",
-                    {"extension": extension, "duckdb": str(error)},
-                ) from error
+            self._load_extension(extension)
+
+    def _attach_local(self, folder: Path) -> None:
         (folder / "data").mkdir(parents=True, exist_ok=True)
         catalog = (folder / "catalog.ducklake").as_posix()
         data = (folder / "data").as_posix() + "/"
@@ -263,12 +399,48 @@ class Lake:
         self._connection.sql(
             f"ATTACH {_quote('ducklake:' + catalog)} AS {LAKE} (DATA_PATH {_quote(data)})"
         )
-        # Nothing may load code or reach data the lake did not ask for after this point.
-        self._connection.sql("SET autoinstall_known_extensions = false")
-        self._connection.sql("SET autoload_known_extensions = false")
+
+    def _attach_postgres(self, location: PostgresLakeLocation, password: str) -> None:
+        """Attach a lake whose catalog is in PostgreSQL; the password comes from the environment."""
+        if "://" not in location.data_path:
+            Path(location.data_path).mkdir(parents=True, exist_ok=True)
+        self._load_extension("postgres")
+        try:
+            # A temporary default secret supplies the password to every PostgreSQL connection of
+            # this database; DuckDB never shows secret values (duckdb_secrets() redacts them).
+            self._connection.sql(
+                f"CREATE TEMPORARY SECRET (TYPE postgres, PASSWORD {_quote(password)})"
+            )
+            options = [f"DATA_PATH {_quote(location.data_path)}"]
+            if location.metadata_schema:
+                options.append(f"METADATA_SCHEMA {_quote(location.metadata_schema)}")
+            self._connection.sql(
+                f"ATTACH {_quote('ducklake:postgres:' + location.connection)} AS {LAKE} "
+                f"({', '.join(options)})"
+            )
+        except duckdb.Error as error:
+            # `from None`: the DuckDB exception is not chained, so a logged traceback cannot show
+            # anything the redacted message does not.
+            raise StoreError(
+                "STORE_CATALOG_UNAVAILABLE",
+                "The PostgreSQL catalog could not be reached or refused the credentials.",
+                {"duckdb": str(error)},
+            ) from None
+
+    def _load_extension(self, extension: str) -> None:
+        try:
+            self._connection.install_extension(extension)
+            self._connection.load_extension(extension)
+        except duckdb.Error as error:
+            raise StoreError(
+                "STORE_EXTENSION_UNAVAILABLE",
+                f"The DuckDB extension {extension} could not be installed or loaded.",
+                {"extension": extension, "duckdb": str(error)},
+            ) from error
 
     def close(self) -> None:
         self._connection.close()
+        shutil.rmtree(self._spill, ignore_errors=True)
 
     def _cursor(self) -> duckdb.DuckDBPyConnection:
         cursor = self._connection.cursor()
@@ -315,8 +487,8 @@ class Lake:
         """(schema, table) of every lake table alive at `snapshot`, lower-cased."""
         row = self._one(
             f"SELECT string_agg(lower(s.schema_name) || '.' || lower(t.table_name), '|') "
-            f"FROM {METADATA}.ducklake_table AS t "
-            f"JOIN {METADATA}.ducklake_schema AS s USING (schema_id) "
+            f"FROM {self._metadata}.ducklake_table AS t "
+            f"JOIN {self._metadata}.ducklake_schema AS s USING (schema_id) "
             "WHERE t.begin_snapshot <= $n AND (t.end_snapshot IS NULL OR t.end_snapshot > $n) "
             "AND s.begin_snapshot <= $n AND (s.end_snapshot IS NULL OR s.end_snapshot > $n)",
             {"n": snapshot},
@@ -387,7 +559,7 @@ class Lake:
 
     def read(self, request: ReadRequest) -> pa.RecordBatchReader:
         """Run one SELECT as of `request.snapshot` and return it once, as Arrow batches."""
-        statement = _single_statement(request.sql)
+        statement = _single_statement(request.sql, self._table_functions)
         if statement.type != duckdb.StatementType.SELECT:
             raise StoreError(
                 "STORE_STATEMENT_INVALID",
@@ -453,7 +625,7 @@ class Lake:
                 before = self._snapshot(None)
                 outside = _outside_inventory(cursor)
                 cursor.begin()
-                handle = Transaction(cursor)
+                handle = Transaction(cursor, self._table_functions)
                 try:
                     yield handle
                     if _outside_inventory(cursor) != outside:
@@ -474,6 +646,12 @@ class Lake:
                     raise
                 try:
                     cursor.commit()
+                except duckdb.TransactionException as error:
+                    raise StoreError(
+                        "STORE_TRANSACTION_CONFLICT",
+                        "Another writer changed the same data first; nothing was written.",
+                        {"duckdb": str(error)},
+                    ) from error
                 except duckdb.Error as error:
                     raise StoreError(
                         "STORE_QUERY_FAILED",
@@ -529,7 +707,7 @@ def _outside_inventory(cursor: duckdb.DuckDBPyConnection) -> str:
         " || sequence_name"
         " FROM duckdb_sequences() WHERE lower(database_name) NOT IN ($lake, $metadata)"
         " UNION ALL SELECT 'type:' || database_name || '.' || schema_name || '.' || type_name"
-        " FROM duckdb_types() WHERE NOT internal"
+        " FROM duckdb_types() WHERE NOT internal AND lower(database_name) NOT IN ($lake, $metadata)"
         " UNION ALL SELECT 'secret:' || name FROM duckdb_secrets()"
         ")",
         {"lake": LAKE, "metadata": METADATA},
@@ -559,12 +737,13 @@ def _created_kind_allowed(sql: str, statement: duckdb.Statement) -> bool:
 class Transaction:
     """A write transaction; `result` is set when the block commits."""
 
-    def __init__(self, cursor: duckdb.DuckDBPyConnection) -> None:
+    def __init__(self, cursor: duckdb.DuckDBPyConnection, table_functions: frozenset[str]) -> None:
         self._cursor = cursor
+        self._table_functions = table_functions
         self.result: CommitResult | None = None
 
     def execute(self, request: StatementRequest) -> None:
-        statement = _single_statement(request.sql)
+        statement = _single_statement(request.sql, self._table_functions)
         if statement.type not in WRITE_STATEMENTS or not _created_kind_allowed(
             request.sql, statement
         ):
@@ -637,5 +816,7 @@ def _utc_schema(schema: pa.Schema) -> pa.Schema:
     return pa.schema(fields, metadata=schema.metadata)
 
 
-def open_lake(location: LakeLocation, limits: Limits) -> Lake:
+def open_lake(
+    location: LakeLocation | LocalLakeLocation | PostgresLakeLocation, limits: Limits
+) -> Lake:
     return Lake(location, limits)
