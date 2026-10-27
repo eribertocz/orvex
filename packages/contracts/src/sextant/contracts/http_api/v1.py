@@ -15,8 +15,13 @@ class Health(BaseModel):
 class SemanticVersion(RootModel[str]):
     root: Annotated[
         str,
-        Field(pattern="^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"),
+        Field(
+            pattern="^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"
+        ),
     ]
+    """
+    Semantic Versioning 2.0.0 (official regular expression from semver.org).
+    """
 
 
 class ModuleVersion(BaseModel):
@@ -52,13 +57,13 @@ class ErrorDetail(BaseModel):
     value: str
 
 
-class Error(BaseModel):
+class ErrorBody(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    code: Annotated[str, Field(pattern="^[A-Z][A-Z0-9_]*$")]
+    code: Annotated[str, Field(pattern="^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$")]
     """
-    Stable, machine-readable error code.
+    Stable, machine-readable error code. Every code the server sends is listed in `components.x-error-codes` with its meaning.
     """
     message: Annotated[str, Field(min_length=1)]
     details: list[ErrorDetail]
@@ -69,4 +74,4 @@ class ErrorEnvelope(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    error: Error
+    error: ErrorBody

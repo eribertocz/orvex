@@ -129,7 +129,11 @@ def python_types(contract: ContractVersion, scratch: Path) -> str:
     output.write_text(header(contract, "#") + "\n" + body.lstrip("\n"), encoding="utf-8")
     # Format with the repository's own settings so the committed file is stable under `ruff`.
     configuration = str(REPOSITORY_ROOT / "pyproject.toml")
-    for command in (["check", "--fix", "--quiet"], ["format", "--quiet"]):
+    # E501: descriptions copied from contracts may exceed the line length (see pyproject.toml).
+    for command in (
+        ["check", "--fix", "--quiet", "--extend-ignore", "E501"],
+        ["format", "--quiet"],
+    ):
         run([sys.executable, "-m", "ruff", *command, "--config", configuration, str(output)])
     return output.read_text(encoding="utf-8")
 

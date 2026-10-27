@@ -28,3 +28,28 @@ describe('HTTP API client', () => {
 		expect(error).toMatchObject({ code: 'HTTP_ERROR', status: 502, requestId: 'r-2' });
 	});
 });
+
+describe('HTTP API client failure modes', () => {
+	it('rejects a 200 response that is not a JSON object with INVALID_RESPONSE', async () => {
+		const client = createClient(respond(200, '<html>', { 'X-Request-Id': 'r-3' }));
+		const error: unknown = await client.health().catch((caught: unknown) => caught);
+		expect(error).toMatchObject({ code: 'INVALID_RESPONSE', status: 200, requestId: 'r-3' });
+	});
+
+	it('treats an incomplete envelope as HTTP_ERROR and keeps the header request id', async () => {
+		const client = createClient(
+			respond(500, '{"error":{"code":"X","message":"m"}}', { 'X-Request-Id': 'hdr' })
+		);
+		const error: unknown = await client.health().catch((caught: unknown) => caught);
+		expect(error).toMatchObject({ code: 'HTTP_ERROR', status: 500, requestId: 'hdr' });
+	});
+
+	it('wraps a network failure as NETWORK_ERROR', async () => {
+		const offline: typeof fetch = () => Promise.reject(new TypeError('Failed to fetch'));
+		const error: unknown = await createClient(offline)
+			.health()
+			.catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(ApiError);
+		expect(error).toMatchObject({ code: 'NETWORK_ERROR', status: 0, requestId: null });
+	});
+});

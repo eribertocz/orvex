@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: HTTP API
-  version: v1
+  version: 1.0.0
   description: >-
     Public HTTP API served by the `server` module. Every non-2xx response uses ErrorEnvelope and
     every response carries an X-Request-Id header. Later issues extend this contract compatibly.
@@ -36,9 +36,18 @@ paths:
               schema: { $ref: "#/components/schemas/Version" }
         default: { $ref: "#/components/responses/Error" }
 components:
+  x-error-codes:
+    # Registry of the codes the server sends in ErrorEnvelope.error.code. Adding a code is a
+    # compatible change; removing one or changing its meaning requires v2 and an ADR.
+    NOT_FOUND: No route or resource matches the request.
+    VALIDATION_FAILED: The request does not match the contract; `details` names each problem.
+    INTERNAL_ERROR: An unexpected server failure; the request id identifies it in the server log.
   headers:
     RequestId:
-      description: Identifier of the request, also written to the server log.
+      description: >-
+        Identifier of the request, also written to the server log. On error responses it equals
+        `error.request_id` in the body.
+      required: true
       schema: { type: string, minLength: 1 }
   responses:
     Error:
@@ -57,7 +66,8 @@ components:
         status: { type: string, const: ok }
     SemanticVersion:
       type: string
-      pattern: "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+      description: Semantic Versioning 2.0.0 (official regular expression from semver.org).
+      pattern: "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$"
     ModuleVersion:
       type: object
       additionalProperties: false
@@ -87,15 +97,17 @@ components:
       properties:
         name: { type: string, minLength: 1 }
         value: { type: string }
-    Error:
+    ErrorBody:
       type: object
       additionalProperties: false
       required: [code, message, details, request_id]
       properties:
         code:
-          description: Stable, machine-readable error code.
+          description: >-
+            Stable, machine-readable error code. Every code the server sends is listed in
+            `components.x-error-codes` with its meaning.
           type: string
-          pattern: "^[A-Z][A-Z0-9_]*$"
+          pattern: "^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$"
         message: { type: string, minLength: 1 }
         details: { type: array, items: { $ref: "#/components/schemas/ErrorDetail" } }
         request_id: { type: string, minLength: 1 }
@@ -104,4 +116,4 @@ components:
       additionalProperties: false
       required: [error]
       properties:
-        error: { $ref: "#/components/schemas/Error" }
+        error: { $ref: "#/components/schemas/ErrorBody" }

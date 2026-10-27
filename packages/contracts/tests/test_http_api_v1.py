@@ -25,6 +25,20 @@ def test_generated_models_agree_with_the_examples(example: Path) -> None:
 
 def test_error_envelope_round_trip() -> None:
     envelope = v1.ErrorEnvelope(
-        error=v1.Error(code="NOT_FOUND", message="No route", details=[], request_id="r-1")
+        error=v1.ErrorBody(code="NOT_FOUND", message="No route", details=[], request_id="r-1")
     )
     assert v1.ErrorEnvelope.model_validate_json(envelope.model_dump_json()) == envelope
+
+
+def test_every_example_error_code_is_registered() -> None:
+    import re
+
+    import yaml
+
+    document = yaml.safe_load((EXAMPLES.parent / "openapi.yaml").read_text())
+    registry = document["components"]["x-error-codes"]
+    code_schema = document["components"]["schemas"]["ErrorBody"]["properties"]["code"]
+    pattern = re.compile(code_schema["pattern"])
+    assert all(pattern.fullmatch(code) for code in registry)
+    for example in (EXAMPLES / "valid").glob("ErrorEnvelope.*.json"):
+        assert json.loads(example.read_text())["error"]["code"] in registry
