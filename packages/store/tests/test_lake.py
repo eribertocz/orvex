@@ -409,3 +409,44 @@ def test_nested_transaction_in_one_thread_is_refused(lake: Lake) -> None:
 
     assert code_of(nested) == "STORE_STATEMENT_INVALID"
     write(lake, statement("CREATE TABLE after_nested AS SELECT 1 AS x"))
+
+
+def test_file_paths_in_from_are_rejected(lake: Lake, tmp_path: Path) -> None:
+    write(lake, statement("CREATE TABLE a AS SELECT 1 AS x"))
+    csv = tmp_path / "plain.csv"
+    csv.write_text("x\n1\n", encoding="utf-8")
+    for sql in (
+        f"SELECT * FROM '{(tmp_path / 'data').as_posix()}/**/*.parquet'",
+        f"SELECT * FROM '{csv.as_posix()}'",
+    ):
+        assert code_of(lambda sql=sql: read(lake, sql)) == "STORE_STATEMENT_INVALID"
+
+
+def test_unknown_names_and_python_objects_are_rejected(lake: Lake) -> None:
+    arrow_table = pa.table({"x": [1]})
+    assert arrow_table.num_rows == 1
+    assert code_of(lambda: read(lake, "SELECT * FROM arrow_table")) == "STORE_STATEMENT_INVALID"
+
+
+def test_dropped_table_is_still_readable_at_its_snapshot(lake: Lake) -> None:
+    alive = write(lake, statement("CREATE TABLE gone AS SELECT 7 AS x"))
+    write(lake, statement("DROP TABLE gone"))
+    assert read(lake, "SELECT x FROM gone", alive).column("x").to_pylist() == [7]
+    assert code_of(lambda: read(lake, "SELECT x FROM gone")) == "STORE_STATEMENT_INVALID"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "CREATE TYPE memory.main.e AS ENUM (SELECT CAST(x AS VARCHAR) FROM lake.main.a)",
+        "CREATE TABLE memory.main.copy AS SELECT * FROM lake.main.a",
+        "CREATE TEMP TABLE copy AS SELECT * FROM lake.main.a",
+        "CREATE SECRET s (TYPE s3, KEY_ID 'k', SECRET 'v')",
+        "CREATE SEQUENCE q",
+    ],
+)
+def test_objects_outside_lake_tables_are_refused(lake: Lake, sql: str) -> None:
+    write(lake, statement("CREATE TABLE a AS SELECT 1 AS x"))
+    before = lake.current_snapshot().id
+    assert code_of(lambda: write(lake, statement(sql))) == "STORE_STATEMENT_INVALID"
+    assert lake.current_snapshot().id == before

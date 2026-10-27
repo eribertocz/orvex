@@ -30,6 +30,8 @@ from orvex.contracts.store.v1 import (
 from orvex.store.errors import StoreError
 
 LAKE = "lake"
+METADATA = f"__ducklake_metadata_{LAKE}"
+_SUSPICIOUS = re.compile(r"[./\\*?:]")
 EXTENSIONS = ("icu", "ducklake")
 WRITE_STATEMENTS = frozenset(
     {
@@ -261,6 +263,9 @@ class Lake:
         self._connection.sql(
             f"ATTACH {_quote('ducklake:' + catalog)} AS {LAKE} (DATA_PATH {_quote(data)})"
         )
+        # Nothing may load code or reach data the lake did not ask for after this point.
+        self._connection.sql("SET autoinstall_known_extensions = false")
+        self._connection.sql("SET autoload_known_extensions = false")
 
     def close(self) -> None:
         self._connection.close()
@@ -271,6 +276,8 @@ class Lake:
         # TIMESTAMPTZ values reach Arrow as instants in UTC whatever the machine's zone;
         # presenting them in a local zone is a later, explicit step.
         cursor.sql("SET TimeZone = 'UTC'")
+        # A name in FROM must never resolve to a Python object in scope.
+        cursor.sql("SET python_enable_replacements = false")
         return cursor
 
     def _one(self, sql: str, parameters: dict[str, object]) -> tuple[object, ...] | None:
@@ -304,14 +311,23 @@ class Lake:
             raise StoreError("STORE_SNAPSHOT_NOT_FOUND", "The lake has no snapshot.", {})
         return snapshot
 
-    def _other_catalogs(self) -> set[str]:
+    def _tables_at(self, snapshot: int) -> set[tuple[str, str]]:
+        """(schema, table) of every lake table alive at `snapshot`, lower-cased."""
         row = self._one(
-            "SELECT string_agg(lower(database_name), '|') FROM duckdb_databases() "
-            "WHERE lower(database_name) <> $lake",
-            {"lake": LAKE},
+            f"SELECT string_agg(lower(s.schema_name) || '.' || lower(t.table_name), '|') "
+            f"FROM {METADATA}.ducklake_table AS t "
+            f"JOIN {METADATA}.ducklake_schema AS s USING (schema_id) "
+            "WHERE t.begin_snapshot <= $n AND (t.end_snapshot IS NULL OR t.end_snapshot > $n) "
+            "AND s.begin_snapshot <= $n AND (s.end_snapshot IS NULL OR s.end_snapshot > $n)",
+            {"n": snapshot},
         )
         text = str(row[0]) if row and row[0] is not None else ""
-        return set(text.split("|")) - {""}
+        found: set[tuple[str, str]] = set()
+        for item in text.split("|"):
+            schema, _, table = item.partition(".")
+            if table:
+                found.add((schema, table))
+        return found
 
     def _pinned(self, sql: str, snapshot: int) -> str:
         """The same SELECT with `AT (VERSION => snapshot)` on every table it references.
@@ -328,7 +344,9 @@ class Lake:
                 "The SQL could not be parsed.",
                 {"duckdb": str(tree.get("error_message", ""))},
             )
-        others = self._other_catalogs()
+        tables = self._tables_at(snapshot)
+        schemas = {schema for schema, _ in tables}
+        ctes = _cte_names(tree)
         for node in _walk(tree):
             if node.get("type") == "TABLE_FUNCTION":
                 function = node.get("function")
@@ -347,12 +365,10 @@ class Lake:
             path = (
                 [str(part) for part in raw] if isinstance(raw, list) else [str(node["table_name"])]
             )
-            if (len(path) == 3 and path[0].lower() != LAKE) or (
-                len(path) == 2 and path[0].lower() in others
-            ):
+            if not _is_lake_table(path, tables, schemas, ctes):
                 raise StoreError(
                     "STORE_STATEMENT_INVALID",
-                    "A read may reference only lake tables.",
+                    "A read may reference only tables of the lake (and its own CTEs).",
                     {"table": ".".join(path)},
                 )
             node["at_clause"] = {
@@ -428,13 +444,24 @@ class Lake:
             )
         with self._write_lock:
             self._local.writing = True
-            cursor = self._cursor()
+            try:
+                cursor = self._cursor()
+            except BaseException:
+                self._local.writing = False
+                raise
             try:
                 before = self._snapshot(None)
+                outside = _outside_inventory(cursor)
                 cursor.begin()
                 handle = Transaction(cursor)
                 try:
                     yield handle
+                    if _outside_inventory(cursor) != outside:
+                        raise StoreError(
+                            "STORE_STATEMENT_INVALID",
+                            "A transaction may change only tables and schemas of the lake.",
+                            {},
+                        )
                     if _unpinnable_objects(cursor):
                         raise StoreError(
                             "STORE_STATEMENT_INVALID",
@@ -479,6 +506,56 @@ def _unpinnable_objects(cursor: duckdb.DuckDBPyConnection) -> int:
     return int(str(row[0])) if row else 0
 
 
+def _single_value(
+    cursor: duckdb.DuckDBPyConnection, sql: str, parameters: dict[str, object]
+) -> str:
+    """One value of a one-row query on `cursor`, leaving the cursor free for the next statement."""
+    result = cursor.execute(sql, parameters)
+    row = result.fetchone()
+    result.fetchone()  # reaches the end of the one-row result
+    return "" if not row or row[0] is None else str(row[0])
+
+
+def _outside_inventory(cursor: duckdb.DuckDBPyConnection) -> str:
+    """Every user object outside the lake: tables, views, sequences, types, macros, secrets."""
+    return _single_value(
+        cursor,
+        "SELECT string_agg(item, '|' ORDER BY item) FROM ("
+        " SELECT 'table:' || database_name || '.' || schema_name || '.' || table_name AS item"
+        " FROM duckdb_tables() WHERE lower(database_name) NOT IN ($lake, $metadata)"
+        " UNION ALL SELECT 'view:' || database_name || '.' || schema_name || '.' || view_name"
+        " FROM duckdb_views() WHERE NOT internal AND lower(database_name) NOT IN ($lake, $metadata)"
+        " UNION ALL SELECT 'sequence:' || database_name || '.' || schema_name || '.'"
+        " || sequence_name"
+        " FROM duckdb_sequences() WHERE lower(database_name) NOT IN ($lake, $metadata)"
+        " UNION ALL SELECT 'type:' || database_name || '.' || schema_name || '.' || type_name"
+        " FROM duckdb_types() WHERE NOT internal"
+        " UNION ALL SELECT 'secret:' || name FROM duckdb_secrets()"
+        ")",
+        {"lake": LAKE, "metadata": METADATA},
+    )
+
+
+def _created_kind_allowed(sql: str, statement: duckdb.Statement) -> bool:
+    """CREATE, DROP and ALTER may only target tables and schemas (decided from the tokens)."""
+    if statement.type not in {
+        duckdb.StatementType.CREATE,
+        duckdb.StatementType.DROP,
+        duckdb.StatementType.ALTER,
+    }:
+        return True
+    tokens = duckdb.tokenize(sql)
+    ends = [position for position, _ in tokens[1:]] + [len(sql)]
+    words = [
+        sql[position:end].strip().upper()
+        for (position, kind), end in zip(tokens, ends, strict=True)
+        if kind == duckdb.token_type.keyword
+    ][:6]
+    modifiers = {"OR", "REPLACE", "TEMP", "TEMPORARY", "PERSISTENT", "IF", "NOT", "EXISTS"}
+    target = next((word for word in words[1:] if word not in modifiers), "")
+    return target in {"TABLE", "SCHEMA"}
+
+
 class Transaction:
     """A write transaction; `result` is set when the block commits."""
 
@@ -488,7 +565,9 @@ class Transaction:
 
     def execute(self, request: StatementRequest) -> None:
         statement = _single_statement(request.sql)
-        if statement.type not in WRITE_STATEMENTS:
+        if statement.type not in WRITE_STATEMENTS or not _created_kind_allowed(
+            request.sql, statement
+        ):
             raise StoreError(
                 "STORE_STATEMENT_INVALID",
                 "This statement kind is not allowed in a transaction.",
@@ -514,6 +593,37 @@ def _walk(node: object) -> Iterator[dict[str, object]]:
     elif isinstance(node, list):
         for item in node:
             yield from _walk(item)
+
+
+def _cte_names(tree: JsonTree) -> set[str]:
+    names: set[str] = set()
+    for node in _walk(tree):
+        cte_map = node.get("cte_map")
+        if isinstance(cte_map, dict):
+            for entry in cte_map.get("map", []):
+                if isinstance(entry, dict) and isinstance(entry.get("key"), str):
+                    names.add(entry["key"].lower())
+    return names
+
+
+def _is_lake_table(
+    path: list[str], tables: set[tuple[str, str]], schemas: set[str], ctes: set[str]
+) -> bool:
+    """Whether a FROM name is a lake table alive at the snapshot, or one of the query's CTEs.
+
+    Names that look like files or URLs are refused outright: DuckDB would otherwise fall back to
+    reading them as files when no table matches.
+    """
+    parts = [part.lower() for part in path]
+    if any(_SUSPICIOUS.search(part) for part in parts):
+        return False
+    if len(parts) == 1:
+        return parts[0] in ctes or ("main", parts[0]) in tables
+    if len(parts) == 2:
+        if parts[0] in schemas:
+            return (parts[0], parts[1]) in tables
+        return parts[0] == LAKE and ("main", parts[1]) in tables
+    return len(parts) == 3 and parts[0] == LAKE and (parts[1], parts[2]) in tables
 
 
 def _utc_schema(schema: pa.Schema) -> pa.Schema:
