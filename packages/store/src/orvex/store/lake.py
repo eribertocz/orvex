@@ -149,6 +149,9 @@ class Admission:
             self._condition.notify_all()
 
 
+INTERRUPT_REPEAT_SECONDS = 0.05
+
+
 class Guard:
     """Interrupts a DuckDB cursor at a deadline or on request, and remembers why."""
 
@@ -156,6 +159,11 @@ class Guard:
         self._cursor = cursor
         self.reason: str | None = None
         self.deadline = deadline
+        # Called after an interruption, for an owner that must also release what is idle.
+        self.on_fire: Callable[[], None] | None = None
+        self._lock = threading.Lock()
+        self._stopped = threading.Event()
+        self._repeat: threading.Thread | None = None
         self._timer = threading.Timer(max(0.0, deadline - time.monotonic()), self._expire)
         self._timer.daemon = True
         self._timer.start()
@@ -167,14 +175,36 @@ class Guard:
         self._interrupt("STORE_CANCELLED")
 
     def _interrupt(self, reason: str) -> None:
-        if self.reason is None:
+        with self._lock:
+            if self.reason is not None:
+                return
             self.reason = reason
+        if self.on_fire is not None:
+            self.on_fire()
+        # An interrupt sent while the cursor is between two pieces of work can be lost, so it is
+        # repeated until the owner stops the guard.
+        with self._lock:
+            if self._stopped.is_set():
+                return
+            self._repeat = threading.Thread(target=self._keep_interrupting, daemon=True)
+            self._repeat.start()
+
+    def _keep_interrupting(self) -> None:
+        while True:
             # A statement that already ended has a closed cursor: there is nothing to stop.
             with contextlib.suppress(duckdb.Error):
                 self._cursor.interrupt()
+            if self._stopped.wait(INTERRUPT_REPEAT_SECONDS):
+                return
 
     def stop(self) -> None:
+        """No interrupt reaches the cursor once this returns."""
+        with self._lock:
+            self._stopped.set()
+            repeat = self._repeat
         self._timer.cancel()
+        if repeat is not None:
+            repeat.join()
 
     def error(self, cause: Exception | None = None) -> StoreError:
         """The store error for an interruption (or `cause` when it was not interrupted)."""
@@ -714,11 +744,29 @@ class Lake:
             self._admission.release()
             raise
         guard = Guard(cursor, deadline)
+        # A stream nobody reads would hold its slot forever: a timeout or a cancel that finds it
+        # not yet started releases it at once; a started stream releases it when it ends.
+        state = threading.Lock()
+        started = False
+        finished = False
 
         def finish() -> None:
+            nonlocal finished
+            with state:
+                if finished:
+                    return
+                finished = True
             guard.stop()
             cursor.close()
             self._admission.release()
+
+        def release_if_idle() -> None:
+            with state:
+                idle = not started
+            if idle:
+                finish()
+
+        guard.on_fire = release_if_idle
 
         try:
             # Binding is quick and returns before any row is computed; the work runs on the first
@@ -742,7 +790,14 @@ class Lake:
 
         def batches() -> Iterator[pa.RecordBatch]:
             # The cursor and the admission slot live as long as the stream.
+            nonlocal started
+            with state:
+                if finished:
+                    raise guard.error()
+                started = True
             try:
+                if guard.reason is not None:
+                    raise guard.error()
                 for batch in relation.to_arrow_reader(request.batch_size):
                     if guard.reason is not None:
                         raise guard.error()
