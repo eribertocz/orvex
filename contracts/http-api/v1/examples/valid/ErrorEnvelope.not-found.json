@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "No route for /api/v1/unknown",
+    "details": [{ "name": "path", "value": "/api/v1/unknown" }],
+    "request_id": "8f1c2a"
+  }
+}

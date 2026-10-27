@@ -1,0 +1,5 @@
+{
+  "product": "0.1.0-alpha.1",
+  "modules": [{ "name": "server", "version": "0.1.0" }],
+  "contracts": [{ "name": "http-api", "version": "v1" }]
+}

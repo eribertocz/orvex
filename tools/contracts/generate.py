@@ -129,7 +129,11 @@ def python_types(contract: ContractVersion, scratch: Path) -> str:
     output.write_text(header(contract, "#") + "\n" + body.lstrip("\n"), encoding="utf-8")
     # Format with the repository's own settings so the committed file is stable under `ruff`.
     configuration = str(REPOSITORY_ROOT / "pyproject.toml")
-    for command in (["check", "--fix", "--quiet"], ["format", "--quiet"]):
+    # E501: descriptions copied from contracts may exceed the line length (see pyproject.toml).
+    for command in (
+        ["check", "--fix", "--quiet", "--extend-ignore", "E501"],
+        ["format", "--quiet"],
+    ):
         run([sys.executable, "-m", "ruff", *command, "--config", configuration, str(output)])
     return output.read_text(encoding="utf-8")
 
@@ -170,7 +174,16 @@ def typescript_types(contract: ContractVersion, scratch: Path) -> str:
         [web_tool("prettier"), "--write", str(output), "--config", str(WEB / ".prettierrc")],
         cwd=WEB,
     )
-    return header(contract, "//") + output.read_text(encoding="utf-8")
+    types = output.read_text(encoding="utf-8")
+    if contract.is_openapi:
+        # The OpenAPI bundle itself is not a type; drop the open placeholder json2ts emits for it.
+        title = json_schema_bundle(contract)["title"]
+        types, removed = re.subn(
+            rf"export interface {title} \{{\n\t\[k: string\]: unknown;\n\}}\n", "", types
+        )
+        if removed != 1:
+            raise GenerationError(f"json2ts output changed: no placeholder '{title}' to remove")
+    return header(contract, "//") + types
 
 
 def generate_all() -> dict[Path, str]:
