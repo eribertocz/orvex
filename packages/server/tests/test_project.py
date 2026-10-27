@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -396,3 +397,22 @@ def test_unreadable_connections_file(tmp_path: Path) -> None:
     error = failure(folder)
     assert error.code == "PROJECT_NOT_FOUND"
     assert error.error.details.file == "connections.yaml"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes and /dev/zero")
+def test_connections_file_must_be_a_regular_file(tmp_path: Path) -> None:
+    folder = project(tmp_path)
+    connections = folder / "connections.yaml"
+    connections.symlink_to("/dev/zero")
+    assert failure(folder).code == "PROJECT_NOT_FOUND"
+    connections.unlink()
+    os.mkfifo(connections)
+    error = failure(folder)  # a pipe would block forever if it were opened
+    assert error.code == "PROJECT_NOT_FOUND"
+    assert error.error.details.file == "connections.yaml"
+
+
+def test_error_paths_escape_key_names(tmp_path: Path) -> None:
+    error = failure(project(tmp_path, PROJECT + "a/b~c: 1\n"))
+    assert error.error.details.path == "/a~1b~0c"
+    assert error.error.details.line == 4

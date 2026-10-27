@@ -132,7 +132,7 @@ def load_project(folder: Path) -> Project:
 
     connections: dict[str, Connection] = {}
     connections_path = folder / CONNECTIONS_FILE
-    if connections_path.exists() or connections_path.is_symlink():
+    if connections_path.exists() or connections_path.is_symlink():  # a broken link is reported
         connections = _load_connections(_Document(connections_path), folder)
     return Project(folder=folder, settings=settings, connections=connections)
 
@@ -162,7 +162,7 @@ def _load_connections(document: _Document, folder: Path) -> dict[str, Connection
         raise document.schema_error("The file must be a mapping.", "")
     unknown = sorted(set(data) - {"version", "connections"})
     if unknown:
-        raise document.schema_error(f"Unknown key '{unknown[0]}'.", f"/{unknown[0]}")
+        raise document.schema_error(f"Unknown key '{unknown[0]}'.", f"/{_token(unknown[0])}")
     if "connections" not in data:
         raise document.schema_error("'connections' is required.", "")
     entries = data["connections"]
@@ -170,7 +170,7 @@ def _load_connections(document: _Document, folder: Path) -> dict[str, Connection
         raise document.schema_error("'connections' must be a mapping.", "/connections")
     connections: dict[str, Connection] = {}
     for name, entry in entries.items():
-        pointer = f"/connections/{name}"
+        pointer = f"/connections/{_token(name)}"
         if not isinstance(name, str) or not CONNECTION_NAME.fullmatch(name):
             raise document.schema_error(
                 f"Connection name '{name}' must be a lowercase identifier "
@@ -207,6 +207,15 @@ def _load_connections(document: _Document, folder: Path) -> dict[str, Connection
     return connections
 
 
+def _token(key: object) -> str:
+    """A key as a JSON pointer reference token (RFC 6901)."""
+    return str(key).replace("~", "~0").replace("/", "~1")
+
+
+def _untoken(token: str) -> str:
+    return token.replace("~1", "/").replace("~0", "~")
+
+
 @functools.cache
 def _iana_zones() -> frozenset[str]:
     """The IANA zone names of the bundled database: the same on every platform, without
@@ -229,21 +238,33 @@ class _Document:
         # Errors are raised outside the handlers: a YAML error quotes the offending line, which
         # may hold a secret, and must not stay attached to ours as its context.
         failure: ProjectLoadError | None = None
+        data = b""
         try:
-            if path.stat().st_size > MAX_FILE_BYTES:
+            # Only a regular file: a pipe would block and a device could be endless. The read is
+            # bounded too, so the limit never depends on the size the file system reports.
+            if not path.is_file():
                 failure = ProjectLoadError(
-                    "PROJECT_YAML_INVALID",
-                    f"{self.file}: larger than {MAX_FILE_BYTES // 1024} KiB.",
-                    file=self.file,
+                    "PROJECT_NOT_FOUND", f"{self.file} is not a regular file.", file=self.file
                 )
             else:
-                text = path.read_bytes().decode("utf-8")
+                with path.open("rb") as handle:
+                    data = handle.read(MAX_FILE_BYTES + 1)
+                if len(data) > MAX_FILE_BYTES:
+                    failure = ProjectLoadError(
+                        "PROJECT_YAML_INVALID",
+                        f"{self.file}: larger than {MAX_FILE_BYTES // 1024} KiB.",
+                        file=self.file,
+                    )
         except OSError as error:
             failure = ProjectLoadError(
                 "PROJECT_NOT_FOUND",
                 f"{self.file} cannot be read ({error.strerror or type(error).__name__}).",
                 file=self.file,
             )
+        if failure is not None:
+            raise failure
+        try:
+            text = data.decode("utf-8")
         except UnicodeDecodeError as error:
             # The decode error carries the whole file; only the position is kept.
             failure = ProjectLoadError(
@@ -352,11 +373,11 @@ class _Document:
                         code,
                         f"{self.file}: duplicate {what} '{name}'.",
                         file=self.file,
-                        path=f"{pointer}/{name}",
+                        path=f"{pointer}/{_token(name)}",
                         line=key.start_mark.line + 1,
                     )
                 seen.add(name)
-                self._check_duplicates(value, f"{pointer}/{name}", seen_nodes, depth + 1)
+                self._check_duplicates(value, f"{pointer}/{_token(name)}", seen_nodes, depth + 1)
         elif isinstance(node, yaml.SequenceNode):
             for index, item in enumerate(node.value):
                 self._check_duplicates(item, f"{pointer}/{index}", seen_nodes, depth + 1)
@@ -366,7 +387,7 @@ class _Document:
         node = self._root
         if node is None:
             return None
-        for part in [part for part in pointer.split("/") if part]:
+        for part in [_untoken(part) for part in pointer.split("/")[1:]]:
             child = None
             if isinstance(node, yaml.MappingNode):
                 child = next((v for k, v in node.value if k.value == part), None)
@@ -398,7 +419,7 @@ class _Document:
             first = error.errors(include_input=False, include_url=False)[0]
         # Raised outside the handler: the validation error quotes the input (a literal password,
         # for example), and it must not stay attached to ours as its context.
-        location = "/".join(str(part) for part in first["loc"] if part != "root")
+        location = "/".join(_token(part) for part in first["loc"] if part != "root")
         where = f"{pointer}/{location}" if location else pointer
         if first["type"] == "extra_forbidden":
             message = f"Unknown key '{first['loc'][-1]}'."
