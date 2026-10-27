@@ -5,7 +5,7 @@
 
 ## Contracts
 - **Owns:** store interface for plans/SQL with bound parameters, write batches, transactions and snapshots (`contracts/store/v1`, created in P1).
-- **Consumes:** `contracts/project/v1` (its `retention` section, P1-20).
+- **Consumes:** `contracts/project/v1` (its `retention` section, P1-20) and the per-model `retention` override from `contracts/model-config/v1` (decision #70).
 
 ## Required reading
 | Document | Sections |

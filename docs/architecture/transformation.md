@@ -82,6 +82,7 @@ full_refresh:                        # periodic full rebuild; captures deletions
   time_zone: America/La_Paz
 
 on_schema_change: fail               # fail | append_new_columns | sync_all_columns  (default: fail)
+retention: 730d                      # snapshot retention for this table (default: project.yaml, §6)
 
 tests:
   - unique: [reading_id]
@@ -190,7 +191,7 @@ Every run produces a **run record** (`contracts/run-record/v1`): run id, model, 
 | Local | DuckDB file inside `.<slug>/lake/` (single client, recommended by DuckLake for local single-user use). Only one process opens it: CLI commands (`orvex run`, `orvex validate`, and the stdio MCP server `orvex mcp`) talk to the running instance over its local API when one is running; otherwise they open the warehouse themselves, and a second opener fails with `PROJECT_LOCKED` | Local Parquet under `.<slug>/lake/data/` |
 | Server | PostgreSQL (recommended by DuckLake for multi-user use with concurrent clients) | Local disk or object storage |
 
-- Snapshot retention is configured by the user in `project.yaml` (default 90 days). Retention defines how long receipts stay **exactly** reproducible.
+- Snapshot retention is set by the Builder: a project default in `project.yaml` (90 days unless changed) and an optional per-model override in the sidecar (`retention`, for example `730d` for readings and `30d` for auxiliary tables). Dashboard authors do not set retention, because several dashboards share the same tables (Owner decision #70). Retention defines how long receipts stay **exactly** reproducible.
 - Snapshot expiration and file compaction are scheduled maintenance tasks with their own run records.
 
 ## 7. Error codes (initial set)
