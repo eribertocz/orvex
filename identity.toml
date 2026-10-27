@@ -1,11 +1,12 @@
 # Product identity — the ONLY place where the product name is written.
 # Every package, CLI, Docker image, Ossie vendor name and UI title is derived from this file.
-# To rename the product: edit this file, run the rename script (created in Phase 0), and add the
-# previous vendor name to `previous_vendor_names` so existing semantic models keep loading.
+# To rename the product: run `python -m tools.rename.rename "<Name>" <slug>`; it rewrites this
+# file and adds the previous vendor name to `previous_vendor_names` so existing semantic models
+# keep loading.
 
 [product]
-name = "Sextant"                 # display name
-slug = "sextant"                 # lowercase identifier: CLI command, Docker image, package prefix
-python_namespace = "sextant"     # top-level Python import namespace
-ossie_vendor_name = "SEXTANT"    # vendor_name used in Apache Ossie custom_extensions
-previous_vendor_names = []       # accepted as aliases when reading existing models
+name = "Sextant"
+slug = "sextant"
+python_namespace = "sextant"
+ossie_vendor_name = "SEXTANT"
+previous_vendor_names = []
