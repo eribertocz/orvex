@@ -1,0 +1,5 @@
+tariff,price_per_kwh
+residential,0.8500
+commercial,1.1200
+industrial,0.7400
+public_lighting,0.9600
