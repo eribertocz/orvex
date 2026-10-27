@@ -36,7 +36,7 @@ class Snapshot(BaseModel):
     )
     kind: Literal["snapshot"]
     id: Annotated[int, Field(ge=0)]
-    committed_at: Annotated[AwareDatetime, Field(pattern="(Z|[+-][0-9]{2}:[0-9]{2})$")]
+    committed_at: AwareDatetime
 
 
 class CommitResult(BaseModel):

@@ -70,7 +70,7 @@
       "properties": {
         "kind": { "const": "snapshot" },
         "id": { "type": "integer", "minimum": 0 },
-        "committed_at": { "type": "string", "format": "date-time", "pattern": "(Z|[+-][0-9]{2}:[0-9]{2})$" }
+        "committed_at": { "type": "string", "format": "date-time" }
       }
     },
     "CommitResult": {
