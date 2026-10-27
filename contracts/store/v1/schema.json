@@ -264,7 +264,7 @@
         "connection": {
           "type": "string",
           "minLength": 1,
-          "description": "libpq key=value connection string without a password, e.g. host=db port=5432 dbname=lake user=orvex"
+          "description": "libpq key=value connection string without a password, e.g. host=db port=5432 dbname=lake user=analytics"
         },
         "password_env": {
           "type": "string",

@@ -39,7 +39,7 @@ export interface PostgresLakeLocation {
 	kind: 'lake_location';
 	catalog: 'postgres';
 	/**
-	 * libpq key=value connection string without a password, e.g. host=db port=5432 dbname=lake user=orvex
+	 * libpq key=value connection string without a password, e.g. host=db port=5432 dbname=lake user=analytics
 	 */
 	connection: string;
 	password_env: string;

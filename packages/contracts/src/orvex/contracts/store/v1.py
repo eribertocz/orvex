@@ -111,7 +111,7 @@ class PostgresLakeLocation(BaseModel):
     catalog: Literal["postgres"]
     connection: Annotated[str, Field(min_length=1)]
     """
-    libpq key=value connection string without a password, e.g. host=db port=5432 dbname=lake user=orvex
+    libpq key=value connection string without a password, e.g. host=db port=5432 dbname=lake user=analytics
     """
     password_env: Annotated[str, Field(pattern="^[A-Z_][A-Z0-9_]*$")]
     metadata_schema: Annotated[str | None, Field(pattern="^[a-z_][a-z0-9_]*$")] = None
