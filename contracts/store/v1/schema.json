@@ -37,7 +37,7 @@
     "ParameterType": {
       "description": "DuckDB type of a parameter.",
       "type": "string",
-      "pattern": "^(BOOLEAN|TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|UHUGEINT|DOUBLE|VARCHAR|DATE|TIMESTAMP|TIMESTAMPTZ|DECIMAL\\(([1-9]|[1-3][0-9]),([0-9]|[1-3][0-9])\\))$"
+      "pattern": "^(BOOLEAN|TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|UHUGEINT|DOUBLE|VARCHAR|DATE|TIMESTAMP|TIMESTAMPTZ|DECIMAL\\(([1-9]|[12][0-9]|3[0-8]),([0-9]|[12][0-9]|3[0-8])\\))$"
     },
     "StatementRequest": {
       "description": "One SQL statement executed in a write transaction.",

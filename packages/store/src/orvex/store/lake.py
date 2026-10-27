@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import re
 import threading
 from collections.abc import Iterator
@@ -138,6 +139,8 @@ def _converted(parameter: Parameter) -> str | None:
     if kind == "DOUBLE":
         if not _DOUBLE.fullmatch(value):
             raise _invalid(parameter, "expected a finite decimal number")
+        if not math.isfinite(float(value)):
+            raise _invalid(parameter, "out of range for DOUBLE")
         return value
     try:
         if kind == "DATE":
@@ -197,6 +200,13 @@ def _typed(sql: str, parameters: list[Parameter]) -> str:
             if name in types:
                 stop = following + len(name)
                 edits.append((position, stop, f"CAST(${name} AS {types[name]})"))
+    wrapped = {sql[start + 1 : stop] for start, stop, _ in edits}
+    if wrapped != set(types):
+        raise StoreError(
+            "STORE_PARAMETER_INVALID",
+            "Every parameter must appear in the SQL as $name.",
+            {"unplaced": ",".join(sorted(set(types) - wrapped))},
+        )
     for start, stop, replacement in reversed(edits):
         sql = sql[:start] + replacement + sql[stop:]
     return sql
@@ -226,6 +236,7 @@ class Lake:
                 {"duckdb": str(error)},
             ) from error
         self._write_lock = threading.Lock()
+        self._local = threading.local()
         try:
             self._prepare(Path(location.path))
         except BaseException:
@@ -409,7 +420,14 @@ class Lake:
         Write transactions in this process run one at a time, so the snapshot reported in the
         result is the one this transaction created.
         """
+        if getattr(self._local, "writing", False):
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "A transaction cannot be opened inside another one in the same thread.",
+                {},
+            )
         with self._write_lock:
+            self._local.writing = True
             cursor = self._cursor()
             try:
                 before = self._snapshot(None)
@@ -417,11 +435,11 @@ class Lake:
                 handle = Transaction(cursor)
                 try:
                     yield handle
-                    if _views_exist(cursor):
+                    if _unpinnable_objects(cursor):
                         raise StoreError(
                             "STORE_STATEMENT_INVALID",
-                            "Views are not allowed in the lake: a read could not pin "
-                            "the tables inside them to a snapshot.",
+                            "Views and macros are not allowed: a read could not pin the "
+                            "tables they use to a snapshot.",
                             {},
                         )
                 except BaseException:
@@ -438,19 +456,27 @@ class Lake:
                 after = self._snapshot(None)
             finally:
                 cursor.close()
+                self._local.writing = False
             changed = after is not None and (before is None or after.id != before.id)
             handle.result = CommitResult(kind="commit_result", snapshot=after if changed else None)
 
 
-def _views_exist(cursor: duckdb.DuckDBPyConnection) -> bool:
-    """Whether the lake holds a view, read inside the open transaction."""
+def _unpinnable_objects(cursor: duckdb.DuckDBPyConnection) -> int:
+    """Views in the lake and user macros anywhere, read inside the open transaction.
+
+    Both can read lake tables from inside a function call or a view body, where a read's
+    snapshot rewrite cannot reach them, so they are not allowed to exist.
+    """
     result = cursor.execute(
-        "SELECT count(*) FROM duckdb_views() WHERE database_name = $lake AND NOT internal",
+        "SELECT (SELECT count(*) FROM duckdb_views() "
+        "        WHERE lower(database_name) = $lake AND NOT internal) "
+        "     + (SELECT count(*) FROM duckdb_functions() "
+        "        WHERE NOT internal AND function_type IN ('macro', 'table_macro'))",
         {"lake": LAKE},
     )
     row = result.fetchone()
     result.fetchone()  # reaches the end of the one-row result, so the cursor is free again
-    return bool(row and int(str(row[0])) > 0)
+    return int(str(row[0])) if row else 0
 
 
 class Transaction:

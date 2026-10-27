@@ -328,6 +328,7 @@ def test_parameters_take_their_declared_type(
         ("INTEGER", " 1"),
         ("DATE", "20261027"),
         ("DOUBLE", "inf"),
+        ("DOUBLE", "1e400"),
     ],
 )
 def test_lenient_or_inexact_parameter_text_is_rejected(lake: Lake, kind: str, value: str) -> None:
@@ -385,3 +386,26 @@ def test_error_while_streaming_is_a_store_error(lake: Lake) -> None:
 def test_invalid_limits_are_rejected(tmp_path: Path) -> None:
     location = LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
     assert code_of(lambda: open_lake(location, Limits("lots", 2))) == "STORE_LIMITS_REQUIRED"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "CREATE MACRO memory.main.s() AS (SELECT count(*) FROM lake.main.a)",
+        "CREATE MACRO memory.main.t() AS TABLE SELECT * FROM lake.main.a",
+    ],
+)
+def test_macros_are_refused_and_rolled_back(lake: Lake, sql: str) -> None:
+    write(lake, statement("CREATE TABLE a AS SELECT 1 AS x"))
+    before = lake.current_snapshot().id
+    assert code_of(lambda: write(lake, statement(sql))) == "STORE_STATEMENT_INVALID"
+    assert lake.current_snapshot().id == before
+
+
+def test_nested_transaction_in_one_thread_is_refused(lake: Lake) -> None:
+    def nested() -> None:
+        with lake.transaction(), lake.transaction():
+            pass
+
+    assert code_of(nested) == "STORE_STATEMENT_INVALID"
+    write(lake, statement("CREATE TABLE after_nested AS SELECT 1 AS x"))
