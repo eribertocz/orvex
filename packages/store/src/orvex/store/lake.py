@@ -677,7 +677,10 @@ class Lake:
             "AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
             "AND n.nspname NOT LIKE 'pg_toast%' AND ("
             "(a.atttypid = 'numeric'::regtype "
-            "AND (a.atttypmod < 0 OR ((a.atttypmod - 4) >> 16) > 38)) "
+            # typmod - 4 = precision << 16 | scale (11 bits; PostgreSQL 15+ allows a negative
+            # scale or one above the precision, which DuckDB cannot represent either).
+            "AND (a.atttypmod < 0 OR ((a.atttypmod - 4) >> 16) > 38 "
+            "OR ((a.atttypmod - 4) & 2047) > ((a.atttypmod - 4) >> 16))) "
             "OR a.atttypid IN ('money'::regtype, '_money'::regtype, '_numeric'::regtype))" + scope
         )
         cursor = self._connection.cursor()
@@ -1476,9 +1479,17 @@ def _source_password(source: PostgresSourceAttachment) -> str:
     return password
 
 
+class _SqliteHasCode(Exception):
+    """The SQLite file defines views or triggers."""
+
+
 def _sqlite_declared_types(source: SqliteSourceAttachment) -> list[tuple[str, str, str]]:
-    """(table, column, declared type) of every table and view, read with SQLite itself,
-    read-only."""
+    """(table, column, declared type) of every table, read with SQLite itself, read-only.
+
+    A file with views or triggers is refused: DuckDB turns a SQLite view's SQL into a DuckDB
+    view that runs with the lake's connection, where it could call functions the statement
+    guard refuses (and run SQL on other sources).
+    """
     uri = Path(source.path).absolute().as_uri() + "?mode=ro"
     try:
         connection = sqlite3.connect(uri, uri=True)
@@ -1486,11 +1497,15 @@ def _sqlite_declared_types(source: SqliteSourceAttachment) -> list[tuple[str, st
             tables = [
                 str(row[0])
                 for row in connection.execute(
-                    # Views too: a view exposes the same columns under another name.
-                    "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') "
+                    "SELECT name FROM sqlite_master WHERE type = 'table' "
                     "AND name NOT LIKE 'sqlite_%'"
                 )
             ]
+            objects = connection.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type IN ('view', 'trigger')"
+            ).fetchone()
+            if objects and int(objects[0]):
+                raise _SqliteHasCode
             found = []
             for table in tables:
                 for row in connection.execute(
@@ -1500,6 +1515,12 @@ def _sqlite_declared_types(source: SqliteSourceAttachment) -> list[tuple[str, st
             return found
         finally:
             connection.close()
+    except _SqliteHasCode:
+        raise StoreError(
+            "STORE_SOURCE_INVALID",
+            f"Source {source.name} defines views or triggers, which a lake cannot attach.",
+            {"source": source.name},
+        ) from None
     except sqlite3.Error as error:
         raise StoreError(
             "STORE_SOURCE_INVALID",

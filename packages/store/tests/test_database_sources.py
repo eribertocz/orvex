@@ -69,7 +69,6 @@ def sqlite_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
         INSERT INTO consumers VALUES (9007199254740993, 'Bea', -1.25, NULL, 'x');
         CREATE TABLE charges (id INTEGER, amount DECIMAL(10,2));
         INSERT INTO charges VALUES (1, 12.34);
-        CREATE VIEW billed AS SELECT id, amount AS total FROM charges;
         """
     )
     connection.commit()
@@ -146,11 +145,31 @@ def test_sqlite_decimal_column_is_refused_only_when_read(sqlite_lake: Lake) -> N
         write(sqlite_lake, "CREATE TABLE c AS SELECT id, amount FROM field.charges")
     assert raised.value.code == "UNSUPPORTED_SOURCE_TYPE"
     assert raised.value.details["column"] == "field.charges.amount"
-    with pytest.raises(StoreError) as through_view:
-        write(sqlite_lake, "CREATE TABLE v AS SELECT * FROM field.billed")
-    assert through_view.value.code == "UNSUPPORTED_SOURCE_TYPE"
     write(sqlite_lake, "CREATE TABLE ids AS SELECT id FROM field.charges")
     assert read(sqlite_lake, "SELECT count(*) AS n FROM ids") == [{"n": 1}]
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        "CREATE VIEW billed AS SELECT id, amount AS total FROM charges",
+        "CREATE VIEW wipe AS SELECT * FROM postgres_execute('production', 'DELETE FROM readings',"
+        " use_transaction = false)",
+        "CREATE TRIGGER audit AFTER INSERT ON charges BEGIN SELECT 1; END",
+    ],
+    ids=["view", "view-calling-a-function", "trigger"],
+)
+def test_sqlite_file_with_views_or_triggers_is_refused(
+    location: Location, sqlite_file: Path, definition: str
+) -> None:
+    connection = sqlite3.connect(sqlite_file)
+    connection.execute(definition)
+    connection.commit()
+    connection.close()
+    with pytest.raises(StoreError) as raised:
+        open_lake(location, LIMITS, [sqlite_source(sqlite_file)])
+    assert raised.value.code == "STORE_SOURCE_INVALID"
+    assert raised.value.details["source"] == "field"
 
 
 def test_missing_sqlite_file_is_not_created(location: Location, tmp_path: Path) -> None:
@@ -215,7 +234,8 @@ def schema(admin: duckdb.DuckDBPyConnection) -> Iterator[str]:
     execute(
         admin,
         f"CREATE TABLE {name}.readings (reading_id bigint, kwh numeric(18,4), "
-        "read_at timestamptz, read_on date, status text, loose numeric, cash money)",
+        "read_at timestamptz, read_on date, status text, loose numeric, cash money, "
+        "rounded numeric(5,-2))",
     )
     execute(
         admin,
@@ -225,8 +245,8 @@ def schema(admin: duckdb.DuckDBPyConnection) -> Iterator[str]:
     execute(
         admin,
         f"INSERT INTO {name}.readings VALUES "
-        "(1, 12.3456, '2024-01-31 23:59:59.123456-04', '2024-01-31', 'valid', 1.5, 2.50), "
-        "(9007199254740993, -0.0001, NULL, NULL, NULL, NULL, NULL)",
+        "(1, 12.3456, '2024-01-31 23:59:59.123456-04', '2024-01-31', 'valid', 1.5, 2.50, 1200), "
+        "(9007199254740993, -0.0001, NULL, NULL, NULL, NULL, NULL, NULL)",
     )
     yield name
     execute(admin, f"DROP SCHEMA {name} CASCADE")
@@ -315,7 +335,7 @@ def test_reads_cannot_reference_postgres(location: Location, schema: str) -> Non
         lake.close()
 
 
-@pytest.mark.parametrize("column", ["loose", "cash"])
+@pytest.mark.parametrize("column", ["loose", "cash", "rounded"])
 @pytest.mark.parametrize("declared", [True, False], ids=["schema", "no-schema"])
 def test_inexact_postgres_columns_are_refused_only_when_read(
     location: Location, schema: str, column: str, declared: bool
