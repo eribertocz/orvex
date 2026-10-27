@@ -20,4 +20,4 @@ where = ["src"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"sextant.server" = ["py.typed", "identity.toml"]
+"sextant.server" = ["py.typed", "contracts.toml", "identity.toml", "versions.toml", "web/**/*"]

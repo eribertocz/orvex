@@ -25,3 +25,6 @@ web/build/
 .idea/
 .DS_Store
 Thumbs.db
+
+# The release workflow copies the web build into the server package; never commit it.
+packages/server/src/*/server/web/

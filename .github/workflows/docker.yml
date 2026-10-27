@@ -1,0 +1,33 @@
+# Docker skeleton (P0-08): build the image (never pushed) on pull requests that change it, and
+# check that it runs as a non-root user.
+name: docker
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - .github/workflows/docker.yml
+
+permissions:
+  contents: read
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the image
+        run: docker build --tag local/product:ci .
+      - name: Runs as a non-root user
+        run: |
+          user=$(docker inspect --format '{{.Config.User}}' local/product:ci)
+          echo "USER=$user"
+          test -n "$user" && test "$user" != "0" && test "$user" != "root"
+          uid=$(docker run --rm --entrypoint id local/product:ci -u)
+          echo "uid=$uid"
+          test "$uid" != "0"
+      - name: Starts and reports its versions
+        run: docker run --rm local/product:ci | tee versions.txt && grep -q "contract http-api v1" versions.txt

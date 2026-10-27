@@ -25,7 +25,13 @@ from sextant.server.instance import (
     open_project,
 )
 from sextant.server.logs import configure_logging
-from sextant.server.versions import Versions, current_versions
+from sextant.server.versions import (
+    ContractVersionIncompatible,
+    Versions,
+    check_compatibility,
+    current_versions,
+    installed_declarations,
+)
 
 LOCAL_HOST = "127.0.0.1"
 DEFAULT_PORT = 7878
@@ -92,10 +98,21 @@ def server_config(port: int, versions: Versions, web_build: Path | None) -> uvic
 def main(argv: Sequence[str] | None = None) -> int:
     identity = load_identity()
     arguments = parser_for(identity).parse_args(argv)
-    versions = current_versions(identity)
+    try:
+        declarations = installed_declarations(identity)
+    except ValueError as error:
+        print(f"{ContractVersionIncompatible.code}: {error}", file=sys.stderr)
+        return 3
+    versions = current_versions(identity, declarations)
     if arguments.version:
         print(describe_versions(identity, versions))
         return 0
+    try:
+        # Before anything else: no project is opened and no port is bound when this fails.
+        check_compatibility(declarations)
+    except ContractVersionIncompatible as error:
+        print(error, file=sys.stderr)
+        return 3
 
     configure_logging()
     registry = ProjectRegistry(instance_directory(identity))

@@ -17,4 +17,4 @@ where = ["src"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"sextant.transform" = ["py.typed"]
+"sextant.transform" = ["py.typed", "contracts.toml"]

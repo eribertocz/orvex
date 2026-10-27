@@ -17,4 +17,4 @@ where = ["src"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"sextant.store" = ["py.typed"]
+"sextant.store" = ["py.typed", "contracts.toml"]

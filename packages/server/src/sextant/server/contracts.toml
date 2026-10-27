@@ -1,0 +1,6 @@
+# Contract versions this module produces and consumes (docs/process/versioning.md §3).
+# produces: { "<contract>" = "vN" }; consumes: { "<contract>" = ["vN", ...] }.
+# The server checks the installed combination before it starts.
+
+produces = { "http-api" = "v1" }
+consumes = {}

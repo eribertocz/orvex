@@ -1,0 +1,7 @@
+# Only packages/ is copied into the image; keep local build output out of the context.
+**/__pycache__
+**/*.egg-info
+**/build
+**/node_modules
+.venv
+.git

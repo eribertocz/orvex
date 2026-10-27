@@ -27,3 +27,11 @@ updates:
     labels: ["type:build", "module:web"]
     commit-message:
       prefix: "build(web)"
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    labels: ["type:build", "module:repo"]
+    commit-message:
+      prefix: "build(repo)"
