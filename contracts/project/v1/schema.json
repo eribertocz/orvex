@@ -1,0 +1,370 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.invalid/project/v1/schema.json",
+  "title": "ProjectDocument",
+  "description": "The files of a project folder that the Builder edits by hand: `project.yaml` and `connections.yaml` (parsed from YAML), and the errors of loading them.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ProjectFile"
+    },
+    {
+      "$ref": "#/$defs/ConnectionsFile"
+    },
+    {
+      "$ref": "#/$defs/ProjectError"
+    }
+  ],
+  "$defs": {
+    "ProjectFile": {
+      "description": "`project.yaml`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "name",
+        "time_zone"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+          "description": "Display name of the project; no control characters."
+        },
+        "time_zone": {
+          "description": "IANA time zone name (for example `America/La_Paz`); required, never implicit. The loader checks it against the IANA database.",
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$",
+          "maxLength": 64
+        },
+        "locale": {
+          "enum": [
+            "es",
+            "en"
+          ],
+          "default": "es"
+        },
+        "retention": {
+          "$ref": "#/$defs/Retention"
+        }
+      }
+    },
+    "Retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "snapshots": {
+          "description": "How long lake snapshots are kept: `<n>d`, at least `1d`.",
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,4}d$",
+          "default": "90d"
+        }
+      }
+    },
+    "ConnectionsFile": {
+      "description": "`connections.yaml`: data sources by name. A name becomes a SQL schema, so it follows identifier rules and cannot be `lake`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "connections"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "connections": {
+          "description": "Connections by name. A name becomes a SQL schema: lowercase identifier, not `lake`.",
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "not": {
+              "const": "lake"
+            }
+          },
+          "patternProperties": {
+            "^[a-z][a-z0-9_]{0,62}$": {
+              "$ref": "#/$defs/Connection"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "Connection": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ParquetConnection"
+        },
+        {
+          "$ref": "#/$defs/CsvConnection"
+        },
+        {
+          "$ref": "#/$defs/DuckdbConnection"
+        },
+        {
+          "$ref": "#/$defs/SqliteConnection"
+        },
+        {
+          "$ref": "#/$defs/PostgresConnection"
+        },
+        {
+          "$ref": "#/$defs/ClickhouseConnection"
+        }
+      ]
+    },
+    "Path": {
+      "description": "A file path; relative paths are resolved against the project folder. Globs are allowed for `parquet` and `csv`.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "ReadOnly": {
+      "description": "Required for database connections. `false` is valid here and refused by the loader with `SOURCE_NOT_READ_ONLY`: every database source is read-only in v1.",
+      "type": "boolean"
+    },
+    "SecretReference": {
+      "description": "A reference to an environment variable: `${env:NAME}`. The value is read when the connection is used and never stored.",
+      "type": "string",
+      "pattern": "^\\$\\{env:[A-Z_][A-Z0-9_]*\\}$"
+    },
+    "ParquetConnection": {
+      "description": "Parquet files (a path or a glob).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "path"
+      ],
+      "properties": {
+        "type": {
+          "const": "parquet"
+        },
+        "path": {
+          "$ref": "#/$defs/Path"
+        }
+      }
+    },
+    "CsvConnection": {
+      "description": "CSV files (a path or a glob).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "path"
+      ],
+      "properties": {
+        "type": {
+          "const": "csv"
+        },
+        "path": {
+          "$ref": "#/$defs/Path"
+        }
+      }
+    },
+    "DuckdbConnection": {
+      "description": "A DuckDB database file.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "path",
+        "read_only"
+      ],
+      "properties": {
+        "type": {
+          "const": "duckdb"
+        },
+        "path": {
+          "$ref": "#/$defs/Path"
+        },
+        "read_only": {
+          "$ref": "#/$defs/ReadOnly"
+        }
+      }
+    },
+    "SqliteConnection": {
+      "description": "A SQLite database file.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "path",
+        "read_only"
+      ],
+      "properties": {
+        "type": {
+          "const": "sqlite"
+        },
+        "path": {
+          "$ref": "#/$defs/Path"
+        },
+        "read_only": {
+          "$ref": "#/$defs/ReadOnly"
+        }
+      }
+    },
+    "PostgresConnection": {
+      "description": "A PostgreSQL database. `schema`, when given, limits the connection to that schema.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "host",
+        "port",
+        "database",
+        "user",
+        "password",
+        "read_only"
+      ],
+      "properties": {
+        "type": {
+          "const": "postgres"
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "database": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "user": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "password": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "read_only": {
+          "$ref": "#/$defs/ReadOnly"
+        },
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "ClickhouseConnection": {
+      "description": "A ClickHouse database.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "host",
+        "port",
+        "database",
+        "user",
+        "password",
+        "read_only"
+      ],
+      "properties": {
+        "type": {
+          "const": "clickhouse"
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "database": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "user": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "password": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "secure": {
+          "description": "TLS to the server; default true.",
+          "type": "boolean",
+          "default": true
+        },
+        "read_only": {
+          "$ref": "#/$defs/ReadOnly"
+        }
+      }
+    },
+    "ProjectErrorCode": {
+      "enum": [
+        "PROJECT_NOT_FOUND",
+        "PROJECT_YAML_INVALID",
+        "PROJECT_SCHEMA_INVALID",
+        "PROJECT_VERSION_UNSUPPORTED",
+        "PROJECT_SECRET_MISSING",
+        "SOURCE_NOT_READ_ONLY"
+      ]
+    },
+    "ProjectError": {
+      "description": "A project that cannot be loaded or a secret that cannot be resolved. `details` names the file, the location of the problem as a JSON pointer (`path`) and its `line` when known; never a secret value.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "details"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ProjectErrorCode"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "details": {
+          "$ref": "#/$defs/ProjectErrorDetails"
+        }
+      }
+    },
+    "ProjectErrorDetails": {
+      "description": "Where the problem is. `path` is a JSON pointer into the file (`/connections/production/password`); `variable` names an environment variable, never its value.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "connection": {
+          "type": "string",
+          "minLength": 1
+        },
+        "variable": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$"
+        }
+      }
+    }
+  }
+}

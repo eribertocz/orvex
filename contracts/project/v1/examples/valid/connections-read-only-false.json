@@ -1,0 +1,1 @@
+{"version": 1, "connections": {"legacy": {"type": "duckdb", "path": "legacy.duckdb", "read_only": false}}}
