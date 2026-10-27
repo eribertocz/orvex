@@ -94,6 +94,10 @@
           {
             "context": "boundaries",
             "integration_id": 15368
+          },
+          {
+            "context": "contracts",
+            "integration_id": 15368
           }
         ]
       }
