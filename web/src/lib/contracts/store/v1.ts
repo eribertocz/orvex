@@ -23,7 +23,10 @@ export type ErrorCode =
 	| 'STORE_SECRET_MISSING'
 	| 'STORE_SECRET_INLINE'
 	| 'STORE_CATALOG_UNAVAILABLE'
-	| 'STORE_TYPE_UNSUPPORTED';
+	| 'STORE_TYPE_UNSUPPORTED'
+	| 'STORE_TIMEOUT'
+	| 'STORE_CANCELLED'
+	| 'STORE_BUSY';
 
 /**
  * A DuckLake lake with a local DuckDB-file catalog at <path>/catalog.ducklake and data files under <path>/data/ (one process).
@@ -57,6 +60,10 @@ export interface StatementRequest {
 	kind: 'statement';
 	sql: string;
 	parameters: Parameter[];
+	/**
+	 * Time limit in milliseconds, waiting for a slot included (default: the lake's default_timeout_ms).
+	 */
+	timeout_ms?: number;
 }
 /**
  * A named parameter bound to `$name` in the SQL. The value is text converted to the declared DuckDB type; exact values are never JSON numbers.
@@ -75,6 +82,10 @@ export interface ReadRequest {
 	parameters: Parameter[];
 	snapshot: number;
 	batch_size: number;
+	/**
+	 * Time limit in milliseconds, waiting for a slot included (default: the lake's default_timeout_ms).
+	 */
+	timeout_ms?: number;
 }
 export interface Snapshot {
 	kind: 'snapshot';

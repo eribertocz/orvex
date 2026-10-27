@@ -13,7 +13,9 @@ from orvex.contracts.store.v1 import Parameter, PostgresLakeLocation, ReadReques
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, open_lake
 
-LIMITS = Limits(memory_limit="512MB", threads=1)
+LIMITS = Limits(
+    memory_limit="512MB", threads=1, max_concurrent=8, queue_size=64, default_timeout_ms=600_000
+)
 PASSWORD_ENV = "STORE_TEST_POSTGRES_PASSWORD"
 
 OTHER_PROCESS = """
@@ -22,7 +24,8 @@ from pathlib import Path
 from orvex.contracts.store.v1 import PostgresLakeLocation, StatementRequest
 from orvex.store.lake import Limits, open_lake
 
-lake = open_lake(PostgresLakeLocation.model_validate_json(sys.argv[1]), Limits("512MB", 1))
+location = PostgresLakeLocation.model_validate_json(sys.argv[1])
+lake = open_lake(location, Limits("512MB", 1, 4, 16, 600_000))
 with lake.transaction() as transaction:
     transaction.execute(StatementRequest(kind="statement", sql=sys.argv[2], parameters=[]))
 lake.close()

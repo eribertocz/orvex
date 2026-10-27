@@ -7,6 +7,8 @@ read once, as an Arrow record-batch stream (ADR-0025). No row passes through Pyt
 
 from __future__ import annotations
 
+import collections
+import contextlib
 import datetime as dt
 import json
 import math
@@ -15,7 +17,9 @@ import re
 import shutil
 import tempfile
 import threading
-from collections.abc import Iterator
+import time
+import weakref
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +39,7 @@ from orvex.contracts.store.v1 import (
 from orvex.store.errors import StoreError, register_secret
 
 LAKE = "lake"
+MAX_TIMEOUT_MS = 3_600_000
 METADATA_PREFIX = "__ducklake_metadata"
 METADATA = f"{METADATA_PREFIX}_{LAKE}"
 # Any password key (password=, sslpassword=, ?password=) and any URI form (user:pw@host) is
@@ -86,10 +91,144 @@ INTEGER_RANGES = {
 
 @dataclass(frozen=True, slots=True)
 class Limits:
-    """DuckDB resource limits; both are required (law 7)."""
+    """Resource limits of a lake; every field is required (law 7).
+
+    `max_concurrent` statements (reads in progress and open transactions) run at once; up to
+    `queue_size` more wait in arrival order; `default_timeout_ms` applies when a request sets no
+    `timeout_ms`.
+    """
 
     memory_limit: str | None
     threads: int | None
+    max_concurrent: int | None = None
+    queue_size: int | None = None
+    default_timeout_ms: int | None = None
+
+
+class Admission:
+    """At most `capacity` holders at once, a bounded first-come first-served queue behind them."""
+
+    def __init__(self, capacity: int, queue_size: int) -> None:
+        self._capacity = capacity
+        self._queue_size = queue_size
+        self._running = 0
+        self._waiting: collections.deque[object] = collections.deque()
+        self._condition = threading.Condition()
+
+    def acquire(self, deadline: float) -> None:
+        """Wait for a slot until `deadline` (time.monotonic); STORE_BUSY or STORE_TIMEOUT."""
+        with self._condition:
+            if self._running < self._capacity and not self._waiting:
+                self._running += 1
+                return
+            if len(self._waiting) >= self._queue_size:
+                raise StoreError(
+                    "STORE_BUSY",
+                    "The lake is at capacity and its queue is full; try again shortly.",
+                    {"running": str(self._running), "queued": str(len(self._waiting))},
+                )
+            ticket = object()
+            self._waiting.append(ticket)
+            try:
+                while not (self._waiting[0] is ticket and self._running < self._capacity):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise StoreError(
+                            "STORE_TIMEOUT",
+                            "The request timed out while waiting for a free slot.",
+                            {},
+                        )
+                    self._condition.wait(remaining)
+                self._running += 1
+            finally:
+                self._waiting.remove(ticket)
+                self._condition.notify_all()
+
+    def release(self) -> None:
+        with self._condition:
+            self._running -= 1
+            self._condition.notify_all()
+
+
+INTERRUPT_REPEAT_SECONDS = 0.05
+
+
+class Guard:
+    """Interrupts a DuckDB cursor at a deadline or on request, and remembers why."""
+
+    def __init__(self, cursor: duckdb.DuckDBPyConnection, deadline: float) -> None:
+        self._cursor = cursor
+        self.reason: str | None = None
+        self.deadline = deadline
+        # Called after an interruption, for an owner that must also release what is idle.
+        self.on_fire: Callable[[], None] | None = None
+        self._lock = threading.Lock()
+        self._stopped = threading.Event()
+        self._repeat: threading.Thread | None = None
+        self._timer = threading.Timer(max(0.0, deadline - time.monotonic()), self._expire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _expire(self) -> None:
+        self._interrupt("STORE_TIMEOUT")
+
+    def cancel(self) -> None:
+        self._interrupt("STORE_CANCELLED")
+
+    def _interrupt(self, reason: str) -> None:
+        with self._lock:
+            if self.reason is not None:
+                return
+            self.reason = reason
+        if self.on_fire is not None:
+            self.on_fire()
+        # An interrupt sent while the cursor is between two pieces of work can be lost, so it is
+        # repeated until the owner stops the guard.
+        with self._lock:
+            if self._stopped.is_set():
+                return
+            self._repeat = threading.Thread(target=self._keep_interrupting, daemon=True)
+            self._repeat.start()
+
+    def _keep_interrupting(self) -> None:
+        while True:
+            # A statement that already ended has a closed cursor: there is nothing to stop.
+            with contextlib.suppress(duckdb.Error):
+                self._cursor.interrupt()
+            if self._stopped.wait(INTERRUPT_REPEAT_SECONDS):
+                return
+
+    def stop(self) -> None:
+        """No interrupt reaches the cursor once this returns."""
+        with self._lock:
+            self._stopped.set()
+            repeat = self._repeat
+        self._timer.cancel()
+        if repeat is not None:
+            repeat.join()
+
+    def error(self, cause: Exception | None = None) -> StoreError:
+        """The store error for an interruption (or `cause` when it was not interrupted)."""
+        if self.reason == "STORE_TIMEOUT" or (
+            self.reason is None and time.monotonic() >= self.deadline
+        ):
+            return StoreError("STORE_TIMEOUT", "The statement exceeded its time limit.", {})
+        if self.reason == "STORE_CANCELLED":
+            return StoreError("STORE_CANCELLED", "The statement was cancelled.", {})
+        return StoreError(
+            "STORE_QUERY_FAILED", "DuckDB could not run the statement.", {"duckdb": str(cause)}
+        )
+
+
+@dataclass(slots=True)
+class ReadHandle:
+    """A running read: its Arrow stream and a way to cancel it from another thread."""
+
+    reader: pa.RecordBatchReader
+    _guard: Guard
+
+    def cancel(self) -> None:
+        self._guard.cancel()
 
 
 def _quote(text: str) -> str:
@@ -316,12 +455,24 @@ class Lake:
         password = (
             _postgres_password(location) if isinstance(location, PostgresLakeLocation) else ""
         )
-        if not limits.memory_limit or not limits.threads:
+        if (
+            not limits.memory_limit
+            or not limits.threads
+            or limits.max_concurrent is None
+            or limits.max_concurrent < 1
+            or limits.queue_size is None
+            or limits.queue_size < 0
+            or limits.default_timeout_ms is None
+            or not 1 <= limits.default_timeout_ms <= MAX_TIMEOUT_MS
+        ):
             raise StoreError(
                 "STORE_LIMITS_REQUIRED",
-                "The lake needs an explicit memory limit and thread count.",
+                "The lake needs a memory limit, a thread count, a concurrency limit, a queue "
+                "size and a default timeout.",
                 {},
             )
+        self._limits = limits
+        self._admission = Admission(limits.max_concurrent, limits.queue_size)
         try:
             self._connection = duckdb.connect(
                 config={
@@ -559,6 +710,18 @@ class Lake:
 
     def read(self, request: ReadRequest) -> pa.RecordBatchReader:
         """Run one SELECT as of `request.snapshot` and return it once, as Arrow batches."""
+        return self.start_read(request).reader
+
+    def _timeout_ms(self, requested: int | None) -> int:
+        assert self._limits.default_timeout_ms is not None
+        return requested if requested is not None else self._limits.default_timeout_ms
+
+    def start_read(self, request: ReadRequest) -> ReadHandle:
+        """Like `read`, with a handle that can cancel the read from another thread.
+
+        The read waits for an admission slot, holds it until its stream ends, and is interrupted
+        when its timeout (counted from the call, waiting included) expires.
+        """
         statement = _single_statement(request.sql, self._table_functions)
         if statement.type != duckdb.StatementType.SELECT:
             raise StoreError(
@@ -574,38 +737,103 @@ class Lake:
                 {"snapshot": str(request.snapshot)},
             )
         sql = self._pinned(_typed(request.sql, request.parameters), request.snapshot)
-        cursor = self._cursor()
+        deadline = time.monotonic() + self._timeout_ms(request.timeout_ms) / 1000
+        self._admission.acquire(deadline)
         try:
+            cursor = self._cursor()
+        except BaseException:
+            self._admission.release()
+            raise
+        guard = Guard(cursor, deadline)
+        # Who owns the cursor: the calling thread while it sets the read up, nobody while the
+        # stream waits for its first read, the reading thread while it streams. Only an idle
+        # read is closed by the timer (or by collection of a dropped reader); the owner closes
+        # it otherwise. The slot is released exactly once.
+        state = threading.Lock()
+        phase = "setup"
+
+        def finish() -> None:
+            nonlocal phase
+            with state:
+                if phase == "finished":
+                    return
+                phase = "finished"
+            try:
+                guard.stop()
+                cursor.close()
+            finally:
+                self._admission.release()
+
+        def release_if_idle() -> None:
+            with state:
+                idle = phase == "idle"
+            if idle:
+                finish()
+
+        guard.on_fire = release_if_idle
+
+        try:
+            # Binding is quick and returns before any row is computed; the work runs on the first
+            # read of the stream, where a timeout or a cancel can still interrupt it.
             relation = cursor.sql(sql, params=parameters)
             names = list(relation.columns)
             types = [str(kind) for kind in relation.types]
             exact = exact_select(sql, names, types)
             if exact is not None:
                 relation = cursor.sql(exact, params=parameters)
-            source = relation.to_arrow_reader(request.batch_size)
+            empty = relation.limit(0).to_arrow_table()
+            schema = _with_duckdb_types(_utc_schema(empty.schema), types)
         except duckdb.Error as error:
-            cursor.close()
+            finish()
+            if isinstance(error, duckdb.InterruptException) or guard.reason:
+                raise guard.error(error) from error
             raise StoreError(
                 "STORE_QUERY_FAILED", "DuckDB could not run the read.", {"duckdb": str(error)}
             ) from error
-
-        schema = _with_duckdb_types(_utc_schema(source.schema), types)
+        except BaseException:
+            finish()
+            raise
+        if guard.reason is not None:
+            # The limit expired or a cancel came while the read was being set up.
+            finish()
+            raise guard.error()
+        with state:
+            phase = "idle"
+            fired = guard.reason is not None
+        if fired:
+            # It fired between the check above and now, and found the read still being set up.
+            release_if_idle()
 
         def batches() -> Iterator[pa.RecordBatch]:
-            # The cursor lives as long as the stream; it is closed when the stream ends.
+            # The cursor and the admission slot live as long as the stream.
+            nonlocal phase
+            with state:
+                if phase == "finished":
+                    raise guard.error()
+                phase = "streaming"
             try:
-                for batch in source:
+                if guard.reason is not None:
+                    raise guard.error()
+                for batch in relation.to_arrow_reader(request.batch_size):
+                    if guard.reason is not None:
+                        raise guard.error()
                     yield batch if batch.schema == schema else batch.cast(schema)
             except (OSError, pa.ArrowException, duckdb.Error) as error:
+                if guard.reason is not None or isinstance(error, duckdb.InterruptException):
+                    raise guard.error(error) from error
                 raise StoreError(
                     "STORE_QUERY_FAILED",
                     "DuckDB failed while streaming the read.",
                     {"duckdb": str(error)},
                 ) from error
             finally:
-                cursor.close()
+                finish()
 
-        return pa.RecordBatchReader.from_batches(schema, batches())
+        reader = pa.RecordBatchReader.from_batches(schema, batches())
+        # A stream dropped before its first batch never runs its generator, so its slot is
+        # released when the reader is collected (a started stream releases it when closed).
+        weakref.finalize(reader, release_if_idle)
+        return ReadHandle(reader=reader, _guard=guard)
 
     @contextmanager
     def transaction(self) -> Iterator[Transaction]:
@@ -620,7 +848,20 @@ class Lake:
                 "A transaction cannot be opened inside another one in the same thread.",
                 {},
             )
-        with self._write_lock:
+        deadline = time.monotonic() + self._timeout_ms(None) / 1000
+        self._admission.acquire(deadline)
+        try:
+            yield from self._transaction(deadline)
+        finally:
+            self._admission.release()
+
+    def _transaction(self, deadline: float) -> Iterator[Transaction]:
+        # Waiting for the writer ahead counts against the same time limit as the admission queue.
+        if not self._write_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise StoreError(
+                "STORE_TIMEOUT", "The transaction waited too long for the writer ahead.", {}
+            )
+        try:
             self._local.writing = True
             try:
                 cursor = self._cursor()
@@ -631,9 +872,11 @@ class Lake:
                 before = self._snapshot(None)
                 outside = _outside_inventory(cursor)
                 cursor.begin()
-                handle = Transaction(cursor, self._table_functions)
+                handle = Transaction(cursor, self._table_functions, self._timeout_ms)
                 try:
                     yield handle
+                    if handle.cancelled:
+                        raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
                     if _outside_inventory(cursor) != outside:
                         raise StoreError(
                             "STORE_STATEMENT_INVALID",
@@ -670,6 +913,8 @@ class Lake:
                 self._local.writing = False
             changed = after is not None and (before is None or after.id != before.id)
             handle.result = CommitResult(kind="commit_result", snapshot=after if changed else None)
+        finally:
+            self._write_lock.release()
 
 
 def _unpinnable_objects(cursor: duckdb.DuckDBPyConnection) -> int:
@@ -743,10 +988,27 @@ def _created_kind_allowed(sql: str, statement: duckdb.Statement) -> bool:
 class Transaction:
     """A write transaction; `result` is set when the block commits."""
 
-    def __init__(self, cursor: duckdb.DuckDBPyConnection, table_functions: frozenset[str]) -> None:
+    def __init__(
+        self,
+        cursor: duckdb.DuckDBPyConnection,
+        table_functions: frozenset[str],
+        timeout_ms: Callable[[int | None], int],
+    ) -> None:
         self._cursor = cursor
         self._table_functions = table_functions
+        self._timeout_ms = timeout_ms
+        self._guard: Guard | None = None
+        self._lock = threading.Lock()
+        self.cancelled = False
         self.result: CommitResult | None = None
+
+    def cancel(self) -> None:
+        """Cancel from any thread: a running statement is interrupted, and the block rolls back."""
+        with self._lock:
+            self.cancelled = True
+            guard = self._guard
+        if guard is not None:
+            guard.cancel()
 
     def execute(self, request: StatementRequest) -> None:
         statement = _single_statement(request.sql, self._table_functions)
@@ -759,12 +1021,21 @@ class Transaction:
                 {"statement": statement.type.name},
             )
         parameters = _bound(statement, request.parameters)
+        deadline = time.monotonic() + self._timeout_ms(request.timeout_ms) / 1000
+        guard = Guard(self._cursor, deadline)
+        # Checked and published together, so a cancel either sees this guard or is seen here.
+        with self._lock:
+            if self.cancelled:
+                guard.stop()
+                raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
+            self._guard = guard
         try:
             self._cursor.sql(_typed(request.sql, request.parameters), params=parameters)
         except duckdb.Error as error:
-            raise StoreError(
-                "STORE_QUERY_FAILED", "DuckDB could not run the statement.", {"duckdb": str(error)}
-            ) from error
+            raise guard.error(error) from error
+        finally:
+            guard.stop()
+            self._guard = None
 
 
 type JsonTree = dict[str, object]

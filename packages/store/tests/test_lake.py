@@ -14,7 +14,9 @@ from orvex.store.errors import StoreError
 from orvex.store.json_encoding import arrow_to_json
 from orvex.store.lake import Lake, Limits, open_lake
 
-LIMITS = Limits(memory_limit="1GB", threads=2)
+LIMITS = Limits(
+    memory_limit="1GB", threads=2, max_concurrent=8, queue_size=64, default_timeout_ms=600_000
+)
 
 
 def statement(sql: str, *parameters: tuple[str, str, str | None]) -> StatementRequest:
@@ -152,7 +154,16 @@ def test_read_runs_the_statement_once(lake: Lake) -> None:
 def test_large_read_streams_batch_by_batch(tmp_path: Path) -> None:
     """About 4 GB of results under a 512 MB limit: only streaming can pass."""
     location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
-    small = open_lake(location, Limits(memory_limit="512MB", threads=2))
+    small = open_lake(
+        location,
+        Limits(
+            memory_limit="512MB",
+            threads=2,
+            max_concurrent=8,
+            queue_size=64,
+            default_timeout_ms=600_000,
+        ),
+    )
     try:
         request = ReadRequest(
             kind="read",
@@ -226,7 +237,18 @@ def test_invalid_parameters(
     assert code_of(lambda: read(lake, sql, None, *parameters)) == "STORE_PARAMETER_INVALID"
 
 
-@pytest.mark.parametrize("limits", [Limits(None, 2), Limits("1GB", None)])
+@pytest.mark.parametrize(
+    "limits",
+    [
+        Limits(None, 2, 1, 0, 1000),
+        Limits("1GB", None, 1, 0, 1000),
+        Limits("1GB", 2, None, 0, 1000),
+        Limits("1GB", 2, 0, 0, 1000),
+        Limits("1GB", 2, 1, None, 1000),
+        Limits("1GB", 2, 1, 0, None),
+        Limits("1GB", 2, 1, 0, 3_600_001),
+    ],
+)
 def test_limits_are_required(tmp_path: Path, limits: Limits) -> None:
     location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
     assert code_of(lambda: open_lake(location, limits)) == "STORE_LIMITS_REQUIRED"
@@ -377,7 +399,10 @@ def test_error_while_streaming_is_a_store_error(lake: Lake) -> None:
 
 def test_invalid_limits_are_rejected(tmp_path: Path) -> None:
     location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
-    assert code_of(lambda: open_lake(location, Limits("lots", 2))) == "STORE_LIMITS_REQUIRED"
+    assert (
+        code_of(lambda: open_lake(location, Limits("lots", 2, 1, 0, 1000)))
+        == "STORE_LIMITS_REQUIRED"
+    )
 
 
 @pytest.mark.parametrize(

@@ -52,6 +52,9 @@ class ErrorCode(
             "STORE_SECRET_INLINE",
             "STORE_CATALOG_UNAVAILABLE",
             "STORE_TYPE_UNSUPPORTED",
+            "STORE_TIMEOUT",
+            "STORE_CANCELLED",
+            "STORE_BUSY",
         ]
     ]
 ):
@@ -67,6 +70,9 @@ class ErrorCode(
         "STORE_SECRET_INLINE",
         "STORE_CATALOG_UNAVAILABLE",
         "STORE_TYPE_UNSUPPORTED",
+        "STORE_TIMEOUT",
+        "STORE_CANCELLED",
+        "STORE_BUSY",
     ]
 
 
@@ -178,6 +184,10 @@ class StatementRequest(BaseModel):
     kind: Literal["statement"]
     sql: Annotated[str, Field(min_length=1)]
     parameters: list[Parameter]
+    timeout_ms: Annotated[int | None, Field(ge=1, le=3600000)] = None
+    """
+    Time limit in milliseconds, waiting for a slot included (default: the lake's default_timeout_ms).
+    """
 
 
 class ReadRequest(BaseModel):
@@ -193,6 +203,10 @@ class ReadRequest(BaseModel):
     parameters: list[Parameter]
     snapshot: Annotated[int, Field(ge=0)]
     batch_size: Annotated[int, Field(ge=1, le=1048576)]
+    timeout_ms: Annotated[int | None, Field(ge=1, le=3600000)] = None
+    """
+    Time limit in milliseconds, waiting for a slot included (default: the lake's default_timeout_ms).
+    """
 
 
 class StoreMessage(

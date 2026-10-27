@@ -79,6 +79,12 @@
           "items": {
             "$ref": "#/$defs/Parameter"
           }
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600000,
+          "description": "Time limit in milliseconds, waiting for a slot included (default: the lake's default_timeout_ms)."
         }
       }
     },
@@ -115,6 +121,12 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 1048576
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600000,
+          "description": "Time limit in milliseconds, waiting for a slot included (default: the lake's default_timeout_ms)."
         }
       }
     },
@@ -177,7 +189,10 @@
         "STORE_SECRET_MISSING",
         "STORE_SECRET_INLINE",
         "STORE_CATALOG_UNAVAILABLE",
-        "STORE_TYPE_UNSUPPORTED"
+        "STORE_TYPE_UNSUPPORTED",
+        "STORE_TIMEOUT",
+        "STORE_CANCELLED",
+        "STORE_BUSY"
       ]
     },
     "ErrorDetail": {
