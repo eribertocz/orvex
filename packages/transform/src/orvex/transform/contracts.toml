@@ -3,4 +3,4 @@
 # The server checks the installed combination before it starts.
 
 produces = {}
-consumes = {}
+consumes = { "project" = ["v1"], "store" = ["v1"] }

@@ -24,6 +24,9 @@
     },
     {
       "$ref": "#/$defs/ResultJson"
+    },
+    {
+      "$ref": "#/$defs/SourceAttachment"
     }
   ],
   "$defs": {
@@ -192,7 +195,9 @@
         "STORE_TYPE_UNSUPPORTED",
         "STORE_TIMEOUT",
         "STORE_CANCELLED",
-        "STORE_BUSY"
+        "STORE_BUSY",
+        "SOURCE_NOT_FOUND",
+        "STORE_SOURCE_INVALID"
       ]
     },
     "ErrorDetail": {
@@ -361,6 +366,50 @@
               ]
             }
           }
+        }
+      }
+    },
+    "SourceAttachment": {
+      "description": "A file source the lake reads inside write transactions, by name: `<name>.data` for parquet and csv (every matching file as one table, columns united by name), `<name>.<schema>.<table>` (or `<name>.<table>` for `main`) for a DuckDB file attached read-only. Reads never see sources. Only the declared paths become readable.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "type",
+        "path"
+      ],
+      "properties": {
+        "kind": {
+          "const": "source_attachment"
+        },
+        "name": {
+          "description": "The connection name; becomes a catalog name in SQL.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,62}$",
+          "not": {
+            "enum": [
+              "lake",
+              "main",
+              "memory",
+              "system",
+              "temp"
+            ]
+          }
+        },
+        "type": {
+          "enum": [
+            "parquet",
+            "csv",
+            "duckdb"
+          ]
+        },
+        "path": {
+          "description": "Absolute path; parquet and csv may use a glob (`*`, `?`, `[...]`, `**`) in their file name or folders.",
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 4096,
+          "pattern": "^(/|[A-Za-z]:[\\\\/])"
         }
       }
     }

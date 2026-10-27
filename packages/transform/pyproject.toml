@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = ["orvex-contracts==0.1.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

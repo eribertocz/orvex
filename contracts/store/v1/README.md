@@ -16,6 +16,22 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 | `CommitResult` | The one snapshot a committed transaction created, or `null` when it changed nothing |
 | `StoreError` | `code`, `message`, `details` |
 | `ResultJson` | A read result as JSON: `columns` (`name`, DuckDB `type`) and positional `rows`, encoded exactly (below) |
+| `SourceAttachment` | A file source (`parquet`, `csv` or `duckdb`) given to `open_lake`; readable by name inside write transactions only (below) |
+
+## File sources (`SourceAttachment`)
+
+`open_lake(location, limits, sources)` makes each source a read-only catalog named after its connection, before the file sandbox is set:
+
+| `type` | Tables |
+|---|---|
+| `parquet`, `csv` | one table `<name>.data`: every file matching `path` (a glob is allowed), columns united by name, types inferred by DuckDB |
+| `duckdb` | the file attached `READ_ONLY`: `<name>.<schema>.<table>`, and `<name>.<table>` for schema `main` |
+
+- Only **write transactions** read sources; a read (`ReadRequest`) still sees only the lake (`STORE_STATEMENT_INVALID`).
+- The file sandbox gains exactly the declared files (or, for a glob, the folder before its first wildcard), never their parents.
+- Statements still cannot call file readers (`read_parquet`, `read_csv`, …) or name a file in `FROM '…'`: a model reaches a file only through its connection (`STORE_STATEMENT_INVALID`).
+- Nothing can be written to a source; a DuckDB source file is never modified.
+- A path that matches no file → `SOURCE_NOT_FOUND`, naming the source, when the lake opens. Two sources with the same name → `STORE_SOURCE_INVALID`.
 
 ## PostgreSQL catalog (`PostgresLakeLocation`)
 
