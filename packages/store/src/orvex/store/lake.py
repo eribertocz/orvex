@@ -622,24 +622,34 @@ class Lake:
         return frozenset(text.split("|")) - {""}
 
     def _attach_sqlite(self, source: SqliteSourceAttachment) -> list[str]:
-        """Attach a SQLite file read-only; its DECIMAL/NUMERIC columns are recorded as inexact."""
+        """Attach a private copy of a SQLite file, read-only.
+
+        The copy (SQLite's backup, consistent even while the file is being written, WAL
+        included) is what gets inspected and attached, so a change to the original after the
+        lake opens can neither add a view nor an inexact column. Its DECIMAL/NUMERIC columns
+        are recorded as inexact.
+        """
         path = Path(source.path)
         if not path.is_file():
             raise _source_not_found(source)  # SQLite would create a missing file
-        declared = _sqlite_declared_types(source)
+        folder = Path(self._spill) / "sources"
+        folder.mkdir(exist_ok=True)
+        copy = folder / f"{source.name}.sqlite"
+        declared = _sqlite_snapshot(source, copy)
         self._load_extension("sqlite")
         self._source_sql(
             source,
-            f"ATTACH {_quote(path.as_posix())} AS {_identifier(source.name)} "
+            f"ATTACH {_quote(copy.as_posix())} AS {_identifier(source.name)} "
             "(TYPE sqlite, READ_ONLY)",
         )
         for table, column, kind in declared:
-            # SQLite stores DECIMAL and NUMERIC values as floating point: never exact.
-            if re.search(r"DEC|NUMERIC", kind, re.IGNORECASE):
+            # DuckDB reads every declared type containing DEC or NUM (DECIMAL, NUMERIC,
+            # NUMBER, NUM) as floating point, and SQLite stores such values as REAL anyway.
+            if re.search(r"DEC|NUM", kind, re.IGNORECASE):
                 self._inexact.add(
                     Inexact(source.name, "", table.lower(), column.lower(), f"{table}.{column}")
                 )
-        return [path.as_posix()]
+        return []  # the copy lives in the lake's temporary folder, already allowed
 
     def _attach_postgres_source(self, source: PostgresSourceAttachment, password: str) -> None:
         """Attach a PostgreSQL database read-only, twice over: DuckDB's READ_ONLY and a
@@ -1479,54 +1489,51 @@ def _source_password(source: PostgresSourceAttachment) -> str:
     return password
 
 
-class _SqliteHasCode(Exception):
-    """The SQLite file defines views or triggers."""
+def _sqlite_snapshot(source: SqliteSourceAttachment, copy: Path) -> list[tuple[str, str, str]]:
+    """Copy the SQLite file to `copy` and return (table, column, declared type) of the copy.
 
-
-def _sqlite_declared_types(source: SqliteSourceAttachment) -> list[tuple[str, str, str]]:
-    """(table, column, declared type) of every table, read with SQLite itself, read-only.
-
-    A file with views or triggers is refused: DuckDB turns a SQLite view's SQL into a DuckDB
-    view that runs with the lake's connection, where it could call functions the statement
-    guard refuses (and run SQL on other sources).
+    A file with views is refused: DuckDB turns a SQLite view's SQL into a DuckDB view that runs
+    with the lake's connection, where it could call functions the statement guard refuses (and
+    run SQL on other sources). Triggers never fire on a read-only attachment.
     """
     uri = Path(source.path).absolute().as_uri() + "?mode=ro"
+    failure: StoreError | None = None
+    found: list[tuple[str, str, str]] = []
     try:
-        connection = sqlite3.connect(uri, uri=True)
+        original = sqlite3.connect(uri, uri=True)
+        target = sqlite3.connect(copy)
         try:
-            tables = [
-                str(row[0])
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table' "
-                    "AND name NOT LIKE 'sqlite_%'"
+            original.backup(target)
+        finally:
+            original.close()
+        try:
+            views = target.execute("SELECT count(*) FROM sqlite_master WHERE type = 'view'")
+            row = views.fetchone()
+            if row and int(row[0]):
+                failure = StoreError(
+                    "STORE_SOURCE_INVALID",
+                    f"Source {source.name} defines views, which a lake cannot attach.",
+                    {"source": source.name},
                 )
-            ]
-            objects = connection.execute(
-                "SELECT count(*) FROM sqlite_master WHERE type IN ('view', 'trigger')"
-            ).fetchone()
-            if objects and int(objects[0]):
-                raise _SqliteHasCode
-            found = []
-            for table in tables:
-                for row in connection.execute(
+            tables = target.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+            for (table,) in list(tables):
+                for name, kind in target.execute(
                     "SELECT name, type FROM pragma_table_info(?)", (table,)
                 ):
-                    found.append((table, str(row[0]), str(row[1] or "")))
-            return found
+                    found.append((str(table), str(name), str(kind or "")))
         finally:
-            connection.close()
-    except _SqliteHasCode:
-        raise StoreError(
-            "STORE_SOURCE_INVALID",
-            f"Source {source.name} defines views or triggers, which a lake cannot attach.",
-            {"source": source.name},
-        ) from None
+            target.close()
     except sqlite3.Error as error:
-        raise StoreError(
+        failure = StoreError(
             "STORE_SOURCE_INVALID",
             f"Source {source.name} is not a readable SQLite database.",
             {"source": source.name, "sqlite": str(error)},
-        ) from None
+        )
+    if failure is not None:
+        raise failure
+    return found
 
 
 def _source_not_found(source: FileSourceAttachment | SqliteSourceAttachment) -> StoreError:

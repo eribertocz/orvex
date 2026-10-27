@@ -38,13 +38,13 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 
 | `type` | Attached as | Tables |
 |---|---|---|
-| `sqlite` | DuckDB `sqlite` extension, `READ_ONLY` (a missing file is `SOURCE_NOT_FOUND`, never created) | `<name>.<table>` |
+| `sqlite` | a private copy taken at open, attached with DuckDB's `sqlite` extension, `READ_ONLY` (a missing file is `SOURCE_NOT_FOUND`, never created) | `<name>.<table>` |
 | `postgres` | DuckDB `postgres` extension, `READ_ONLY`, and the session set `default_transaction_read_only = on`; password from `password_env` | `<name>.<table>` with `schema`, otherwise `<name>.<schema>.<table>` |
 
 - Nothing can be written to a database source, even when its user could write.
-- A SQLite file that defines views or triggers is refused (`STORE_SOURCE_INVALID`): DuckDB would run a view's SQL with the lake's connection.
+- A SQLite source is copied when the lake opens (SQLite's backup, WAL included) and the copy is attached: later changes to the file do not reach the lake until it is opened again. A SQLite file that defines views is refused (`STORE_SOURCE_INVALID`): DuckDB would run a view's SQL with the lake's connection.
 - Functions that run SQL on a source (`postgres_query`, `postgres_execute`, `sqlite_query`, …) and `ATTACH`/`DETACH` are refused in statements (`STORE_STATEMENT_INVALID`).
-- **Exact types (law 11):** a column DuckDB cannot carry exactly — PostgreSQL `numeric` without precision, with more than 38 digits or with a negative scale or one above its precision, `money` and arrays of either, in tables, views and materialized views; SQLite columns declared `DECIMAL` or `NUMERIC` (SQLite stores them as floating point) — is refused when a write reads it: `UNSUPPORTED_SOURCE_TYPE` naming `<source>.<table>.<column>`. Columns a write does not read do not matter.
+- **Exact types (law 11):** a column DuckDB cannot carry exactly — PostgreSQL `numeric` without precision, with more than 38 digits or with a negative scale or one above its precision, `money` and arrays of either, in tables, views and materialized views; SQLite columns whose declared type contains `DEC` or `NUM` (`DECIMAL`, `NUMERIC`, `NUMBER`; DuckDB reads them as floating point, and SQLite stores them so) — is refused when a write reads it: `UNSUPPORTED_SOURCE_TYPE` naming `<source>.<table>.<column>`. Columns a write does not read do not matter.
 - A connection or credential failure is `STORE_CONNECTION_FAILED` naming the source, with the password redacted; an unset variable is `STORE_SECRET_MISSING`.
 
 ## PostgreSQL catalog (`PostgresLakeLocation`)

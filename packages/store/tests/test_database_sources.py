@@ -67,8 +67,8 @@ def sqlite_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
         CREATE TABLE consumers (id INTEGER, name TEXT, ratio REAL, photo BLOB, note TEXT);
         INSERT INTO consumers VALUES (1, 'Ana', 0.5, x'00ff', NULL);
         INSERT INTO consumers VALUES (9007199254740993, 'Bea', -1.25, NULL, 'x');
-        CREATE TABLE charges (id INTEGER, amount DECIMAL(10,2));
-        INSERT INTO charges VALUES (1, 12.34);
+        CREATE TABLE charges (id INTEGER, amount DECIMAL(10,2), fee NUMBER(12,2));
+        INSERT INTO charges VALUES (1, 12.34, 0.10);
         """
     )
     connection.commit()
@@ -145,6 +145,9 @@ def test_sqlite_decimal_column_is_refused_only_when_read(sqlite_lake: Lake) -> N
         write(sqlite_lake, "CREATE TABLE c AS SELECT id, amount FROM field.charges")
     assert raised.value.code == "UNSUPPORTED_SOURCE_TYPE"
     assert raised.value.details["column"] == "field.charges.amount"
+    with pytest.raises(StoreError) as number:
+        write(sqlite_lake, "CREATE TABLE f AS SELECT fee FROM field.charges")
+    assert number.value.details["column"] == "field.charges.fee"
     write(sqlite_lake, "CREATE TABLE ids AS SELECT id FROM field.charges")
     assert read(sqlite_lake, "SELECT count(*) AS n FROM ids") == [{"n": 1}]
 
@@ -155,11 +158,10 @@ def test_sqlite_decimal_column_is_refused_only_when_read(sqlite_lake: Lake) -> N
         "CREATE VIEW billed AS SELECT id, amount AS total FROM charges",
         "CREATE VIEW wipe AS SELECT * FROM postgres_execute('production', 'DELETE FROM readings',"
         " use_transaction = false)",
-        "CREATE TRIGGER audit AFTER INSERT ON charges BEGIN SELECT 1; END",
     ],
-    ids=["view", "view-calling-a-function", "trigger"],
+    ids=["view", "view-calling-a-function"],
 )
-def test_sqlite_file_with_views_or_triggers_is_refused(
+def test_sqlite_file_with_views_is_refused(
     location: Location, sqlite_file: Path, definition: str
 ) -> None:
     connection = sqlite3.connect(sqlite_file)
@@ -170,6 +172,44 @@ def test_sqlite_file_with_views_or_triggers_is_refused(
         open_lake(location, LIMITS, [sqlite_source(sqlite_file)])
     assert raised.value.code == "STORE_SOURCE_INVALID"
     assert raised.value.details["source"] == "field"
+
+
+def test_sqlite_trigger_is_harmless(location: Location, sqlite_file: Path) -> None:
+    connection = sqlite3.connect(sqlite_file)
+    connection.execute("CREATE TRIGGER audit AFTER INSERT ON charges BEGIN SELECT 1; END")
+    connection.commit()
+    connection.close()
+    lake = open_lake(location, LIMITS, [sqlite_source(sqlite_file)])
+    try:
+        write(lake, "CREATE TABLE ids AS SELECT id FROM field.charges")
+    finally:
+        lake.close()
+
+
+def test_sqlite_changes_after_opening_do_not_reach_the_lake(
+    location: Location, sqlite_file: Path
+) -> None:
+    """The lake reads a private copy taken at open: a view or an inexact column added to the
+    original afterwards cannot be used."""
+    lake = open_lake(location, LIMITS, [sqlite_source(sqlite_file)])
+    try:
+        connection = sqlite3.connect(sqlite_file)
+        connection.executescript(
+            """
+            DROP TABLE consumers;
+            CREATE VIEW consumers AS SELECT * FROM charges;
+            CREATE TABLE late (amount DECIMAL(10,2));
+            """
+        )
+        connection.commit()
+        connection.close()
+        write(lake, "CREATE TABLE c AS SELECT name FROM field.consumers")
+        assert read(lake, "SELECT count(*) AS n FROM c") == [{"n": 2}]
+        assert code_of(lambda: write(lake, "CREATE TABLE l AS SELECT * FROM field.late")) == (
+            "STORE_QUERY_FAILED"
+        )
+    finally:
+        lake.close()
 
 
 def test_missing_sqlite_file_is_not_created(location: Location, tmp_path: Path) -> None:
