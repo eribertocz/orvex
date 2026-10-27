@@ -8,6 +8,7 @@ read once, as an Arrow record-batch stream (ADR-0025). No row passes through Pyt
 from __future__ import annotations
 
 import collections
+import contextlib
 import datetime as dt
 import json
 import math
@@ -168,7 +169,9 @@ class Guard:
     def _interrupt(self, reason: str) -> None:
         if self.reason is None:
             self.reason = reason
-            self._cursor.interrupt()
+            # A statement that already ended has a closed cursor: there is nothing to stop.
+            with contextlib.suppress(duckdb.Error):
+                self._cursor.interrupt()
 
     def stop(self) -> None:
         self._timer.cancel()
@@ -718,13 +721,15 @@ class Lake:
             self._admission.release()
 
         try:
+            # Binding is quick and returns before any row is computed; the work runs on the first
+            # read of the stream, where a timeout or a cancel can still interrupt it.
             relation = cursor.sql(sql, params=parameters)
             names = list(relation.columns)
             types = [str(kind) for kind in relation.types]
             exact = exact_select(sql, names, types)
             if exact is not None:
                 relation = cursor.sql(exact, params=parameters)
-            source = relation.to_arrow_reader(request.batch_size)
+            empty = relation.limit(0).to_arrow_table()
         except duckdb.Error as error:
             finish()
             if isinstance(error, duckdb.InterruptException) or guard.reason:
@@ -733,17 +738,17 @@ class Lake:
                 "STORE_QUERY_FAILED", "DuckDB could not run the read.", {"duckdb": str(error)}
             ) from error
 
-        schema = _with_duckdb_types(_utc_schema(source.schema), types)
+        schema = _with_duckdb_types(_utc_schema(empty.schema), types)
 
         def batches() -> Iterator[pa.RecordBatch]:
             # The cursor and the admission slot live as long as the stream.
             try:
-                for batch in source:
+                for batch in relation.to_arrow_reader(request.batch_size):
                     if guard.reason is not None:
                         raise guard.error()
                     yield batch if batch.schema == schema else batch.cast(schema)
             except (OSError, pa.ArrowException, duckdb.Error) as error:
-                if guard.reason is not None or "INTERRUPT" in str(error):
+                if guard.reason is not None or isinstance(error, duckdb.InterruptException):
                     raise guard.error(error) from error
                 raise StoreError(
                     "STORE_QUERY_FAILED",

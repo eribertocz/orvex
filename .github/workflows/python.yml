@@ -50,6 +50,8 @@ jobs:
   python-tests:
     name: python-tests-${{ matrix.python }}
     runs-on: ubuntu-latest
+    # A hung test must fail the job, not hold it for the default six hours.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

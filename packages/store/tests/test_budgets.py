@@ -16,7 +16,7 @@ from orvex.contracts.store.v1 import (
 from orvex.store.errors import StoreError
 from orvex.store.lake import Admission, Lake, Limits, open_lake
 
-SLOW = "SELECT count(*) AS n FROM range(2000000000) AS a, range(1000) AS b"
+SLOW = "SELECT sum(hash(a.range + b.range)) AS n FROM range(200000000) AS a, range(1000) AS b"
 
 
 def limits(max_concurrent: int = 8, queue_size: int = 64, timeout_ms: int = 600_000) -> Limits:
