@@ -11,22 +11,30 @@ from orvex.contracts.project.v1 import (
     ParquetConnection,
     PostgresConnection,
 )
-from orvex.transform.sources import file_sources
+from orvex.transform.sources import Connection, file_sources
 
 
 def test_file_connections_become_sources(tmp_path: Path) -> None:
-    connections = {
-        "tariffs": CsvConnection(type="csv", path=str(tmp_path / "tariffs.csv")),
-        "archive": ParquetConnection(type="parquet", path=str(tmp_path / "r" / "*.parquet")),
-        "legacy": DuckdbConnection(type="duckdb", path=str(tmp_path / "l.duckdb"), read_only=True),
-        "production": PostgresConnection(
-            type="postgres",
-            host="db.example.invalid",
-            port=5432,
-            database="billing",
-            user="reader",
-            password="${env:PRODUCTION_PASSWORD}",
-            read_only=True,
+    connections: dict[str, Connection] = {
+        "tariffs": CsvConnection.model_validate(
+            {"type": "csv", "path": str(tmp_path / "tariffs.csv")}
+        ),
+        "archive": ParquetConnection.model_validate(
+            {"type": "parquet", "path": str(tmp_path / "r" / "*.parquet")}
+        ),
+        "legacy": DuckdbConnection.model_validate(
+            {"type": "duckdb", "path": str(tmp_path / "l.duckdb"), "read_only": True}
+        ),
+        "production": PostgresConnection.model_validate(
+            {
+                "type": "postgres",
+                "host": "db.example.invalid",
+                "port": 5432,
+                "database": "billing",
+                "user": "reader",
+                "password": "${env:PRODUCTION_PASSWORD}",
+                "read_only": True,
+            }
         ),
     }
     sources = file_sources(connections)
@@ -39,5 +47,6 @@ def test_file_connections_become_sources(tmp_path: Path) -> None:
 
 def test_home_is_expanded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    sources = file_sources({"a": CsvConnection(type="csv", path="~/data/a.csv")})
+    connection = CsvConnection.model_validate({"type": "csv", "path": "~/data/a.csv"})
+    sources = file_sources({"a": connection})
     assert sources[0].path == str(tmp_path / "data" / "a.csv")

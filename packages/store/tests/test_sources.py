@@ -67,9 +67,9 @@ def code_of(action: object) -> str:
 
 
 @pytest.fixture
-def files(tmp_path: Path) -> Path:
-    """Source files in their own folder, apart from the lake's folder."""
-    folder = tmp_path / "sources"
+def files(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Source files in their own folder, outside the lake's folder (which the sandbox allows)."""
+    folder = tmp_path_factory.mktemp("sources")
     (folder / "readings").mkdir(parents=True)
     (folder / "private").mkdir()
     builder = duckdb.connect()
@@ -171,6 +171,7 @@ def test_files_outside_the_declared_paths_stay_unreadable(sourced: Lake, files: 
 
 def test_sandbox_allows_only_declared_files(location: Location, files: Path) -> None:
     """Behind the statement checks, DuckDB itself refuses undeclared files."""
+    (files.parent / "elsewhere.csv").write_text("x\n1\n", encoding="utf-8")
     lake = open_lake(location, LIMITS, [source("tariffs", "csv", files / "tariffs.csv")])
     try:
         connection = lake._connection  # the raw connection: the sandbox, not the guard, decides
@@ -180,6 +181,7 @@ def test_sandbox_allows_only_declared_files(location: Location, files: Path) -> 
             files / "sibling.csv",
             files / "private" / "secret.parquet",
             files / "readings" / ".." / "sibling.csv",
+            files.parent / "elsewhere.csv",
         ]:
             with pytest.raises(duckdb.Error):
                 connection.execute(f"SELECT * FROM '{path}'").fetchall()

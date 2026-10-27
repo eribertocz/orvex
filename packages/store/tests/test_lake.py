@@ -7,6 +7,7 @@ import json
 import threading
 from pathlib import Path
 
+import duckdb
 import pyarrow as pa
 import pytest
 from orvex.contracts.store.v1 import LocalLakeLocation, Parameter, ReadRequest, StatementRequest
@@ -498,13 +499,15 @@ def test_reads_cannot_touch_the_catalog(lake: Lake) -> None:
 def test_files_outside_the_lake_cannot_be_read_by_writes(
     lake: Lake, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    """Passes the statement check (a plain FROM path); only the file sandbox stops it."""
+    """A file named in FROM is refused by the statement check, and behind it by the sandbox."""
     outside = tmp_path_factory.mktemp("outside") / "x.csv"
     outside.write_text("x\n1\n", encoding="utf-8")
     before = lake.current_snapshot().id
     sql = f"CREATE TABLE e AS SELECT * FROM '{outside.as_posix()}'"
-    assert code_of(lambda: write(lake, statement(sql))) == "STORE_QUERY_FAILED"
+    assert code_of(lambda: write(lake, statement(sql))) == "STORE_STATEMENT_INVALID"
     assert lake.current_snapshot().id == before
+    with pytest.raises(duckdb.Error):  # the raw connection: only the sandbox decides here
+        lake._connection.execute(f"SELECT * FROM '{outside.as_posix()}'").fetchall()
 
 
 def test_lake_results_encode_exactly_to_json(lake: Lake) -> None:
