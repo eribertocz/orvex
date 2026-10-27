@@ -1,0 +1,15 @@
+{
+	"extends": "$app/tsconfig",
+	"include": ["src", "test", "*"],
+	"exclude": ["src/service-worker"],
+	"compilerOptions": {
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"exactOptionalPropertyTypes": true,
+		"noImplicitOverride": true,
+		"verbatimModuleSyntax": true,
+		"skipLibCheck": true,
+		"allowJs": true,
+		"checkJs": true
+	}
+}

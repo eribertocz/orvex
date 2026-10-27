@@ -66,6 +66,26 @@
           {
             "context": "python-lock",
             "integration_id": 15368
+          },
+          {
+            "context": "web-check",
+            "integration_id": 15368
+          },
+          {
+            "context": "web-lint",
+            "integration_id": 15368
+          },
+          {
+            "context": "web-test",
+            "integration_id": 15368
+          },
+          {
+            "context": "web-build",
+            "integration_id": 15368
+          },
+          {
+            "context": "licenses",
+            "integration_id": 15368
           }
         ]
       }

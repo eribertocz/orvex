@@ -39,6 +39,8 @@ select = [
 # - PT009, PT027: their tests use unittest because pytest is not available to them;
 # - ANN401: the REST client returns decoded JSON, whose shape is only known to the caller.
 ".github/workflows/scripts/*.py" = ["T20", "PT009", "PT027", "ANN401"]
+# Repository tools are command-line programs that report through stdout.
+"tools/**/*.py" = ["T20"]
 
 [tool.mypy]
 strict = true
@@ -49,6 +51,7 @@ warn_unreachable = true
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib", "--strict-markers", "--strict-config", "-ra"]
+pythonpath = ["."]
 testpaths = ["packages", "tests"]
 xfail_strict = true
 filterwarnings = ["error"]
