@@ -74,3 +74,16 @@ def test_repository_policy_loads() -> None:
     policy = load_policy()
     assert "Apache-2.0" in policy.runtime
     assert "MPL-2.0" not in policy.runtime
+
+
+def test_legacy_license_field_with_spdx_identifier() -> None:
+    from email.message import Message
+
+    from tools.licenses.check_licenses import python_license
+
+    spdx = Message()
+    spdx["License"] = "BSD-3-Clause"
+    custom = Message()
+    custom["License"] = "Some long custom text"
+    assert python_license(spdx) == "BSD-3-Clause"
+    assert python_license(custom) is None

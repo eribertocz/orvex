@@ -13,7 +13,7 @@ PACKAGES = REPOSITORY_ROOT / "packages"
 PRODUCT = tomllib.loads((REPOSITORY_ROOT / "identity.toml").read_text())["product"]
 SLUG: str = PRODUCT["slug"]
 NAMESPACE: str = PRODUCT["python_namespace"]
-MODULES = ("store", "transform", "semantic", "access", "dashboards", "mcp", "server")
+MODULES = ("store", "transform", "semantic", "access", "dashboards", "mcp", "server", "contracts")
 
 
 def distribution_name(module: str) -> str:

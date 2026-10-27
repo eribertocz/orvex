@@ -1,0 +1,7 @@
+{
+  "reading_id": "R-2",
+  "consumer": { "consumer_id": "C-2" },
+  "kwh": "-0.5",
+  "status": "voided",
+  "read_at": "2026-10-01T12:00:00Z"
+}

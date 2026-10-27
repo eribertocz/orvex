@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.invalid/_example/v1/schema.json",
+  "title": "ExampleReading",
+  "description": "Fixture contract that exercises the contract tooling. Not part of the product.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reading_id", "consumer", "kwh", "status", "read_at"],
+  "properties": {
+    "reading_id": { "type": "string", "minLength": 1 },
+    "consumer": { "$ref": "#/$defs/Consumer" },
+    "kwh": { "$ref": "#/$defs/Decimal" },
+    "status": { "type": "string", "enum": ["valid", "estimated", "voided"] },
+    "read_at": { "type": "string", "format": "date-time" },
+    "note": { "type": ["string", "null"] }
+  },
+  "$defs": {
+    "Decimal": {
+      "description": "Exact decimal transported as a string, never as a JSON number (law 11).",
+      "type": "string",
+      "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+    },
+    "Consumer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["consumer_id"],
+      "properties": {
+        "consumer_id": { "type": "string" },
+        "zone": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
