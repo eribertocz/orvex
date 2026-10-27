@@ -3,7 +3,14 @@
  * Messages of the store contract: where the lake is, statements and reads with bound parameters, snapshots, commit results and errors. Read results are Arrow record-batch streams (see README).
  */
 export type StoreMessage =
-	LakeLocation | StatementRequest | ReadRequest | Snapshot | CommitResult | StoreError | ResultJson;
+	| LakeLocation
+	| StatementRequest
+	| ReadRequest
+	| Snapshot
+	| CommitResult
+	| StoreError
+	| ResultJson
+	| SourceAttachment;
 /**
  * Where the lake is.
  */
@@ -26,7 +33,9 @@ export type ErrorCode =
 	| 'STORE_TYPE_UNSUPPORTED'
 	| 'STORE_TIMEOUT'
 	| 'STORE_CANCELLED'
-	| 'STORE_BUSY';
+	| 'STORE_BUSY'
+	| 'SOURCE_NOT_FOUND'
+	| 'STORE_SOURCE_INVALID';
 
 /**
  * A DuckLake lake with a local DuckDB-file catalog at <path>/catalog.ducklake and data files under <path>/data/ (one process).
@@ -123,4 +132,19 @@ export interface ResultColumn {
 	 * DuckDB type name, e.g. DECIMAL(18,4) or TIMESTAMP WITH TIME ZONE
 	 */
 	type: string;
+}
+/**
+ * A file source the lake reads inside write transactions, by name: `<name>.data` for parquet and csv (every matching file as one table, columns united by name), `<name>.<schema>.<table>` (or `<name>.<table>` for `main`) for a DuckDB file attached read-only. Reads never see sources. Only the declared paths become readable.
+ */
+export interface SourceAttachment {
+	kind: 'source_attachment';
+	/**
+	 * The connection name; becomes a catalog name in SQL.
+	 */
+	name: string;
+	type: 'parquet' | 'csv' | 'duckdb';
+	/**
+	 * Absolute path; parquet and csv may use a glob (`*`, `?`, `[...]`, `**`) in their file name or folders.
+	 */
+	path: string;
 }

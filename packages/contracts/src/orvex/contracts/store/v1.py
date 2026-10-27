@@ -55,6 +55,8 @@ class ErrorCode(
             "STORE_TIMEOUT",
             "STORE_CANCELLED",
             "STORE_BUSY",
+            "SOURCE_NOT_FOUND",
+            "STORE_SOURCE_INVALID",
         ]
     ]
 ):
@@ -73,6 +75,8 @@ class ErrorCode(
         "STORE_TIMEOUT",
         "STORE_CANCELLED",
         "STORE_BUSY",
+        "SOURCE_NOT_FOUND",
+        "STORE_SOURCE_INVALID",
     ]
 
 
@@ -160,6 +164,26 @@ class ResultJson(BaseModel):
     rows: list[list[str | float | bool | None]]
 
 
+class SourceAttachment(BaseModel):
+    """
+    A file source the lake reads inside write transactions, by name: `<name>.data` for parquet and csv (every matching file as one table, columns united by name), `<name>.<schema>.<table>` (or `<name>.<table>` for `main`) for a DuckDB file attached read-only. Reads never see sources. Only the declared paths become readable.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["source_attachment"]
+    name: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    """
+    The connection name; becomes a catalog name in SQL.
+    """
+    type: Literal["parquet", "csv", "duckdb"]
+    path: Annotated[str, Field(max_length=4096, min_length=2, pattern="^(/|[A-Za-z]:[\\\\/])")]
+    """
+    Absolute path; parquet and csv may use a glob (`*`, `?`, `[...]`, `**`) in their file name or folders.
+    """
+
+
 class Parameter(BaseModel):
     """
     A named parameter bound to `$name` in the SQL. The value is text converted to the declared DuckDB type; exact values are never JSON numbers.
@@ -218,6 +242,7 @@ class StoreMessage(
         | CommitResult
         | StoreError
         | ResultJson
+        | SourceAttachment
     ]
 ):
     root: Annotated[
@@ -227,7 +252,8 @@ class StoreMessage(
         | Snapshot
         | CommitResult
         | StoreError
-        | ResultJson,
+        | ResultJson
+        | SourceAttachment,
         Field(title="StoreMessage"),
     ]
     """

@@ -10,6 +10,7 @@ from __future__ import annotations
 import collections
 import contextlib
 import datetime as dt
+import glob as globlib
 import json
 import math
 import os
@@ -19,7 +20,7 @@ import tempfile
 import threading
 import time
 import weakref
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,7 @@ from orvex.contracts.store.v1 import (
     PostgresLakeLocation,
     ReadRequest,
     Snapshot,
+    SourceAttachment,
     StatementRequest,
 )
 from orvex.store.errors import StoreError, register_secret
@@ -61,6 +63,8 @@ _EXTERNAL_SQL_FUNCTIONS = frozenset(
     }
 )
 _SUSPICIOUS = re.compile(r"[./\\*?:]")
+RESERVED_SOURCE_NAMES = frozenset({LAKE, "main", "memory", "system", "temp"})
+_GLOB = re.compile(r"[*?\[]")
 EXTENSIONS = ("icu", "ducklake")
 WRITE_STATEMENTS = frozenset(
     {
@@ -279,6 +283,7 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
         )
     tokens = [token for token in duckdb.tokenize(sql) if token[1] != duckdb.token_type.comment]
     positions = [position for position, _ in duckdb.tokenize(sql)] + [len(sql)]
+    _refuse_file_names(sql, tokens, positions)
     for index, (position, kind) in enumerate(tokens):
         if kind not in {duckdb.token_type.identifier, duckdb.token_type.keyword}:
             continue
@@ -295,6 +300,48 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
                 "Only the table functions range, generate_series and unnest are allowed.",
                 {"function": name},
             )
+
+
+def _refuse_file_names(
+    sql: str, tokens: list[tuple[int, duckdb.token_type]], positions: list[int]
+) -> None:
+    """Refuse a quoted string or quoted name that names an existing file or matches files.
+
+    DuckDB reads such a string as a file in many places (`FROM '…'`, `MERGE … USING '…'`,
+    `PIVOT '…'`, `SUMMARIZE '…'`, …); a model reaches a file only through its source name. The
+    file sandbox, which allows exactly the declared files, is the boundary behind this check.
+    """
+    for position, kind in tokens:
+        end = next(later for later in positions if later > position)
+        text = sql[position:end].strip()
+        quoted = kind == duckdb.token_type.string_const or text.startswith('"')
+        if quoted and _names_a_file(text):
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "A file cannot be named in a statement; declare it as a source and use its name.",
+                {},
+            )
+
+
+def _names_a_file(token: str) -> bool:
+    quote = token[-1:]
+    start = token.find(quote)
+    content = token[start + 1 : -1].replace(quote * 2, quote) if start >= 0 else token
+    candidates = {content, content.removeprefix("file://")}
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = os.path.expanduser(candidate)
+        if os.path.isfile(path):
+            return True
+        looks_like_path = any(mark in candidate for mark in ("/", "\\", "."))
+        if (
+            looks_like_path
+            and _GLOB.search(candidate)
+            and any(os.path.isfile(match) for match in globlib.iglob(path))
+        ):
+            return True
+    return False
 
 
 def _single_statement(sql: str, table_functions: frozenset[str]) -> duckdb.Statement:
@@ -447,7 +494,10 @@ class Lake:
     """One open lake. Reads may run concurrently; write transactions run one at a time."""
 
     def __init__(
-        self, location: LakeLocation | LocalLakeLocation | PostgresLakeLocation, limits: Limits
+        self,
+        location: LakeLocation | LocalLakeLocation | PostgresLakeLocation,
+        limits: Limits,
+        sources: Sequence[SourceAttachment] = (),
     ) -> None:
         if isinstance(location, LakeLocation):
             location = location.root
@@ -470,6 +520,22 @@ class Lake:
                 "The lake needs a memory limit, a thread count, a concurrency limit, a queue "
                 "size and a default timeout.",
                 {},
+            )
+        names = [source.name for source in sources]
+        reserved = sorted(set(names) & RESERVED_SOURCE_NAMES)
+        if reserved:
+            # The contract excludes these names too; generated models do not check `not`.
+            raise StoreError(
+                "STORE_SOURCE_INVALID",
+                f"Source name {reserved[0]} is reserved.",
+                {"source": reserved[0]},
+            )
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise StoreError(
+                "STORE_SOURCE_INVALID",
+                f"Source {duplicates[0]} is declared more than once.",
+                {"source": duplicates[0]},
             )
         self._limits = limits
         self._admission = Admission(limits.max_concurrent, limits.queue_size)
@@ -507,7 +573,8 @@ class Lake:
             self._connection.sql("SET autoinstall_known_extensions = false")
             self._connection.sql("SET autoload_known_extensions = false")
             self._table_functions = self._names_of_table_functions()
-            self._sandbox(location)
+            readable = [file for source in sources for file in self._attach_source(source)]
+            self._sandbox(location, readable)
         except BaseException:
             self._connection.close()
             shutil.rmtree(self._spill, ignore_errors=True)
@@ -526,16 +593,93 @@ class Lake:
         text = str(row[0]) if row and row[0] is not None else ""
         return frozenset(text.split("|")) - {""}
 
-    def _sandbox(self, location: LocalLakeLocation | PostgresLakeLocation) -> None:
-        """Limit file access to the lake's own folders, for good (DuckDB cannot undo it)."""
+    def _attach_source(self, source: SourceAttachment) -> list[str]:
+        """Attach one file source read-only; returns the files the sandbox must allow.
+
+        For a glob, exactly the files it matches now: a file added later to the same folder,
+        or any other file there, stays unreadable.
+        """
+        path = source.path
+        if source.type == "duckdb":
+            if not Path(path).is_file():
+                raise _source_not_found(source)
+            self._source_sql(
+                source, f"ATTACH {_quote(path)} AS {_identifier(source.name)} (READ_ONLY)"
+            )
+            macros = self._one(
+                "SELECT (SELECT count(*) FROM duckdb_functions() WHERE database_name = $name "
+                "AND NOT internal AND function_type IN ('macro', 'table_macro')) "
+                "+ (SELECT count(*) FROM duckdb_views() WHERE database_name = $name "
+                "AND NOT internal)",
+                {"name": source.name},
+            )
+            if macros and int(str(macros[0])):
+                # A view or macro runs with the lake's connection: it could read lake tables or
+                # the lake's catalog database, which a source must never reach.
+                raise StoreError(
+                    "STORE_SOURCE_INVALID",
+                    f"Source {source.name} defines views or macros, which a lake cannot attach.",
+                    {"source": source.name},
+                )
+            return [Path(path).as_posix()]
+        matched = self._one("SELECT list(file ORDER BY file) FROM glob($path)", {"path": path})
+        matched_files = matched[0] if matched else None
+        if not isinstance(matched_files, list) or not matched_files:
+            raise _source_not_found(source)
+        # The view lives in its own small database file, attached read-only: nothing can be
+        # created in, or dropped from, a source catalog.
+        folder = Path(self._spill) / "sources"
+        folder.mkdir(exist_ok=True)
+        catalog = (folder / f"{source.name}.duckdb").as_posix()
+        reader = "read_parquet" if source.type == "parquet" else "read_csv"
+        builder = duckdb.connect(catalog)
+        try:
+            # The files matched now, listed one by one: the sandbox allows exactly these.
+            listed = ", ".join(_quote(str(file)) for file in matched_files)
+            builder.sql(
+                f"CREATE VIEW data AS SELECT * FROM {reader}([{listed}], union_by_name = true)"
+            )
+        except duckdb.Error as error:
+            raise StoreError(
+                "STORE_SOURCE_INVALID",
+                f"Source {source.name} cannot be read as {source.type}.",
+                {"source": source.name, "duckdb": str(error)},
+            ) from None
+        finally:
+            builder.close()
+        self._source_sql(
+            source, f"ATTACH {_quote(catalog)} AS {_identifier(source.name)} (READ_ONLY)"
+        )
+        return [str(file) for file in matched_files]
+
+    def _source_sql(self, source: SourceAttachment, sql: str) -> None:
+        try:
+            self._connection.sql(sql)
+        except duckdb.Error as error:
+            raise StoreError(
+                "STORE_SOURCE_INVALID",
+                f"Source {source.name} could not be attached.",
+                {"source": source.name, "duckdb": str(error)},
+            ) from None
+
+    def _sandbox(
+        self,
+        location: LocalLakeLocation | PostgresLakeLocation,
+        readable: Sequence[str] = (),
+    ) -> None:
+        """Limit file access to the lake's own folders and the declared source files, for good
+        (DuckDB cannot undo it)."""
         folders = [self._spill]
         if isinstance(location, LocalLakeLocation):
             folders.append(Path(location.path).resolve().as_posix())
         elif "://" not in location.data_path:
             folders.append(Path(location.data_path).resolve().as_posix())
+        files = list(readable)
         listed = ", ".join(_quote(folder.rstrip("/") + "/") for folder in folders)
         self._connection.sql(f"SET temp_directory = {_quote(self._spill)}")
         self._connection.sql(f"SET allowed_directories = [{listed}]")
+        if files:
+            self._connection.sql(f"SET allowed_paths = [{', '.join(map(_quote, files))}]")
         self._connection.sql("SET enable_external_access = false")
 
     def _load_extensions(self) -> None:
@@ -1126,7 +1270,17 @@ def _utc_schema(schema: pa.Schema) -> pa.Schema:
     return pa.schema(fields, metadata=schema.metadata)
 
 
+def _source_not_found(source: SourceAttachment) -> StoreError:
+    return StoreError(
+        "SOURCE_NOT_FOUND",
+        f"No file matches the path of source {source.name}.",
+        {"source": source.name},
+    )
+
+
 def open_lake(
-    location: LakeLocation | LocalLakeLocation | PostgresLakeLocation, limits: Limits
+    location: LakeLocation | LocalLakeLocation | PostgresLakeLocation,
+    limits: Limits,
+    sources: Sequence[SourceAttachment] = (),
 ) -> Lake:
-    return Lake(location, limits)
+    return Lake(location, limits, sources)
