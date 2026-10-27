@@ -416,3 +416,21 @@ def test_error_paths_escape_key_names(tmp_path: Path) -> None:
     error = failure(project(tmp_path, PROJECT + "a/b~c: 1\n"))
     assert error.error.details.path == "/a~1b~0c"
     assert error.error.details.line == 4
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "path"),
+    [
+        ("    schema: public\n", "    schema: ~\n", "/connections/production/schema"),
+        (
+            "    database: events\n",
+            "    database: events\n    secure:\n",
+            "/connections/events/secure",
+        ),
+    ],
+    ids=["null-schema", "empty-secure"],
+)
+def test_null_connection_fields_are_refused(tmp_path: Path, old: str, new: str, path: str) -> None:
+    error = failure(project(tmp_path, connections=CONNECTIONS.replace(old, new)))
+    assert error.code == "PROJECT_SCHEMA_INVALID"
+    assert error.error.details.path == path

@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import os
 import re
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import resources
@@ -114,14 +115,6 @@ def load_project(folder: Path) -> Project:
         )
     document = _Document(project_path)
     settings = document.model(ProjectFile, document.data, "")
-    # The generated model admits null for fields with a default; the contract does not.
-    raw = document.data if isinstance(document.data, dict) else {}
-    for key in ("locale", "retention"):
-        if key in raw and raw[key] is None:
-            raise document.schema_error(f"'{key}' cannot be null.", f"/{key}")
-    retention = raw.get("retention")
-    if isinstance(retention, dict) and "snapshots" in retention and retention["snapshots"] is None:
-        raise document.schema_error("'snapshots' cannot be null.", "/retention/snapshots")
     zone = settings.time_zone
     if zone not in _iana_zones():
         raise document.schema_error(
@@ -207,6 +200,22 @@ def _load_connections(document: _Document, folder: Path) -> dict[str, Connection
     return connections
 
 
+def _first_null(value: object, pointer: str) -> str | None:
+    """The JSON pointer of the first null value, or None (the root itself is left to callers)."""
+    items: list[tuple[str, object]] = []
+    if isinstance(value, dict):
+        items = [(f"{pointer}/{_token(key)}", child) for key, child in value.items()]
+    elif isinstance(value, list):
+        items = [(f"{pointer}/{index}", child) for index, child in enumerate(value)]
+    for child_pointer, child in items:
+        if child is None:
+            return child_pointer
+        found = _first_null(child, child_pointer)
+        if found is not None:
+            return found
+    return None
+
+
 def _token(key: object) -> str:
     """A key as a JSON pointer reference token (RFC 6901)."""
     return str(key).replace("~", "~0").replace("/", "~1")
@@ -242,19 +251,22 @@ class _Document:
         try:
             # Only a regular file: a pipe would block and a device could be endless. The read is
             # bounded too, so the limit never depends on the size the file system reports.
-            if not path.is_file():
+            # Opened without blocking (a pipe), then checked on the open file itself.
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+            with os.fdopen(descriptor, "rb") as handle:
+                regular = stat.S_ISREG(os.fstat(handle.fileno()).st_mode)
+                if regular:
+                    data = handle.read(MAX_FILE_BYTES + 1)
+            if not regular:
                 failure = ProjectLoadError(
                     "PROJECT_NOT_FOUND", f"{self.file} is not a regular file.", file=self.file
                 )
-            else:
-                with path.open("rb") as handle:
-                    data = handle.read(MAX_FILE_BYTES + 1)
-                if len(data) > MAX_FILE_BYTES:
-                    failure = ProjectLoadError(
-                        "PROJECT_YAML_INVALID",
-                        f"{self.file}: larger than {MAX_FILE_BYTES // 1024} KiB.",
-                        file=self.file,
-                    )
+            elif len(data) > MAX_FILE_BYTES:
+                failure = ProjectLoadError(
+                    "PROJECT_YAML_INVALID",
+                    f"{self.file}: larger than {MAX_FILE_BYTES // 1024} KiB.",
+                    file=self.file,
+                )
         except OSError as error:
             failure = ProjectLoadError(
                 "PROJECT_NOT_FOUND",
@@ -296,6 +308,11 @@ class _Document:
             loader.dispose()
         if failure is not None:
             raise failure
+        null = _first_null(self.data, "")
+        if null is not None:
+            # No field of these files is nullable; the generated models would admit null where
+            # a field has a default (TLS `secure`, for example).
+            raise self.schema_error(f"{null or '/'}: a value is required, not null.", null)
         if not isinstance(self.data, dict):
             return
         if "version" not in self.data:
