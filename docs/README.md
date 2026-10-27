@@ -64,3 +64,4 @@ Terms used with a precise meaning across all documents.
 | **Phase** | A roadmap stage that ends with a product pre-release tag (see `roadmap.md`). |
 | **Issue** | One medium-sized deliverable: one observable capability in one module, implemented by one pull request (`process/issues.md`). |
 | **MVP** | The scope defined in `product/vision.md`, released as **v1.0.0 (stable)**. |
+
