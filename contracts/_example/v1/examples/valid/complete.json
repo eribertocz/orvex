@@ -1,0 +1,8 @@
+{
+  "reading_id": "R-1",
+  "consumer": { "consumer_id": "C-1", "zone": "Z-1" },
+  "kwh": "123.4500",
+  "status": "estimated",
+  "read_at": "2026-10-01T08:00:00-04:00",
+  "note": null
+}

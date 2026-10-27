@@ -4,7 +4,7 @@
 # runtime license.
 
 runtime = ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "0BSD", "PSF-2.0"]
-development = ["MPL-2.0", "MIT-0", "BlueOak-1.0.0", "CC0-1.0"]
+development = ["MPL-2.0", "MIT-0", "BlueOak-1.0.0", "CC0-1.0", "Python-2.0"]
 
 # Per-package exceptions: package name -> reason. Each needs an issue or ADR reference.
 [exceptions]

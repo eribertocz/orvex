@@ -13,8 +13,9 @@ import sys
 import tomllib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from importlib.metadata import Distribution, distributions
+from importlib.metadata import distributions
 from pathlib import Path
+from typing import Protocol
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 ALLOW_LIST = Path(__file__).with_name("allowed.toml")
@@ -72,14 +73,23 @@ def expression_allowed(expression: str, allowed: frozenset[str]) -> bool:
     )
 
 
-def python_license(distribution: Distribution) -> str | None:
-    metadata = distribution.metadata
+class MetadataFields(Protocol):
+    def get(self, name: str, failobj: None = None) -> str | None: ...
+
+    def get_all(self, name: str, failobj: None = None) -> list[str] | None: ...
+
+
+def python_license(metadata: MetadataFields) -> str | None:
     expression = metadata.get("License-Expression")
     if expression:
         return expression
     for classifier in metadata.get_all("Classifier") or []:
         if classifier in CLASSIFIER_TO_SPDX:
             return CLASSIFIER_TO_SPDX[classifier]
+    # Older metadata: a short `License` field that is already an SPDX identifier.
+    legacy = (metadata.get("License") or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9.+-]+", legacy):
+        return legacy
     return None
 
 
@@ -100,7 +110,7 @@ def python_dependencies(workspace: Iterable[str]) -> list[Dependency]:
             pending.append(_normalize(re.split(r"[\s;<>=!~\[(]", requirement, maxsplit=1)[0]))
     workspace_names = {_normalize(name) for name in workspace}
     return [
-        Dependency("python", name, python_license(distribution), name in runtime)
+        Dependency("python", name, python_license(distribution.metadata), name in runtime)
         for name, distribution in sorted(installed.items())
         if name not in workspace_names
     ]

@@ -26,7 +26,7 @@ On Windows PowerShell, replace the last line with:
 ```bash
 ruff format --check .
 ruff check .
-mypy -p sextant.store -p sextant.transform -p sextant.semantic -p sextant.access -p sextant.dashboards -p sextant.mcp -p sextant.server
+mypy -p sextant.store -p sextant.transform -p sextant.semantic -p sextant.access -p sextant.dashboards -p sextant.mcp -p sextant.server -p sextant.contracts
 mypy packages/*/tests tests tools .github/workflows/scripts
 pytest
 ```
@@ -36,6 +36,14 @@ pytest
 ```bash
 python -m tools.checks.product_name   # PRODUCT_NAME_HARDCODED
 python -m tools.checks.boundaries     # MODULE_BOUNDARY_VIOLATION, MATERIALIZATION_IN_PYTHON
+```
+
+### Contracts
+
+```bash
+python -m tools.contracts.validate          # schemas, examples, closed objects
+python -m tools.contracts.generate          # regenerate Python and TypeScript types (needs web/node_modules)
+python -m tools.contracts.generate --check  # CONTRACT_TYPES_STALE when the committed types are out of date
 ```
 
 ### Rename the product
