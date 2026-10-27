@@ -190,7 +190,7 @@ def test_inline_password_is_refused(connection: str, tmp_path: Path) -> None:
     with pytest.raises(StoreError) as raised:
         open_lake(inline, LIMITS)
     assert raised.value.code == "STORE_SECRET_INLINE"
-    assert "x" not in raised.value.details.values()
+    assert raised.value.details == {}
 
 
 def test_default_metadata_schema(location: PostgresLakeLocation) -> None:

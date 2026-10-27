@@ -12,6 +12,8 @@ import json
 import math
 import os
 import re
+import shutil
+import tempfile
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -121,11 +123,14 @@ def _postgres_password(location: PostgresLakeLocation) -> str:
     return password
 
 
-def _guarded(sql: str) -> None:
-    """Refuse SQL that names the catalog database or a function that runs SQL elsewhere.
+def _guarded(sql: str, table_functions: frozenset[str]) -> None:
+    """Refuse SQL that names the catalog database or calls a table function other than generators.
 
-    The catalog database (in PostgreSQL it is the whole database, other lakes included) is only
-    ever touched by DuckLake itself.
+    Table functions read files, run SQL or open connections (`read_text`, `query`,
+    `postgres_execute`, …); only `range`, `generate_series` and `unnest` are allowed. Comments
+    between a name and its `(` are skipped. The catalog database (in PostgreSQL the whole
+    database, other lakes included) is only ever touched by DuckLake itself. The connection is
+    also sandboxed to the lake's folders (`Lake._sandbox`), so these checks are a first layer.
     """
     if METADATA_PREFIX in sql.lower():
         raise StoreError(
@@ -133,24 +138,28 @@ def _guarded(sql: str) -> None:
             "Statements may not reference the lake's catalog database.",
             {},
         )
-    tokens = duckdb.tokenize(sql)
-    ends = [position for position, _ in tokens[1:]] + [len(sql)]
-    for index, ((position, kind), end) in enumerate(zip(tokens, ends, strict=True)):
-        if kind != duckdb.token_type.identifier:
+    tokens = [token for token in duckdb.tokenize(sql) if token[1] != duckdb.token_type.comment]
+    positions = [position for position, _ in duckdb.tokenize(sql)] + [len(sql)]
+    for index, (position, kind) in enumerate(tokens):
+        if kind not in {duckdb.token_type.identifier, duckdb.token_type.keyword}:
             continue
-        following = tokens[index + 1][0] if index + 1 < len(tokens) else len(sql)
-        called = sql[following : following + 1] == "("
+        end = next(later for later in positions if later > position)
         name = sql[position:end].strip().strip('"').lower()
-        if called and name in _EXTERNAL_SQL_FUNCTIONS:
+        following = tokens[index + 1][0] if index + 1 < len(tokens) else len(sql)
+        if (
+            sql[following : following + 1] == "("
+            and name in table_functions
+            and name not in READ_TABLE_FUNCTIONS
+        ):
             raise StoreError(
                 "STORE_STATEMENT_INVALID",
-                "Statements may not call functions that run SQL outside the lake.",
+                "Only the table functions range, generate_series and unnest are allowed.",
                 {"function": name},
             )
 
 
-def _single_statement(sql: str) -> duckdb.Statement:
-    _guarded(sql)
+def _single_statement(sql: str, table_functions: frozenset[str]) -> duckdb.Statement:
+    _guarded(sql, table_functions)
     try:
         statements = duckdb.extract_statements(sql)
     except duckdb.Error as error:
@@ -324,6 +333,8 @@ class Lake:
                 {"duckdb": str(error)},
             ) from error
         self._write_lock = threading.Lock()
+        # DuckDB spills to this folder when a query exceeds the memory limit.
+        self._spill = tempfile.mkdtemp(prefix="lake-spill-")
         self._local = threading.local()
         try:
             self._load_extensions()
@@ -339,9 +350,32 @@ class Lake:
             # Nothing may load code or reach data the lake did not ask for after this point.
             self._connection.sql("SET autoinstall_known_extensions = false")
             self._connection.sql("SET autoload_known_extensions = false")
+            self._table_functions = self._names_of_table_functions()
+            self._sandbox(location)
         except BaseException:
             self._connection.close()
             raise
+
+    def _names_of_table_functions(self) -> frozenset[str]:
+        row = self._one(
+            "SELECT string_agg(DISTINCT lower(function_name), '|') FROM duckdb_functions() "
+            "WHERE function_type IN ('table', 'table_macro', 'pragma')",
+            {},
+        )
+        text = str(row[0]) if row and row[0] is not None else ""
+        return frozenset(text.split("|")) - {""}
+
+    def _sandbox(self, location: LocalLakeLocation | PostgresLakeLocation) -> None:
+        """Limit file access to the lake's own folders, for good (DuckDB cannot undo it)."""
+        folders = [self._spill]
+        if isinstance(location, LocalLakeLocation):
+            folders.append(Path(location.path).resolve().as_posix())
+        elif "://" not in location.data_path:
+            folders.append(Path(location.data_path).resolve().as_posix())
+        listed = ", ".join(_quote(folder.rstrip("/") + "/") for folder in folders)
+        self._connection.sql(f"SET temp_directory = {_quote(self._spill)}")
+        self._connection.sql(f"SET allowed_directories = [{listed}]")
+        self._connection.sql("SET enable_external_access = false")
 
     def _load_extensions(self) -> None:
         for extension in EXTENSIONS:
@@ -394,6 +428,7 @@ class Lake:
 
     def close(self) -> None:
         self._connection.close()
+        shutil.rmtree(self._spill, ignore_errors=True)
 
     def _cursor(self) -> duckdb.DuckDBPyConnection:
         cursor = self._connection.cursor()
@@ -512,7 +547,7 @@ class Lake:
 
     def read(self, request: ReadRequest) -> pa.RecordBatchReader:
         """Run one SELECT as of `request.snapshot` and return it once, as Arrow batches."""
-        statement = _single_statement(request.sql)
+        statement = _single_statement(request.sql, self._table_functions)
         if statement.type != duckdb.StatementType.SELECT:
             raise StoreError(
                 "STORE_STATEMENT_INVALID",
@@ -578,7 +613,7 @@ class Lake:
                 before = self._snapshot(None)
                 outside = _outside_inventory(cursor)
                 cursor.begin()
-                handle = Transaction(cursor)
+                handle = Transaction(cursor, self._table_functions)
                 try:
                     yield handle
                     if _outside_inventory(cursor) != outside:
@@ -690,12 +725,13 @@ def _created_kind_allowed(sql: str, statement: duckdb.Statement) -> bool:
 class Transaction:
     """A write transaction; `result` is set when the block commits."""
 
-    def __init__(self, cursor: duckdb.DuckDBPyConnection) -> None:
+    def __init__(self, cursor: duckdb.DuckDBPyConnection, table_functions: frozenset[str]) -> None:
         self._cursor = cursor
+        self._table_functions = table_functions
         self.result: CommitResult | None = None
 
     def execute(self, request: StatementRequest) -> None:
-        statement = _single_statement(request.sql)
+        statement = _single_statement(request.sql, self._table_functions)
         if statement.type not in WRITE_STATEMENTS or not _created_kind_allowed(
             request.sql, statement
         ):

@@ -449,6 +449,11 @@ def test_objects_outside_lake_tables_are_refused(lake: Lake, sql: str) -> None:
         "DELETE FROM __ducklake_metadata_lake.ducklake_snapshot",
         "CREATE TABLE x AS SELECT * FROM postgres_query('__ducklake_metadata_lake', 'SELECT 1')",
         "INSERT INTO a SELECT 1 FROM query('SELECT 1')",
+        "INSERT INTO a SELECT 1 FROM query/**/('SELECT * FROM __duck' || 'lake_metadata_lake.t')",
+        "INSERT INTO a SELECT 1 FROM query_table -- comment\n('__duck' || 'lake_metadata_lake.t')",
+        "INSERT INTO a SELECT 1 FROM json_execute_serialized_sql(json_serialize_sql('SELECT 1'))",
+        "CREATE TABLE e AS SELECT content FROM read_text('/proc/self/environ')",
+        "CREATE TABLE e AS SELECT * FROM read_csv('/etc/hostname')",
     ],
 )
 def test_writes_cannot_touch_the_catalog_or_run_outside_sql(lake: Lake, sql: str) -> None:
@@ -461,3 +466,12 @@ def test_writes_cannot_touch_the_catalog_or_run_outside_sql(lake: Lake, sql: str
 def test_reads_cannot_touch_the_catalog(lake: Lake) -> None:
     sql = "SELECT * FROM __ducklake_metadata_lake.ducklake_snapshot"
     assert code_of(lambda: read(lake, sql)) == "STORE_STATEMENT_INVALID"
+
+
+def test_files_outside_the_lake_cannot_be_read_by_writes(lake: Lake) -> None:
+    before = lake.current_snapshot().id
+    code = code_of(
+        lambda: write(lake, statement("CREATE TABLE e AS SELECT * FROM '/proc/self/environ'"))
+    )
+    assert code in {"STORE_STATEMENT_INVALID", "STORE_QUERY_FAILED"}
+    assert lake.current_snapshot().id == before
