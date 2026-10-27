@@ -1,0 +1,250 @@
+"""P1-01: store contract v1 on DuckLake with a local catalog."""
+
+from __future__ import annotations
+
+import decimal
+from collections.abc import Iterator
+from pathlib import Path
+
+import pyarrow as pa
+import pytest
+from orvex.contracts.store.v1 import LakeLocation, Parameter, ReadRequest, StatementRequest
+from orvex.store.errors import StoreError
+from orvex.store.lake import Lake, Limits, open_lake
+
+LIMITS = Limits(memory_limit="1GB", threads=2)
+
+
+@pytest.fixture
+def lake(tmp_path: Path) -> Iterator[Lake]:
+    opened = open_lake(
+        LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path)), LIMITS
+    )
+    yield opened
+    opened.close()
+
+
+def statement(sql: str, *parameters: tuple[str, str, str | None]) -> StatementRequest:
+    return StatementRequest(
+        kind="statement",
+        sql=sql,
+        parameters=[Parameter(name=n, type=t, value=v) for n, t, v in parameters],  # type: ignore[arg-type]
+    )
+
+
+def read(
+    lake: Lake,
+    sql: str,
+    snapshot: int | None = None,
+    *parameters: tuple[str, str, str | None],
+    batch_size: int = 65536,
+) -> pa.Table:
+    pinned = lake.current_snapshot().id if snapshot is None else snapshot
+    request = ReadRequest(
+        kind="read",
+        sql=sql,
+        parameters=[Parameter(name=n, type=t, value=v) for n, t, v in parameters],  # type: ignore[arg-type]
+        snapshot=pinned,
+        batch_size=batch_size,
+    )
+    return lake.read(request).read_all()
+
+
+def write(lake: Lake, *statements: StatementRequest) -> int | None:
+    with lake.transaction() as transaction:
+        for item in statements:
+            transaction.execute(item)
+    assert transaction.result is not None
+    return transaction.result.snapshot.id if transaction.result.snapshot else None
+
+
+def test_commit_creates_exactly_one_snapshot(lake: Lake) -> None:
+    before = lake.current_snapshot().id
+    created = write(
+        lake,
+        statement("CREATE TABLE a AS SELECT 1 AS x"),
+        statement("CREATE TABLE b AS SELECT 2 AS y"),
+    )
+    assert created is not None
+    assert created == lake.current_snapshot().id
+    assert created == before + 1
+
+
+def test_transaction_without_changes_creates_no_snapshot(lake: Lake) -> None:
+    write(lake, statement("CREATE TABLE a AS SELECT 1 AS x"))
+    before = lake.current_snapshot().id
+    assert write(lake, statement("DELETE FROM a WHERE x = 99")) is None
+    assert write(lake) is None
+    assert lake.current_snapshot().id == before
+
+
+def test_exception_rolls_back(lake: Lake) -> None:
+    write(lake, statement("CREATE TABLE a AS SELECT 1 AS x"))
+    before = lake.current_snapshot().id
+
+    def failing() -> None:
+        with lake.transaction() as transaction:
+            transaction.execute(statement("INSERT INTO a VALUES (2)"))
+            raise RuntimeError("stop")
+
+    with pytest.raises(RuntimeError):
+        failing()
+    assert lake.current_snapshot().id == before
+    assert read(lake, "SELECT x FROM a ORDER BY x").column("x").to_pylist() == [1]
+
+
+def test_read_is_pinned_to_its_snapshot(lake: Lake) -> None:
+    first = write(
+        lake,
+        statement("CREATE TABLE a AS SELECT 1 AS id, 10 AS v"),
+        statement("CREATE TABLE b AS SELECT 1 AS id, 'one' AS name"),
+    )
+    write(
+        lake,
+        statement("INSERT INTO a VALUES (2, 20)"),
+        statement("UPDATE b SET name = 'uno'"),
+        statement("INSERT INTO b VALUES (2, 'two')"),
+    )
+    sql = "WITH t AS (SELECT * FROM a) SELECT t.id, t.v, b.name FROM t JOIN b USING (id) ORDER BY 1"
+    old = read(lake, sql, first)
+    assert old.to_pylist() == [{"id": 1, "v": 10, "name": "one"}]
+    new = read(lake, sql)
+    assert new.to_pylist() == [{"id": 1, "v": 10, "name": "uno"}, {"id": 2, "v": 20, "name": "two"}]
+
+
+def test_parameters_are_bound_not_concatenated(lake: Lake) -> None:
+    hostile = "x'); DROP TABLE t; --"
+    write(lake, statement("CREATE TABLE t (s VARCHAR)"))
+    write(lake, statement("INSERT INTO t VALUES ($s)", ("s", "VARCHAR", hostile)))
+    table = read(lake, "SELECT s FROM t WHERE s = $s", None, ("s", "VARCHAR", hostile))
+    assert table.column("s").to_pylist() == [hostile]
+
+
+def test_exact_types_reach_arrow(lake: Lake) -> None:
+    write(
+        lake,
+        statement(
+            "CREATE TABLE e AS SELECT "
+            "12345678901234.5678::DECIMAL(18,4) AS d, "
+            "170141183460469231731687303715884105727::HUGEINT AS h, "
+            "18446744073709551615::UBIGINT AS u, "
+            "TIMESTAMPTZ '2026-10-27 08:30:00-04' AS t "
+            "UNION ALL SELECT NULL, NULL, NULL, NULL"
+        ),
+    )
+    table = read(lake, "SELECT d, h, u, t FROM e ORDER BY d NULLS LAST")
+    schema = table.schema
+    assert schema.field("d").type == pa.decimal128(18, 4)
+    assert schema.field("h").type == pa.decimal128(38, 0)
+    assert schema.field("u").type == pa.uint64()
+    assert schema.field("t").type == pa.timestamp("us", tz="UTC")
+    first, second = table.to_pylist()
+    assert first["d"] == decimal.Decimal("12345678901234.5678")
+    assert first["h"] == decimal.Decimal(2**127 - 1)
+    assert first["u"] == 2**64 - 1
+    assert first["t"].isoformat() == "2026-10-27T12:30:00+00:00"
+    assert second == {"d": None, "h": None, "u": None, "t": None}
+
+
+def test_read_runs_the_statement_once(lake: Lake) -> None:
+    lake._connection.execute("CREATE SEQUENCE memory.main.counter")
+    table = read(
+        lake, "SELECT nextval('memory.main.counter') AS v FROM range(10000)", batch_size=1000
+    )
+    assert sorted(table.column("v").to_pylist()) == list(range(1, 10001))
+    current = lake._connection.execute("SELECT currval('memory.main.counter')").fetchone()
+    assert current == (10000,)
+
+
+def test_large_read_streams_batch_by_batch(lake: Lake) -> None:
+    request = ReadRequest(
+        kind="read",
+        sql="SELECT range AS i FROM range(100000000)",
+        parameters=[],
+        snapshot=lake.current_snapshot().id,
+        batch_size=1048576,
+    )
+    rows = 0
+    for batch in lake.read(request):
+        rows += batch.num_rows
+        del batch
+    assert rows == 100_000_000
+
+
+def code_of(action: object) -> str:
+    assert callable(action)
+    with pytest.raises(StoreError) as raised:
+        action()
+    return raised.value.code
+
+
+def test_unknown_snapshot(lake: Lake) -> None:
+    assert code_of(lambda: read(lake, "SELECT 1", 999)) == "STORE_SNAPSHOT_NOT_FOUND"
+
+
+@pytest.mark.parametrize("sql", ["SELECT 1; SELECT 2", "DELETE FROM a", "CREATE TABLE z (i INT)"])
+def test_read_needs_one_select(lake: Lake, sql: str) -> None:
+    assert code_of(lambda: read(lake, sql)) == "STORE_STATEMENT_INVALID"
+
+
+def test_transaction_rejects_control_statements(lake: Lake) -> None:
+    def attempt() -> None:
+        with lake.transaction() as transaction:
+            transaction.execute(statement("ATTACH 'x.duckdb' AS x"))
+
+    assert code_of(attempt) == "STORE_STATEMENT_INVALID"
+
+
+def test_read_of_another_catalog_is_rejected(lake: Lake) -> None:
+    assert code_of(lambda: read(lake, "SELECT * FROM memory.main.t")) == "STORE_STATEMENT_INVALID"
+
+
+def test_duckdb_error_is_reported(lake: Lake) -> None:
+    def attempt() -> None:
+        read(lake, "SELECT no_such_column FROM range(1)")
+
+    with pytest.raises(StoreError) as raised:
+        attempt()
+    assert raised.value.code == "STORE_QUERY_FAILED"
+    assert "no_such_column" in raised.value.details["duckdb"]
+
+
+@pytest.mark.parametrize(
+    ("sql", "parameters"),
+    [
+        ("SELECT $a AS x", ()),
+        ("SELECT 1 AS x", (("a", "INTEGER", "1"),)),
+        ("SELECT $a AS x", (("a", "INTEGER", "1.5"),)),
+        ("SELECT $a AS x", (("a", "TINYINT", "300"),)),
+        ("SELECT $a AS x", (("a", "DATE", "2026-13-01"),)),
+        ("SELECT $a AS x", (("a", "TIMESTAMPTZ", "2026-10-27 08:00:00"),)),
+        ("SELECT $a AS x", (("a", "BOOLEAN", "yes"),)),
+    ],
+)
+def test_invalid_parameters(
+    lake: Lake, sql: str, parameters: tuple[tuple[str, str, str], ...]
+) -> None:
+    assert code_of(lambda: read(lake, sql, None, *parameters)) == "STORE_PARAMETER_INVALID"
+
+
+@pytest.mark.parametrize("limits", [Limits(None, 2), Limits("1GB", None)])
+def test_limits_are_required(tmp_path: Path, limits: Limits) -> None:
+    location = LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
+    assert code_of(lambda: open_lake(location, limits)) == "STORE_LIMITS_REQUIRED"
+
+
+def test_missing_extension_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("orvex.store.lake.EXTENSIONS", ("no_such_extension_xyz",))
+    location = LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
+    with pytest.raises(StoreError) as raised:
+        open_lake(location, LIMITS)
+    assert raised.value.code == "STORE_EXTENSION_UNAVAILABLE"
+    assert raised.value.details["extension"] == "no_such_extension_xyz"
+
+
+def test_errors_convert_to_the_contract_message() -> None:
+    message = StoreError("STORE_QUERY_FAILED", "x", {"duckdb": "boom"}).to_message()
+    assert message.code.root == "STORE_QUERY_FAILED"
+    assert message.details[0].name == "duckdb"
+    with pytest.raises(ValueError, match="NOT_A_CODE"):
+        StoreError("NOT_A_CODE", "x", {})

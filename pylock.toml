@@ -431,6 +431,17 @@ url = "https://files.pythonhosted.org/packages/40/9e/2b38731e0fc536806f16490e1a1
 sha256 = "7dd7b0d8832ba3cb632c306926ded123429211b83641b35dc5c41ad2d34f9bec"
 
 [[packages]]
+name = "pyarrow"
+version = "26.0.0"
+
+[[packages.wheels]]
+name = "pyarrow-26.0.0-cp315-cp315-manylinux_2_28_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/78/80/8c47b6cf8cfd42826df65193eff026c1cc81fa6cb213a3c3f5d203e6f67a/pyarrow-26.0.0-cp315-cp315-manylinux_2_28_x86_64.whl"
+
+[packages.wheels.hashes]
+sha256 = "24f892fdf1ae1942d69d3f7742e2f49960ec95277cfb1a70b8a1d91f4a96d935"
+
+[[packages]]
 name = "pydantic"
 version = "2.14.1"
 

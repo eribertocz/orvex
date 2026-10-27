@@ -1,0 +1,5 @@
+{
+  "kind": "statement",
+  "sql": "INSERT INTO staging.readings SELECT * FROM staging.readings_new WHERE kwh > $minimum",
+  "parameters": [{ "name": "minimum", "type": "DECIMAL(12,3)", "value": "0.000" }]
+}
