@@ -197,6 +197,7 @@ class Lake:
     def _cursor(self) -> duckdb.DuckDBPyConnection:
         cursor = self._connection.cursor()
         cursor.sql(f"USE {LAKE}")
+        cursor.sql("SET TimeZone = 'UTC'")
         return cursor
 
     def _one(self, sql: str, parameters: dict[str, object]) -> tuple[object, ...] | None:
@@ -295,14 +296,17 @@ class Lake:
                 "STORE_QUERY_FAILED", "DuckDB could not run the read.", {"duckdb": str(error)}
             ) from error
 
+        schema = _utc_schema(source.schema)
+
         def batches() -> Iterator[pa.RecordBatch]:
             # The cursor lives as long as the stream; it is closed when the stream ends.
             try:
-                yield from source
+                for batch in source:
+                    yield batch if batch.schema == schema else batch.cast(schema)
             finally:
                 cursor.close()
 
-        return pa.RecordBatchReader.from_batches(source.schema, batches())
+        return pa.RecordBatchReader.from_batches(schema, batches())
 
     @contextmanager
     def transaction(self) -> Iterator[Transaction]:
@@ -381,6 +385,17 @@ def _cte_names(tree: JsonTree) -> set[str]:
                 if isinstance(entry, dict) and isinstance(entry.get("key"), str):
                     names.add(entry["key"])
     return names
+
+
+def _utc_schema(schema: pa.Schema) -> pa.Schema:
+    """Name every zoned timestamp's zone `UTC` (DuckDB may say `Etc/UTC`); values are unchanged."""
+    fields = [
+        field.with_type(pa.timestamp(field.type.unit, tz="UTC"))
+        if pa.types.is_timestamp(field.type) and field.type.tz is not None
+        else field
+        for field in schema
+    ]
+    return pa.schema(fields, metadata=schema.metadata)
 
 
 def open_lake(location: LakeLocation, limits: Limits) -> Lake:
