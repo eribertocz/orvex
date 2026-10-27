@@ -10,12 +10,13 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from conformance.runners import bi_platform_adapter as adapter
-from conformance.runners.semantic_corpus import CORPUS, OSSIE, ROOT, run
+from conformance.runners.semantic_corpus import CORPUS, OSSIE, ROOT, check_vendored, run
 
 
 def copy_repository(tmp_path: Path) -> Path:
@@ -63,6 +64,8 @@ def test_ossie_pin() -> None:
     schema = json.loads((ROOT / OSSIE / "ossie-schema.json").read_text("utf-8"))
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert schema["properties"]["version"]["const"] == pin["specification_version"] == "0.2.0.dev0"
+    assert sorted(pin["sha256"]) == ["LICENSE", "NOTICE", "ossie-schema.json"]
+    assert check_vendored(ROOT / OSSIE) == []
 
 
 def test_report_is_deterministic(tmp_path: Path) -> None:
@@ -162,7 +165,7 @@ def test_unmapped_error_code(tmp_path: Path) -> None:
     assert codes(root) == ["CORPUS_ERROR_CODE_UNMAPPED"]
 
 
-@pytest.mark.parametrize("change", ["edit", "add", "remove"])
+@pytest.mark.parametrize("change", ["edit", "add", "nested-source-toml", "remove"])
 def test_changed_source_is_detected(tmp_path: Path, change: str) -> None:
     root = copy_repository(tmp_path)
     folder = case_folder(root, "CASE-001")
@@ -171,14 +174,88 @@ def test_changed_source_is_detected(tmp_path: Path, change: str) -> None:
         path.write_text(path.read_text("utf-8") + "\n", encoding="utf-8")
     elif change == "add":
         (folder / "notes.md").write_text("x", encoding="utf-8")
+    elif change == "nested-source-toml":
+        (folder / "SOURCE.toml").write_text("x", encoding="utf-8")
     else:
         (folder / "README.md").unlink()
     assert "CORPUS_SOURCE_CHANGED" in codes(root)
 
 
-def test_command_exits_one_on_findings(tmp_path: Path) -> None:
+@pytest.mark.parametrize("change", ["edit-schema", "add", "remove-license"])
+def test_changed_vendored_ossie_file_is_detected(tmp_path: Path, change: str) -> None:
     root = copy_repository(tmp_path)
+    folder = root / OSSIE
+    if change == "edit-schema":
+        path = folder / "ossie-schema.json"
+        path.write_text(path.read_text("utf-8") + "\n", encoding="utf-8")
+    elif change == "add":
+        (folder / "extra.json").write_text("{}", encoding="utf-8")
+    else:
+        (folder / "LICENSE").unlink()
+    assert codes(root) == ["CORPUS_SOURCE_CHANGED"]
+
+
+def test_case_missing_from_manifest(tmp_path: Path) -> None:
+    root = copy_repository(tmp_path)
+    path = root / CORPUS / "corpus" / "manifest.json"
+    manifest = json.loads(path.read_text("utf-8"))
+    manifest["cases"] = manifest["cases"][:-1]
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    refresh_sources(root)
+    assert codes(root) == ["CORPUS_MANIFEST_MISMATCH"]
+
+
+def test_malformed_expected_error_is_incomplete(tmp_path: Path) -> None:
+    root = copy_repository(tmp_path)
+    (case_folder(root, "CASE-016") / "expected" / "error.json").write_text("{", encoding="utf-8")
+    refresh_sources(root)
+    assert codes(root) == ["CORPUS_CASE_INCOMPLETE"]
+
+
+def break_incomplete(root: Path) -> None:
+    (case_folder(root, "CASE-001") / "expected" / "result.csv").unlink()
+
+
+def break_manifest(root: Path) -> None:
+    path = root / CORPUS / "corpus" / "manifest.json"
+    manifest = json.loads(path.read_text("utf-8"))
+    manifest["cases"][0]["outcome"] = "compile_error"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def break_model(root: Path) -> None:
+    path = root / CORPUS / "models" / "CASE-001.yaml"
+    path.write_text(
+        path.read_text("utf-8").replace("version: '0.2.0.dev0'", "version: '9'"), "utf-8"
+    )
+
+
+def break_error_code(root: Path) -> None:
+    path = case_folder(root, "CASE-016") / "expected" / "error.json"
+    path.write_text(json.dumps({"code": "SOMETHING_NEW", "evidence_contains": []}), "utf-8")
+
+
+def break_source(root: Path) -> None:
     (case_folder(root, "CASE-001") / "README.md").write_text("changed", encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("defect", "line"),
+    [
+        (break_incomplete, "CORPUS_CASE_INCOMPLETE: CASE-001: "),
+        (break_manifest, "CORPUS_MANIFEST_MISMATCH: CASE-001: "),
+        (break_model, "CORPUS_MODEL_INVALID: CASE-001: "),
+        (break_error_code, "CORPUS_ERROR_CODE_UNMAPPED: CASE-016: "),
+        (break_source, "CORPUS_SOURCE_CHANGED: corpus/cases/CASE-001/README.md: "),
+    ],
+)
+def test_command_exits_one_with_code_and_case(
+    tmp_path: Path, defect: Callable[[Path], None], line: str
+) -> None:
+    root = copy_repository(tmp_path)
+    defect(root)
+    if defect is not break_source:
+        refresh_sources(root)
     result = subprocess.run(
         [sys.executable, "-m", "conformance.runners.semantic_corpus", "--root", str(root)],
         cwd=ROOT,
@@ -187,4 +264,4 @@ def test_command_exits_one_on_findings(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 1
-    assert "CORPUS_SOURCE_CHANGED: corpus/cases/CASE-001/README.md" in result.stdout
+    assert line in result.stdout

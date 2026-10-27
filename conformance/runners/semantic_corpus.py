@@ -59,7 +59,7 @@ def check_sources(corpus: Path) -> list[Finding]:
     present = {
         path.relative_to(corpus).as_posix(): path
         for path in corpus.rglob("*")
-        if path.is_file() and path.name != "SOURCE.toml"
+        if path.is_file() and path != corpus / "SOURCE.toml"
     }
     findings = []
     for name in sorted(set(recorded) | set(present)):
@@ -72,14 +72,50 @@ def check_sources(corpus: Path) -> list[Finding]:
     return findings
 
 
+def check_vendored(ossie: Path) -> list[Finding]:
+    """Every vendored Ossie file matches PIN.toml, and no file is added or missing."""
+    recorded: dict[str, str] = tomllib.loads((ossie / "PIN.toml").read_text("utf-8"))["sha256"]
+    present = {path.name: path for path in ossie.iterdir() if path.name != "PIN.toml"}
+    findings = []
+    for name in sorted(set(recorded) | set(present)):
+        where = f"{OSSIE.as_posix()}/{name}"
+        if name not in present:
+            findings.append(Finding("CORPUS_SOURCE_CHANGED", where, "missing"))
+        elif name not in recorded:
+            findings.append(Finding("CORPUS_SOURCE_CHANGED", where, "not in PIN.toml"))
+        elif not present[name].is_file() or sha256(present[name]) != recorded[name]:
+            findings.append(Finding("CORPUS_SOURCE_CHANGED", where, "SHA-256 differs"))
+    return findings
+
+
 def ossie_validator(ossie: Path) -> jsonschema.Draft202012Validator:
-    pin = tomllib.loads((ossie / "PIN.toml").read_text("utf-8"))
-    for name, digest in pin["sha256"].items():
-        if sha256(ossie / name) != digest:
-            raise ValueError(f"{ossie / name} differs from PIN.toml")
     schema = json.loads((ossie / "ossie-schema.json").read_text("utf-8"))
     jsonschema.Draft202012Validator.check_schema(schema)
     return jsonschema.Draft202012Validator(schema)
+
+
+def check_manifest(corpus: Path, manifest: dict[str, object]) -> list[Finding]:
+    """The manifest lists exactly the case folders, and its case count agrees."""
+    cases = manifest.get("cases")
+    listed = (
+        [entry.get("id") for entry in cases if isinstance(entry, dict)]
+        if isinstance(cases, list)
+        else []
+    )
+    folders = sorted(path.name for path in (corpus / "corpus" / "cases").iterdir() if path.is_dir())
+    findings = []
+    for case in sorted(set(folders) - set(listed)):
+        findings.append(
+            Finding("CORPUS_MANIFEST_MISMATCH", case, "case folder not in manifest.json")
+        )
+    for case in sorted({str(case) for case in listed} - set(folders)):
+        findings.append(
+            Finding("CORPUS_MANIFEST_MISMATCH", case, "listed in manifest.json, no folder")
+        )
+    if manifest.get("case_count") != len(listed):
+        detail = f"case_count is {manifest.get('case_count')}, {len(listed)} cases are listed"
+        findings.append(Finding("CORPUS_MANIFEST_MISMATCH", "manifest.json", detail))
+    return findings
 
 
 def load_case(
@@ -105,7 +141,13 @@ def load_case(
             findings.append(Finding("CORPUS_CASE_INCOMPLETE", case, f"unreadable CSV: {problem}"))
     code = None
     if error.exists():
-        upstream = json.loads(error.read_text("utf-8"))["code"]
+        try:
+            upstream = json.loads(error.read_text("utf-8"))["code"]
+            if not isinstance(upstream, str):
+                raise TypeError("`code` is not a string")
+        except (ValueError, KeyError, TypeError) as problem:
+            detail = f"unreadable expected/error.json: {problem}"
+            return None, [*findings, Finding("CORPUS_CASE_INCOMPLETE", case, detail)]
         code = adapter.product_error_code(upstream)
         if code is None:
             findings.append(Finding("CORPUS_ERROR_CODE_UNMAPPED", case, upstream))
@@ -136,11 +178,18 @@ def load_case(
 
 def run(root: Path = ROOT) -> tuple[list[CaseReport], list[Finding]]:
     corpus = root / CORPUS
-    findings = check_sources(corpus)
-    validator = ossie_validator(root / OSSIE)
+    findings = check_sources(corpus) + check_vendored(root / OSSIE)
+    try:
+        validator = ossie_validator(root / OSSIE)
+    except (ValueError, jsonschema.SchemaError) as problem:
+        # Without the pinned schema no model can be checked; the source finding names the file.
+        return [], [*findings, Finding("CORPUS_SOURCE_CHANGED", OSSIE.as_posix(), str(problem))]
     manifest = json.loads((corpus / "corpus" / "manifest.json").read_text("utf-8"))
+    findings += check_manifest(corpus, manifest)
     reports = []
     for entry in manifest["cases"]:
+        if not (corpus / "corpus" / "cases" / entry["id"]).is_dir():
+            continue
         report, case_findings = load_case(corpus, entry, validator)
         findings.extend(case_findings)
         if report is not None:
