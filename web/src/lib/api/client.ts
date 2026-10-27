@@ -36,7 +36,9 @@ function isErrorEnvelope(body: unknown): body is ErrorEnvelope {
 	return (
 		typeof code === 'string' &&
 		typeof message === 'string' &&
+		message !== '' &&
 		typeof request_id === 'string' &&
+		request_id !== '' &&
 		Array.isArray(details) &&
 		details.every(
 			(detail) =>

@@ -7,6 +7,10 @@ OpenAPI 3.1 description of the public HTTP API.
 - **Error model:** every non-2xx response is an `ErrorEnvelope` with a stable `code` (`UPPER_SNAKE_CASE`), a human message, structured `details` (name/value pairs) and the `request_id` that also appears in the `X-Request-Id` header and in the server log.
 - **Compatibility:** later issues add paths and schemas compatibly. Removing a path or a field, or changing the meaning of an error code, needs `v2` and an ADR.
 
+## Identity
+
+OpenAPI 3.1 does not allow a root `$id`, so the P0-05 `$id` rule applies to JSON Schema contracts only. This contract is identified by its path (`contracts/http-api/v1`) and `info.version`; its schemas are addressed as `#/components/schemas/<Name>`.
+
 ## Error codes
 
 The registry is `components.x-error-codes` in `openapi.yaml`; a test checks that every code used in the examples, and later every code the server sends, is listed there. Codes that only the web client produces, and the server never sends:
