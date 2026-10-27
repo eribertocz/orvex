@@ -105,17 +105,20 @@ def changed_paths(client: GitHubReader, pull_number: int) -> list[str]:
             f"the API listed {len(files)} of {expected} changed files",
         )
     paths: list[str] = []
-    for entry in files:
-        paths.append(entry["filename"])
-        if entry.get("previous_filename"):
-            paths.append(entry["previous_filename"])
+    try:
+        for entry in files:
+            paths.append(entry["filename"])
+            if entry.get("previous_filename"):
+                paths.append(entry["previous_filename"])
+    except (KeyError, TypeError, AttributeError) as error:
+        raise GovernanceError("CHANGED_FILES_UNAVAILABLE", "malformed file entry") from error
     return paths
 
 
 def current_labels(client: GitHubReader, pull_number: int) -> list[str]:
     try:
         return [label["name"] for label in client.paginate(f"/issues/{pull_number}/labels")]
-    except GitHubApiError as error:
+    except (GitHubApiError, KeyError, TypeError) as error:
         raise GovernanceError("LABELS_UNAVAILABLE", str(error)) from error
 
 
@@ -127,9 +130,13 @@ def read_rules_document(path: Path) -> str:
 
 
 def main() -> int:
-    rules_document = Path(os.environ["GOVERNANCE_DOCUMENT"])
-    client = GitHubClient(os.environ["GITHUB_TOKEN"], os.environ["GITHUB_REPOSITORY"])
-    pull_number = int(os.environ["PULL_NUMBER"])
+    try:
+        rules_document = Path(os.environ["GOVERNANCE_DOCUMENT"])
+        client = GitHubClient(os.environ["GITHUB_TOKEN"], os.environ["GITHUB_REPOSITORY"])
+        pull_number = int(os.environ["PULL_NUMBER"])
+    except (KeyError, ValueError) as error:
+        print(f"::error::GOVERNANCE_MISCONFIGURED: missing or invalid environment value {error}")
+        return 1
     try:
         governed = parse_governed_paths(read_rules_document(rules_document))
         blocking = evaluate(

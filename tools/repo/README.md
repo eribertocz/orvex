@@ -4,7 +4,7 @@ The Owner applies these settings once, after the pull request of P0-01 is merged
 
 ## 1. Merge settings
 
-Only squash merges; the squash commit takes the pull request title and keeps the commit messages (so `Co-Authored-By` trailers survive); head branches are deleted after merging; auto-merge is allowed for later Dependabot tier C updates.
+Only squash merges; the squash commit takes the pull request title and keeps the commit messages (so `Co-Authored-By` trailers survive); head branches are deleted after merging. Auto-merge stays off until the issue that adopts it for Dependabot tier C updates.
 
 ```bash
 gh api -X PATCH repos/eribertocz/sextant \
@@ -14,7 +14,7 @@ gh api -X PATCH repos/eribertocz/sextant \
   -f squash_merge_commit_title=PR_TITLE \
   -f squash_merge_commit_message=COMMIT_MESSAGES \
   -F delete_branch_on_merge=true \
-  -F allow_auto_merge=true
+  -F allow_auto_merge=false
 ```
 
 ## 2. Ruleset for `main`
@@ -41,7 +41,12 @@ Update it when a later issue adds a required check (the id comes from `gh api re
 gh api -X PUT repos/eribertocz/sextant/rulesets/<id> --input tools/repo/main-ruleset.json
 ```
 
-## 3. Verify
+## 3. What the checks mean
+
+- `governance` gives **visibility, not authorization**: it guarantees that a pull request touching governed paths carries `owner-merge`, so the Owner sees it. The Owner and the Agent share one account, so the rule "only the Owner merges `owner-merge` pull requests" is a process rule (ADR-0018).
+- Dependabot updates of GitHub Actions touch `.github/workflows/`, so their `governance` check is red until the Owner adds `owner-merge`. That is expected.
+
+## 4. Verify
 
 ```bash
 gh api repos/eribertocz/sextant --jq '{squash:.allow_squash_merge, merge:.allow_merge_commit, rebase:.allow_rebase_merge, delete_branch:.delete_branch_on_merge}'

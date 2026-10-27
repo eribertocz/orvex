@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import urllib.error
@@ -55,7 +56,7 @@ class GitHubClient:
                 return response.read().decode(), response.headers.get("Link", "")
         except urllib.error.HTTPError as error:
             raise GitHubApiError(f"{method} {url} failed with HTTP {error.code}") from error
-        except (urllib.error.URLError, OSError) as error:
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
             raise GitHubApiError(f"{method} {url} failed: {error}") from error
 
 

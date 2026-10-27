@@ -23,7 +23,7 @@ The Agent prepares the exact settings in P0-01 (as a checklist and a script usin
 
 ### Governed paths
 
-Pull requests that touch any of these paths are **merged only by the Owner**. The Agent prepares them, labels them `owner-merge`, and asks for review. A required CI check (`governance`, created in P0-01) fails while a pull request touching governed paths lacks the `owner-merge` label, so such pull requests are always visible to the Owner. The check reads the block below from the pull request's **base** commit, so a pull request cannot weaken its own check.
+Pull requests that touch any of these paths are **merged only by the Owner**. The Agent prepares them, labels them `owner-merge`, and asks for review. A required CI check (`governance`, created in P0-01) fails while a pull request touching governed paths lacks the `owner-merge` label, so such pull requests are always visible to the Owner. The check runs as defined on the **base branch** at the time it runs (workflow, script and the block below), so a pull request cannot weaken its own check.
 
 Format (machine-read): one pattern per line; the first token is the pattern, the rest of the line is a comment. A pattern ending in `/` matches every path under it; any other pattern matches one file exactly. A leading `!` marks an exclusion, which wins over inclusions.
 

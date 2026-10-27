@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 from collections.abc import Iterator
 from pathlib import Path
@@ -56,6 +57,14 @@ class ParseTests(unittest.TestCase):
     def test_unreadable_document_fails_closed(self) -> None:
         with self.assertRaises(GovernanceError) as context:
             read_rules_document(REPOSITORY_ROOT / "does-not-exist.md")
+        self.assertEqual(context.exception.code, "GOVERNED_PATHS_NOT_FOUND")
+
+    def test_undecodable_document_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rules.md"
+            path.write_bytes(b"\xff\xfe\x00invalid")
+            with self.assertRaises(GovernanceError) as context:
+                read_rules_document(path)
         self.assertEqual(context.exception.code, "GOVERNED_PATHS_NOT_FOUND")
 
     def test_repository_document_is_parsable(self) -> None:
@@ -140,6 +149,11 @@ class ChangedPathsTests(unittest.TestCase):
         files = [{"filename": f"f{index}"} for index in range(3000)]
         with self.assertRaises(GovernanceError) as context:
             changed_paths(FakeClient(3001, files), 7)
+        self.assertEqual(context.exception.code, "CHANGED_FILES_UNAVAILABLE")
+
+    def test_malformed_entry_fails_closed(self) -> None:
+        with self.assertRaises(GovernanceError) as context:
+            changed_paths(FakeClient(1, [{"name": "a"}]), 7)
         self.assertEqual(context.exception.code, "CHANGED_FILES_UNAVAILABLE")
 
     def test_count_mismatch_fails_closed(self) -> None:
