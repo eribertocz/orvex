@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import tomllib
 from pathlib import Path
@@ -45,7 +46,8 @@ def test_every_distribution_is_listed() -> None:
 def test_package_version_differing_from_manifest_fails(tmp_path: Path) -> None:
     root = copy_layout(tmp_path)
     pyproject = root / "packages" / "store" / "pyproject.toml"
-    text = pyproject.read_text("utf-8").replace('version = "0.0.0"', 'version = "0.2.0"', 1)
+    current = tomllib.loads(pyproject.read_text("utf-8"))["project"]["version"]
+    text = pyproject.read_text("utf-8").replace(f'version = "{current}"', 'version = "9.9.9"', 1)
     pyproject.write_text(text, "utf-8")
     assert codes(root) == ["VERSION_MISMATCH"]
 
@@ -89,8 +91,8 @@ def test_workspace_pin_differing_from_manifest_fails(tmp_path: Path) -> None:
     root = copy_layout(tmp_path)
     pyproject = root / "packages" / "server" / "pyproject.toml"
     slug = identity(REPOSITORY_ROOT)["slug"]
-    text = pyproject.read_text("utf-8").replace(
-        f'"{slug}-contracts==0.0.0"', f'"{slug}-contracts==9.9.9"'
+    text = re.sub(
+        rf'"{slug}-contracts==[^"]+"', f'"{slug}-contracts==9.9.9"', pyproject.read_text("utf-8")
     )
     pyproject.write_text(text, "utf-8")
     assert codes(root) == ["VERSION_MISMATCH"]

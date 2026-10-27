@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orvex-store"
-version = "0.0.0"
+version = "0.1.0"
 description = "Store and read analytical data in DuckLake through DuckDB."
 readme = "README.md"
 license = "Apache-2.0"
