@@ -448,3 +448,20 @@ def test_values_python_cannot_build_are_refused(tmp_path: Path, file: str, value
     assert error.code in {"PROJECT_YAML_INVALID", "PROJECT_SCHEMA_INVALID"}
     assert error.error.details.file == file
     assert error.__context__ is None
+
+
+@pytest.mark.parametrize(
+    "connections",
+    [
+        "version: 1\nconnections:\n  a: {type: csv, path: a.csv}\n"
+        "  <<: {a: {type: csv, path: b}}\n",
+        "version: 1\nconnections:\n  legacy:\n    type: duckdb\n    path: a\n    read_only: true\n"
+        "    <<: {read_only: false}\n",
+        "version: 1\n<<: {connections: {}}\n",
+    ],
+    ids=["duplicate-connection", "duplicate-key", "top-level"],
+)
+def test_merge_keys_are_refused(tmp_path: Path, connections: str) -> None:
+    error = failure(project(tmp_path, connections=connections))
+    assert error.code == "PROJECT_YAML_INVALID"
+    assert error.error.details.line is not None

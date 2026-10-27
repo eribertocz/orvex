@@ -40,6 +40,7 @@ RESERVED_CONNECTION = "lake"
 # they can exhaust memory or the parser's stack.
 MAX_FILE_BYTES = 1024 * 1024
 MAX_DEPTH = 32
+MERGE_TAG = "tag:yaml.org,2002:merge"
 
 type Connection = (
     ParquetConnection
@@ -386,6 +387,15 @@ class _Document:
         if isinstance(node, yaml.MappingNode):
             seen: set[object] = set()
             for key, value in node.value:
+                if key.tag == MERGE_TAG:
+                    # `<<` would copy keys in after this check, hiding duplicates.
+                    raise ProjectLoadError(
+                        "PROJECT_YAML_INVALID",
+                        f"{self.file}: merge keys (<<) are not supported; write each key.",
+                        file=self.file,
+                        path=pointer,
+                        line=key.start_mark.line + 1,
+                    )
                 name = key.value if isinstance(key, yaml.ScalarNode) else None
                 if name in seen:
                     code = (
