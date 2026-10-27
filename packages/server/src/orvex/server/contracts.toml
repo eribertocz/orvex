@@ -2,5 +2,5 @@
 # produces: { "<contract>" = "vN" }; consumes: { "<contract>" = ["vN", ...] }.
 # The server checks the installed combination before it starts.
 
-produces = { "http-api" = "v1" }
+produces = { "http-api" = "v1", "project" = "v1" }
 consumes = {}

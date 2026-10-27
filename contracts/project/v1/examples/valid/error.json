@@ -1,0 +1,1 @@
+{"code": "PROJECT_YAML_INVALID", "message": "connections.yaml: duplicate key 'host'.", "details": {"file": "connections.yaml", "path": "/connections/production", "line": 7}}
