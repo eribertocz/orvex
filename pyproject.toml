@@ -2,14 +2,21 @@
 # There is intentionally no [project] table here.
 
 [dependency-groups]
+# Runtime dependencies of the workspace packages, pinned exactly; each package declares the same
+# pins (tests/workspace/test_lock_files.py checks both). Locked together with `dev`.
+runtime = [
+  "fastapi==0.162.0",
+  "pydantic==2.14.1",
+  "uvicorn==0.54.0",
+]
 dev = [
   "datamodel-code-generator==0.86.0",
   "duckdb==2.0.0",
+  "httpx2==2.16.0",
   "hypothesis==6.170.12",
   "jsonschema==4.26.0",
   "mypy==2.4.0",
   "openapi-spec-validator==0.9.0",
-  "pydantic==2.14.1",
   "pytest==9.1.1",
   "pyyaml==6.0.3",
   "ruff==0.17.3",
@@ -49,6 +56,8 @@ select = [
 ".github/workflows/scripts/*.py" = ["T20", "PT009", "PT027", "ANN401"]
 # Repository tools are command-line programs that report through stdout.
 "tools/**/*.py" = ["T20"]
+# The command line prints its user-facing output.
+"packages/server/src/*/server/cli.py" = ["T20"]
 # Generated contract types carry the contracts' descriptions verbatim.
 "packages/contracts/src/*/contracts/*/v*.py" = ["E501"]
 "tests/contracts/generated/*.py" = ["E501"]
