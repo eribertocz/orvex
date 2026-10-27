@@ -3,3 +3,13 @@
 # file = "packages/<module>/src/<namespace>/<module>/<file>.py"
 # call = "fetchall"
 # reason = "why this result is small and bounded"
+
+[[allow]]
+file = "packages/server/src/sextant/server/instance.py"
+call = "fetchone"
+reason = "SQLite project registry (module state, not analytical data): one row per lookup"
+
+[[allow]]
+file = "packages/server/src/sextant/server/instance.py"
+call = "fetchall"
+reason = "SQLite project registry (module state, not analytical data): the list of registered projects"

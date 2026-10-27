@@ -12,7 +12,7 @@ LOCK_FILES = ("pylock.toml", "pylock.py314.toml")
 def declared_pins() -> dict[str, str]:
     groups = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text())["dependency-groups"]
     pins: dict[str, str] = {}
-    for requirement in groups["dev"]:
+    for requirement in groups["dev"] + groups["runtime"]:
         name, separator, version = requirement.partition("==")
         assert separator, f"dependency '{requirement}' is not pinned exactly with =="
         pins[name.lower()] = version
@@ -39,4 +39,14 @@ def test_every_locked_wheel_has_a_hash(lock_file: str) -> None:
         ):
             assert artifact["hashes"].get("sha256"), (
                 f"{package['name']} has no sha256 in {lock_file}"
+            )
+
+
+def test_package_dependencies_are_pinned_in_the_runtime_group() -> None:
+    groups = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text())["dependency-groups"]
+    runtime = set(groups["runtime"])
+    for project in sorted((REPOSITORY_ROOT / "packages").glob("*/pyproject.toml")):
+        for requirement in tomllib.loads(project.read_text())["project"]["dependencies"]:
+            assert requirement in runtime, (
+                f"{project.parent.name}: {requirement} not in runtime group"
             )

@@ -2,6 +2,17 @@ lock-version = "1.0"
 created-by = "pip"
 
 [[packages]]
+name = "annotated-doc"
+version = "0.0.5"
+
+[[packages.wheels]]
+name = "annotated_doc-0.0.5-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/3e/30/e900b21425a860e195f32e37657aa1f7c7f2b1bfb26f03ca209b90933c06/annotated_doc-0.0.5-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101"
+
+[[packages]]
 name = "annotated-types"
 version = "0.8.0"
 
@@ -11,6 +22,17 @@ url = "https://files.pythonhosted.org/packages/99/91/8acff4f5e50511b911bbccb72b8
 
 [packages.wheels.hashes]
 sha256 = "f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0"
+
+[[packages]]
+name = "anyio"
+version = "4.15.1"
+
+[[packages.wheels]]
+name = "anyio-4.15.1-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/12/b8/4bd346e22b28902df4d651910f5242c28d84e4a5c2435ca5c3f797ed7e2e/anyio-4.15.1-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101"
 
 [[packages]]
 name = "argcomplete"
@@ -90,6 +112,17 @@ url = "https://files.pythonhosted.org/packages/cc/33/01ad2535ee897db2bad70cbc800
 sha256 = "ab51ec57d329d6f3df37c0287b55d71c3fc07bb54b61d1afed09104f953b1431"
 
 [[packages]]
+name = "fastapi"
+version = "0.162.0"
+
+[[packages.wheels]]
+name = "fastapi-0.162.0-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/b4/4f/3f2c25c9b43970b5e9a08beb5e04776247edea684ddc0930f4f02f0bb6cb/fastapi-0.162.0-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "3785963de305dd09912426cb81f2d230fce98ab3521cdfe97265c8d14983128c"
+
+[[packages]]
 name = "genson"
 version = "1.4.0"
 
@@ -101,6 +134,39 @@ url = "https://files.pythonhosted.org/packages/16/02/767f744ab6d4cb7761e5008acc3
 sha256 = "03bc71bbe52defde70660cc4dcd1ea1097997da5a1cbb90a9dbd3acc7c9e1b65"
 
 [[packages]]
+name = "h11"
+version = "0.16.0"
+
+[[packages.wheels]]
+name = "h11-0.16.0-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86"
+
+[[packages]]
+name = "httpcore2"
+version = "2.16.0"
+
+[[packages.wheels]]
+name = "httpcore2-2.16.0-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/af/c2/ce417c397afa5181f0e3c6ff01a4d01639414e1adef08730d97571297151/httpcore2-2.16.0-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "5c4358319f2602d984ad93182c9fee5160f22e9da7babdda870a5e7c4e2dc34f"
+
+[[packages]]
+name = "httpx2"
+version = "2.16.0"
+
+[[packages.wheels]]
+name = "httpx2-2.16.0-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/7b/3d/2e4bc4fd1ef9770871669adb348d612a6e4786b303a23f9935b81c48dd60/httpx2-2.16.0-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "fd2c5d7909e8d86fe92d53020c310ca0e4e431b838c207c5754b9bbf0308d49a"
+
+[[packages]]
 name = "hypothesis"
 version = "6.170.12"
 
@@ -110,6 +176,17 @@ url = "https://files.pythonhosted.org/packages/2d/ed/4a6cec0a929079b3c2103dbc71d
 
 [packages.wheels.hashes]
 sha256 = "1cb0a1042041ad3b03159c658214eb19d19ec9d0efcf03a84f4ed94de54f1630"
+
+[[packages]]
+name = "idna"
+version = "3.20"
+
+[[packages.wheels]]
+name = "idna-3.20-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c"
 
 [[packages]]
 name = "inflect"
@@ -286,6 +363,17 @@ url = "https://files.pythonhosted.org/packages/95/d8/321ff889330acca2e3097f3d4f8
 
 [packages.wheels.hashes]
 sha256 = "222fecffc7714f6d0a6ad62c0e4b66cc2b7dbfafb7b93acfc6c308abbdb51af8"
+
+[[packages]]
+name = "opentelemetry-api"
+version = "1.45.1"
+
+[[packages.wheels]]
+name = "opentelemetry_api-1.45.1-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/1e/41/f7dcf80b81ee8e71c1a2b59f14208bc723edbd89ed027a73b175abf6348e/opentelemetry_api-1.45.1-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "b31553efa588ae44bc306f863c785c5333a9ecc091248c6ee68b4b6c87fdedfb"
 
 [[packages]]
 name = "packaging"
@@ -508,6 +596,28 @@ url = "https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3
 sha256 = "a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0"
 
 [[packages]]
+name = "starlette"
+version = "1.10.0"
+
+[[packages.wheels]]
+name = "starlette-1.10.0-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/88/2e/947cfe02def9371c07cd5bf5b6b61c829e9aecb9904db02a66cfafbc1eec/starlette-1.10.0-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "478c0ab3b4ced6e82719849c118fa406f0278a3499c1a898cd15cd31bdc38ce4"
+
+[[packages]]
+name = "truststore"
+version = "0.10.5"
+
+[[packages.wheels]]
+name = "truststore-0.10.5-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/51/e9/3a7820be2bb0fe53b6bc9c3be26d3d1158004e4c3ab953aa6840b955b1e9/truststore-0.10.5-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c"
+
+[[packages]]
 name = "typeguard"
 version = "4.6.0"
 
@@ -561,3 +671,14 @@ url = "https://files.pythonhosted.org/packages/67/81/4add07e5172b7ac40d8ed5ff580
 
 [packages.wheels.hashes]
 sha256 = "65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147"
+
+[[packages]]
+name = "uvicorn"
+version = "0.54.0"
+
+[[packages.wheels]]
+name = "uvicorn-0.54.0-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/38/0c/b54a4fdd7f90a3af8b02ebc9ce6712c2c208b7926a2f7bad95c33ebbe943/uvicorn-0.54.0-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "505bdb0f318731d45f1f712071fc781a8981f6847a31c902c9f5e652d4f67faf"
