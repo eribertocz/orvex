@@ -745,25 +745,28 @@ class Lake:
             self._admission.release()
             raise
         guard = Guard(cursor, deadline)
-        # A stream nobody reads would hold its slot forever: a timeout or a cancel that finds it
-        # not yet started releases it at once; a started stream releases it when it ends.
+        # Who owns the cursor: the calling thread while it sets the read up, nobody while the
+        # stream waits for its first read, the reading thread while it streams. Only an idle
+        # read is closed by the timer (or by collection of a dropped reader); the owner closes
+        # it otherwise. The slot is released exactly once.
         state = threading.Lock()
-        started = False
-        finished = False
+        phase = "setup"
 
         def finish() -> None:
-            nonlocal finished
+            nonlocal phase
             with state:
-                if finished:
+                if phase == "finished":
                     return
-                finished = True
-            guard.stop()
-            cursor.close()
-            self._admission.release()
+                phase = "finished"
+            try:
+                guard.stop()
+                cursor.close()
+            finally:
+                self._admission.release()
 
         def release_if_idle() -> None:
             with state:
-                idle = not started
+                idle = phase == "idle"
             if idle:
                 finish()
 
@@ -779,6 +782,7 @@ class Lake:
             if exact is not None:
                 relation = cursor.sql(exact, params=parameters)
             empty = relation.limit(0).to_arrow_table()
+            schema = _with_duckdb_types(_utc_schema(empty.schema), types)
         except duckdb.Error as error:
             finish()
             if isinstance(error, duckdb.InterruptException) or guard.reason:
@@ -786,16 +790,27 @@ class Lake:
             raise StoreError(
                 "STORE_QUERY_FAILED", "DuckDB could not run the read.", {"duckdb": str(error)}
             ) from error
-
-        schema = _with_duckdb_types(_utc_schema(empty.schema), types)
+        except BaseException:
+            finish()
+            raise
+        if guard.reason is not None:
+            # The limit expired or a cancel came while the read was being set up.
+            finish()
+            raise guard.error()
+        with state:
+            phase = "idle"
+            fired = guard.reason is not None
+        if fired:
+            # It fired between the check above and now, and found the read still being set up.
+            release_if_idle()
 
         def batches() -> Iterator[pa.RecordBatch]:
             # The cursor and the admission slot live as long as the stream.
-            nonlocal started
+            nonlocal phase
             with state:
-                if finished:
+                if phase == "finished":
                     raise guard.error()
-                started = True
+                phase = "streaming"
             try:
                 if guard.reason is not None:
                     raise guard.error()

@@ -282,3 +282,22 @@ def test_waiting_for_the_writer_ahead_counts_against_the_timeout(
         release.set()
         ahead.join(5)
         lake.close()
+
+
+def test_timeout_during_setup_frees_the_slot(lake: Lake, monkeypatch: pytest.MonkeyPatch) -> None:
+    original = lake_module.exact_select
+
+    def slow_setup(*args: object) -> str | None:
+        time.sleep(0.2)  # the limit expires while the read is being set up
+        return original(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(lake_module, "exact_select", slow_setup)
+    for _ in range(3):
+        assert code_of(lambda: lake.start_read(request("SELECT 1 AS x", lake, 50))) == (
+            "STORE_TIMEOUT"
+        )
+    monkeypatch.setattr(lake_module, "exact_select", original)
+    first = lake.start_read(request("SELECT 1 AS x", lake))
+    second = lake.start_read(request("SELECT 2 AS x", lake))
+    assert first.reader.read_all().to_pylist() == [{"x": 1}]
+    assert second.reader.read_all().to_pylist() == [{"x": 2}]
