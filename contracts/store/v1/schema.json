@@ -197,7 +197,9 @@
         "STORE_CANCELLED",
         "STORE_BUSY",
         "SOURCE_NOT_FOUND",
-        "STORE_SOURCE_INVALID"
+        "STORE_SOURCE_INVALID",
+        "STORE_CONNECTION_FAILED",
+        "UNSUPPORTED_SOURCE_TYPE"
       ]
     },
     "ErrorDetail": {
@@ -369,8 +371,8 @@
         }
       }
     },
-    "SourceAttachment": {
-      "description": "A file source the lake reads inside write transactions, by name: `<name>.data` for parquet and csv (every matching file as one table, columns united by name), `<name>.<schema>.<table>` (or `<name>.<table>` for `main`) for a DuckDB file attached read-only. Reads never see sources. Only the declared paths become readable.",
+    "FileSourceAttachment": {
+      "description": "A file source (Parquet, CSV, DuckDB) the lake reads inside write transactions, by name: `<name>.data` for parquet and csv (every matching file as one table, columns united by name), `<name>.<schema>.<table>` (or `<name>.<table>` for `main`) for a DuckDB file attached read-only. Reads never see sources. Only the declared paths become readable.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -412,6 +414,128 @@
           "pattern": "^(/|[A-Za-z]:[\\\\/])"
         }
       }
+    },
+    "SqliteSourceAttachment": {
+      "description": "A SQLite database file attached read-only: `<name>.<table>`. Columns declared DECIMAL or NUMERIC (stored by SQLite as floating point) are refused when a write reads them (`UNSUPPORTED_SOURCE_TYPE`).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "type",
+        "path"
+      ],
+      "properties": {
+        "kind": {
+          "const": "source_attachment"
+        },
+        "name": {
+          "description": "The connection name; becomes a catalog name in SQL.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,62}$",
+          "not": {
+            "enum": [
+              "lake",
+              "main",
+              "memory",
+              "system",
+              "temp"
+            ]
+          }
+        },
+        "type": {
+          "const": "sqlite"
+        },
+        "path": {
+          "description": "Absolute path; parquet and csv may use a glob (`*`, `?`, `[...]`, `**`) in their file name or folders.",
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 4096,
+          "pattern": "^(/|[A-Za-z]:[\\\\/])"
+        }
+      }
+    },
+    "PostgresSourceAttachment": {
+      "description": "A PostgreSQL database attached read-only (also `default_transaction_read_only` on its session): `<name>.<table>` when `schema` is given, otherwise `<name>.<schema>.<table>`. The password is read from the environment variable `password_env` and never appears in errors. Columns `numeric` without precision and `money` are refused when a write reads them (`UNSUPPORTED_SOURCE_TYPE`).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "type",
+        "host",
+        "port",
+        "database",
+        "user",
+        "password_env"
+      ],
+      "properties": {
+        "kind": {
+          "const": "source_attachment"
+        },
+        "name": {
+          "description": "The connection name; becomes a catalog name in SQL.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,62}$",
+          "not": {
+            "enum": [
+              "lake",
+              "main",
+              "memory",
+              "system",
+              "temp"
+            ]
+          }
+        },
+        "type": {
+          "const": "postgres"
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "database": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^'\\\\\\s]+$"
+        },
+        "user": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^'\\\\\\s]+$"
+        },
+        "password_env": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$"
+        },
+        "schema": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$"
+        }
+      }
+    },
+    "SourceAttachment": {
+      "description": "A source the lake reads inside write transactions, by name; reads never see sources.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/FileSourceAttachment"
+        },
+        {
+          "$ref": "#/$defs/SqliteSourceAttachment"
+        },
+        {
+          "$ref": "#/$defs/PostgresSourceAttachment"
+        }
+      ]
     }
   }
 }

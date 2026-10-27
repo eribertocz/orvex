@@ -16,6 +16,7 @@ import math
 import os
 import re
 import shutil
+import sqlite3
 import tempfile
 import threading
 import time
@@ -29,13 +30,16 @@ import duckdb
 import pyarrow as pa
 from orvex.contracts.store.v1 import (
     CommitResult,
+    FileSourceAttachment,
     LakeLocation,
     LocalLakeLocation,
     Parameter,
     PostgresLakeLocation,
+    PostgresSourceAttachment,
     ReadRequest,
     Snapshot,
     SourceAttachment,
+    SqliteSourceAttachment,
     StatementRequest,
 )
 from orvex.store.errors import StoreError, register_secret
@@ -58,11 +62,13 @@ _EXTERNAL_SQL_FUNCTIONS = frozenset(
         "postgres_attach",
         "sqlite_query",
         "sqlite_attach",
+        "sqlite_scan",
         "query",
         "query_table",
     }
 )
 _SUSPICIOUS = re.compile(r"[./\\*?:]")
+POSTGRES_CONNECT_TIMEOUT_S = 10
 RESERVED_SOURCE_NAMES = frozenset({LAKE, "main", "memory", "system", "temp"})
 _GLOB = re.compile(r"[*?\[]")
 EXTENSIONS = ("icu", "ducklake")
@@ -292,7 +298,7 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
         following = tokens[index + 1][0] if index + 1 < len(tokens) else len(sql)
         if (
             sql[following : following + 1] == "("
-            and name in table_functions
+            and (name in table_functions or name in _EXTERNAL_SQL_FUNCTIONS)
             and name not in READ_TABLE_FUNCTIONS
         ):
             raise StoreError(
@@ -497,7 +503,7 @@ class Lake:
         self,
         location: LakeLocation | LocalLakeLocation | PostgresLakeLocation,
         limits: Limits,
-        sources: Sequence[SourceAttachment] = (),
+        sources: Sequence[AnySource] = (),
     ) -> None:
         if isinstance(location, LakeLocation):
             location = location.root
@@ -521,7 +527,17 @@ class Lake:
                 "size and a default timeout.",
                 {},
             )
-        names = [source.name for source in sources]
+        attachments: list[FileSourceAttachment | SqliteSourceAttachment | PostgresSourceAttachment]
+        attachments = [
+            source.root if isinstance(source, SourceAttachment) else source for source in sources
+        ]
+        # Passwords are read and registered before anything is opened, so no error can show one.
+        passwords = {
+            source.name: _source_password(source)
+            for source in attachments
+            if isinstance(source, PostgresSourceAttachment)
+        }
+        names = [source.name for source in attachments]
         reserved = sorted(set(names) & RESERVED_SOURCE_NAMES)
         if reserved:
             # The contract excludes these names too; generated models do not check `not`.
@@ -572,8 +588,17 @@ class Lake:
             # Nothing may load code or reach data the lake did not ask for after this point.
             self._connection.sql("SET autoinstall_known_extensions = false")
             self._connection.sql("SET autoload_known_extensions = false")
+            self._inexact: set[tuple[str, str, str]] = set()
+            readable: list[str] = []
+            for source in attachments:
+                if isinstance(source, SqliteSourceAttachment):
+                    readable += self._attach_sqlite(source)
+                elif isinstance(source, PostgresSourceAttachment):
+                    self._attach_postgres_source(source, passwords[source.name])
+                else:
+                    readable += self._attach_source(source)
+            # After the sources: their extensions add table functions (sqlite_scan, …) to refuse.
             self._table_functions = self._names_of_table_functions()
-            readable = [file for source in sources for file in self._attach_source(source)]
             self._sandbox(location, readable)
         except BaseException:
             self._connection.close()
@@ -593,7 +618,81 @@ class Lake:
         text = str(row[0]) if row and row[0] is not None else ""
         return frozenset(text.split("|")) - {""}
 
-    def _attach_source(self, source: SourceAttachment) -> list[str]:
+    def _attach_sqlite(self, source: SqliteSourceAttachment) -> list[str]:
+        """Attach a SQLite file read-only; its DECIMAL/NUMERIC columns are recorded as inexact."""
+        path = Path(source.path)
+        if not path.is_file():
+            raise _source_not_found(source)  # SQLite would create a missing file
+        declared = _sqlite_declared_types(source)
+        self._load_extension("sqlite")
+        self._source_sql(
+            source,
+            f"ATTACH {_quote(path.as_posix())} AS {_identifier(source.name)} "
+            "(TYPE sqlite, READ_ONLY)",
+        )
+        for table, column, kind in declared:
+            # SQLite stores DECIMAL and NUMERIC values as floating point: never exact.
+            if re.search(r"DEC|NUMERIC", kind, re.IGNORECASE):
+                self._inexact.add((source.name, table.lower(), column.lower()))
+        return [path.as_posix()]
+
+    def _attach_postgres_source(self, source: PostgresSourceAttachment, password: str) -> None:
+        """Attach a PostgreSQL database read-only, twice over: DuckDB's READ_ONLY and a
+        read-only session. Inexact columns (numeric without precision, money) are recorded."""
+        self._load_extension("postgres")
+        secret = _identifier(f"source_{source.name}")
+        self._source_connect(
+            source,
+            f"CREATE TEMPORARY SECRET {secret} (TYPE postgres, HOST {_quote(source.host)}, "
+            f"PORT {int(source.port)}, DATABASE {_quote(source.database)}, "
+            f"USER {_quote(source.user)}, PASSWORD {_quote(password)})",
+        )
+        connection = (
+            f"connect_timeout={POSTGRES_CONNECT_TIMEOUT_S} "
+            "options='-c default_transaction_read_only=on'"
+        )
+        options = ["TYPE postgres", f"SECRET {secret}", "READ_ONLY"]
+        if source.schema_:
+            options.append(f"SCHEMA {_quote(source.schema_)}")
+        self._source_connect(
+            source,
+            f"ATTACH {_quote(connection)} AS {_identifier(source.name)} ({', '.join(options)})",
+        )
+        scope = "" if not source.schema_ else f" AND table_schema = {_quote(source.schema_)}"
+        inner = (
+            "SELECT table_schema, table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') AND ("
+            "(data_type = 'numeric' AND numeric_precision IS NULL) OR data_type = 'money')" + scope
+        )
+        cursor = self._connection.cursor()
+        try:
+            rows = cursor.execute(
+                "SELECT * FROM postgres_query($name, $sql)", {"name": source.name, "sql": inner}
+            ).fetchall()
+        except duckdb.Error as error:
+            raise StoreError(
+                "STORE_CONNECTION_FAILED",
+                f"Source {source.name} could not be inspected.",
+                {"source": source.name, "duckdb": str(error)},
+            ) from None
+        finally:
+            cursor.close()
+        for schema, table, column in rows:
+            qualified = str(table) if source.schema_ else f"{schema}.{table}"
+            self._inexact.add((source.name, qualified.lower(), str(column).lower()))
+
+    def _source_connect(self, source: PostgresSourceAttachment, sql: str) -> None:
+        try:
+            self._connection.sql(sql)
+        except duckdb.Error as error:
+            # `from None`: the DuckDB error is not chained; the message is redacted.
+            raise StoreError(
+                "STORE_CONNECTION_FAILED",
+                f"Source {source.name} could not be reached or refused the credentials.",
+                {"source": source.name, "duckdb": str(error)},
+            ) from None
+
+    def _attach_source(self, source: FileSourceAttachment) -> list[str]:
         """Attach one file source read-only; returns the files the sandbox must allow.
 
         For a glob, exactly the files it matches now: a file added later to the same folder,
@@ -652,7 +751,7 @@ class Lake:
         )
         return [str(file) for file in matched_files]
 
-    def _source_sql(self, source: SourceAttachment, sql: str) -> None:
+    def _source_sql(self, source: FileSourceAttachment | SqliteSourceAttachment, sql: str) -> None:
         try:
             self._connection.sql(sql)
         except duckdb.Error as error:
@@ -1016,7 +1115,9 @@ class Lake:
                 before = self._snapshot(None)
                 outside = _outside_inventory(cursor)
                 cursor.begin()
-                handle = Transaction(cursor, self._table_functions, self._timeout_ms)
+                handle = Transaction(
+                    cursor, self._table_functions, self._timeout_ms, frozenset(self._inexact)
+                )
                 try:
                     yield handle
                     if handle.cancelled:
@@ -1137,9 +1238,11 @@ class Transaction:
         cursor: duckdb.DuckDBPyConnection,
         table_functions: frozenset[str],
         timeout_ms: Callable[[int | None], int],
+        inexact: frozenset[tuple[str, str, str]] = frozenset(),
     ) -> None:
         self._cursor = cursor
         self._table_functions = table_functions
+        self._inexact = inexact
         self._timeout_ms = timeout_ms
         self._guard: Guard | None = None
         self._lock = threading.Lock()
@@ -1173,13 +1276,59 @@ class Transaction:
                 guard.stop()
                 raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
             self._guard = guard
+        typed = _typed(request.sql, request.parameters)
         try:
-            self._cursor.sql(_typed(request.sql, request.parameters), params=parameters)
+            inexact = _inexact_column_read(self._cursor, typed, parameters, self._inexact)
+            if inexact is not None:
+                raise StoreError(
+                    "UNSUPPORTED_SOURCE_TYPE",
+                    f"Column {inexact} has no exact type in DuckDB (law 11); cast it at the "
+                    "source or leave it out.",
+                    {"column": inexact},
+                )
+            self._cursor.sql(typed, params=parameters)
         except duckdb.Error as error:
             raise guard.error(error) from error
         finally:
             guard.stop()
             self._guard = None
+
+
+def _inexact_column_read(
+    cursor: duckdb.DuckDBPyConnection,
+    sql: str,
+    parameters: dict[str, str | None],
+    inexact: frozenset[tuple[str, str, str]],
+) -> str | None:
+    """`source.table.column` of an inexact source column the statement reads, or None.
+
+    The columns a statement reads are those DuckDB's plan scans (projections and pushed-down
+    filters); a statement that never names such a table is not planned twice.
+    """
+    lowered = sql.lower()
+    candidates = [entry for entry in inexact if entry[1].split(".")[-1] in lowered]
+    if not candidates:
+        return None
+    result = cursor.execute(f"EXPLAIN (FORMAT json) {sql}", parameters)
+    row = result.fetchone()
+    result.fetchone()  # reaches the end of the one-row result, so the cursor is free again
+    plan = json.loads(str(row[1])) if row else []
+    for node in _walk(plan):
+        info = node.get("extra_info")
+        table = info.get("Table") if isinstance(info, dict) else None
+        if not isinstance(info, dict) or not isinstance(table, str):
+            continue
+        scanned = table.lower().replace('"', "").split(".")
+        for source, qualified, column in candidates:
+            parts = qualified.split(".")
+            if scanned[-len(parts) :] != parts:
+                continue
+            if "Projections" not in info:
+                return f"{source}.{qualified}.{column}"  # columns unknown: assume all are read
+            used = f"{info.get('Projections')} {info.get('Filters', '')}".lower()
+            if re.search(rf"(?<![a-z0-9_]){re.escape(column)}(?![a-z0-9_])", used):
+                return f"{source}.{qualified}.{column}"
+    return None
 
 
 type JsonTree = dict[str, object]
@@ -1270,7 +1419,54 @@ def _utc_schema(schema: pa.Schema) -> pa.Schema:
     return pa.schema(fields, metadata=schema.metadata)
 
 
-def _source_not_found(source: SourceAttachment) -> StoreError:
+type AnySource = (
+    SourceAttachment | FileSourceAttachment | SqliteSourceAttachment | PostgresSourceAttachment
+)
+
+
+def _source_password(source: PostgresSourceAttachment) -> str:
+    password = os.environ.get(source.password_env, "")
+    if not password:
+        raise StoreError(
+            "STORE_SECRET_MISSING",
+            f"The environment variable {source.password_env} is not set.",
+            {"variable": source.password_env, "source": source.name},
+        )
+    register_secret(password)
+    return password
+
+
+def _sqlite_declared_types(source: SqliteSourceAttachment) -> list[tuple[str, str, str]]:
+    """(table, column, declared type) of every table, read with SQLite itself, read-only."""
+    uri = Path(source.path).absolute().as_uri() + "?mode=ro"
+    try:
+        connection = sqlite3.connect(uri, uri=True)
+        try:
+            tables = [
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' "
+                    "AND name NOT LIKE 'sqlite_%'"
+                )
+            ]
+            found = []
+            for table in tables:
+                for row in connection.execute(
+                    "SELECT name, type FROM pragma_table_info(?)", (table,)
+                ):
+                    found.append((table, str(row[0]), str(row[1] or "")))
+            return found
+        finally:
+            connection.close()
+    except sqlite3.Error as error:
+        raise StoreError(
+            "STORE_SOURCE_INVALID",
+            f"Source {source.name} is not a readable SQLite database.",
+            {"source": source.name, "sqlite": str(error)},
+        ) from None
+
+
+def _source_not_found(source: FileSourceAttachment | SqliteSourceAttachment) -> StoreError:
     return StoreError(
         "SOURCE_NOT_FOUND",
         f"No file matches the path of source {source.name}.",
@@ -1281,6 +1477,6 @@ def _source_not_found(source: SourceAttachment) -> StoreError:
 def open_lake(
     location: LakeLocation | LocalLakeLocation | PostgresLakeLocation,
     limits: Limits,
-    sources: Sequence[SourceAttachment] = (),
+    sources: Sequence[AnySource] = (),
 ) -> Lake:
     return Lake(location, limits, sources)

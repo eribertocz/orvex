@@ -16,7 +16,7 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 | `CommitResult` | The one snapshot a committed transaction created, or `null` when it changed nothing |
 | `StoreError` | `code`, `message`, `details` |
 | `ResultJson` | A read result as JSON: `columns` (`name`, DuckDB `type`) and positional `rows`, encoded exactly (below) |
-| `SourceAttachment` | A file source (`parquet`, `csv` or `duckdb`) given to `open_lake`; readable by name inside write transactions only (below) |
+| `SourceAttachment` | A source given to `open_lake` — files (`parquet`, `csv`, `duckdb`) or databases (`sqlite`, `postgres`); readable by name inside write transactions only (below) |
 
 ## File sources (`SourceAttachment`)
 
@@ -33,6 +33,18 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 - A DuckDB source that defines views or macros is refused (`STORE_SOURCE_INVALID`): they would run with the lake's connection.
 - Nothing can be written to a source; a DuckDB source file is never modified.
 - A path that matches no file → `SOURCE_NOT_FOUND`, naming the source, when the lake opens. Two sources with the same name → `STORE_SOURCE_INVALID`.
+
+## Database sources (`SqliteSourceAttachment`, `PostgresSourceAttachment`)
+
+| `type` | Attached as | Tables |
+|---|---|---|
+| `sqlite` | DuckDB `sqlite` extension, `READ_ONLY` (a missing file is `SOURCE_NOT_FOUND`, never created) | `<name>.<table>` |
+| `postgres` | DuckDB `postgres` extension, `READ_ONLY`, and the session set `default_transaction_read_only = on`; password from `password_env` | `<name>.<table>` with `schema`, otherwise `<name>.<schema>.<table>` |
+
+- Nothing can be written to a database source, even when its user could write.
+- Functions that run SQL on a source (`postgres_query`, `postgres_execute`, `sqlite_query`, …) and `ATTACH`/`DETACH` are refused in statements (`STORE_STATEMENT_INVALID`).
+- **Exact types (law 11):** a column DuckDB cannot carry exactly — PostgreSQL `numeric` without precision and `money`, SQLite columns declared `DECIMAL` or `NUMERIC` (SQLite stores them as floating point) — is refused when a write reads it: `UNSUPPORTED_SOURCE_TYPE` naming `<source>.<table>.<column>`. Columns a write does not read do not matter.
+- A connection or credential failure is `STORE_CONNECTION_FAILED` naming the source, with the password redacted; an unset variable is `STORE_SECRET_MISSING`.
 
 ## PostgreSQL catalog (`PostgresLakeLocation`)
 
