@@ -25,6 +25,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import duckdb
 import pyarrow as pa
@@ -588,7 +589,9 @@ class Lake:
             # Nothing may load code or reach data the lake did not ask for after this point.
             self._connection.sql("SET autoinstall_known_extensions = false")
             self._connection.sql("SET autoload_known_extensions = false")
-            self._inexact: set[tuple[str, str, str]] = set()
+            # (source, schema or "", table, column, label) of every column DuckDB cannot carry
+            # exactly; the label is how errors name it.
+            self._inexact: set[Inexact] = set()
             readable: list[str] = []
             for source in attachments:
                 if isinstance(source, SqliteSourceAttachment):
@@ -633,7 +636,9 @@ class Lake:
         for table, column, kind in declared:
             # SQLite stores DECIMAL and NUMERIC values as floating point: never exact.
             if re.search(r"DEC|NUMERIC", kind, re.IGNORECASE):
-                self._inexact.add((source.name, table.lower(), column.lower()))
+                self._inexact.add(
+                    Inexact(source.name, "", table.lower(), column.lower(), f"{table}.{column}")
+                )
         return [path.as_posix()]
 
     def _attach_postgres_source(self, source: PostgresSourceAttachment, password: str) -> None:
@@ -658,11 +663,22 @@ class Lake:
             source,
             f"ATTACH {_quote(connection)} AS {_identifier(source.name)} ({', '.join(options)})",
         )
-        scope = "" if not source.schema_ else f" AND table_schema = {_quote(source.schema_)}"
+        scope = "" if not source.schema_ else f" AND n.nspname = {_quote(source.schema_)}"
+        # Every relation DuckDB can scan (tables, views, materialized views, foreign and
+        # partitioned tables). Inexact: numeric without precision or above 38 digits (DuckDB
+        # reads both as DOUBLE), money, and arrays of either.
         inner = (
-            "SELECT table_schema, table_name, column_name FROM information_schema.columns "
-            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') AND ("
-            "(data_type = 'numeric' AND numeric_precision IS NULL) OR data_type = 'money')" + scope
+            "SELECT n.nspname AS table_schema, c.relname AS table_name, a.attname AS column_name "
+            "FROM pg_catalog.pg_attribute a "
+            "JOIN pg_catalog.pg_class c ON c.oid = a.attrelid "
+            "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE c.relkind IN ('r', 'v', 'm', 'f', 'p') AND a.attnum > 0 "
+            "AND NOT a.attisdropped "
+            "AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
+            "AND n.nspname NOT LIKE 'pg_toast%' AND ("
+            "(a.atttypid = 'numeric'::regtype "
+            "AND (a.atttypmod < 0 OR ((a.atttypmod - 4) >> 16) > 38)) "
+            "OR a.atttypid IN ('money'::regtype, '_money'::regtype, '_numeric'::regtype))" + scope
         )
         cursor = self._connection.cursor()
         try:
@@ -682,8 +698,12 @@ class Lake:
             cursor.close()
         found = row[0] if row and isinstance(row[0], list) else []
         for schema, table, column in found:
-            qualified = str(table) if source.schema_ else f"{schema}.{table}"
-            self._inexact.add((source.name, qualified.lower(), str(column).lower()))
+            label = f"{table}.{column}" if source.schema_ else f"{schema}.{table}.{column}"
+            self._inexact.add(
+                Inexact(
+                    source.name, str(schema).lower(), str(table).lower(), str(column).lower(), label
+                )
+            )
 
     def _source_connect(self, source: PostgresSourceAttachment, sql: str) -> None:
         try:
@@ -1242,7 +1262,7 @@ class Transaction:
         cursor: duckdb.DuckDBPyConnection,
         table_functions: frozenset[str],
         timeout_ms: Callable[[int | None], int],
-        inexact: frozenset[tuple[str, str, str]] = frozenset(),
+        inexact: frozenset[Inexact] = frozenset(),
     ) -> None:
         self._cursor = cursor
         self._table_functions = table_functions
@@ -1302,15 +1322,17 @@ def _inexact_column_read(
     cursor: duckdb.DuckDBPyConnection,
     sql: str,
     parameters: dict[str, str | None],
-    inexact: frozenset[tuple[str, str, str]],
+    inexact: frozenset[Inexact],
 ) -> str | None:
     """`source.table.column` of an inexact source column the statement reads, or None.
 
     The columns a statement reads are those DuckDB's plan scans (projections and pushed-down
-    filters); a statement that never names such a table is not planned twice.
+    filters). A scan is matched by its table name and, when the plan names one, its schema or
+    source; when two candidates share a name, any of them counts (refusing beats a lost digit).
+    A statement that names none of these tables is not planned twice.
     """
     lowered = sql.lower()
-    candidates = [entry for entry in inexact if entry[1].split(".")[-1] in lowered]
+    candidates = [entry for entry in inexact if entry.table in lowered]
     if not candidates:
         return None
     result = cursor.execute(f"EXPLAIN (FORMAT json) {sql}", parameters)
@@ -1323,15 +1345,17 @@ def _inexact_column_read(
         if not isinstance(info, dict) or not isinstance(table, str):
             continue
         scanned = table.lower().replace('"', "").split(".")
-        for source, qualified, column in candidates:
-            parts = qualified.split(".")
-            if scanned[-len(parts) :] != parts:
+        for entry in candidates:
+            if scanned[-1] != entry.table:
+                continue
+            qualifiers = scanned[:-1]
+            if qualifiers and not ({entry.schema, entry.source} & set(qualifiers)) and entry.schema:
                 continue
             if "Projections" not in info:
-                return f"{source}.{qualified}.{column}"  # columns unknown: assume all are read
+                return f"{entry.source}.{entry.label}"  # columns unknown: assume all are read
             used = f"{info.get('Projections')} {info.get('Filters', '')}".lower()
-            if re.search(rf"(?<![a-z0-9_]){re.escape(column)}(?![a-z0-9_])", used):
-                return f"{source}.{qualified}.{column}"
+            if re.search(rf"(?<![a-z0-9_]){re.escape(entry.column)}(?![a-z0-9_])", used):
+                return f"{entry.source}.{entry.label}"
     return None
 
 
@@ -1423,6 +1447,16 @@ def _utc_schema(schema: pa.Schema) -> pa.Schema:
     return pa.schema(fields, metadata=schema.metadata)
 
 
+class Inexact(NamedTuple):
+    """A source column DuckDB cannot carry exactly."""
+
+    source: str
+    schema: str  # "" for SQLite
+    table: str
+    column: str
+    label: str  # how errors name it, after the source name
+
+
 type AnySource = (
     SourceAttachment | FileSourceAttachment | SqliteSourceAttachment | PostgresSourceAttachment
 )
@@ -1441,7 +1475,8 @@ def _source_password(source: PostgresSourceAttachment) -> str:
 
 
 def _sqlite_declared_types(source: SqliteSourceAttachment) -> list[tuple[str, str, str]]:
-    """(table, column, declared type) of every table, read with SQLite itself, read-only."""
+    """(table, column, declared type) of every table and view, read with SQLite itself,
+    read-only."""
     uri = Path(source.path).absolute().as_uri() + "?mode=ro"
     try:
         connection = sqlite3.connect(uri, uri=True)
@@ -1449,7 +1484,8 @@ def _sqlite_declared_types(source: SqliteSourceAttachment) -> list[tuple[str, st
             tables = [
                 str(row[0])
                 for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table' "
+                    # Views too: a view exposes the same columns under another name.
+                    "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') "
                     "AND name NOT LIKE 'sqlite_%'"
                 )
             ]

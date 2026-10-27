@@ -7,6 +7,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -68,6 +69,7 @@ def sqlite_file(tmp_path_factory: pytest.TempPathFactory) -> Path:
         INSERT INTO consumers VALUES (9007199254740993, 'Bea', -1.25, NULL, 'x');
         CREATE TABLE charges (id INTEGER, amount DECIMAL(10,2));
         INSERT INTO charges VALUES (1, 12.34);
+        CREATE VIEW billed AS SELECT id, amount AS total FROM charges;
         """
     )
     connection.commit()
@@ -144,6 +146,9 @@ def test_sqlite_decimal_column_is_refused_only_when_read(sqlite_lake: Lake) -> N
         write(sqlite_lake, "CREATE TABLE c AS SELECT id, amount FROM field.charges")
     assert raised.value.code == "UNSUPPORTED_SOURCE_TYPE"
     assert raised.value.details["column"] == "field.charges.amount"
+    with pytest.raises(StoreError) as through_view:
+        write(sqlite_lake, "CREATE TABLE v AS SELECT * FROM field.billed")
+    assert through_view.value.code == "UNSUPPORTED_SOURCE_TYPE"
     write(sqlite_lake, "CREATE TABLE ids AS SELECT id FROM field.charges")
     assert read(sqlite_lake, "SELECT count(*) AS n FROM ids") == [{"n": 1}]
 
@@ -211,6 +216,11 @@ def schema(admin: duckdb.DuckDBPyConnection) -> Iterator[str]:
         admin,
         f"CREATE TABLE {name}.readings (reading_id bigint, kwh numeric(18,4), "
         "read_at timestamptz, read_on date, status text, loose numeric, cash money)",
+    )
+    execute(
+        admin,
+        f"CREATE MATERIALIZED VIEW {name}.monthly AS "
+        f"SELECT reading_id, sum(kwh) AS total FROM {name}.readings GROUP BY reading_id",
     )
     execute(
         admin,
@@ -306,15 +316,20 @@ def test_reads_cannot_reference_postgres(location: Location, schema: str) -> Non
 
 
 @pytest.mark.parametrize("column", ["loose", "cash"])
+@pytest.mark.parametrize("declared", [True, False], ids=["schema", "no-schema"])
 def test_inexact_postgres_columns_are_refused_only_when_read(
-    location: Location, schema: str, column: str
+    location: Location, schema: str, column: str, declared: bool
 ) -> None:
-    lake = open_lake(location, LIMITS, [postgres_source(schema)])
+    lake = open_lake(location, LIMITS, [postgres_source(schema if declared else None)])
+    table = "production.readings" if declared else f"production.{schema}.readings"
+    label = (
+        f"production.readings.{column}" if declared else f"production.{schema}.readings.{column}"
+    )
     try:
         with pytest.raises(StoreError) as raised:
-            write(lake, f"CREATE TABLE x AS SELECT reading_id, {column} FROM production.readings")
+            write(lake, f"CREATE TABLE x AS SELECT reading_id, {column} FROM {table}")
         assert raised.value.code == "UNSUPPORTED_SOURCE_TYPE"
-        assert raised.value.details["column"] == f"production.readings.{column}"
+        assert raised.value.details["column"] == label
         with pytest.raises(StoreError) as filtered:
             write(
                 lake,
@@ -322,10 +337,32 @@ def test_inexact_postgres_columns_are_refused_only_when_read(
                 f"WHERE {column} IS NOT NULL",
             )
         assert filtered.value.code == "UNSUPPORTED_SOURCE_TYPE"
-        write(lake, "CREATE TABLE ok AS SELECT reading_id, kwh FROM production.readings")
+        write(lake, f"CREATE TABLE ok AS SELECT reading_id, kwh FROM {table}")
         assert read(lake, "SELECT count(*) AS n FROM ok") == [{"n": 2}]
     finally:
         lake.close()
+
+
+def test_materialized_view_sum_is_refused(location: Location, schema: str) -> None:
+    """sum() of numeric(18,4) is numeric without precision: DuckDB would read it as DOUBLE."""
+    lake = open_lake(location, LIMITS, [postgres_source(schema)])
+    try:
+        with pytest.raises(StoreError) as raised:
+            write(lake, "CREATE TABLE m AS SELECT * FROM production.monthly")
+        assert raised.value.code == "UNSUPPORTED_SOURCE_TYPE"
+        assert raised.value.details["column"] == "production.monthly.total"
+    finally:
+        lake.close()
+
+
+def test_unreachable_host_fails_within_the_connect_timeout(location: Location) -> None:
+    postgres_settings()
+    unreachable = postgres_source(None).model_copy(update={"host": "192.0.2.1"})  # TEST-NET-1
+    started = time.monotonic()
+    with pytest.raises(StoreError) as raised:
+        open_lake(location, LIMITS, [unreachable])
+    assert raised.value.code == "STORE_CONNECTION_FAILED"
+    assert time.monotonic() - started < 30
 
 
 def test_postgres_credentials_never_appear(
