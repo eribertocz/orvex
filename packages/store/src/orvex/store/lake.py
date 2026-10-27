@@ -199,15 +199,14 @@ class Lake:
         where = "" if snapshot_id is None else "WHERE snapshot_id = $id"
         parameters = {} if snapshot_id is None else {"id": snapshot_id}
         row = cursor.execute(
-            "SELECT snapshot_id, snapshot_time FROM ducklake_snapshots($lake) "
+            "SELECT snapshot_id, epoch_us(snapshot_time) FROM ducklake_snapshots($lake) "
             f"{where} ORDER BY snapshot_id DESC LIMIT 1",
             {"lake": LAKE, **parameters},
         ).fetchone()
         if row is None:
             return None
-        committed: dt.datetime = row[1]
-        if committed.tzinfo is None:
-            committed = committed.replace(tzinfo=dt.UTC)
+        # Microseconds since the epoch, so no time-zone library is needed to read the instant.
+        committed = dt.datetime(1970, 1, 1, tzinfo=dt.UTC) + dt.timedelta(microseconds=int(row[1]))
         return Snapshot(kind="snapshot", id=int(row[0]), committed_at=committed)
 
     def current_snapshot(self) -> Snapshot:
