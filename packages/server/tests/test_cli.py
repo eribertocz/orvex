@@ -8,10 +8,10 @@ import urllib.request
 from pathlib import Path
 
 import pytest
-from sextant.server.cli import LOCAL_HOST, free_port, main, server_config
-from sextant.server.identity import load_identity
-from sextant.server.instance import home_variable
-from sextant.server.versions import Versions
+from orvex.server.cli import LOCAL_HOST, free_port, main, server_config
+from orvex.server.identity import load_identity
+from orvex.server.instance import home_variable
+from orvex.server.versions import Versions
 
 IDENTITY = load_identity()
 
@@ -49,7 +49,7 @@ def test_server_starts_and_answers(tmp_path: Path) -> None:
     environment = os.environ | {home_variable(IDENTITY): str(tmp_path / "instance")}
     project = tmp_path / "billing"
     process = subprocess.Popen(
-        [sys.executable, "-m", "sextant.server", str(project), "--no-browser", "--port", str(port)],
+        [sys.executable, "-m", "orvex.server", str(project), "--no-browser", "--port", str(port)],
         env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

@@ -1,7 +1,7 @@
 # Module pack — `mcp`
 
 **Responsibility:** expose the semantic model to AI agents through the Model Context Protocol, acting as the authenticated user.
-**Distribution / import:** `sextant-mcp` / `sextant.mcp`.
+**Distribution / import:** `orvex-mcp` / `orvex.mcp`.
 
 ## Contracts
 - **Owns:** `contracts/mcp-tools/v1` (`describe_model`, `query`, `explain`, `list_dashboards`).

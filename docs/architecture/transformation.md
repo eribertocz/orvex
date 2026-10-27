@@ -23,7 +23,7 @@ connections:
     port: 5432
     database: billing
     user: readonly_bi
-    password: ${env:SEXTANT_PRODUCTION_PASSWORD}
+    password: ${env:ORVEX_PRODUCTION_PASSWORD}
     read_only: true                # required for production databases; enforced by the adapter
   meters_archive:
     type: parquet
@@ -39,7 +39,7 @@ connections:
 
 For every type except `clickhouse`, a connection name becomes a SQL schema in DuckDB: `production.readings` reads table `readings` from connection `production`, and DuckDB pushes filters and projections down to the source. ClickHouse has no DuckDB extension that meets the dependency policy (ADR-0002), so it is reached only through extraction models.
 
-**One dialect per engine, no transpilation (ADR-0026).** Sextant never translates SQL between dialects. A model's SQL is DuckDB SQL, except extraction models, whose SQL is the source's own dialect and runs on the source.
+**One dialect per engine, no transpilation (ADR-0026).** Orvex never translates SQL between dialects. A model's SQL is DuckDB SQL, except extraction models, whose SQL is the source's own dialect and runs on the source.
 
 ## 3. Models
 
@@ -126,7 +126,7 @@ Run-time values:
 
 ### 3.4 Deletions at the source
 
-A watermark on `updated_at` cannot see rows deleted at the source. Sextant handles this explicitly:
+A watermark on `updated_at` cannot see rows deleted at the source. Orvex handles this explicitly:
 
 - `full_refresh.cron` rebuilds the model periodically.
 - `reconciliation` detects divergence between source and model and raises an alert.
@@ -157,7 +157,7 @@ WHERE event_time > {since:DateTime64(6, 'UTC')}
 
 - The SQL is sent unchanged to ClickHouse with the read-only setting (`readonly = 1`); `$since` is a ClickHouse **server-side parameter** (`{since:Type}`), never string-formatted.
 - Results stream as Arrow record batches (`query_arrow_stream`) straight into the DuckDB write of the run; no rows are collected in Python (ADR-0025).
-- Only `filter: manual` is allowed (Sextant does not parse ClickHouse SQL); a missing `{since:…}` parameter in an incremental extraction model fails with `MISSING_SINCE_PARAMETER`.
+- Only `filter: manual` is allowed (Orvex does not parse ClickHouse SQL); a missing `{since:…}` parameter in an incremental extraction model fails with `MISSING_SINCE_PARAMETER`.
 - Extraction models have no model dependencies (they read only their connection) and must be one `SELECT`; validation asks ClickHouse to parse it (`EXPLAIN SYNTAX`) and fails with `INVALID_MODEL_SQL` if it does not.
 - Type mapping ClickHouse → Arrow → DuckDB is explicit and tested: `Decimal` stays `DECIMAL`, `UInt64` becomes `UBIGINT`, `DateTime64` keeps its time zone, `Nullable` keeps `NULL`. An unmappable type fails with `UNSUPPORTED_SOURCE_TYPE`.
 - Downstream models are DuckDB SQL over the extracted table, like any other model.
@@ -187,7 +187,7 @@ Every run produces a **run record** (`contracts/run-record/v1`): run id, model, 
 
 | Mode | Catalog | Data files |
 |---|---|---|
-| Local | DuckDB file inside `.<slug>/lake/` (single client, recommended by DuckLake for local single-user use). Only one process opens it: CLI commands (`sextant run`, `sextant validate`, and the stdio MCP server `sextant mcp`) talk to the running instance over its local API when one is running; otherwise they open the warehouse themselves, and a second opener fails with `PROJECT_LOCKED` | Local Parquet under `.<slug>/lake/data/` |
+| Local | DuckDB file inside `.<slug>/lake/` (single client, recommended by DuckLake for local single-user use). Only one process opens it: CLI commands (`orvex run`, `orvex validate`, and the stdio MCP server `orvex mcp`) talk to the running instance over its local API when one is running; otherwise they open the warehouse themselves, and a second opener fails with `PROJECT_LOCKED` | Local Parquet under `.<slug>/lake/data/` |
 | Server | PostgreSQL (recommended by DuckLake for multi-user use with concurrent clients) | Local disk or object storage |
 
 - Snapshot retention is configured by the user in `project.yaml` (default 90 days). Retention defines how long receipts stay **exactly** reproducible.
@@ -220,7 +220,7 @@ Every run produces a **run record** (`contracts/run-record/v1`): run id, model, 
 
 Pre-aggregations (semantic engine S5) are stored as DuckLake tables and refreshed by `transform`, never by `semantic`; no project file is generated:
 
-- The Builder declares them in the Ossie model (`SEXTANT` `preaggregations`, `semantic-engine.md` §3). `semantic` turns each declaration into a definition conforming to `contracts/preaggregation/v1` (target table, DuckDB SQL, base tables, refresh strategy); `server` hands those definitions to `transform` at composition and whenever the model changes.
+- The Builder declares them in the Ossie model (`ORVEX` `preaggregations`, `semantic-engine.md` §3). `semantic` turns each declaration into a definition conforming to `contracts/preaggregation/v1` (target table, DuckDB SQL, base tables, refresh strategy); `server` hands those definitions to `transform` at composition and whenever the model changes.
 - `transform` schedules each definition like a model that depends on its base tables: it runs, in its own DuckLake transaction, right after every committed run of a base table, with write–audit–publish.
 - Its run record stores, for each base table, the DuckLake snapshot at which that table **last changed**. `semantic` uses a pre-aggregation only when those values equal the last-change snapshots of the base tables at the query's snapshot; otherwise it reads the base tables (correct, slower) and the receipt says so.
 - Strategies: `partition_overwrite` by time when the base model is incremental by time; full rebuild otherwise.

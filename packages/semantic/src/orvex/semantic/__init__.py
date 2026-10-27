@@ -2,4 +2,4 @@
 
 from importlib.metadata import version
 
-__version__ = version("sextant-semantic")
+__version__ = version("orvex-semantic")

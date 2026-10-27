@@ -1,7 +1,7 @@
 # Module pack — `semantic` (the core)
 
 **Responsibility:** turn business meaning into correct results — or stable errors — with receipts; single enforcement point for data access.
-**Distribution / import:** `sextant-semantic` / `sextant.semantic`.
+**Distribution / import:** `orvex-semantic` / `orvex.semantic`.
 
 ## Contracts
 - **Owns:** `ossie-extensions`, `catalog`, `semantic-query`, `semantic-result`, `receipt`, `semantic-error`, `security-policies`, `matrix`, `preaggregation`.

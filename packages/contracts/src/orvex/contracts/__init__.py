@@ -2,4 +2,4 @@
 
 from importlib.metadata import version
 
-__version__ = version("sextant-contracts")
+__version__ = version("orvex-contracts")

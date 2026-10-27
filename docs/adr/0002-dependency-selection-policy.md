@@ -10,7 +10,7 @@ The Owner wants a tool that never locks users into one vendor and that stays mai
 2. Runtime dependency selection order: (1) language or browser standard library; (2) DuckDB capabilities; (3) projects governed by a foundation, a large organization, or a funded team of at least three active maintainers (for example Svelte Flow by xyflow); (4) nothing that depends on a single maintainer.
 3. Development-only tools may come from smaller projects if replaceable without touching product code.
 4. Packaging uses Python standards (`pyproject.toml`) so the project works with `pip`; tool-specific features (for example of `uv`) are prohibited.
-5. Exceptions are explicit and isolated: **Gridstack** (single main maintainer) is allowed only inside one component that stores positions in Sextant's own format, so it can be replaced without touching anything else.
+5. Exceptions are explicit and isolated: **Gridstack** (single main maintainer) is allowed only inside one component that stores positions in Orvex's own format, so it can be replaced without touching anything else.
 
 Choices derived from this policy: DuckDB's own parser instead of SQLGlot; `hashlib.scrypt` instead of Argon2 libraries; PyYAML instead of ruamel.yaml; Monaco instead of CodeMirror; own matrix component; `clickhouse-connect` (ClickHouse, Inc.) for ClickHouse.
 

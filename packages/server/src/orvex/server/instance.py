@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sextant.server.identity import Identity
+from orvex.server.identity import Identity
 
 REGISTRY_FILE = "server.sqlite"
 

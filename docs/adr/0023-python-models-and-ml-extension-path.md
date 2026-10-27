@@ -3,7 +3,7 @@
 **Status:** Accepted (2026-10-26) — design direction only; implementation is **not** part of v1.0.0.
 
 ## Context
-Power BI offers Python scripts and visuals (pandas-based). The Owner wants Sextant to support, after the MVP, machine-learning predictions and Python analysis compatible with Polars, Apache Arrow, DuckDB, XGBoost, LightGBM, scikit-learn, Plotly and Matplotlib. Contracts designed for v1.0.0 must not block this.
+Power BI offers Python scripts and visuals (pandas-based). The Owner wants Orvex to support, after the MVP, machine-learning predictions and Python analysis compatible with Polars, Apache Arrow, DuckDB, XGBoost, LightGBM, scikit-learn, Plotly and Matplotlib. Contracts designed for v1.0.0 must not block this.
 
 ## Decision
 1. **Python models in `transform`.** A model may later be a `.py` file (beside the same YAML sidecar) exposing one function that receives Arrow tables or DuckDB relations of its declared inputs and returns an Arrow table. It gets the same materializations, incremental strategies, tests, write–audit–publish, run records and lineage as SQL models. Typical use: train or apply XGBoost, LightGBM or scikit-learn models and write predictions as a table.

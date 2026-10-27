@@ -6,7 +6,7 @@ Rules for every change: [`AGENTS.md`](AGENTS.md) and [`docs/process/`](docs/proc
 
 Requirements: Python 3.15 (also tested on 3.14) and pip 26.2.2 or newer, because pip installs from `pylock.toml` only from 26.1 on.
 
-Every module under `packages/` is its own distribution in the `sextant` namespace (PEP 420). The root `pyproject.toml` holds only tool settings and the `dev` dependency group.
+Every module under `packages/` is its own distribution in the `orvex` namespace (PEP 420). The root `pyproject.toml` holds only tool settings and the `dev` dependency group.
 
 ### Set up
 
@@ -26,7 +26,7 @@ On Windows PowerShell, replace the last line with:
 ```bash
 ruff format --check .
 ruff check .
-mypy -p sextant.store -p sextant.transform -p sextant.semantic -p sextant.access -p sextant.dashboards -p sextant.mcp -p sextant.server -p sextant.contracts
+mypy -p orvex.store -p orvex.transform -p orvex.semantic -p orvex.access -p orvex.dashboards -p orvex.mcp -p orvex.server -p orvex.contracts
 mypy packages/*/tests tests tools .github/workflows/scripts
 pytest
 ```

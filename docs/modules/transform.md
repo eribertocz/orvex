@@ -1,7 +1,7 @@
 # Module pack — `transform`
 
 **Responsibility:** connect to sources and turn them into tested tables in DuckLake; schedule runs from declared freshness.
-**Distribution / import:** `sextant-transform` / `sextant.transform`.
+**Distribution / import:** `orvex-transform` / `orvex.transform`.
 
 ## Contracts
 - **Owns:** `contracts/model-config/v1`, `contracts/run-record/v1`, OpenLineage emission.

@@ -41,23 +41,23 @@
 
 **Goal:** a repository where every later issue can be specified, implemented, verified and released under the rules.
 **Required reading:** `AGENTS.md`; `docs/process/`; module packs `repo.md`, `web.md`, `contracts.md`, `server.md`, `conformance.md`.
-**Owner tasks before P0-01:** create the empty repository `eribertocz/sextant`; merge the foundation pull request; formal trademark search for the product name (before the first public tag).
+**Owner tasks before P0-01:** create the empty repository `eribertocz/orvex`; merge the foundation pull request; formal trademark search for the product name (before the first public tag).
 
 | ID | Issue | Module |
 |---|---|---|
 | P0-01 | Repository governance: branch-protection settings prepared by the Agent and applied by the Owner (including "do not allow bypassing"), labels from `.github/labels.yml`, milestones P0–GA, `governance` required check for governed paths, status-label automation, Dependabot (weekly; security immediately) | repo |
-| P0-02 | Python workspace: one `pyproject.toml` per package under the `sextant` namespace, latest stable Python, `pylock.toml`, `ruff`, `mypy --strict`, `pytest`; CI jobs for them | repo |
+| P0-02 | Python workspace: one `pyproject.toml` per package under the `orvex` namespace, latest stable Python, `pylock.toml`, `ruff`, `mypy --strict`, `pytest`; CI jobs for them | repo |
 | P0-03 | Web workspace: SvelteKit (static adapter), Svelte 5, TypeScript strict, Tailwind CSS v4, `svelte-check`, lint, unit tests; CI jobs; dependency license allow-list | web |
 | P0-04 | Identity and boundaries: `identity.toml` loader, rename script, product-name check, import-boundary and materialization checker (standard-library `ast`, ADR-0025) with tests that provoke each violation; CI jobs | repo |
 | P0-05 | Contracts workspace: `contracts/<name>/vN` layout, JSON Schema and OpenAPI validation, generated types for Python and TypeScript, CI check that generated types are current | contracts |
 | P0-06 | `http-api` contract v1 baseline (OpenAPI 3.1: health, version, error envelope) and generated TypeScript client | server |
-| P0-07 | Server skeleton: `sextant` CLI, local mode, FastAPI app, composition root, serving the web build, JSON logging with request id, instance directory `~/.<slug>/` (override `<SLUG>_HOME`), `sextant <path>` opens or creates a project folder and registers it with the instance (`project.yaml` is written once its contract exists, P1-05), temporary directory for in-memory projects | server |
+| P0-07 | Server skeleton: `orvex` CLI, local mode, FastAPI app, composition root, serving the web build, JSON logging with request id, instance directory `~/.<slug>/` (override `<SLUG>_HOME`), `orvex <path>` opens or creates a project folder and registers it with the instance (`project.yaml` is written once its contract exists, P1-05), temporary directory for in-memory projects | server |
 | P0-08 | Versions and releases: `versions.toml`, module and contract version declarations, startup compatibility check, tag-triggered release workflow (GitHub release, Docker image skeleton) | repo |
 | P0-09 | Synthetic data generator, part 1: consumers and meter readings (deterministic seed; late readings, nulls, duplicates, estimated readings) | repo |
 | P0-10 | Synthetic data generator, part 2: billing and collections (voided invoices, negative balances, partial payments), scalable to 100 M rows with measured generation time | repo |
-| P0-11 | Semantic corpus import (bi-platform commit `072bb2c7502ae0f46a60a3156724a07e058b3d3d`, unchanged, with `NOTICE`), Apache Ossie specification pinned and its schema vendored, corpus runner with a non-governed adapter (format, vendor-name alias and error-code mapping to Sextant's) reporting per case `not-run` until P2-12 *(touches governed paths: Owner merges)* | conformance |
+| P0-11 | Semantic corpus import (bi-platform commit `072bb2c7502ae0f46a60a3156724a07e058b3d3d`, unchanged, with `NOTICE`), Apache Ossie specification pinned and its schema vendored, corpus runner with a non-governed adapter (format, vendor-name alias and error-code mapping to Orvex's) reporting per case `not-run` until P2-12 *(touches governed paths: Owner merges)* | conformance |
 
-**Exit criteria:** all P0 required checks green (`engineering.md` §8); `sextant` opens an empty UI in local mode; the corpus runner loads all 21 cases and reports them `not-run`; governance check blocks unlabeled pull requests on governed paths; rename script and product-name check pass; trademark search done.
+**Exit criteria:** all P0 required checks green (`engineering.md` §8); `orvex` opens an empty UI in local mode; the corpus runner loads all 21 cases and reports them `not-run`; governance check blocks unlabeled pull requests on governed paths; rename script and product-name check pass; trademark search done.
 
 ---
 
@@ -76,7 +76,7 @@
 | P1-06 | File sources: Parquet, CSV, DuckDB | transform |
 | P1-07 | Database sources: SQLite and PostgreSQL attached read-only (`SOURCE_NOT_READ_ONLY` when `read_only: true` is missing) | transform |
 | P1-08 | `model-config` contract v1 and model discovery: naming, validation errors, `.py` models rejected with `UNSUPPORTED_MODEL_KIND` | transform |
-| P1-09 | Dependency graph with DuckDB's parser (`DEPENDENCY_CYCLE`), materializations `view` and `table`, CLI `sextant validate` and `sextant run` (single-writer rule, `PROJECT_LOCKED`) | transform |
+| P1-09 | Dependency graph with DuckDB's parser (`DEPENDENCY_CYCLE`), materializations `view` and `table`, CLI `orvex validate` and `orvex run` (single-writer rule, `PROJECT_LOCKED`) | transform |
 | P1-10 | `run-record` contract v1, persistence and run history; every run from here on produces one | transform |
 | P1-11 | Incremental strategies `append` and `merge` | transform |
 | P1-12 | Incremental strategies `delete_insert` and `partition_overwrite`; `on_schema_change` policies | transform |
@@ -101,7 +101,7 @@
 
 | ID | Issue | Module |
 |---|---|---|
-| P2-01 | `ossie-extensions` contract v1 (`SEXTANT` payload JSON Schema, including geographic semantic types and pre-aggregation declarations) | semantic |
+| P2-01 | `ossie-extensions` contract v1 (`ORVEX` payload JSON Schema, including geographic semantic types and pre-aggregation declarations) | semantic |
 | P2-02 | `semantic-error` contract v1 and the stable error catalog (codes, i18n messages, details) | semantic |
 | P2-03 | Ossie adapter: parse and validate the pinned specification, resolve references (`OSSIE_INVALID`, `UNSUPPORTED_OSSIE_VERSION`) | semantic |
 | P2-04 | `CompiledModel`: typed expressions, semantic types, units and currencies; canonical fingerprints (own RFC 8785 implementation tested with the RFC's examples) + SHA-256 | semantic |
@@ -220,7 +220,7 @@
 | P6-06 | `visual-spec` contract v1 (reserves `python` with `UNSUPPORTED_VISUAL_TYPE`) and validation | dashboards |
 | P6-07 | Drafts and publishing through the project writer; page access decisions (`PAGE_FORBIDDEN`); dashboards HTTP endpoints | dashboards |
 | P6-08 | Page-bound query validation (`security.md` §3.2) and metric impact on dashboards, pages and visuals | dashboards |
-| P6-09 | Dashboard canvas: Gridstack isolated in one component; positions in Sextant format | web |
+| P6-09 | Dashboard canvas: Gridstack isolated in one component; positions in Orvex format | web |
 | P6-10 | Chart renderer: ECharts with function-free JSON allow-list; bar, line, area, combo | web |
 | P6-11 | Scatter, heatmap, funnel, pie/donut; maps from project GeoJSON (choropleth and points) | web |
 | P6-12 | KPI card (comparison, sparkline) and detail table (server-side sorting and pagination) | web |

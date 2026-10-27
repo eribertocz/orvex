@@ -7,7 +7,7 @@ The Owner applies these settings once, after the pull request of P0-01 is merged
 Only squash merges; the squash commit takes the pull request title and keeps the commit messages (so `Co-Authored-By` trailers survive); head branches are deleted after merging. Auto-merge stays off until the issue that adopts it for Dependabot tier C updates.
 
 ```bash
-gh api -X PATCH repos/eribertocz/sextant \
+gh api -X PATCH repos/eribertocz/orvex \
   -F allow_squash_merge=true \
   -F allow_merge_commit=false \
   -F allow_rebase_merge=false \
@@ -32,13 +32,13 @@ gh api -X PATCH repos/eribertocz/sextant \
 Create it the first time:
 
 ```bash
-gh api -X POST repos/eribertocz/sextant/rulesets --input tools/repo/main-ruleset.json
+gh api -X POST repos/eribertocz/orvex/rulesets --input tools/repo/main-ruleset.json
 ```
 
-Update it when a later issue adds a required check (the id comes from `gh api repos/eribertocz/sextant/rulesets`):
+Update it when a later issue adds a required check (the id comes from `gh api repos/eribertocz/orvex/rulesets`):
 
 ```bash
-gh api -X PUT repos/eribertocz/sextant/rulesets/<id> --input tools/repo/main-ruleset.json
+gh api -X PUT repos/eribertocz/orvex/rulesets/<id> --input tools/repo/main-ruleset.json
 ```
 
 ## 3. What the checks mean
@@ -49,8 +49,8 @@ gh api -X PUT repos/eribertocz/sextant/rulesets/<id> --input tools/repo/main-rul
 ## 4. Verify
 
 ```bash
-gh api repos/eribertocz/sextant --jq '{squash:.allow_squash_merge, merge:.allow_merge_commit, rebase:.allow_rebase_merge, delete_branch:.delete_branch_on_merge}'
-gh api repos/eribertocz/sextant/rulesets --jq '.[] | {id, name, enforcement}'
+gh api repos/eribertocz/orvex --jq '{squash:.allow_squash_merge, merge:.allow_merge_commit, rebase:.allow_rebase_merge, delete_branch:.delete_branch_on_merge}'
+gh api repos/eribertocz/orvex/rulesets --jq '.[] | {id, name, enforcement}'
 ```
 
 The expected result is squash `true`, merge `false`, rebase `false`, delete_branch `true`, and one active ruleset named `main`.

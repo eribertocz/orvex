@@ -5,8 +5,8 @@
 # keep loading.
 
 [product]
-name = "Sextant"
-slug = "sextant"
-python_namespace = "sextant"
-ossie_vendor_name = "SEXTANT"
-previous_vendor_names = []
+name = "Orvex"
+slug = "orvex"
+python_namespace = "orvex"
+ossie_vendor_name = "ORVEX"
+previous_vendor_names = ["SEXTANT"]

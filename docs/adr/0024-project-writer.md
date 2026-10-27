@@ -3,7 +3,7 @@
 **Status:** Accepted (2026-10-26)
 
 ## Context
-Projects are files in Git (ADR-0007). The Builder edits SQL models, sidecars, the Ossie model and `security.yaml` in Monaco inside Sextant; Authors build dashboards visually; governed metric authoring (S4) changes the semantic model. Tools that rewrite files on save (reformatting YAML, reordering keys, dropping comments) produce noisy diffs and destroy the Builder's intent — a common complaint about generated BI files. Tools that keep definitions only in a database lose Git review entirely.
+Projects are files in Git (ADR-0007). The Builder edits SQL models, sidecars, the Ossie model and `security.yaml` in Monaco inside Orvex; Authors build dashboards visually; governed metric authoring (S4) changes the semantic model. Tools that rewrite files on save (reformatting YAML, reordering keys, dropping comments) produce noisy diffs and destroy the Builder's intent — a common complaint about generated BI files. Tools that keep definitions only in a database lose Git review entirely.
 
 ## Decision
 1. **One writer.** Only the `server` module's **project writer** writes project files. Other modules read files and return validated definitions; they never write.

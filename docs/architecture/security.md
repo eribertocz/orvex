@@ -19,7 +19,7 @@ Rank 3 in the precedence order (`docs/README.md`). Changes require Owner approva
 - Users are global to the instance. Users are identified by an internal id; with OIDC, by issuer + subject, never by email.
 - Sessions are server-side, in `HttpOnly`, `Secure` (HTTPS), `SameSite=Strict` cookies; mutating requests validate `Origin`.
 - The OIDC flow uses a separate short-lived binding cookie (`state`, `nonce`, PKCE verifier; at most 10 minutes) with `SameSite=Lax`, because the identity provider's redirect back is a cross-site navigation. It is deleted when the session cookie is issued and is never accepted as a session.
-- OIDC group claims can map to Sextant groups only through an explicit mapping in instance configuration; a claim alone grants nothing.
+- OIDC group claims can map to Orvex groups only through an explicit mapping in instance configuration; a claim alone grants nothing.
 
 ## 3. Authorization layers
 
@@ -33,7 +33,7 @@ Rank 3 in the precedence order (`docs/README.md`). Changes require Owner approva
 
 ### 3.1 Roles
 
-The **instance administrator** is an instance-level flag, not a project role: it creates and deactivates users, registers projects with the instance, configures OIDC and the claim-to-group mapping, and assigns each project's first Builder. It grants **no data access**: an administrator sees a project's data only through a project role. The first administrator is created by `sextant admin create` on the server machine; local mode has a single implicit user who is administrator and Builder.
+The **instance administrator** is an instance-level flag, not a project role: it creates and deactivates users, registers projects with the instance, configures OIDC and the claim-to-group mapping, and assigns each project's first Builder. It grants **no data access**: an administrator sees a project's data only through a project role. The first administrator is created by `orvex admin create` on the server machine; local mode has a single implicit user who is administrator and Builder.
 
 
 | Permission | Builder | Author | Viewer |
@@ -103,7 +103,7 @@ column_policies:
 ## 5. AI access (MCP)
 
 - MCP tools act **as the authenticated user**: same roles, groups, row and column policies.
-- **Transports:** in local mode, **stdio** (the AI client starts `sextant mcp <project>` and acts as the local user); in server mode, **Streamable HTTP** at `/mcp`, authenticated with a **personal access token** the user creates in Sextant (Bearer token, stored hashed, scoped to one project, expiring, revocable, audited). OAuth 2.1 authorization for MCP is a later improvement and does not change the tools.
+- **Transports:** in local mode, **stdio** (the AI client starts `orvex mcp <project>` and acts as the local user); in server mode, **Streamable HTTP** at `/mcp`, authenticated with a **personal access token** the user creates in Orvex (Bearer token, stored hashed, scoped to one project, expiring, revocable, audited). OAuth 2.1 authorization for MCP is a later improvement and does not change the tools.
 - `list_dashboards` returns only pages the user may see; the decision comes from `dashboards` through `server`.
 - AI never sends SQL; only semantic queries.
 - Read-only by default; every call is audited.

@@ -1,6 +1,6 @@
 # Laws, anti-patterns and design principles
 
-**Origin:** the Owner's "Fundamental Laws of a BI Tool" (2026-10-11), as refined in the bi-platform project, adopted and adapted for Sextant.
+**Origin:** the Owner's "Fundamental Laws of a BI Tool" (2026-10-11), as refined in the bi-platform project, adopted and adapted for Orvex.
 
 These rules are **non-negotiable** and **retroactive**: anything already built is audited against them, and a violation is a defect regardless of when it was introduced.
 
@@ -60,7 +60,7 @@ The same number is the same number everywhere, within the declared freshness.
 
 The frontend never knows the physical structure of tables.
 
-| Layer | In Sextant |
+| Layer | In Orvex |
 |---|---|
 | Ingestion / transformation | `transform` module: SQL models + YAML sidecar |
 | Storage | `store` module: DuckLake (DuckDB engine) |

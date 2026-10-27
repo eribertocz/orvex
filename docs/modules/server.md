@@ -1,7 +1,7 @@
 # Module pack — `server`
 
-**Responsibility:** composition root; HTTP API (FastAPI); CLI (`sextant`); serving the web build; selecting adapters for local or server mode; scheduling workers.
-**Distribution / import:** `sextant` / `sextant.server`.
+**Responsibility:** composition root; HTTP API (FastAPI); CLI (`orvex`); serving the web build; selecting adapters for local or server mode; scheduling workers.
+**Distribution / import:** `orvex` / `orvex.server`.
 
 ## Contracts
 - **Owns:** `contracts/project/v1` (`project.yaml` and `connections.yaml`; other modules add their sections by extending it), `contracts/http-api` (OpenAPI 3.1), CLI interface, instance configuration, project registry, the **project writer** (ADR-0024). Also `contracts/lineage-graph/v1` (composed from the transform graph, the semantic model and dashboard references) and the routing of `preaggregation` definitions from `semantic` to `transform`.

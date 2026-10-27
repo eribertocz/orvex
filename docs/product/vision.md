@@ -13,7 +13,7 @@ Existing open-source tools solve parts of this, but either feel dated, lock logi
 
 ## 2. Product statement
 
-Sextant is a self-hosted BI platform where:
+Orvex is a self-hosted BI platform where:
 
 - data is transformed with **plain SQL**;
 - business meaning is defined once in **Apache Ossie**, the open semantic standard;
@@ -40,7 +40,7 @@ Rules:
 
 1. **Connect** to raw data: Parquet, CSV, DuckDB, SQLite, PostgreSQL, ClickHouse.
 2. **Transform** with SQL models (full or incremental) into clean facts and dimensions stored in **DuckLake**.
-3. **Model meaning** in Apache Ossie: datasets, dimensions, metrics, relationships, plus Sextant extensions (additivity, grain, units, time roles, policies, cache).
+3. **Model meaning** in Apache Ossie: datasets, dimensions, metrics, relationships, plus Orvex extensions (additivity, grain, units, time roles, policies, cache).
 4. **Ask**: the semantic engine receives a semantic query, applies security, proves correctness, plans, generates DuckDB SQL, executes it and returns typed results with a receipt.
 5. **Present**: dashboards (pages, charts, KPIs, tables, the matrix, filters) built by Builders and Authors.
 6. **Share**: a URL per dashboard; access by role, group (pages), row and column policies.
@@ -54,7 +54,7 @@ Everything below is **in scope**. Nothing is simplified to ship earlier; capabil
 
 | Area | In scope |
 |---|---|
-| Runtime | Local single-user mode (`sextant`, `sextant <project>`) and server mode (`sextant <project> --server`); official Docker image |
+| Runtime | Local single-user mode (`orvex`, `orvex <project>`) and server mode (`orvex <project> --server`); official Docker image |
 | Sources | Parquet, CSV, DuckDB, SQLite, PostgreSQL, ClickHouse |
 | Warehouse | DuckLake with a local DuckDB catalog (local mode) or a PostgreSQL catalog (server mode); Quack as an optional adapter |
 | Transformation | Pure SQL models with YAML sidecar; full, incremental (append, merge, delete+insert, partition overwrite); automatic incremental filter; lookback; scheduled full refresh; freshness-driven scheduling; audits with write-audit-publish; OpenLineage events |
@@ -86,7 +86,7 @@ All targets are measured with the reference dataset (synthetic, same shape as th
 | Supported platforms | Server: Linux (Docker). Local mode: Linux, Windows, macOS |
 | Accessibility | WCAG 2.2 AA |
 
-## 7. Product principles specific to Sextant
+## 7. Product principles specific to Orvex
 
 These complement the laws in [`laws.md`](laws.md):
 

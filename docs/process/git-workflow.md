@@ -7,7 +7,7 @@ Binding for the Owner and the Agent. Everything is in English.
 | Role | Who | GitHub identity |
 |---|---|---|
 | **Owner** | @eribertocz (human) | Personal account `eribertocz` |
-| **Agent** | One AI coding agent (Claude Code) that **both specifies and implements** | Works through the Owner's account; every commit it creates has the author `Claude Code <claude-code@sextant.invalid>` so the history shows what the Agent wrote |
+| **Agent** | One AI coding agent (Claude Code) that **both specifies and implements** | Works through the Owner's account; every commit it creates has the author `Claude Code <claude-code@orvex.invalid>` so the history shows what the Agent wrote |
 
 There are no other accounts, machine users or GitHub Apps. Because the Agent and the Owner share one GitHub account, GitHub approvals cannot distinguish them; control is therefore defined by **rules on who merges what** (§4) and by **automated gates** (required checks).
 
@@ -54,7 +54,7 @@ conformance/security/scenarios/
 - [Conventional Commits 1.0](https://www.conventionalcommits.org/): `<type>(<scope>): <imperative summary>`.
 - `<scope>`: `store`, `transform`, `semantic`, `access`, `dashboards`, `mcp`, `server`, `web`, `contracts`, `conformance` or `repo`.
 - Breaking changes add `!` after the scope and a `BREAKING CHANGE:` footer.
-- Agent commits use the author `Claude Code <claude-code@sextant.invalid>`; the Owner's commits use the Owner's identity.
+- Agent commits use the author `Claude Code <claude-code@orvex.invalid>`; the Owner's commits use the Owner's identity.
 
 ### 3.3 Pull requests
 

@@ -1,7 +1,7 @@
 import re
 
-import sextant.dashboards
+import orvex.dashboards
 
 
 def test_version_comes_from_package_metadata() -> None:
-    assert re.fullmatch(r"\d+\.\d+\.\d+", sextant.dashboards.__version__)
+    assert re.fullmatch(r"\d+\.\d+\.\d+", orvex.dashboards.__version__)

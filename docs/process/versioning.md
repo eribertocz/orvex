@@ -2,7 +2,7 @@
 
 ## 1. Standard
 
-Sextant follows [Semantic Versioning 2.0.0](https://semver.org/): `MAJOR.MINOR.PATCH[-PRERELEASE]`.
+Orvex follows [Semantic Versioning 2.0.0](https://semver.org/): `MAJOR.MINOR.PATCH[-PRERELEASE]`.
 
 - **MAJOR** — incompatible change to a public contract.
 - **MINOR** — backwards-compatible capability.
@@ -57,9 +57,9 @@ All must be evidenced in the release issue:
 
 ## 5. Dependencies pinned for stability
 
-- Apache Ossie is incubating (pre-1.0). Sextant pins the exact specification commit it supports and isolates it in the Ossie adapter; a newer specification is adopted through an issue and an ADR.
+- Apache Ossie is incubating (pre-1.0). Orvex pins the exact specification commit it supports and isolates it in the Ossie adapter; a newer specification is adopted through an issue and an ADR.
 - DuckDB, DuckLake and every other dependency always track their **latest stable release** (ADR-0022), pinned exactly in lock files and updated through Dependabot pull requests that must pass the full CI gate.
-- **Freeze during beta and release candidates:** only patch, minor and security updates are applied. A new major version released during beta or RC is applied right after `v1.0.0`, unless it fixes a security issue that affects Sextant.
+- **Freeze during beta and release candidates:** only patch, minor and security updates are applied. A new major version released during beta or RC is applied right after `v1.0.0`, unless it fixes a security issue that affects Orvex.
 
 ## 6. Who approves each release
 

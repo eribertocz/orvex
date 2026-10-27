@@ -1,4 +1,4 @@
-# `sextant-transform` — `sextant.transform`
+# `orvex-transform` — `orvex.transform`
 
 Turn sources into tested tables: SQL models, incremental loads, write-audit-publish.
 

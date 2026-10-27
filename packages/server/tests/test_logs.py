@@ -1,7 +1,7 @@
 import json
 import logging
 
-from sextant.server.logs import JsonFormatter
+from orvex.server.logs import JsonFormatter
 
 
 def test_json_line_with_extra_fields_and_without_terminal_colors() -> None:

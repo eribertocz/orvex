@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 import yaml
+from orvex.contracts.http_api import v1
 from pydantic import BaseModel, ValidationError
-from sextant.contracts.http_api import v1
 
 EXAMPLES = Path(__file__).resolve().parents[3] / "contracts" / "http-api" / "v1" / "examples"
 

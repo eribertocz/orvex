@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
-from sextant.server import cli
-from sextant.server.app import create_app
-from sextant.server.cli import describe_versions, main
-from sextant.server.identity import load_identity
-from sextant.server.versions import (
+from orvex.server import cli
+from orvex.server.app import create_app
+from orvex.server.cli import describe_versions, main
+from orvex.server.identity import load_identity
+from orvex.server.versions import (
     ContractVersionIncompatible,
     Declaration,
     check_compatibility,

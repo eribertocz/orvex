@@ -1,8 +1,8 @@
 from pathlib import Path
 
 import pytest
-from sextant.server.identity import load_identity
-from sextant.server.instance import (
+from orvex.server.identity import load_identity
+from orvex.server.instance import (
     ProjectPathError,
     ProjectRegistry,
     home_variable,

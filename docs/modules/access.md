@@ -1,7 +1,7 @@
 # Module pack — `access`
 
 **Responsibility:** authenticate callers and produce their security context; manage users, sessions, project memberships, groups and the audit log.
-**Distribution / import:** `sextant-access` / `sextant.access`.
+**Distribution / import:** `orvex-access` / `orvex.access`.
 
 ## Contracts
 - **Owns:** `contracts/security-context/v1`, `contracts/audit-event/v1` (the audit log with its hash chain), instance administrator flag, personal access tokens (stored hashed; P9-02).

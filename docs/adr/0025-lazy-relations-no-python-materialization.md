@@ -3,7 +3,7 @@
 **Status:** Accepted (2026-10-26)
 
 ## Context
-The Owner requires that Sextant always work with DuckDB Python relations, which do not materialize. In DuckDB 2.0 a relation is a lazy query: building it runs nothing (DuckDB only binds it to learn columns and types), and **every read reruns the query**; `con.sql(text, params=...)` binds its parameters on every read; `materialize()` runs once and keeps the rows. Copying data into Python objects (lists, dicts, DataFrames) between steps wastes memory, loses exact types, and breaks with 100 M-row tables on a 16 GB machine.
+The Owner requires that Orvex always work with DuckDB Python relations, which do not materialize. In DuckDB 2.0 a relation is a lazy query: building it runs nothing (DuckDB only binds it to learn columns and types), and **every read reruns the query**; `con.sql(text, params=...)` binds its parameters on every read; `materialize()` runs once and keeps the rows. Copying data into Python objects (lists, dicts, DataFrames) between steps wastes memory, loses exact types, and breaks with 100 M-row tables on a 16 GB machine.
 
 ## Decision
 1. **Data never passes through Python between steps.** Transformation models, semantic plans, audits, exports and pre-aggregations are composed as DuckDB SQL or lazy relations and executed inside DuckDB. Python code handles plans, SQL text, parameters and metadata — never intermediate rows.

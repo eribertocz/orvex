@@ -3,7 +3,7 @@
 **Status:** Accepted (2026-10-26)
 
 ## Context
-The manager and department heads will make decisions with Sextant's numbers. The Owner prioritizes quality over speed.
+The manager and department heads will make decisions with Orvex's numbers. The Owner prioritizes quality over speed.
 
 ## Decision
 - Semantic Versioning 2.0.0; module versions and product versions (`process/versioning.md`).

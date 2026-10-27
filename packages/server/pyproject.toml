@@ -3,7 +3,7 @@ requires = ["setuptools==84.2.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sextant"
+name = "orvex"
 version = "0.0.0"
 description = "Compose the modules; serve the HTTP API, the CLI and the web application."
 readme = "README.md"
@@ -13,11 +13,11 @@ requires-python = ">=3.14"
 dependencies = ["fastapi==0.162.0", "uvicorn==0.54.0"]
 
 [project.scripts]
-sextant = "sextant.server.cli:main"
+orvex = "orvex.server.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"sextant.server" = ["py.typed", "contracts.toml", "identity.toml", "versions.toml", "web/**/*"]
+"orvex.server" = ["py.typed", "contracts.toml", "identity.toml", "versions.toml", "web/**/*"]

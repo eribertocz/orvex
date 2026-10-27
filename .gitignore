@@ -16,7 +16,7 @@ web/.svelte-kit/
 web/build/
 
 # Local project state and data (never committed)
-.sextant/
+.orvex/
 *.duckdb
 *.duckdb.wal
 

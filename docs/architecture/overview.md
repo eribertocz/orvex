@@ -11,13 +11,13 @@
 
 | Module | Distribution | Single responsibility | Receives | Returns | Owns state |
 |---|---|---|---|---|---|
-| **store** | `sextant-store` | Store and read analytical data | SQL plans, write batches, snapshot requests | Arrow results, snapshot identifiers | DuckLake catalog and Parquet files |
-| **transform** | `sextant-transform` | Turn sources into clean tables | Connections, SQL models, model configs | Tables in the store, run records, OpenLineage events, audit results | Run history, incremental watermarks |
-| **semantic** | `sextant-semantic` | Turn meaning into correct results | Ossie model, semantic query, security context | Typed results, receipts, stable errors, explanations, pre-aggregation definitions | Compiled-model cache, result cache, metric proposals, query statistics, evidence-verification results (own schema, §4.3) |
-| **access** | `sextant-access` | Know who the caller is and what they may do | Credentials, OIDC tokens, personal access tokens | Security context (user, roles, groups, attributes, permission fingerprint) | Users, sessions, memberships, personal access tokens (hashed), audit log |
-| **dashboards** | `sextant-dashboards` | Manage dashboard definitions and decide page access | Dashboard and page YAML, security context | Validated definitions, page access decisions | Dashboard files (in the project), drafts |
-| **mcp** | `sextant-mcp` | Expose the semantic model to AI agents | MCP requests | MCP responses | None |
-| **server** | `sextant` | Compose modules; serve HTTP and the CLI; write project files (ADR-0024) | HTTP requests, CLI commands | HTTP responses, static web assets | Instance configuration, project registry |
+| **store** | `orvex-store` | Store and read analytical data | SQL plans, write batches, snapshot requests | Arrow results, snapshot identifiers | DuckLake catalog and Parquet files |
+| **transform** | `orvex-transform` | Turn sources into clean tables | Connections, SQL models, model configs | Tables in the store, run records, OpenLineage events, audit results | Run history, incremental watermarks |
+| **semantic** | `orvex-semantic` | Turn meaning into correct results | Ossie model, semantic query, security context | Typed results, receipts, stable errors, explanations, pre-aggregation definitions | Compiled-model cache, result cache, metric proposals, query statistics, evidence-verification results (own schema, §4.3) |
+| **access** | `orvex-access` | Know who the caller is and what they may do | Credentials, OIDC tokens, personal access tokens | Security context (user, roles, groups, attributes, permission fingerprint) | Users, sessions, memberships, personal access tokens (hashed), audit log |
+| **dashboards** | `orvex-dashboards` | Manage dashboard definitions and decide page access | Dashboard and page YAML, security context | Validated definitions, page access decisions | Dashboard files (in the project), drafts |
+| **mcp** | `orvex-mcp` | Expose the semantic model to AI agents | MCP requests | MCP responses | None |
+| **server** | `orvex` | Compose modules; serve HTTP and the CLI; write project files (ADR-0024) | HTTP requests, CLI commands | HTTP responses, static web assets | Instance configuration, project registry |
 | **web** | `web/` (SvelteKit) | User interface | Public HTTP API only | — | None (per-viewer UI preferences only) |
 
 Rules:
@@ -38,7 +38,7 @@ All contracts live in `contracts/`, versioned by directory (`contracts/<name>/v1
 | `model-config` | JSON Schema for transformation model sidecars | files → transform |
 | `store` | Python protocol + JSON Schema of its requests and results (plans/SQL with bound parameters, write batches, transactions, snapshots) | store → transform, semantic |
 | `run-record` | JSON Schema | transform → server, semantic (cache invalidation, freshness) |
-| `ossie-extensions` | JSON Schema for the `SEXTANT` vendor payload in Ossie `custom_extensions` | files → semantic |
+| `ossie-extensions` | JSON Schema for the `ORVEX` vendor payload in Ossie `custom_extensions` | files → semantic |
 | `catalog` | JSON Schema: the semantic model as a caller may see it (metrics, dimensions, descriptions, `ai_context`, certification), already filtered by column policies | semantic → server, dashboards, mcp |
 | `semantic-query` | JSON Schema | server, mcp, dashboards → semantic |
 | `semantic-result` | Apache Arrow schema + JSON envelope (exact values as strings) | semantic → server, mcp |
@@ -55,15 +55,15 @@ All contracts live in `contracts/`, versioned by directory (`contracts/<name>/v1
 | `mcp-tools` | MCP tool definitions (names, JSON Schema inputs and outputs) | mcp → AI clients |
 | `http-api` | OpenAPI 3.1, embedding the schemas above that the browser needs | server → web, external clients |
 
-External standards used at boundaries without a Sextant contract of their own: **OpenLineage** events (transform → lineage collectors) and **OpenTelemetry** OTLP (every module → collectors). Sextant follows them as published; it does not version them.
+External standards used at boundaries without a Orvex contract of their own: **OpenLineage** events (transform → lineage collectors) and **OpenTelemetry** OTLP (every module → collectors). Orvex follows them as published; it does not version them.
 
 ## 4. Runtime modes
 
 ### 4.1 Local mode (default)
 
 ```
-sextant                    # in-memory project, opens the UI
-sextant facturacion/       # opens or creates a persistent project
+orvex                    # in-memory project, opens the UI
+orvex facturacion/       # opens or creates a persistent project
 ```
 
 - One process runs `server`, every module in-process, and serves the web UI.
@@ -74,7 +74,7 @@ sextant facturacion/       # opens or creates a persistent project
 ### 4.2 Server mode
 
 ```
-sextant facturacion/ --server     # or the official Docker image
+orvex facturacion/ --server     # or the official Docker image
 ```
 
 - Processes: `server` (HTTP API + web) with multiple workers, and `transform` worker(s) for scheduled loads.
@@ -93,7 +93,7 @@ Both modes run the same code; only the adapters selected at composition differ.
 | Module state (users, sessions, run history, audit log, drafts, metric proposals, query statistics) | One SQLite file per module in the instance directory | PostgreSQL, one schema and role per module |
 | Project files | The project folder (a Git repository) | The project folder on the server |
 | Warehouse | `<project>/.<slug>/lake/` (DuckLake, local DuckDB catalog) | DuckLake with PostgreSQL catalog; data files on disk or object storage |
-| In-memory project (`sextant` with no folder) | A temporary directory deleted on exit; **Save as** turns it into a project folder | Not available |
+| In-memory project (`orvex` with no folder) | A temporary directory deleted on exit; **Save as** turns it into a project folder | Not available |
 | Result cache | In-process | Per worker, invalidated across workers by PostgreSQL `LISTEN/NOTIFY` on each run record |
 | Secrets | Environment variables referenced from `connections.yaml` | Environment variables or the platform's secret store |
 
@@ -118,7 +118,7 @@ facturacion/                       # one project = one Git repository
 │   │   └── readings.yaml          # optional sidecar: materialization, incremental, tests, freshness
 │   └── marts/…
 ├── semantic/
-│   └── facturacion.ossie.yaml     # Apache Ossie + SEXTANT extensions
+│   └── facturacion.ossie.yaml     # Apache Ossie + ORVEX extensions
 ├── security.yaml                  # row and column policies (page groups live in page YAML)
 ├── assets/
 │   └── geo/                       # GeoJSON files for maps (referenced by `geo_source`)
@@ -138,18 +138,18 @@ Files under the project are edited by hand or from the UI; UI writes go through 
 ## 7. Repository layout (what the Agent builds)
 
 ```
-sextant/
+orvex/
 ├── identity.toml                  # product name, single source
 ├── versions.toml                  # module versions per product release
 ├── contracts/                     # language-neutral contracts, versioned
 ├── packages/
-│   ├── store/                     # sextant-store      → import sextant.store
-│   ├── transform/                 # sextant-transform  → import sextant.transform
-│   ├── semantic/                  # sextant-semantic   → import sextant.semantic
-│   ├── access/                    # sextant-access     → import sextant.access
-│   ├── dashboards/                # sextant-dashboards → import sextant.dashboards
-│   ├── mcp/                       # sextant-mcp        → import sextant.mcp
-│   └── server/                    # sextant (CLI + HTTP, composition root)
+│   ├── store/                     # orvex-store      → import orvex.store
+│   ├── transform/                 # orvex-transform  → import orvex.transform
+│   ├── semantic/                  # orvex-semantic   → import orvex.semantic
+│   ├── access/                    # orvex-access     → import orvex.access
+│   ├── dashboards/                # orvex-dashboards → import orvex.dashboards
+│   ├── mcp/                       # orvex-mcp        → import orvex.mcp
+│   └── server/                    # orvex (CLI + HTTP, composition root)
 ├── web/                           # SvelteKit application
 ├── conformance/
 │   ├── semantic-corpus/           # normative semantic cases
@@ -159,7 +159,7 @@ sextant/
 └── .github/
 ```
 
-Python packages share the `sextant` namespace through implicit namespace packages (PEP 420), so each module is installable and versioned on its own.
+Python packages share the `orvex` namespace through implicit namespace packages (PEP 420), so each module is installable and versioned on its own.
 
 ## 8. Technology
 

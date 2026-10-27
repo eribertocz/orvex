@@ -1,7 +1,7 @@
 import re
 
-import sextant.store
+import orvex.store
 
 
 def test_version_comes_from_package_metadata() -> None:
-    assert re.fullmatch(r"\d+\.\d+\.\d+", sextant.store.__version__)
+    assert re.fullmatch(r"\d+\.\d+\.\d+", orvex.store.__version__)

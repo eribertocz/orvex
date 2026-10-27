@@ -8,7 +8,7 @@ Power BI's PBIR stores each page and visual in separate JSON files, publicly doc
 ## Decision
 - One folder per dashboard: `dashboard.yaml` plus one YAML file per page, validated by `contracts/dashboard/v1` (JSON Schema).
 - Visuals reference semantic members by name; never SQL, never data.
-- Layout positions in Sextant's own format.
+- Layout positions in Orvex's own format.
 - The UI writes dashboard YAML through the project writer, with a diff preview and comments preserved (ADR-0024).
 - If an open dashboard standard matures, an adapter converts to it.
 

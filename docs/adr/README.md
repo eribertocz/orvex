@@ -14,7 +14,7 @@ All records below were approved by the Owner during the design session of 2026-1
 | [0006](0006-duckdb-and-ducklake.md) | DuckDB as the only analytical engine; DuckLake as the warehouse | Accepted |
 | [0007](0007-projects-as-files.md) | Projects as files in Git; module state separate | Accepted |
 | [0008](0008-sql-models-with-yaml-sidecar.md) | Transformation models: pure SQL plus YAML sidecar | Accepted |
-| [0009](0009-apache-ossie-native-format.md) | Apache Ossie as the native semantic format with `SEXTANT` extensions | Accepted |
+| [0009](0009-apache-ossie-native-format.md) | Apache Ossie as the native semantic format with `ORVEX` extensions | Accepted |
 | [0010](0010-semantic-engine-scope.md) | Semantic engine scope: SEF parity plus S1–S6; normative corpus | Accepted |
 | [0011](0011-security-model.md) | Security model: roles, groups, row and column policies, own evaluator | Accepted |
 | [0012](0012-result-cache.md) | Result cache keyed by permission fingerprint, invalidated by runs | Accepted |

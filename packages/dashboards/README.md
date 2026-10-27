@@ -1,4 +1,4 @@
-# `sextant-dashboards` — `sextant.dashboards`
+# `orvex-dashboards` — `orvex.dashboards`
 
 Manage dashboard definitions and decide page access.
 
