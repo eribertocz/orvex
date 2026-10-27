@@ -1,0 +1,81 @@
+# Release (P0-08): a product tag `v*` builds the web application and every wheel (the server wheel
+# includes the web build) and publishes them as a GitHub release with SHA256SUMS. Module tags
+# (`<module>-v*`) only mark versions and do not match this trigger.
+# `workflow_dispatch` with dry-run (the default) builds and uploads the files as a workflow
+# artifact only; nothing is published.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Build everything and publish nothing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web/.nvmrc
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Build the web application
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Put the web build inside the server package
+        run: |
+          namespace=$(python -c "import tomllib; print(tomllib.load(open('identity.toml', 'rb'))['product']['python_namespace'])")
+          cp -r web/build "packages/server/src/${namespace}/server/web"
+      - name: Build every wheel
+        run: |
+          python -m pip install --upgrade pip==26.2.2
+          for package in packages/*/; do
+            python -m pip wheel --no-deps --wheel-dir dist "$package"
+          done
+      - name: Check the server wheel contains the web build
+        run: python -c "import glob, sys, zipfile; names = [n for w in glob.glob('dist/*.whl') for n in zipfile.ZipFile(w).namelist()]; sys.exit(0 if any(n.endswith('/server/web/index.html') for n in names) else 'web build missing from the server wheel')"
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum -- *.whl > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    # Publishes only for a product tag: pushed, or dispatched on a tag with dry-run turned off.
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') &&
+      (github.event_name == 'push' || inputs.dry-run == false)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: dist
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          prerelease=""
+          case "$TAG" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes $prerelease

@@ -1,0 +1,15 @@
+# Product release manifest (docs/process/versioning.md §3): the product version and the version of
+# every distribution it is made of. The release pull request updates it; each package's
+# [project].version must equal its entry here (tests/workspace/test_versions.py), and the server
+# ships an identical copy to report the product version.
+
+product = "0.0.0"
+
+access = "0.0.0"
+contracts = "0.0.0"
+dashboards = "0.0.0"
+mcp = "0.0.0"
+semantic = "0.0.0"
+server = "0.0.0"
+store = "0.0.0"
+transform = "0.0.0"

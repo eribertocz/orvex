@@ -17,4 +17,4 @@ where = ["src"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"sextant.mcp" = ["py.typed"]
+"sextant.mcp" = ["py.typed", "contracts.toml"]
