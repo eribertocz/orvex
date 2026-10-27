@@ -31,7 +31,9 @@
         "name": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 100
+          "maxLength": 100,
+          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+          "description": "Display name of the project; no control characters."
         },
         "time_zone": {
           "description": "IANA time zone name (for example `America/La_Paz`); required, never implicit. The loader checks it against the IANA database.",

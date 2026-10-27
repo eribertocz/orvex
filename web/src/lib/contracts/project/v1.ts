@@ -39,6 +39,9 @@ export type ProjectErrorCode =
  */
 export interface ProjectFile {
 	version: 1;
+	/**
+	 * Display name of the project; no control characters.
+	 */
 	name: string;
 	/**
 	 * IANA time zone name (for example `America/La_Paz`); required, never implicit. The loader checks it against the IANA database.

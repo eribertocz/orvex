@@ -7,11 +7,12 @@ or object of this module ever contains a secret value.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
-import zoneinfo
 from collections.abc import Mapping
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 
 import yaml
@@ -118,12 +119,10 @@ def load_project(folder: Path) -> Project:
     if isinstance(retention, dict) and "snapshots" in retention and retention["snapshots"] is None:
         raise document.schema_error("'snapshots' cannot be null.", "/retention/snapshots")
     zone = settings.time_zone
-    try:
-        zoneinfo.ZoneInfo(zone)
-    except zoneinfo.ZoneInfoNotFoundError, ValueError:
+    if zone not in _iana_zones():
         raise document.schema_error(
             f"time_zone '{zone}' is not an IANA time zone name.", "/time_zone"
-        ) from None
+        )
     if settings.retention is None:
         settings = settings.model_copy(update={"retention": Retention()})
 
@@ -204,6 +203,14 @@ def _load_connections(document: _Document, folder: Path) -> dict[str, Connection
     return connections
 
 
+@functools.cache
+def _iana_zones() -> frozenset[str]:
+    """The IANA zone names of the bundled database: the same on every platform, without
+    system-only entries such as `localtime` (the machine's own zone)."""
+    text = resources.files("tzdata").joinpath("zones").read_text(encoding="utf-8")
+    return frozenset(text.split())
+
+
 def _absolute(path: str, folder: Path) -> str:
     expanded = Path(os.path.expanduser(path))
     return str(expanded if expanded.is_absolute() else folder / expanded)
@@ -215,38 +222,35 @@ class _Document:
     def __init__(self, path: Path) -> None:
         self.file = path.name
         text = path.read_text(encoding="utf-8")
+        # Errors are raised outside the handlers: a YAML error quotes the offending line, which
+        # may hold a secret, and must not stay attached to ours as its context.
+        failure: ProjectLoadError | None = None
         try:
             self._root = yaml.compose(text, Loader=yaml.SafeLoader)
-        except yaml.MarkedYAMLError as error:
-            mark = error.problem_mark or error.context_mark
-            raise ProjectLoadError(
-                "PROJECT_YAML_INVALID",
-                f"{self.file}: {error.problem or error.context or 'invalid YAML'}.",
-                file=self.file,
-                line=None if mark is None else mark.line + 1,
-            ) from None
         except yaml.YAMLError as error:
-            raise ProjectLoadError(
-                "PROJECT_YAML_INVALID", f"{self.file}: {type(error).__name__}.", file=self.file
-            ) from None
+            failure = self._yaml_failure(error)
+        if failure is not None:
+            raise failure
         self._check_duplicates(self._root, "")
         loader = yaml.SafeLoader("")
         try:
             self.data: object = (
                 None if self._root is None else loader.construct_document(self._root)
             )
-        except yaml.MarkedYAMLError as error:
-            mark = error.problem_mark
-            raise ProjectLoadError(
-                "PROJECT_YAML_INVALID",
-                f"{self.file}: {error.problem or 'invalid value'}.",
-                file=self.file,
-                line=None if mark is None else mark.line + 1,
-            ) from None
+        except yaml.YAMLError as error:
+            failure = self._yaml_failure(error)
         finally:
             loader.dispose()
-        version = self.data.get("version") if isinstance(self.data, dict) else None
-        if isinstance(version, int) and not isinstance(version, bool) and version != 1:
+        if failure is not None:
+            raise failure
+        if not isinstance(self.data, dict):
+            return
+        if "version" not in self.data:
+            raise self.schema_error("'version' is required.", "")
+        version = self.data["version"]
+        if type(version) is not int:  # a YAML `true` is a bool, which Python counts as 1
+            raise self.schema_error("'version' must be an integer.", "/version")
+        if version != SUPPORTED_VERSION:
             raise ProjectLoadError(
                 "PROJECT_VERSION_UNSUPPORTED",
                 f"{self.file}: version {version} is not supported; this release reads "
@@ -255,6 +259,21 @@ class _Document:
                 path="/version",
                 line=self.line("/version"),
             )
+
+    def _yaml_failure(self, error: yaml.YAMLError) -> ProjectLoadError:
+        """The problem and its line, without the quoted text of the line."""
+        problem: str | None = None
+        line: int | None = None
+        if isinstance(error, yaml.MarkedYAMLError):
+            problem = error.problem or error.context
+            mark = error.problem_mark or error.context_mark
+            line = None if mark is None else mark.line + 1
+        return ProjectLoadError(
+            "PROJECT_YAML_INVALID",
+            f"{self.file}: {problem or 'invalid YAML'}.",
+            file=self.file,
+            line=line,
+        )
 
     def _check_duplicates(self, node: yaml.Node | None, pointer: str) -> None:
         if isinstance(node, yaml.MappingNode):
@@ -316,12 +335,14 @@ class _Document:
             return model.model_validate(data, strict=True, by_alias=True)
         except ValidationError as error:
             first = error.errors(include_input=False, include_url=False)[0]
-            location = "/".join(str(part) for part in first["loc"] if part != "root")
-            where = f"{pointer}/{location}" if location else pointer
-            if first["type"] == "extra_forbidden":
-                message = f"Unknown key '{first['loc'][-1]}'."
-            elif first["loc"] and first["loc"][0] == "password":
-                message = f"{where}: a password must be a reference ${{env:NAME}}, never a value."
-            else:
-                message = f"{where or '/'}: {first['msg']}."
-            raise self.schema_error(message, where) from None
+        # Raised outside the handler: the validation error quotes the input (a literal password,
+        # for example), and it must not stay attached to ours as its context.
+        location = "/".join(str(part) for part in first["loc"] if part != "root")
+        where = f"{pointer}/{location}" if location else pointer
+        if first["type"] == "extra_forbidden":
+            message = f"Unknown key '{first['loc'][-1]}'."
+        elif first["loc"] and first["loc"][0] == "password":
+            message = f"{where}: a password must be a reference ${{env:NAME}}, never a value."
+        else:
+            message = f"{where or '/'}: {first['msg']}."
+        raise self.schema_error(message, where)

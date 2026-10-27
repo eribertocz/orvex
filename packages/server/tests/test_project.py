@@ -286,3 +286,44 @@ def test_unknown_version(tmp_path: Path, file: str) -> None:
     assert error.code == "PROJECT_VERSION_UNSUPPORTED"
     assert error.error.details.file == file
     assert error.error.details.line == 1
+
+
+@pytest.mark.parametrize("version", ["", "version: abc\n", "version: ~\n", "version: true\n"])
+def test_connections_version_is_checked(tmp_path: Path, version: str) -> None:
+    error = failure(project(tmp_path, connections=f"{version}connections: {{}}\n"))
+    assert error.code == "PROJECT_SCHEMA_INVALID"
+    assert error.error.details.file == "connections.yaml"
+
+
+@pytest.mark.parametrize("version", ["true", "yes", "1.0"])
+def test_project_version_must_be_the_integer_one(tmp_path: Path, version: str) -> None:
+    error = failure(project(tmp_path, PROJECT.replace("version: 1", f"version: {version}")))
+    assert error.code == "PROJECT_SCHEMA_INVALID"
+    assert error.error.details.path == "/version"
+
+
+@pytest.mark.parametrize("zone", ["localtime", "posixrules", "../etc/passwd"])
+def test_time_zone_must_be_an_iana_name(tmp_path: Path, zone: str) -> None:
+    error = failure(project(tmp_path, PROJECT.replace("America/La_Paz", zone)))
+    assert error.code == "PROJECT_SCHEMA_INVALID"
+    assert error.error.details.path == "/time_zone"
+
+
+def chain(error: BaseException) -> str:
+    """Every exception reachable from `error` through its cause and context, as text."""
+    texts = []
+    seen: BaseException | None = error
+    while seen is not None:
+        texts.append(repr(seen) + str(seen))
+        seen = seen.__cause__ or seen.__context__
+    return "\n".join(texts)
+
+
+def test_literal_password_is_not_kept_in_the_exception_chain(tmp_path: Path) -> None:
+    literal = CONNECTIONS.replace("${env:TEST_SECRET_PASSWORD}", SECRET, 1)
+    error = failure(project(tmp_path, connections=literal))
+    assert SECRET not in chain(error)
+    broken_yaml = f"version: 1\nconnections:\n  a: {{password: {SECRET}\n"
+    error = failure(project(tmp_path, connections=broken_yaml))
+    assert error.code == "PROJECT_YAML_INVALID"
+    assert SECRET not in chain(error)

@@ -171,7 +171,12 @@ class ProjectFile(BaseModel):
         extra="forbid",
     )
     version: Literal[1]
-    name: Annotated[str, Field(max_length=100, min_length=1)]
+    name: Annotated[
+        str, Field(max_length=100, min_length=1, pattern="^[^\\u0000-\\u001f\\u007f]+$")
+    ]
+    """
+    Display name of the project; no control characters.
+    """
     time_zone: Annotated[
         str,
         Field(max_length=64, pattern="^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$"),
