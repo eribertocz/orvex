@@ -9,3 +9,13 @@ updates:
     labels: ["type:ci", "module:repo"]
     commit-message:
       prefix: "ci(repo)"
+
+  # Python: Dependabot updates the exact pins in pyproject.toml; the lock files are regenerated
+  # in the same pull request before merge (tests/workspace/test_lock_files.py fails until then).
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    labels: ["type:build", "module:repo"]
+    commit-message:
+      prefix: "build(repo)"
