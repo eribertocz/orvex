@@ -27,7 +27,7 @@ On Windows PowerShell, replace the last line with:
 ruff format --check .
 ruff check .
 mypy -p sextant.store -p sextant.transform -p sextant.semantic -p sextant.access -p sextant.dashboards -p sextant.mcp -p sextant.server
-mypy packages/*/tests tests .github/workflows/scripts
+mypy packages/*/tests tests tools .github/workflows/scripts
 pytest
 ```
 
@@ -42,3 +42,24 @@ pytest
    ```
 
 `pip lock` is still marked experimental by pip. The lock files are valid for Linux x86_64, the CI platform. Lock files for Windows and macOS arrive with the operating-system matrix (P9-10). `tests/workspace/test_lock_files.py` fails while a lock file disagrees with `pyproject.toml`.
+
+## Web workspace
+
+Requirements: Node.js from `web/.nvmrc`, the latest LTS line.
+
+```bash
+cd web
+npm ci
+npm run check    # svelte-check, warnings are errors
+npm run lint     # Prettier and ESLint
+npm run test     # Vitest
+npm run build    # static files in web/build
+```
+
+## Licenses
+
+```bash
+python tools/licenses/check_licenses.py   # with the Python workspace installed and web/package-lock.json present
+```
+
+The allow-list is `tools/licenses/allowed.toml`. A runtime dependency may use only the runtime licenses; development tools may also use the development licenses.

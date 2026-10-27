@@ -45,7 +45,7 @@ jobs:
       - name: Strict types (module sources)
         run: mypy -p sextant.store -p sextant.transform -p sextant.semantic -p sextant.access -p sextant.dashboards -p sextant.mcp -p sextant.server
       - name: Strict types (tests and scripts)
-        run: mypy packages/*/tests tests .github/workflows/scripts
+        run: mypy packages/*/tests tests tools .github/workflows/scripts
 
   python-tests:
     name: python-tests-${{ matrix.python }}
