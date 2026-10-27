@@ -86,6 +86,14 @@
           {
             "context": "licenses",
             "integration_id": 15368
+          },
+          {
+            "context": "product-name",
+            "integration_id": 15368
+          },
+          {
+            "context": "boundaries",
+            "integration_id": 15368
           }
         ]
       }

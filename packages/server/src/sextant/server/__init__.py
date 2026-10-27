@@ -2,4 +2,7 @@
 
 from importlib.metadata import version
 
-__version__ = version("sextant")
+from sextant.server.identity import load_identity
+
+# The server's distribution is named after the product slug (identity.toml).
+__version__ = version(load_identity().slug)

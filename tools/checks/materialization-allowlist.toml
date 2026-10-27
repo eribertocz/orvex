@@ -1,0 +1,5 @@
+# Calls that read rows into Python, allowed in product code only with a reason (ADR-0025).
+# [[allow]]
+# file = "packages/<module>/src/<namespace>/<module>/<file>.py"
+# call = "fetchall"
+# reason = "why this result is small and bounded"

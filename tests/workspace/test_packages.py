@@ -1,4 +1,4 @@
-"""Workspace invariants: every module is an independent distribution in the `sextant` namespace."""
+"""Workspace invariants: every module is an independent distribution in the product namespace."""
 
 import subprocess
 import sys
@@ -10,11 +10,14 @@ import pytest
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PACKAGES = REPOSITORY_ROOT / "packages"
+PRODUCT = tomllib.loads((REPOSITORY_ROOT / "identity.toml").read_text())["product"]
+SLUG: str = PRODUCT["slug"]
+NAMESPACE: str = PRODUCT["python_namespace"]
 MODULES = ("store", "transform", "semantic", "access", "dashboards", "mcp", "server")
 
 
 def distribution_name(module: str) -> str:
-    return "sextant" if module == "server" else f"sextant-{module}"
+    return SLUG if module == "server" else f"{SLUG}-{module}"
 
 
 def test_every_module_has_a_package() -> None:
@@ -32,9 +35,9 @@ def test_package_metadata(module: str) -> None:
 @pytest.mark.parametrize("module", MODULES)
 def test_namespace_has_no_init(module: str) -> None:
     source = PACKAGES / module / "src"
-    assert not (source / "sextant" / "__init__.py").exists()
-    assert (source / "sextant" / module / "__init__.py").is_file()
-    assert (source / "sextant" / module / "py.typed").is_file()
+    assert not (source / NAMESPACE / "__init__.py").exists()
+    assert (source / NAMESPACE / module / "__init__.py").is_file()
+    assert (source / NAMESPACE / module / "py.typed").is_file()
 
 
 @pytest.mark.parametrize("module", MODULES)
@@ -65,7 +68,7 @@ def test_package_installs_and_imports_alone(module: str, tmp_path: Path) -> None
     )
 
     imported = subprocess.run(
-        [str(python), "-c", f"import sextant.{module} as m; print(m.__version__)"],
+        [str(python), "-c", f"import {NAMESPACE}.{module} as m; print(m.__version__)"],
         capture_output=True,
         text=True,
         check=False,
@@ -75,9 +78,11 @@ def test_package_installs_and_imports_alone(module: str, tmp_path: Path) -> None
         if other == module:
             continue
         missing = subprocess.run(
-            [str(python), "-c", f"import sextant.{other}"],
+            [str(python), "-c", f"import {NAMESPACE}.{other}"],
             capture_output=True,
             text=True,
             check=False,
         )
-        assert missing.returncode != 0, f"sextant.{other} importable next to sextant.{module}"
+        assert missing.returncode != 0, (
+            f"{NAMESPACE}.{other} importable next to {NAMESPACE}.{module}"
+        )
