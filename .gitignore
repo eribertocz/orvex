@@ -31,3 +31,4 @@ data/
 
 # The release workflow copies the web build into the server package; never commit it.
 packages/server/src/*/server/web/
+junit.xml

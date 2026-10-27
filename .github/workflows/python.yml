@@ -72,7 +72,10 @@ jobs:
           for package in packages/*/; do
             python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
           done
-      - run: pytest
+      - run: pytest --junitxml=junit.xml
+      - name: Report failures as annotations
+        if: failure()
+        run: python -m tools.ci.junit_annotations junit.xml
 
   python-lock:
     runs-on: ubuntu-latest
