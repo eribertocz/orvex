@@ -43,7 +43,6 @@ select = [
 [tool.mypy]
 strict = true
 python_version = "3.14"
-mypy_path = "$MYPY_CONFIG_DIR/packages/store/src:$MYPY_CONFIG_DIR/packages/transform/src:$MYPY_CONFIG_DIR/packages/semantic/src:$MYPY_CONFIG_DIR/packages/access/src:$MYPY_CONFIG_DIR/packages/dashboards/src:$MYPY_CONFIG_DIR/packages/mcp/src:$MYPY_CONFIG_DIR/packages/server/src"
 namespace_packages = true
 explicit_package_bases = true
 warn_unreachable = true

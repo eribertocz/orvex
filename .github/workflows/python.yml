@@ -35,10 +35,13 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.15"
-      - name: Install from the lock file
+      - name: Install from the lock file and the workspace packages
         run: |
           python -m pip install --quiet pip==26.2.2
           python -m pip install --quiet -r pylock.toml
+          for package in packages/*/; do
+            python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
+          done
       - name: Strict types (module sources)
         run: mypy -p sextant.store -p sextant.transform -p sextant.semantic -p sextant.access -p sextant.dashboards -p sextant.mcp -p sextant.server
       - name: Strict types (tests and scripts)
