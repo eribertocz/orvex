@@ -206,17 +206,17 @@ def admin() -> Iterator[duckdb.DuckDBPyConnection]:
 @pytest.fixture
 def schema(admin: duckdb.DuckDBPyConnection) -> Iterator[str]:
     name = f"src_{uuid.uuid4().hex[:12]}"
+    execute(admin, f"CREATE SCHEMA {name}")
     execute(
         admin,
-        f"""
-            CREATE SCHEMA {name};
-            CREATE TABLE {name}.readings (
-                reading_id bigint, kwh numeric(18,4), read_at timestamptz, read_on date,
-                status text, loose numeric, cash money);
-            INSERT INTO {name}.readings VALUES
-                (1, 12.3456, '2024-01-31 23:59:59.123456-04', '2024-01-31', 'valid', 1.5, 2.50),
-                (9007199254740993, -0.0001, NULL, NULL, NULL, NULL, NULL);
-        """,
+        f"CREATE TABLE {name}.readings (reading_id bigint, kwh numeric(18,4), "
+        "read_at timestamptz, read_on date, status text, loose numeric, cash money)",
+    )
+    execute(
+        admin,
+        f"INSERT INTO {name}.readings VALUES "
+        "(1, 12.3456, '2024-01-31 23:59:59.123456-04', '2024-01-31', 'valid', 1.5, 2.50), "
+        "(9007199254740993, -0.0001, NULL, NULL, NULL, NULL, NULL)",
     )
     yield name
     execute(admin, f"DROP SCHEMA {name} CASCADE")

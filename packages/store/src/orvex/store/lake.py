@@ -666,9 +666,12 @@ class Lake:
         )
         cursor = self._connection.cursor()
         try:
-            rows = cursor.execute(
-                "SELECT * FROM postgres_query($name, $sql)", {"name": source.name, "sql": inner}
-            ).fetchall()
+            # One metadata row: the inexact columns as a list (no row data reaches Python).
+            row = cursor.execute(
+                "SELECT list([table_schema, table_name, column_name]) "
+                "FROM postgres_query($name, $sql)",
+                {"name": source.name, "sql": inner},
+            ).fetchone()
         except duckdb.Error as error:
             raise StoreError(
                 "STORE_CONNECTION_FAILED",
@@ -677,7 +680,8 @@ class Lake:
             ) from None
         finally:
             cursor.close()
-        for schema, table, column in rows:
+        found = row[0] if row and isinstance(row[0], list) else []
+        for schema, table, column in found:
             qualified = str(table) if source.schema_ else f"{schema}.{table}"
             self._inexact.add((source.name, qualified.lower(), str(column).lower()))
 
