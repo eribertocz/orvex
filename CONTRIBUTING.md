@@ -27,7 +27,7 @@ On Windows PowerShell, replace the last line with:
 ruff format --check .
 ruff check .
 mypy -p orvex.store -p orvex.transform -p orvex.semantic -p orvex.access -p orvex.dashboards -p orvex.mcp -p orvex.server -p orvex.contracts
-mypy packages/*/tests tests tools .github/workflows/scripts
+mypy packages/*/tests tests tools conformance .github/workflows/scripts
 pytest
 ```
 

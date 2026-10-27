@@ -2,7 +2,7 @@
 
 **Business intelligence built on open standards.** Orvex connects raw data, transforms it with plain SQL, models business meaning in [Apache Ossie](https://github.com/apache/ossie), and serves governed dashboards, matrices and AI access — with every number traceable to its source.
 
-> **Status:** pre-alpha. This repository currently contains the project foundation (product laws, architecture, decisions, roadmap and process). No product code exists yet. See [`docs/roadmap.md`](docs/roadmap.md).
+> **Status:** alpha. Phase P0 (foundation) is in place: the workspaces, contracts, the server skeleton (`orvex` opens an empty UI in local mode), the synthetic dataset generator and the semantic corpus runner. The BI capabilities arrive phase by phase; see [`docs/roadmap.md`](docs/roadmap.md).
 
 ## Why Orvex
 

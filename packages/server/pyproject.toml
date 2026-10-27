@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.14"
-dependencies = ["fastapi==0.162.0", "uvicorn==0.54.0"]
+dependencies = ["fastapi==0.162.0", "orvex-contracts==0.0.0", "uvicorn==0.54.0"]
 
 [project.scripts]
 orvex = "orvex.server.cli:main"

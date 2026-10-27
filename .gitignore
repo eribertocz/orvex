@@ -26,5 +26,8 @@ web/build/
 .DS_Store
 Thumbs.db
 
+# Synthetic datasets generated locally (tools/synthetic/README.md).
+data/
+
 # The release workflow copies the web build into the server package; never commit it.
 packages/server/src/*/server/web/

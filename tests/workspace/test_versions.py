@@ -75,3 +75,22 @@ def test_declaring_an_unknown_contract_fails(tmp_path: Path) -> None:
     assert codes(root) == ["CONTRACT_NOT_FOUND"]
     declaration.write_text('produces = { "no-such-contract" = "v1" }\nconsumes = {}\n', "utf-8")
     assert codes(root) == ["CONTRACT_NOT_FOUND"]
+
+
+def test_server_requires_the_contracts_package() -> None:
+    """The server imports the generated contract types, so its wheel must depend on them."""
+    slug = identity(REPOSITORY_ROOT)["slug"]
+    pyproject = REPOSITORY_ROOT / "packages" / "server" / "pyproject.toml"
+    dependencies = tomllib.loads(pyproject.read_text("utf-8"))["project"]["dependencies"]
+    assert any(item.startswith(f"{slug}-contracts==") for item in dependencies)
+
+
+def test_workspace_pin_differing_from_manifest_fails(tmp_path: Path) -> None:
+    root = copy_layout(tmp_path)
+    pyproject = root / "packages" / "server" / "pyproject.toml"
+    slug = identity(REPOSITORY_ROOT)["slug"]
+    text = pyproject.read_text("utf-8").replace(
+        f'"{slug}-contracts==0.0.0"', f'"{slug}-contracts==9.9.9"'
+    )
+    pyproject.write_text(text, "utf-8")
+    assert codes(root) == ["VERSION_MISMATCH"]

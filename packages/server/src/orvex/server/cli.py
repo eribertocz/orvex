@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import socket
 import sys
 import threading
@@ -36,7 +35,6 @@ from orvex.server.versions import (
 LOCAL_HOST = "127.0.0.1"
 DEFAULT_PORT = 7878
 PORT_ATTEMPTS = 100
-log = logging.getLogger("orvex.server")
 
 
 def parser_for(identity: Identity) -> argparse.ArgumentParser:

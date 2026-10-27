@@ -120,7 +120,7 @@ Version rules: [`versioning.md`](versioning.md).
 3. Approval:
    - **alphas and betas from `beta.2`:** the Agent proceeds when every checklist item is evidenced, and notifies the Owner in the release issue;
    - **`beta.1`, every `rc`, `v1.0.0` and stable patches:** the Agent waits until the Owner comments `Approved for release vX.Y.Z` on the release issue.
-4. The Agent merges the release pull request (it touches no governed paths), creates annotated tags (module tags and the product tag) on the merge commit and publishes the GitHub release. CI builds artifacts from the tag.
+4. The Agent merges the release pull request (it touches no governed paths), creates annotated tags (module tags and the product tag) on the merge commit and pushes them. The `release` workflow builds the artifacts from the product tag, checks that the tag equals the product version in `versions.toml`, and publishes the GitHub release.
 5. The Agent closes the release issue with: `✅ Done · 🔍 Verification · ➡️ Next`.
 
 ## 7. Hotfixes
