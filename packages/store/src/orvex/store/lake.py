@@ -29,7 +29,7 @@ from orvex.contracts.store.v1 import (
 from orvex.store.errors import StoreError
 
 LAKE = "lake"
-EXTENSIONS = ("ducklake",)
+EXTENSIONS = ("icu", "ducklake")
 WRITE_STATEMENTS = frozenset(
     {
         duckdb.StatementType.CREATE,
@@ -163,13 +163,10 @@ class Lake:
             )
         folder = Path(location.path)
         (folder / "data").mkdir(parents=True, exist_ok=True)
-        # TimeZone is fixed to UTC so TIMESTAMPTZ values reach Arrow as `tz=UTC` whatever the
-        # machine's zone; presentation in a local zone is a later, explicit step.
         self._connection = duckdb.connect(
             config={
                 "memory_limit": limits.memory_limit,
                 "threads": int(limits.threads),
-                "TimeZone": "UTC",
             }
         )
         self._lock = threading.Lock()
@@ -183,6 +180,9 @@ class Lake:
                     f"The DuckDB extension {extension} could not be installed or loaded.",
                     {"extension": extension, "duckdb": str(error)},
                 ) from error
+        # TIMESTAMPTZ values reach Arrow as `tz=UTC` whatever the machine's zone; presenting
+        # them in a local zone is a later, explicit step.
+        self._connection.sql("SET TimeZone = 'UTC'")
         catalog = (folder / "catalog.ducklake").as_posix()
         data = (folder / "data").as_posix() + "/"
         # Paths come from the project configuration, not from query input; quoted as literals.
