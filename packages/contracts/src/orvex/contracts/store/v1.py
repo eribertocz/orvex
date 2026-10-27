@@ -51,6 +51,7 @@ class ErrorCode(
             "STORE_SECRET_MISSING",
             "STORE_SECRET_INLINE",
             "STORE_CATALOG_UNAVAILABLE",
+            "STORE_TYPE_UNSUPPORTED",
         ]
     ]
 ):
@@ -65,6 +66,7 @@ class ErrorCode(
         "STORE_SECRET_MISSING",
         "STORE_SECRET_INLINE",
         "STORE_CATALOG_UNAVAILABLE",
+        "STORE_TYPE_UNSUPPORTED",
     ]
 
 
@@ -128,6 +130,30 @@ class LakeLocation(RootModel[LocalLakeLocation | PostgresLakeLocation]):
     """
 
 
+class ResultColumn(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    name: str
+    type: Annotated[str, Field(min_length=1)]
+    """
+    DuckDB type name, e.g. DECIMAL(18,4) or TIMESTAMP WITH TIME ZONE
+    """
+
+
+class ResultJson(BaseModel):
+    """
+    A read result encoded as JSON without losing exactness (README: encoding rules). Rows are positional arrays matching columns.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["result_json"]
+    columns: list[ResultColumn]
+    rows: list[list[str | float | bool | None]]
+
+
 class Parameter(BaseModel):
     """
     A named parameter bound to `$name` in the SQL. The value is text converted to the declared DuckDB type; exact values are never JSON numbers.
@@ -170,10 +196,24 @@ class ReadRequest(BaseModel):
 
 
 class StoreMessage(
-    RootModel[LakeLocation | StatementRequest | ReadRequest | Snapshot | CommitResult | StoreError]
+    RootModel[
+        LakeLocation
+        | StatementRequest
+        | ReadRequest
+        | Snapshot
+        | CommitResult
+        | StoreError
+        | ResultJson
+    ]
 ):
     root: Annotated[
-        LakeLocation | StatementRequest | ReadRequest | Snapshot | CommitResult | StoreError,
+        LakeLocation
+        | StatementRequest
+        | ReadRequest
+        | Snapshot
+        | CommitResult
+        | StoreError
+        | ResultJson,
         Field(title="StoreMessage"),
     ]
     """
