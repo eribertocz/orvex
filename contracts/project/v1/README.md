@@ -36,9 +36,9 @@ Relative `path` values are resolved against the project folder by the loader.
 | Code | When |
 |---|---|
 | `PROJECT_NOT_FOUND` | the folder or its `project.yaml` does not exist |
-| `PROJECT_YAML_INVALID` | not valid YAML, more than one document, or a duplicate key (with its line) |
+| `PROJECT_YAML_INVALID` | not UTF-8 text, not valid YAML, more than one document, a duplicate key, or an anchor or alias (`&`, `*`), with its line |
 | `PROJECT_VERSION_UNSUPPORTED` | `version` is an integer other than 1 |
-| `PROJECT_SCHEMA_INVALID` | the file does not match its message, `time_zone` is not in the IANA database, or a connection name appears twice |
+| `PROJECT_SCHEMA_INVALID` | the file does not match its message, `time_zone` is not a zone of the bundled IANA database (system-only names such as `localtime` and the placeholder `Factory` are refused), or a connection name appears twice |
 | `SOURCE_NOT_READ_ONLY` | a database connection declares `read_only: false` |
 | `PROJECT_SECRET_MISSING` | a referenced environment variable is not set when the secret is resolved |
 

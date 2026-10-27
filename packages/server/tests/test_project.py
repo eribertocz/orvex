@@ -327,3 +327,43 @@ def test_literal_password_is_not_kept_in_the_exception_chain(tmp_path: Path) -> 
     error = failure(project(tmp_path, connections=broken_yaml))
     assert error.code == "PROJECT_YAML_INVALID"
     assert SECRET not in chain(error)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "version: 1\nconnections: &c {a: *c}\n",
+        "version: 1\nconnections:\n  a: &x {type: csv, path: a.csv}\n  b: *x\n",
+        "version: 1\nx: &a [1, 1]\ny: &b [*a, *a]\nz: &c [*b, *b]\nconnections: {}\n",
+    ],
+    ids=["self-reference", "alias", "nested-aliases"],
+)
+def test_anchors_and_aliases_are_refused(tmp_path: Path, text: str) -> None:
+    error = failure(project(tmp_path, connections=text))
+    assert error.code == "PROJECT_YAML_INVALID"
+    assert error.error.details.line is not None
+
+
+def test_a_file_that_is_not_utf8_is_refused_without_its_content(tmp_path: Path) -> None:
+    folder = project(tmp_path)
+    (folder / "connections.yaml").write_bytes(
+        f"version: 1\n# \xe9\nconnections: {{}}\npassword: {SECRET}\n".encode("latin-1")
+    )
+    error = failure(folder)
+    assert error.code == "PROJECT_YAML_INVALID"
+    assert error.error.details.file == "connections.yaml"
+    assert SECRET not in chain(error)
+    assert error.__context__ is None
+
+
+def test_factory_is_not_a_time_zone(tmp_path: Path) -> None:
+    error = failure(project(tmp_path, PROJECT.replace("America/La_Paz", "Factory")))
+    assert error.code == "PROJECT_SCHEMA_INVALID"
+
+
+def test_clickhouse_read_only_false_is_refused(tmp_path: Path) -> None:
+    head, events = CONNECTIONS.split("  events:\n")
+    text = head + "  events:\n" + events.replace("read_only: true", "read_only: false")
+    error = failure(project(tmp_path, connections=text))
+    assert error.code == "SOURCE_NOT_READ_ONLY"
+    assert error.error.details.connection == "events"

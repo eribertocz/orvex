@@ -208,7 +208,8 @@ def _iana_zones() -> frozenset[str]:
     """The IANA zone names of the bundled database: the same on every platform, without
     system-only entries such as `localtime` (the machine's own zone)."""
     text = resources.files("tzdata").joinpath("zones").read_text(encoding="utf-8")
-    return frozenset(text.split())
+    # `Factory` is a placeholder of the database, not a place.
+    return frozenset(text.split()) - {"Factory"}
 
 
 def _absolute(path: str, folder: Path) -> str:
@@ -221,17 +222,27 @@ class _Document:
 
     def __init__(self, path: Path) -> None:
         self.file = path.name
-        text = path.read_text(encoding="utf-8")
         # Errors are raised outside the handlers: a YAML error quotes the offending line, which
         # may hold a secret, and must not stay attached to ours as its context.
         failure: ProjectLoadError | None = None
+        try:
+            text = path.read_bytes().decode("utf-8")
+        except UnicodeDecodeError as error:
+            # The decode error carries the whole file; only the position is kept.
+            failure = ProjectLoadError(
+                "PROJECT_YAML_INVALID",
+                f"{self.file}: the file is not UTF-8 text (byte {error.start}).",
+                file=self.file,
+            )
+        if failure is not None:
+            raise failure
         try:
             self._root = yaml.compose(text, Loader=yaml.SafeLoader)
         except yaml.YAMLError as error:
             failure = self._yaml_failure(error)
         if failure is not None:
             raise failure
-        self._check_duplicates(self._root, "")
+        self._check_duplicates(self._root, "", set())
         loader = yaml.SafeLoader("")
         try:
             self.data: object = (
@@ -275,7 +286,24 @@ class _Document:
             line=line,
         )
 
-    def _check_duplicates(self, node: yaml.Node | None, pointer: str) -> None:
+    def _check_duplicates(self, node: yaml.Node | None, pointer: str, seen_nodes: set[int]) -> None:
+        """Refuse duplicate keys, and anchors and aliases.
+
+        An alias reuses a node already seen; refusing it rules out self-references and the
+        exponential expansion of nested aliases, and keeps every value at one place in the file.
+        """
+        if node is None:
+            return
+        if id(node) in seen_nodes:
+            raise ProjectLoadError(
+                "PROJECT_YAML_INVALID",
+                f"{self.file}: anchors and aliases (&, *) are not supported; write each value "
+                "where it is used.",
+                file=self.file,
+                path=pointer,
+                line=node.start_mark.line + 1,
+            )
+        seen_nodes.add(id(node))
         if isinstance(node, yaml.MappingNode):
             seen: set[object] = set()
             for key, value in node.value:
@@ -295,10 +323,10 @@ class _Document:
                         line=key.start_mark.line + 1,
                     )
                 seen.add(name)
-                self._check_duplicates(value, f"{pointer}/{name}")
+                self._check_duplicates(value, f"{pointer}/{name}", seen_nodes)
         elif isinstance(node, yaml.SequenceNode):
             for index, item in enumerate(node.value):
-                self._check_duplicates(item, f"{pointer}/{index}")
+                self._check_duplicates(item, f"{pointer}/{index}", seen_nodes)
 
     def line(self, pointer: str) -> int | None:
         """The line of the value at a JSON pointer, or of its closest existing parent."""
