@@ -33,8 +33,26 @@ from orvex.contracts.store.v1 import (
 from orvex.store.errors import StoreError, register_secret
 
 LAKE = "lake"
-METADATA = f"__ducklake_metadata_{LAKE}"
-_PASSWORD_KEY = re.compile(r"(^|\s)password\s*=", re.IGNORECASE)
+METADATA_PREFIX = "__ducklake_metadata"
+METADATA = f"{METADATA_PREFIX}_{LAKE}"
+# Any password key (password=, sslpassword=, ?password=) and any URI form (user:pw@host) is
+# refused: the password may only come from `password_env`.
+_INLINE_SECRET = re.compile(r"password|://", re.IGNORECASE)
+_SCHEMA_NAME = re.compile(r"[a-z_][a-z0-9_]*")
+# Functions that run SQL or open connections outside the lake; never allowed in a statement.
+_EXTERNAL_SQL_FUNCTIONS = frozenset(
+    {
+        "postgres_query",
+        "postgres_execute",
+        "postgres_scan",
+        "postgres_scan_pushdown",
+        "postgres_attach",
+        "sqlite_query",
+        "sqlite_attach",
+        "query",
+        "query_table",
+    }
+)
 _SUSPICIOUS = re.compile(r"[./\\*?:]")
 EXTENSIONS = ("icu", "ducklake")
 WRITE_STATEMENTS = frozenset(
@@ -76,7 +94,63 @@ def _quote(text: str) -> str:
     return "'" + text.replace("'", "''") + "'"
 
 
+def _postgres_password(location: PostgresLakeLocation) -> str:
+    """Refuse an unsafe PostgreSQL location, then read and register its password."""
+    if _INLINE_SECRET.search(location.connection):
+        raise StoreError(
+            "STORE_SECRET_INLINE",
+            "The connection must be key=value pairs without any password; use password_env.",
+            {},
+        )
+    if location.metadata_schema is not None and not _SCHEMA_NAME.fullmatch(
+        location.metadata_schema
+    ):
+        raise StoreError(
+            "STORE_STATEMENT_INVALID",
+            "metadata_schema must match [a-z_][a-z0-9_]*.",
+            {"metadata_schema": location.metadata_schema},
+        )
+    password = os.environ.get(location.password_env)
+    if not password:
+        raise StoreError(
+            "STORE_SECRET_MISSING",
+            f"The environment variable {location.password_env} is not set.",
+            {"variable": location.password_env},
+        )
+    register_secret(password)
+    return password
+
+
+def _guarded(sql: str) -> None:
+    """Refuse SQL that names the catalog database or a function that runs SQL elsewhere.
+
+    The catalog database (in PostgreSQL it is the whole database, other lakes included) is only
+    ever touched by DuckLake itself.
+    """
+    if METADATA_PREFIX in sql.lower():
+        raise StoreError(
+            "STORE_STATEMENT_INVALID",
+            "Statements may not reference the lake's catalog database.",
+            {},
+        )
+    tokens = duckdb.tokenize(sql)
+    ends = [position for position, _ in tokens[1:]] + [len(sql)]
+    for index, ((position, kind), end) in enumerate(zip(tokens, ends, strict=True)):
+        if kind != duckdb.token_type.identifier:
+            continue
+        following = tokens[index + 1][0] if index + 1 < len(tokens) else len(sql)
+        called = sql[following : following + 1] == "("
+        name = sql[position:end].strip().strip('"').lower()
+        if called and name in _EXTERNAL_SQL_FUNCTIONS:
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "Statements may not call functions that run SQL outside the lake.",
+                {"function": name},
+            )
+
+
 def _single_statement(sql: str) -> duckdb.Statement:
+    _guarded(sql)
     try:
         statements = duckdb.extract_statements(sql)
     except duckdb.Error as error:
@@ -229,6 +303,10 @@ class Lake:
     ) -> None:
         if isinstance(location, LakeLocation):
             location = location.root
+        # Location checks come first: nothing is opened for a location that must be refused.
+        password = (
+            _postgres_password(location) if isinstance(location, PostgresLakeLocation) else ""
+        )
         if not limits.memory_limit or not limits.threads:
             raise StoreError(
                 "STORE_LIMITS_REQUIRED",
@@ -257,7 +335,7 @@ class Lake:
             if isinstance(location, LocalLakeLocation):
                 self._attach_local(Path(location.path))
             else:
-                self._attach_postgres(location)
+                self._attach_postgres(location, password)
             # Nothing may load code or reach data the lake did not ask for after this point.
             self._connection.sql("SET autoinstall_known_extensions = false")
             self._connection.sql("SET autoload_known_extensions = false")
@@ -278,22 +356,8 @@ class Lake:
             f"ATTACH {_quote('ducklake:' + catalog)} AS {LAKE} (DATA_PATH {_quote(data)})"
         )
 
-    def _attach_postgres(self, location: PostgresLakeLocation) -> None:
+    def _attach_postgres(self, location: PostgresLakeLocation, password: str) -> None:
         """Attach a lake whose catalog is in PostgreSQL; the password comes from the environment."""
-        if _PASSWORD_KEY.search(location.connection):
-            raise StoreError(
-                "STORE_SECRET_INLINE",
-                "The connection string must not contain a password; use password_env.",
-                {},
-            )
-        password = os.environ.get(location.password_env)
-        if not password:
-            raise StoreError(
-                "STORE_SECRET_MISSING",
-                f"The environment variable {location.password_env} is not set.",
-                {"variable": location.password_env},
-            )
-        register_secret(password)
         self._load_extension("postgres")
         try:
             # A temporary default secret supplies the password to every PostgreSQL connection of
@@ -309,11 +373,13 @@ class Lake:
                 f"({', '.join(options)})"
             )
         except duckdb.Error as error:
+            # `from None`: the DuckDB exception is not chained, so a logged traceback cannot show
+            # anything the redacted message does not.
             raise StoreError(
                 "STORE_CATALOG_UNAVAILABLE",
-                "The PostgreSQL catalog could not be reached.",
+                "The PostgreSQL catalog could not be reached or refused the credentials.",
                 {"duckdb": str(error)},
-            ) from error
+            ) from None
 
     def _load_extension(self, extension: str) -> None:
         try:
@@ -594,7 +660,7 @@ def _outside_inventory(cursor: duckdb.DuckDBPyConnection) -> str:
         " || sequence_name"
         " FROM duckdb_sequences() WHERE lower(database_name) NOT IN ($lake, $metadata)"
         " UNION ALL SELECT 'type:' || database_name || '.' || schema_name || '.' || type_name"
-        " FROM duckdb_types() WHERE NOT internal"
+        " FROM duckdb_types() WHERE NOT internal AND lower(database_name) NOT IN ($lake, $metadata)"
         " UNION ALL SELECT 'secret:' || name FROM duckdb_secrets()"
         ")",
         {"lake": LAKE, "metadata": METADATA},

@@ -6,6 +6,7 @@ import logging
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from orvex.contracts.store.v1 import Parameter, PostgresLakeLocation, ReadRequest, StatementRequest
@@ -17,6 +18,7 @@ PASSWORD_ENV = "STORE_TEST_POSTGRES_PASSWORD"
 
 OTHER_PROCESS = """
 import sys
+from pathlib import Path
 from orvex.contracts.store.v1 import PostgresLakeLocation, StatementRequest
 from orvex.store.lake import Limits, open_lake
 
@@ -65,13 +67,24 @@ def location(postgres_location: PostgresLakeLocation) -> PostgresLakeLocation:
     return postgres_location
 
 
-def test_pinned_read_survives_a_commit_from_another_process(location: PostgresLakeLocation) -> None:
+def test_open_read_survives_a_commit_from_another_process(location: PostgresLakeLocation) -> None:
     lake = open_lake(location, LIMITS)
     try:
-        first = write(lake, "CREATE TABLE readings AS SELECT 1 AS id, 10 AS kwh")
-        run_elsewhere(location, "INSERT INTO readings VALUES (2, 20)")
-        assert rows(lake, "SELECT id FROM readings ORDER BY id", first) == [{"id": 1}]
-        assert rows(lake, "SELECT id FROM readings ORDER BY id") == [{"id": 1}, {"id": 2}]
+        pinned = write(lake, "CREATE TABLE readings AS SELECT range AS id FROM range(200000)")
+        request = ReadRequest(
+            kind="read",
+            sql="SELECT id FROM readings",
+            parameters=[],
+            snapshot=pinned,
+            batch_size=1000,
+        )
+        reader = lake.read(request)
+        seen = reader.read_next_batch().num_rows
+        run_elsewhere(location, "DELETE FROM readings WHERE id % 2 = 0")
+        seen += sum(batch.num_rows for batch in reader)
+        assert seen == 200000
+        latest = rows(lake, "SELECT count(*) AS n FROM readings")
+        assert latest == [{"n": 100000}]
     finally:
         lake.close()
 
@@ -80,11 +93,13 @@ def test_writers_of_different_tables_both_commit(location: PostgresLakeLocation)
     one = open_lake(location, LIMITS)
     two = open_lake(location, LIMITS)
     try:
+        write(one, "CREATE TABLE a (x INTEGER)")
+        write(one, "CREATE TABLE b (y INTEGER)")
         start = one.current_snapshot().id
         with one.transaction() as first:
-            first.execute(statement("CREATE TABLE a AS SELECT 1 AS x"))
+            first.execute(statement("INSERT INTO a VALUES (1)"))
             with two.transaction() as second:
-                second.execute(statement("CREATE TABLE b AS SELECT 2 AS y"))
+                second.execute(statement("INSERT INTO b VALUES (2)"))
         assert first.result is not None
         assert first.result.snapshot is not None
         assert second.result is not None
@@ -153,12 +168,46 @@ def test_missing_password_variable(
     assert raised.value.details == {"variable": PASSWORD_ENV}
 
 
-@pytest.mark.parametrize("extra", [" password=x", " PASSWORD = x"])
-def test_inline_password_is_refused(location: PostgresLakeLocation, extra: str) -> None:
-    inline = location.model_copy(update={"connection": location.connection + extra})
+@pytest.mark.parametrize(
+    "connection",
+    [
+        "host=h dbname=d password=x",
+        "host=h dbname=d PASSWORD = x",
+        "host=h dbname=d sslpassword=x",
+        "postgresql://user:x@h/d",
+        "postgresql://h/d?password=x",
+    ],
+)
+def test_inline_password_is_refused(connection: str, tmp_path: Path) -> None:
+    """Checked before anything else, so no database is needed."""
+    inline = PostgresLakeLocation(
+        kind="lake_location",
+        catalog="postgres",
+        connection=connection,
+        password_env="NOT_USED_BY_THIS_TEST",
+        data_path=tmp_path.as_posix(),
+    )
     with pytest.raises(StoreError) as raised:
         open_lake(inline, LIMITS)
     assert raised.value.code == "STORE_SECRET_INLINE"
+    assert "x" not in raised.value.details.values()
+
+
+def test_default_metadata_schema(location: PostgresLakeLocation) -> None:
+    public = location.model_copy(update={"metadata_schema": None})
+    lake = open_lake(public, LIMITS)
+    try:
+        snapshot = write(lake, "CREATE TABLE in_public AS SELECT 1 AS x")
+        assert rows(lake, "SELECT x FROM in_public", snapshot) == [{"x": 1}]
+    finally:
+        lake.close()
+
+
+def test_metadata_schema_is_checked_again(location: PostgresLakeLocation) -> None:
+    hostile = location.model_construct(**{**location.model_dump(), "metadata_schema": "x; DROP"})
+    with pytest.raises(StoreError) as raised:
+        open_lake(hostile, LIMITS)
+    assert raised.value.code == "STORE_STATEMENT_INVALID"
 
 
 def test_parameter_round_trip(location: PostgresLakeLocation) -> None:

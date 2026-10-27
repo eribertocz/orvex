@@ -440,3 +440,24 @@ def test_objects_outside_lake_tables_are_refused(lake: Lake, sql: str) -> None:
     before = lake.current_snapshot().id
     assert code_of(lambda: write(lake, statement(sql))) == "STORE_STATEMENT_INVALID"
     assert lake.current_snapshot().id == before
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "DROP SCHEMA __ducklake_metadata_lake.other CASCADE",
+        "DELETE FROM __ducklake_metadata_lake.ducklake_snapshot",
+        "CREATE TABLE x AS SELECT * FROM postgres_query('__ducklake_metadata_lake', 'SELECT 1')",
+        "INSERT INTO a SELECT 1 FROM query('SELECT 1')",
+    ],
+)
+def test_writes_cannot_touch_the_catalog_or_run_outside_sql(lake: Lake, sql: str) -> None:
+    write(lake, statement("CREATE TABLE a (x INTEGER)"))
+    before = lake.current_snapshot().id
+    assert code_of(lambda: write(lake, statement(sql))) == "STORE_STATEMENT_INVALID"
+    assert lake.current_snapshot().id == before
+
+
+def test_reads_cannot_touch_the_catalog(lake: Lake) -> None:
+    sql = "SELECT * FROM __ducklake_metadata_lake.ducklake_snapshot"
+    assert code_of(lambda: read(lake, sql)) == "STORE_STATEMENT_INVALID"

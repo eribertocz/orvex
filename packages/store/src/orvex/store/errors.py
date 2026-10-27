@@ -15,7 +15,7 @@ def register_secret(value: str) -> None:
 
 
 def redact(text: str) -> str:
-    for secret in _SECRETS:
+    for secret in tuple(_SECRETS):  # a copy: another thread may register a secret meanwhile
         text = text.replace(secret, "***")
     return text
 
