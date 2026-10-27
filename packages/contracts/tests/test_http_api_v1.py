@@ -53,5 +53,8 @@ def test_every_response_carries_the_required_request_id_header() -> None:
     ]
     for response in responses:
         target = response.get("$ref")
-        resolved = document["components"]["responses"]["Error"] if target else response
+        prefix = "#/components/responses/"
+        resolved = (
+            document["components"]["responses"][target.removeprefix(prefix)] if target else response
+        )
         assert resolved["headers"]["X-Request-Id"] == {"$ref": "#/components/headers/RequestId"}
