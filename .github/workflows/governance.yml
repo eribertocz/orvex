@@ -1,0 +1,51 @@
+# Required check: pull requests that touch governed paths must carry the `owner-merge` label.
+# The rules and the script are read from the pull request's BASE commit, so a pull request
+# cannot weaken its own check (docs/process/git-workflow.md §2).
+name: governance
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  governance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the base commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          persist-credentials: false
+      - name: Check out the head commit (bootstrap only)
+        if: ${{ hashFiles('base/.github/workflows/scripts/governance.py') == '' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: head
+          persist-credentials: false
+      - name: Evaluate governed paths
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PULL_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          root=base
+          if [ ! -f base/.github/workflows/scripts/governance.py ]; then
+            echo "::warning::Bootstrap: the base commit has no governance script; using the head copy."
+            root=head
+          fi
+          GOVERNANCE_DOCUMENT="$root/docs/process/git-workflow.md" \
+            python3 "$root/.github/workflows/scripts/governance.py"
+
+  governance-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test the repository automation scripts
+        working-directory: .github/workflows/scripts
+        run: python3 -m unittest discover -p 'test_*.py' -v

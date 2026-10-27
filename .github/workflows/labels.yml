@@ -1,0 +1,24 @@
+# Keeps the repository's labels exactly equal to .github/labels.yml.
+name: labels
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/labels.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Synchronize labels
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/workflows/scripts/sync_labels.py

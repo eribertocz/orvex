@@ -1,0 +1,11 @@
+# Dependency updates (ADR-0022). The pip, npm and Docker ecosystems are added by the issues
+# that create those manifests (P0-02, P0-03, P0-08).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels: ["type:ci", "module:repo"]
+    commit-message:
+      prefix: "ci(repo)"
