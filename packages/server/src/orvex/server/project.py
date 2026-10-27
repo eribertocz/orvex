@@ -35,6 +35,10 @@ PROJECT_FILE = "project.yaml"
 CONNECTIONS_FILE = "connections.yaml"
 SUPPORTED_VERSION = 1
 RESERVED_CONNECTION = "lake"
+# Hand-written configuration is small and shallow; larger or deeper files are refused before
+# they can exhaust memory or the parser's stack.
+MAX_FILE_BYTES = 1024 * 1024
+MAX_DEPTH = 32
 
 type Connection = (
     ParquetConnection
@@ -128,7 +132,7 @@ def load_project(folder: Path) -> Project:
 
     connections: dict[str, Connection] = {}
     connections_path = folder / CONNECTIONS_FILE
-    if connections_path.exists():
+    if connections_path.exists() or connections_path.is_symlink():
         connections = _load_connections(_Document(connections_path), folder)
     return Project(folder=folder, settings=settings, connections=connections)
 
@@ -226,7 +230,20 @@ class _Document:
         # may hold a secret, and must not stay attached to ours as its context.
         failure: ProjectLoadError | None = None
         try:
-            text = path.read_bytes().decode("utf-8")
+            if path.stat().st_size > MAX_FILE_BYTES:
+                failure = ProjectLoadError(
+                    "PROJECT_YAML_INVALID",
+                    f"{self.file}: larger than {MAX_FILE_BYTES // 1024} KiB.",
+                    file=self.file,
+                )
+            else:
+                text = path.read_bytes().decode("utf-8")
+        except OSError as error:
+            failure = ProjectLoadError(
+                "PROJECT_NOT_FOUND",
+                f"{self.file} cannot be read ({error.strerror or type(error).__name__}).",
+                file=self.file,
+            )
         except UnicodeDecodeError as error:
             # The decode error carries the whole file; only the position is kept.
             failure = ProjectLoadError(
@@ -240,9 +257,11 @@ class _Document:
             self._root = yaml.compose(text, Loader=yaml.SafeLoader)
         except yaml.YAMLError as error:
             failure = self._yaml_failure(error)
+        except RecursionError:
+            failure = self._too_deep(None)
         if failure is not None:
             raise failure
-        self._check_duplicates(self._root, "", set())
+        self._check_duplicates(self._root, "", set(), 0)
         loader = yaml.SafeLoader("")
         try:
             self.data: object = (
@@ -250,6 +269,8 @@ class _Document:
             )
         except yaml.YAMLError as error:
             failure = self._yaml_failure(error)
+        except RecursionError:
+            failure = self._too_deep(None)
         finally:
             loader.dispose()
         if failure is not None:
@@ -286,7 +307,17 @@ class _Document:
             line=line,
         )
 
-    def _check_duplicates(self, node: yaml.Node | None, pointer: str, seen_nodes: set[int]) -> None:
+    def _too_deep(self, line: int | None) -> ProjectLoadError:
+        return ProjectLoadError(
+            "PROJECT_YAML_INVALID",
+            f"{self.file}: values are nested more than {MAX_DEPTH} levels deep.",
+            file=self.file,
+            line=line,
+        )
+
+    def _check_duplicates(
+        self, node: yaml.Node | None, pointer: str, seen_nodes: set[int], depth: int
+    ) -> None:
         """Refuse duplicate keys, and anchors and aliases.
 
         An alias reuses a node already seen; refusing it rules out self-references and the
@@ -304,6 +335,8 @@ class _Document:
                 line=node.start_mark.line + 1,
             )
         seen_nodes.add(id(node))
+        if depth > MAX_DEPTH:
+            raise self._too_deep(node.start_mark.line + 1)
         if isinstance(node, yaml.MappingNode):
             seen: set[object] = set()
             for key, value in node.value:
@@ -323,10 +356,10 @@ class _Document:
                         line=key.start_mark.line + 1,
                     )
                 seen.add(name)
-                self._check_duplicates(value, f"{pointer}/{name}", seen_nodes)
+                self._check_duplicates(value, f"{pointer}/{name}", seen_nodes, depth + 1)
         elif isinstance(node, yaml.SequenceNode):
             for index, item in enumerate(node.value):
-                self._check_duplicates(item, f"{pointer}/{index}", seen_nodes)
+                self._check_duplicates(item, f"{pointer}/{index}", seen_nodes, depth + 1)
 
     def line(self, pointer: str) -> int | None:
         """The line of the value at a JSON pointer, or of its closest existing parent."""

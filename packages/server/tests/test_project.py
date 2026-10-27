@@ -367,3 +367,32 @@ def test_clickhouse_read_only_false_is_refused(tmp_path: Path) -> None:
     error = failure(project(tmp_path, connections=text))
     assert error.code == "SOURCE_NOT_READ_ONLY"
     assert error.error.details.connection == "events"
+
+
+@pytest.mark.parametrize("depth", [40, 500, 5000])
+@pytest.mark.parametrize("file", ["project.yaml", "connections.yaml"])
+def test_deeply_nested_files_are_refused(tmp_path: Path, file: str, depth: int) -> None:
+    nested = "[" * depth + "]" * depth
+    folder = project(tmp_path, connections="version: 1\nconnections: {}\n")
+    if file == "project.yaml":
+        (folder / file).write_text(PROJECT + f"retention: {nested}\n", encoding="utf-8")
+    else:
+        (folder / file).write_text(f"version: 1\nconnections: {nested}\n", encoding="utf-8")
+    error = failure(folder)
+    assert error.code == "PROJECT_YAML_INVALID"
+    assert error.error.details.file == file
+    assert error.__context__ is None
+
+
+def test_oversized_file_is_refused(tmp_path: Path) -> None:
+    folder = project(tmp_path, PROJECT + "# " + "x" * (1024 * 1024) + "\n")
+    error = failure(folder)
+    assert error.code == "PROJECT_YAML_INVALID"
+
+
+def test_unreadable_connections_file(tmp_path: Path) -> None:
+    folder = project(tmp_path)
+    (folder / "connections.yaml").mkdir()
+    error = failure(folder)
+    assert error.code == "PROJECT_NOT_FOUND"
+    assert error.error.details.file == "connections.yaml"
