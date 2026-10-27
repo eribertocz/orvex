@@ -163,8 +163,14 @@ class Lake:
             )
         folder = Path(location.path)
         (folder / "data").mkdir(parents=True, exist_ok=True)
+        # TimeZone is fixed to UTC so TIMESTAMPTZ values reach Arrow as `tz=UTC` whatever the
+        # machine's zone; presentation in a local zone is a later, explicit step.
         self._connection = duckdb.connect(
-            config={"memory_limit": limits.memory_limit, "threads": int(limits.threads)}
+            config={
+                "memory_limit": limits.memory_limit,
+                "threads": int(limits.threads),
+                "TimeZone": "UTC",
+            }
         )
         self._lock = threading.Lock()
         for extension in EXTENSIONS:
