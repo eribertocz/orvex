@@ -12,5 +12,5 @@ def test_failures_become_error_annotations(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert failure_annotations(report) == [
-        "::error title=a.b::test_x::assert 1 == 2%0Aline one%0Aline 100%25"
+        "::error title=a.b%3A%3Atest_x::assert 1 == 2%0Aline one%0Aline 100%25"
     ]

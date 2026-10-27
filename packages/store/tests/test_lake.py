@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import decimal
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -156,19 +157,25 @@ def test_read_runs_the_statement_once(lake: Lake) -> None:
     assert current == (10000,)
 
 
-def test_large_read_streams_batch_by_batch(lake: Lake) -> None:
-    request = ReadRequest(
-        kind="read",
-        sql="SELECT range AS i FROM range(100000000)",
-        parameters=[],
-        snapshot=lake.current_snapshot().id,
-        batch_size=1048576,
-    )
-    rows = 0
-    for batch in lake.read(request):
-        rows += batch.num_rows
-        del batch
-    assert rows == 100_000_000
+def test_large_read_streams_batch_by_batch(tmp_path: Path) -> None:
+    """About 4 GB of results under a 512 MB limit: only streaming can pass."""
+    location = LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
+    small = open_lake(location, Limits(memory_limit="512MB", threads=2))
+    try:
+        request = ReadRequest(
+            kind="read",
+            sql="SELECT range AS i, range * 2 AS j, repeat('x', 24) AS s FROM range(100000000)",
+            parameters=[],
+            snapshot=small.current_snapshot().id,
+            batch_size=1048576,
+        )
+        rows = 0
+        for batch in small.read(request):
+            rows += batch.num_rows
+            del batch
+        assert rows == 100_000_000
+    finally:
+        small.close()
 
 
 def code_of(action: object) -> str:
@@ -248,3 +255,133 @@ def test_errors_convert_to_the_contract_message() -> None:
     assert message.details[0].name == "duckdb"
     with pytest.raises(ValueError, match="NOT_A_CODE"):
         StoreError("NOT_A_CODE", "x", {})
+
+
+def test_cte_named_like_a_lake_table_cannot_escape_the_snapshot(lake: Lake) -> None:
+    first = write(lake, statement("CREATE TABLE a AS SELECT 1 AS x"))
+    write(lake, statement("INSERT INTO a VALUES (2)"))
+    sql = (
+        "SELECT x FROM a WHERE x IN (WITH a AS (SELECT 1 AS x UNION ALL SELECT 2) SELECT x FROM a)"
+    )
+    assert read(lake, sql, first).column("x").to_pylist() == [1]
+    assert sorted(read(lake, sql).column("x").to_pylist()) == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM query_table('a')",
+        "SELECT * FROM query('SELECT * FROM a')",
+        "SELECT * FROM read_parquet('data/*.parquet')",
+    ],
+)
+def test_table_functions_that_could_bypass_the_snapshot_are_rejected(lake: Lake, sql: str) -> None:
+    write(lake, statement("CREATE TABLE a AS SELECT 1 AS x"))
+    assert code_of(lambda: read(lake, sql)) == "STORE_STATEMENT_INVALID"
+
+
+def test_generator_table_functions_are_allowed(lake: Lake) -> None:
+    sql = "SELECT count(*) AS n FROM range(3) CROSS JOIN generate_series(1, 2)"
+    assert read(lake, sql).column("n").to_pylist() == [6]
+
+
+def test_views_are_refused_and_rolled_back(lake: Lake) -> None:
+    write(lake, statement("CREATE TABLE a AS SELECT 1 AS x"))
+    before = lake.current_snapshot().id
+
+    def attempt() -> None:
+        write(lake, statement("CREATE VIEW v AS SELECT * FROM a"))
+
+    assert code_of(attempt) == "STORE_STATEMENT_INVALID"
+    assert lake.current_snapshot().id == before
+
+
+def test_catalog_name_is_case_insensitive(lake: Lake) -> None:
+    write(lake, statement("CREATE TABLE a AS SELECT 1 AS x"))
+    assert read(lake, "SELECT x FROM LAKE.main.a").column("x").to_pylist() == [1]
+
+
+@pytest.mark.parametrize(
+    ("kind", "value", "expected"),
+    [
+        ("DECIMAL(18,4)", "1.5", "DECIMAL(18,4)"),
+        ("TINYINT", "7", "TINYINT"),
+        ("UBIGINT", "1", "UBIGINT"),
+    ],
+)
+def test_parameters_take_their_declared_type(
+    lake: Lake, kind: str, value: str, expected: str
+) -> None:
+    table = read(lake, "SELECT typeof($a) AS t, $a AS v", None, ("a", kind, value))
+    assert table.column("t").to_pylist() == [expected]
+
+
+@pytest.mark.parametrize(
+    ("kind", "value"),
+    [
+        ("DECIMAL(18,4)", "NaN"),
+        ("DECIMAL(18,4)", "Infinity"),
+        ("DECIMAL(18,4)", "1E+50"),
+        ("DECIMAL(4,2)", "123.456"),
+        ("DECIMAL(4,2)", "123.4"),
+        ("INTEGER", "1_000"),
+        ("INTEGER", " 1"),
+        ("DATE", "20261027"),
+        ("DOUBLE", "inf"),
+    ],
+)
+def test_lenient_or_inexact_parameter_text_is_rejected(lake: Lake, kind: str, value: str) -> None:
+    assert code_of(lambda: read(lake, "SELECT $a AS v", None, ("a", kind, value))) == (
+        "STORE_PARAMETER_INVALID"
+    )
+
+
+def test_concurrent_transactions_report_their_own_snapshot(lake: Lake) -> None:
+    write(lake, statement("CREATE TABLE a (writer INTEGER)"))
+    results: dict[int, int | None] = {}
+
+    def writer(number: int) -> None:
+        results[number] = write(lake, statement(f"INSERT INTO a VALUES ({number})"))
+
+    threads = [threading.Thread(target=writer, args=(number,)) for number in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    snapshots = list(results.values())
+    assert None not in snapshots
+    assert len(set(snapshots)) == 8
+    for number, snapshot in results.items():
+        assert snapshot is not None
+        rows = read(
+            lake, "SELECT writer FROM a WHERE writer = $w", snapshot, ("w", "INTEGER", str(number))
+        )
+        assert rows.num_rows == 1
+        before = read(
+            lake,
+            "SELECT writer FROM a WHERE writer = $w",
+            snapshot - 1,
+            ("w", "INTEGER", str(number)),
+        )
+        assert before.num_rows == 0
+
+
+def test_error_while_streaming_is_a_store_error(lake: Lake) -> None:
+    request = ReadRequest(
+        kind="read",
+        sql="SELECT CASE WHEN range = 5000000 THEN error('boom') ELSE range END AS i "
+        "FROM range(10000000)",
+        parameters=[],
+        snapshot=lake.current_snapshot().id,
+        batch_size=65536,
+    )
+    reader = lake.read(request)
+    with pytest.raises(StoreError) as raised:
+        for _ in reader:
+            pass
+    assert raised.value.code == "STORE_QUERY_FAILED"
+
+
+def test_invalid_limits_are_rejected(tmp_path: Path) -> None:
+    location = LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
+    assert code_of(lambda: open_lake(location, Limits("lots", 2))) == "STORE_LIMITS_REQUIRED"

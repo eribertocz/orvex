@@ -8,8 +8,8 @@ read once, as an Arrow record-batch stream (ADR-0025). No row passes through Pyt
 from __future__ import annotations
 
 import datetime as dt
-import decimal
 import json
+import re
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -85,49 +85,82 @@ def _single_statement(sql: str) -> duckdb.Statement:
     return statements[0]
 
 
-def _converted(parameter: Parameter) -> object:
-    """The Python value DuckDB binds exactly for the declared type, from its text."""
+_INTEGER = re.compile(r"-?[0-9]+")
+_DECIMAL = re.compile(r"-?[0-9]+(\.[0-9]+)?")
+_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_MOMENT = r"[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?"
+_TIMESTAMP = re.compile(_MOMENT)
+_TIMESTAMPTZ = re.compile(_MOMENT + r"(Z|[+-][0-9]{2}:[0-9]{2})")
+_DOUBLE = re.compile(r"-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?")
+
+
+def _invalid(parameter: Parameter, reason: str) -> StoreError:
+    return StoreError(
+        "STORE_PARAMETER_INVALID",
+        f"Parameter {parameter.name} is not a valid {parameter.type.root}.",
+        {"parameter": parameter.name, "reason": reason},
+    )
+
+
+def _converted(parameter: Parameter) -> str | None:
+    """The parameter's text after a strict check against its type.
+
+    The text is bound as is and converted by `CAST(... AS <type>)` inside DuckDB (`_typed`), so
+    no value passes through a Python float or a time-zone library.
+    """
     value = parameter.value
     kind = parameter.type.root
     if value is None:
         return None
-    try:
-        if kind.startswith("DECIMAL"):
-            return decimal.Decimal(value)
-        if kind in INTEGER_RANGES:
-            number = int(value, 10)
-            low, high = INTEGER_RANGES[kind]
-            if not low <= number <= high:
-                raise ValueError(f"out of range for {kind}")
-            return number
-        if kind == "BOOLEAN":
-            if value not in {"true", "false"}:
-                raise ValueError("expected true or false")
-            return value == "true"
-        if kind == "DOUBLE":
-            return float(value)
-        if kind == "DATE":
-            return dt.date.fromisoformat(value)
-        if kind == "TIMESTAMP":
-            moment = dt.datetime.fromisoformat(value)
-            if moment.tzinfo is not None:
-                raise ValueError("TIMESTAMP takes no time zone")
-            return moment
-        if kind == "TIMESTAMPTZ":
-            moment = dt.datetime.fromisoformat(value)
-            if moment.tzinfo is None:
-                raise ValueError("TIMESTAMPTZ needs a time zone offset")
-            return moment
+    if kind.startswith("DECIMAL"):
+        precision, scale = (int(part) for part in kind[8:-1].split(","))
+        if not 1 <= precision <= 38 or scale > precision:
+            raise _invalid(parameter, "precision must be 1-38 and scale at most the precision")
+        if not _DECIMAL.fullmatch(value):
+            raise _invalid(parameter, "expected digits with an optional fraction")
+        fraction = len(value.partition(".")[2])
+        whole = len(value.lstrip("-").partition(".")[0].lstrip("0"))
+        if fraction > scale or whole > precision - scale:
+            raise _invalid(parameter, f"does not fit DECIMAL({precision},{scale})")
         return value
-    except (ValueError, decimal.InvalidOperation) as error:
-        raise StoreError(
-            "STORE_PARAMETER_INVALID",
-            f"Parameter {parameter.name} is not a valid {kind}.",
-            {"parameter": parameter.name, "reason": str(error)},
-        ) from error
+    if kind in INTEGER_RANGES:
+        if not _INTEGER.fullmatch(value):
+            raise _invalid(parameter, "expected digits")
+        number = int(value, 10)
+        low, high = INTEGER_RANGES[kind]
+        if not low <= number <= high:
+            raise _invalid(parameter, f"out of range for {kind}")
+        return value
+    if kind == "BOOLEAN":
+        if value not in {"true", "false"}:
+            raise _invalid(parameter, "expected true or false")
+        return value
+    if kind == "DOUBLE":
+        if not _DOUBLE.fullmatch(value):
+            raise _invalid(parameter, "expected a finite decimal number")
+        return value
+    try:
+        if kind == "DATE":
+            if not _DATE.fullmatch(value):
+                raise ValueError("expected YYYY-MM-DD")
+            dt.date.fromisoformat(value)
+            return value
+        if kind == "TIMESTAMP":
+            if not _TIMESTAMP.fullmatch(value):
+                raise ValueError("expected YYYY-MM-DDTHH:MM:SS[.ffffff] without a zone")
+            dt.datetime.fromisoformat(value)
+            return value
+        if kind == "TIMESTAMPTZ":
+            if not _TIMESTAMPTZ.fullmatch(value):
+                raise ValueError("expected YYYY-MM-DDTHH:MM:SS[.ffffff] with Z or an offset")
+            dt.datetime.fromisoformat(value)
+            return value
+    except ValueError as error:
+        raise _invalid(parameter, str(error)) from error
+    return value
 
 
-def _bound(statement: duckdb.Statement, parameters: list[Parameter]) -> dict[str, object]:
+def _bound(statement: duckdb.Statement, parameters: list[Parameter]) -> dict[str, str | None]:
     names = [parameter.name for parameter in parameters]
     expected = set(statement.named_parameters)
     if len(names) != len(set(names)) or set(names) != expected:
@@ -139,20 +172,41 @@ def _bound(statement: duckdb.Statement, parameters: list[Parameter]) -> dict[str
                 "extra": ",".join(sorted(set(names) - expected)),
             },
         )
-    for parameter in parameters:
-        if parameter.type.root.startswith("DECIMAL") and parameter.value is not None:
-            precision, scale = (int(part) for part in parameter.type.root[8:-1].split(","))
-            if scale > precision:
-                raise StoreError(
-                    "STORE_PARAMETER_INVALID",
-                    f"Parameter {parameter.name}: scale exceeds precision.",
-                    {"parameter": parameter.name},
-                )
     return {parameter.name: _converted(parameter) for parameter in parameters}
 
 
+def _typed(sql: str, parameters: list[Parameter]) -> str:
+    """The SQL with every `$name` wrapped in `CAST($name AS <declared type>)`.
+
+    DuckDB's tokenizer finds the parameters, so text inside strings and comments is untouched.
+    The declared type is validated by the contract pattern before it reaches the SQL.
+    """
+    types = {parameter.name: parameter.type.root for parameter in parameters}
+    tokens = duckdb.tokenize(sql)
+    edits: list[tuple[int, int, str]] = []
+    for index, (position, kind) in enumerate(tokens[:-1]):
+        following, following_kind = tokens[index + 1]
+        if (
+            kind == duckdb.token_type.operator
+            and sql[position] == "$"
+            and following == position + 1
+            and following_kind == duckdb.token_type.identifier
+        ):
+            end = tokens[index + 2][0] if index + 2 < len(tokens) else len(sql)
+            name = sql[following:end].rstrip()
+            if name in types:
+                stop = following + len(name)
+                edits.append((position, stop, f"CAST(${name} AS {types[name]})"))
+    for start, stop, replacement in reversed(edits):
+        sql = sql[:start] + replacement + sql[stop:]
+    return sql
+
+
+READ_TABLE_FUNCTIONS = frozenset({"range", "generate_series", "unnest"})
+
+
 class Lake:
-    """One open lake. Thread-safe: each call uses its own cursor on a shared database."""
+    """One open lake. Reads may run concurrently; write transactions run one at a time."""
 
     def __init__(self, location: LakeLocation, limits: Limits) -> None:
         if not limits.memory_limit or not limits.threads:
@@ -161,15 +215,24 @@ class Lake:
                 "The lake needs an explicit memory limit and thread count.",
                 {},
             )
-        folder = Path(location.path)
-        (folder / "data").mkdir(parents=True, exist_ok=True)
-        self._connection = duckdb.connect(
-            config={
-                "memory_limit": limits.memory_limit,
-                "threads": int(limits.threads),
-            }
-        )
-        self._lock = threading.Lock()
+        try:
+            self._connection = duckdb.connect(
+                config={"memory_limit": limits.memory_limit, "threads": int(limits.threads)}
+            )
+        except (duckdb.Error, ValueError) as error:
+            raise StoreError(
+                "STORE_LIMITS_REQUIRED",
+                "The memory limit or the thread count is not valid.",
+                {"duckdb": str(error)},
+            ) from error
+        self._write_lock = threading.Lock()
+        try:
+            self._prepare(Path(location.path))
+        except BaseException:
+            self._connection.close()
+            raise
+
+    def _prepare(self, folder: Path) -> None:
         for extension in EXTENSIONS:
             try:
                 self._connection.install_extension(extension)
@@ -180,16 +243,13 @@ class Lake:
                     f"The DuckDB extension {extension} could not be installed or loaded.",
                     {"extension": extension, "duckdb": str(error)},
                 ) from error
-        # TIMESTAMPTZ values reach Arrow as `tz=UTC` whatever the machine's zone; presenting
-        # them in a local zone is a later, explicit step.
-        self._connection.sql("SET TimeZone = 'UTC'")
+        (folder / "data").mkdir(parents=True, exist_ok=True)
         catalog = (folder / "catalog.ducklake").as_posix()
         data = (folder / "data").as_posix() + "/"
         # Paths come from the project configuration, not from query input; quoted as literals.
         self._connection.sql(
             f"ATTACH {_quote('ducklake:' + catalog)} AS {LAKE} (DATA_PATH {_quote(data)})"
         )
-        self._connection.sql(f"USE {LAKE}")
 
     def close(self) -> None:
         self._connection.close()
@@ -197,6 +257,8 @@ class Lake:
     def _cursor(self) -> duckdb.DuckDBPyConnection:
         cursor = self._connection.cursor()
         cursor.sql(f"USE {LAKE}")
+        # TIMESTAMPTZ values reach Arrow as instants in UTC whatever the machine's zone;
+        # presenting them in a local zone is a later, explicit step.
         cursor.sql("SET TimeZone = 'UTC'")
         return cursor
 
@@ -231,8 +293,22 @@ class Lake:
             raise StoreError("STORE_SNAPSHOT_NOT_FOUND", "The lake has no snapshot.", {})
         return snapshot
 
+    def _other_catalogs(self) -> set[str]:
+        row = self._one(
+            "SELECT string_agg(lower(database_name), '|') FROM duckdb_databases() "
+            "WHERE lower(database_name) <> $lake",
+            {"lake": LAKE},
+        )
+        text = str(row[0]) if row and row[0] is not None else ""
+        return set(text.split("|")) - {""}
+
     def _pinned(self, sql: str, snapshot: int) -> str:
-        """The same SELECT with `AT (VERSION => snapshot)` on every lake table it references."""
+        """The same SELECT with `AT (VERSION => snapshot)` on every table it references.
+
+        Every base table is pinned, including CTE references (DuckDB binds a CTE with an AT
+        clause unchanged). Table functions other than generators are refused, because they could
+        read the lake or its files without a snapshot.
+        """
         serialized = self._one("SELECT json_serialize_sql($sql)", {"sql": sql})
         tree = json.loads(str(serialized[0])) if serialized else {"error": True}
         if tree.get("error"):
@@ -241,22 +317,34 @@ class Lake:
                 "The SQL could not be parsed.",
                 {"duckdb": str(tree.get("error_message", ""))},
             )
-        names = _cte_names(tree)
-        for table in _base_tables(tree):
-            qualified = table.get("qualified_name")
+        others = self._other_catalogs()
+        for node in _walk(tree):
+            if node.get("type") == "TABLE_FUNCTION":
+                function = node.get("function")
+                name = function.get("function_name") if isinstance(function, dict) else None
+                if str(name).lower() not in READ_TABLE_FUNCTIONS:
+                    raise StoreError(
+                        "STORE_STATEMENT_INVALID",
+                        "A read may use only the table functions range, generate_series "
+                        "and unnest.",
+                        {"function": str(name)},
+                    )
+            if node.get("type") != "BASE_TABLE":
+                continue
+            qualified = node.get("qualified_name")
             raw = qualified.get("path") if isinstance(qualified, dict) else None
             path = (
-                [str(part) for part in raw] if isinstance(raw, list) else [str(table["table_name"])]
+                [str(part) for part in raw] if isinstance(raw, list) else [str(node["table_name"])]
             )
-            if len(path) == 1 and path[0] in names:
-                continue
-            if len(path) == 3 and path[0] != LAKE:
+            if (len(path) == 3 and path[0].lower() != LAKE) or (
+                len(path) == 2 and path[0].lower() in others
+            ):
                 raise StoreError(
                     "STORE_STATEMENT_INVALID",
                     "A read may reference only lake tables.",
                     {"table": ".".join(path)},
                 )
-            table["at_clause"] = {
+            node["at_clause"] = {
                 "unit": "VERSION",
                 "expr": {
                     "class": "CONSTANT",
@@ -286,7 +374,7 @@ class Lake:
                 f"Snapshot {request.snapshot} does not exist in the lake.",
                 {"snapshot": str(request.snapshot)},
             )
-        sql = self._pinned(request.sql, request.snapshot)
+        sql = self._pinned(_typed(request.sql, request.parameters), request.snapshot)
         cursor = self._cursor()
         try:
             source = cursor.sql(sql, params=parameters).to_arrow_reader(request.batch_size)
@@ -303,6 +391,12 @@ class Lake:
             try:
                 for batch in source:
                     yield batch if batch.schema == schema else batch.cast(schema)
+            except (OSError, pa.ArrowException, duckdb.Error) as error:
+                raise StoreError(
+                    "STORE_QUERY_FAILED",
+                    "DuckDB failed while streaming the read.",
+                    {"duckdb": str(error)},
+                ) from error
             finally:
                 cursor.close()
 
@@ -310,29 +404,53 @@ class Lake:
 
     @contextmanager
     def transaction(self) -> Iterator[Transaction]:
-        """Statements inside the block commit together to one snapshot, or roll back on error."""
-        cursor = self._cursor()
-        before = self._snapshot(None)
-        cursor.begin()
-        handle = Transaction(cursor)
-        try:
-            yield handle
-        except BaseException:
-            cursor.rollback()
-            cursor.close()
-            raise
-        try:
-            cursor.commit()
-        except duckdb.Error as error:
-            cursor.rollback()
-            cursor.close()
-            raise StoreError(
-                "STORE_QUERY_FAILED", "The transaction could not commit.", {"duckdb": str(error)}
-            ) from error
-        after = self._snapshot(None)
-        cursor.close()
-        changed = after is not None and (before is None or after.id != before.id)
-        handle.result = CommitResult(kind="commit_result", snapshot=after if changed else None)
+        """Statements inside the block commit together to one snapshot, or roll back on error.
+
+        Write transactions in this process run one at a time, so the snapshot reported in the
+        result is the one this transaction created.
+        """
+        with self._write_lock:
+            cursor = self._cursor()
+            try:
+                before = self._snapshot(None)
+                cursor.begin()
+                handle = Transaction(cursor)
+                try:
+                    yield handle
+                    if _views_exist(cursor):
+                        raise StoreError(
+                            "STORE_STATEMENT_INVALID",
+                            "Views are not allowed in the lake: a read could not pin "
+                            "the tables inside them to a snapshot.",
+                            {},
+                        )
+                except BaseException:
+                    cursor.rollback()
+                    raise
+                try:
+                    cursor.commit()
+                except duckdb.Error as error:
+                    raise StoreError(
+                        "STORE_QUERY_FAILED",
+                        "The transaction could not commit.",
+                        {"duckdb": str(error)},
+                    ) from error
+                after = self._snapshot(None)
+            finally:
+                cursor.close()
+            changed = after is not None and (before is None or after.id != before.id)
+            handle.result = CommitResult(kind="commit_result", snapshot=after if changed else None)
+
+
+def _views_exist(cursor: duckdb.DuckDBPyConnection) -> bool:
+    """Whether the lake holds a view, read inside the open transaction."""
+    result = cursor.execute(
+        "SELECT count(*) FROM duckdb_views() WHERE database_name = $lake AND NOT internal",
+        {"lake": LAKE},
+    )
+    row = result.fetchone()
+    result.fetchone()  # reaches the end of the one-row result, so the cursor is free again
+    return bool(row and int(str(row[0])) > 0)
 
 
 class Transaction:
@@ -352,7 +470,7 @@ class Transaction:
             )
         parameters = _bound(statement, request.parameters)
         try:
-            self._cursor.sql(request.sql, params=parameters)
+            self._cursor.sql(_typed(request.sql, request.parameters), params=parameters)
         except duckdb.Error as error:
             raise StoreError(
                 "STORE_QUERY_FAILED", "DuckDB could not run the statement.", {"duckdb": str(error)}
@@ -370,21 +488,6 @@ def _walk(node: object) -> Iterator[dict[str, object]]:
     elif isinstance(node, list):
         for item in node:
             yield from _walk(item)
-
-
-def _base_tables(tree: JsonTree) -> list[dict[str, object]]:
-    return [node for node in _walk(tree) if node.get("type") == "BASE_TABLE"]
-
-
-def _cte_names(tree: JsonTree) -> set[str]:
-    names: set[str] = set()
-    for node in _walk(tree):
-        cte_map = node.get("cte_map")
-        if isinstance(cte_map, dict):
-            for entry in cte_map.get("map", []):
-                if isinstance(entry, dict) and isinstance(entry.get("key"), str):
-                    names.add(entry["key"])
-    return names
 
 
 def _utc_schema(schema: pa.Schema) -> pa.Schema:

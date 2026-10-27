@@ -19,13 +19,18 @@ def escape(text: str) -> str:
     return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
+def escape_property(text: str) -> str:
+    """Annotation properties (such as `title`) also escape `:` and `,`."""
+    return escape(text).replace(":", "%3A").replace(",", "%2C")
+
+
 def failure_annotations(report: Path) -> list[str]:
     lines = []
     for case in ElementTree.parse(report).getroot().iter("testcase"):
         for problem in [*case.findall("failure"), *case.findall("error")]:
             name = f"{case.get('classname', '')}::{case.get('name', '')}"
             detail = (problem.get("message") or "") + "\n" + (problem.text or "")
-            lines.append(f"::error title={escape(name)}::{escape(detail[-LIMIT:])}")
+            lines.append(f"::error title={escape_property(name)}::{escape(detail[-LIMIT:])}")
     return lines
 
 
