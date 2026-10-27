@@ -1,0 +1,44 @@
+version: '0.2.0.dev0'
+name: case-015
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0", "policies": [{"name": "tenant", "dataset": "sales", "enforcement": "mandatory", "predicate": "tenant_id = :tenant_id", "context": [{"name": "tenant_id", "type": "string", "sensitivity": "sensitive"}]}]}'
+datasets:
+  - name: sales
+    source: sales
+    primary_key:
+      - sale_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "sale"}'
+    fields:
+      - name: sale_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: sale_id
+      - name: tenant_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: tenant_id
+      - name: region
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: region
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "region"}'
+      - name: amount
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: amount
+metrics:
+  - name: revenue
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(sales.amount)'

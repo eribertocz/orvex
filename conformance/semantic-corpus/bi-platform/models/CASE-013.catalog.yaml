@@ -1,0 +1,10 @@
+sales:
+  sale_id: int64
+  customer_id: int64
+  sale_date: date
+  amount: 'decimal(18,2)'
+customer_history:
+  customer_id: int64
+  region: utf8
+  valid_from: date
+  valid_to: date

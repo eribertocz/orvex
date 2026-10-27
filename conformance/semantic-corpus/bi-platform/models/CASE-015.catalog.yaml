@@ -1,0 +1,5 @@
+sales:
+  sale_id: int64
+  tenant_id: utf8
+  region: utf8
+  amount: 'decimal(18,2)'

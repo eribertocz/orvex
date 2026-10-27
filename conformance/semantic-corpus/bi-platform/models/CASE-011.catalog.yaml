@@ -1,0 +1,10 @@
+orders:
+  order_id: int64
+  order_total: 'decimal(18,2)'
+order_campaign:
+  order_id: int64
+  campaign_id: utf8
+  allocation_weight: 'decimal(3,2)'
+campaign:
+  campaign_id: utf8
+  name: utf8

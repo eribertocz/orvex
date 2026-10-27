@@ -1,0 +1,83 @@
+version: '0.2.0.dev0'
+name: case-016
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0"}'
+datasets:
+  - name: orders
+    source: orders
+    primary_key:
+      - order_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "order"}'
+    fields:
+      - name: order_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: order_id
+      - name: billing_customer_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: billing_customer_id
+      - name: shipping_customer_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: shipping_customer_id
+      - name: amount
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: amount
+  - name: customer
+    source: customer
+    primary_key:
+      - customer_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "customer"}'
+    fields:
+      - name: customer_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: customer_id
+      - name: country
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: country
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "country"}'
+relationships:
+  - name: billing_customer
+    from: orders
+    to: customer
+    from_columns:
+      - billing_customer_id
+    to_columns:
+      - customer_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "optionality": "required"}'
+  - name: shipping_customer
+    from: orders
+    to: customer
+    from_columns:
+      - shipping_customer_id
+    to_columns:
+      - customer_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "optionality": "required"}'
+metrics:
+  - name: revenue
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(orders.amount)'

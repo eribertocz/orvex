@@ -1,0 +1,4 @@
+order_id,campaign_id,allocation_weight
+1,A,0.60
+1,B,0.40
+2,A,1.00

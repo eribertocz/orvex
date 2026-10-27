@@ -1,0 +1,4 @@
+balances:
+  account_id: int64
+  month_end: date
+  balance: 'decimal(18,2)'

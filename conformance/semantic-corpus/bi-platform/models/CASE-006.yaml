@@ -1,0 +1,49 @@
+version: '0.2.0.dev0'
+name: case-006
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0"}'
+datasets:
+  - name: orders
+    source: orders
+    primary_key:
+      - order_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "order"}'
+    fields:
+      - name: order_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: order_id
+      - name: region
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: region
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "region"}'
+      - name: amount
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: amount
+metrics:
+  - name: revenue
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(orders.amount)'
+  - name: order_count
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'COUNT(orders.order_id)'
+  - name: average_order_value
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'CAST(revenue / order_count AS DECIMAL(18, 2))'

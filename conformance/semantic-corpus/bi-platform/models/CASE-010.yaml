@@ -1,0 +1,101 @@
+version: '0.2.0.dev0'
+name: case-010
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0"}'
+datasets:
+  - name: invoices
+    source: invoices
+    primary_key:
+      - invoice_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "invoice"}'
+    fields:
+      - name: invoice_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: invoice_id
+      - name: date
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: '"date"'
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "time_role": "event"}'
+      - name: region
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: region
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "region"}'
+      - name: amount
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: amount
+      - name: month
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: 'DATE_TRUNC(''MONTH'', "date")'
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "month", "time": {"timezone": "UTC", "tzdb": "2025b"}, "semantic_role": "business_time"}'
+  - name: targets
+    source: targets
+    primary_key:
+      - month
+      - region
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "month_region", "grain": {"dimensions": ["month", "region"]}}'
+    fields:
+      - name: month
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: month
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "month"}'
+      - name: region
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: region
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "region"}'
+      - name: target_amount
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: target_amount
+metrics:
+  - name: actual_revenue
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(invoices.amount)'
+  - name: target_revenue
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(targets.target_amount)'
+  - name: attainment
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'CAST(actual_revenue / target_revenue AS DECIMAL(18, 2))'
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "grain": {"dimensions": ["month", "region"]}, "unit": "ratio"}'

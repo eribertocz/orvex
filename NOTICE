@@ -4,3 +4,13 @@ Copyright 2026 Eriberto Condori
 This product includes the "Semantic Problem Corpus v0.1" (21 normative cases),
 originally developed in the bi-platform project
 (https://github.com/eribertocz/bi-platform), licensed under the Apache License 2.0.
+
+It also includes, unchanged, the per-case Apache Ossie models of that corpus from the same
+project (backend/crates/sef-ossie/tests/corpus/ at commit
+072bb2c7502ae0f46a60a3156724a07e058b3d3d), licensed under the Apache License 2.0.
+
+This product includes the JSON Schema of the Apache Ossie specification
+(https://github.com/apache/ossie, commit c721ffce76869cf941a1d9d8b9d01b607a87e838),
+Copyright 2026 The Apache Software Foundation, licensed under the Apache License 2.0.
+This product includes software developed at The Apache Software Foundation
+(http://www.apache.org/).

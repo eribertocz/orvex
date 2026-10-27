@@ -1,0 +1,47 @@
+version: '0.2.0.dev0'
+name: case-012
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0"}'
+datasets:
+  - name: events
+    source: events
+    primary_key:
+      - event_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "event"}'
+    fields:
+      - name: event_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: event_id
+      - name: event_time
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: event_time
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "time_role": "event"}'
+      - name: amount
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: amount
+      - name: month
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: 'DATE_TRUNC(''MONTH'', event_time)'
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "month", "time": {"timezone": "UTC", "tzdb": "2025b"}, "semantic_role": "business_time"}'
+metrics:
+  - name: revenue
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(events.amount)'

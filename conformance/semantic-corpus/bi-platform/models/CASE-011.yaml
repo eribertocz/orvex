@@ -1,0 +1,100 @@
+version: '0.2.0.dev0'
+name: case-011
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0", "bridges": [{"name": "order_campaign", "left": "orders", "bridge": "order_campaign", "right": "campaign", "left_relationship": "order", "right_relationship": "campaign", "allocation": {"weight": "allocation_weight", "normalization_scope": {"entities": ["order"]}, "required_total": "1.00", "tolerance": "0.00"}}]}'
+datasets:
+  - name: orders
+    source: orders
+    primary_key:
+      - order_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "order"}'
+    fields:
+      - name: order_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: order_id
+      - name: order_total
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: order_total
+  - name: order_campaign
+    source: order_campaign
+    primary_key:
+      - order_id
+      - campaign_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "order_campaign"}'
+    fields:
+      - name: order_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: order_id
+      - name: campaign_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: campaign_id
+      - name: allocation_weight
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: allocation_weight
+  - name: campaign
+    source: campaign
+    primary_key:
+      - campaign_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "campaign"}'
+    fields:
+      - name: campaign_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: campaign_id
+      - name: name
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: name
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "campaign"}'
+relationships:
+  - name: order
+    from: order_campaign
+    to: orders
+    from_columns:
+      - order_id
+    to_columns:
+      - order_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "optionality": "required"}'
+  - name: campaign
+    from: order_campaign
+    to: campaign
+    from_columns:
+      - campaign_id
+    to_columns:
+      - campaign_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "optionality": "required"}'
+metrics:
+  - name: allocated_revenue
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(orders.order_total)'
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "allocation_bridge": "order_campaign"}'

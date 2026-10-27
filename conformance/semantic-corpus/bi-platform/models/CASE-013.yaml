@@ -1,0 +1,93 @@
+version: '0.2.0.dev0'
+name: case-013
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0"}'
+datasets:
+  - name: sales
+    source: sales
+    primary_key:
+      - sale_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "sale", "keys": [{"entity": "customer", "fields": ["customer_id"]}]}'
+    fields:
+      - name: sale_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: sale_id
+      - name: customer_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: customer_id
+      - name: sale_date
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: sale_date
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "time_role": "event"}'
+      - name: amount
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: amount
+  - name: customer_history
+    source: customer_history
+    primary_key:
+      - customer_id
+      - valid_from
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "customer_version", "keys": [{"entity": "customer", "fields": ["customer_id"]}]}'
+    fields:
+      - name: customer_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: customer_id
+      - name: region
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: region
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "historical_region"}'
+      - name: valid_from
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: valid_from
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "time_role": "validity_start"}'
+      - name: valid_to
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: valid_to
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "time_role": "validity_end"}'
+relationships:
+  - name: historical_customer
+    from: sales
+    to: customer_history
+    from_columns:
+      - customer_id
+    to_columns:
+      - customer_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "optionality": "required", "temporal": {"event_time": "sales.sale_date", "valid_from": "customer_history.valid_from", "valid_to": "customer_history.valid_to", "boundary": "closed_open", "match": "exactly_one"}}'
+metrics:
+  - name: revenue
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(sales.amount)'

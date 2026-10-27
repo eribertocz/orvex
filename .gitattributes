@@ -13,3 +13,7 @@
 *.xlsx binary
 *.woff binary
 *.woff2 binary
+
+# Imported and vendored third-party files stay byte-exact (their SHA-256 is verified by tests).
+conformance/semantic-corpus/** -text
+vendor/** -text

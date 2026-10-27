@@ -56,6 +56,8 @@ select = [
 ".github/workflows/scripts/*.py" = ["T20", "PT009", "PT027", "ANN401"]
 # Repository tools are command-line programs that report through stdout.
 "tools/**/*.py" = ["T20"]
+# Conformance runners are command-line programs that report through stdout.
+"conformance/runners/*.py" = ["T20"]
 # The command line prints its user-facing output.
 "packages/server/src/*/server/cli.py" = ["T20"]
 # Generated contract types carry the contracts' descriptions verbatim.

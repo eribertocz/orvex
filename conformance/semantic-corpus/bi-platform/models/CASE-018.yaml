@@ -1,0 +1,88 @@
+version: '0.2.0.dev0'
+name: case-018
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0"}'
+datasets:
+  - name: sales
+    source: sales
+    primary_key:
+      - sale_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "sale"}'
+    fields:
+      - name: sale_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: sale_id
+      - name: date
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: '"date"'
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "time_role": "event"}'
+      - name: category
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: category
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "category"}'
+      - name: amount
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: amount
+      - name: month
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: 'DATE_TRUNC(''MONTH'', "date")'
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "month", "time": {"timezone": "UTC", "tzdb": "2025b"}, "semantic_role": "business_time"}'
+  - name: sales_month_category_rollup
+    source: sales_month_category_rollup
+    primary_key:
+      - month
+      - category
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "month_category", "grain": {"dimensions": ["month", "category"]}, "measures": [{"name": "rollup_revenue", "expression": "SUM(revenue)"}]}'
+    fields:
+      - name: month
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: month
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "month"}'
+      - name: category
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: category
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "category"}'
+      - name: revenue
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: revenue
+metrics:
+  - name: revenue
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(sales.amount)'

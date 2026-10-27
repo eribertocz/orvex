@@ -1,0 +1,3 @@
+sales_daily:
+  date: date
+  amount: 'decimal(18,2)'

@@ -1,0 +1,9 @@
+invoices:
+  invoice_id: int64
+  date: date
+  region: utf8
+  amount: 'decimal(18,2)'
+targets:
+  month: date
+  region: utf8
+  target_amount: 'decimal(18,2)'

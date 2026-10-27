@@ -1,0 +1,89 @@
+version: '0.2.0.dev0'
+name: case-009
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0"}'
+datasets:
+  - name: sales_monthly
+    source: sales_monthly
+    primary_key:
+      - month
+      - region
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "month_region", "grain": {"dimensions": ["month", "region"]}}'
+    fields:
+      - name: month
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: month
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "month"}'
+      - name: region
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: region
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "region"}'
+      - name: amount
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: amount
+  - name: refunds_monthly
+    source: refunds_monthly
+    primary_key:
+      - month
+      - region
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "month_region", "grain": {"dimensions": ["month", "region"]}}'
+    fields:
+      - name: month
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: month
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "month"}'
+      - name: region
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: region
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "region"}'
+      - name: amount
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: amount
+metrics:
+  - name: gross_revenue
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(sales_monthly.amount)'
+  - name: refunds
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(refunds_monthly.amount)'
+  - name: net_revenue
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'gross_revenue - refunds'
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "aggregation": {"class": "fully_additive"}}'

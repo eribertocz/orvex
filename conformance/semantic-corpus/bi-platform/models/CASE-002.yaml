@@ -1,0 +1,110 @@
+version: '0.2.0.dev0'
+name: case-002
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0"}'
+datasets:
+  - name: sales
+    source: sales
+    primary_key:
+      - line_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "line"}'
+    fields:
+      - name: line_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: line_id
+      - name: customer_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: customer_id
+      - name: product_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: product_id
+      - name: quantity
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: quantity
+      - name: unit_price
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: unit_price
+  - name: customers
+    source: customers
+    primary_key:
+      - customer_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "customer"}'
+    fields:
+      - name: customer_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: customer_id
+      - name: region
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: region
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "region"}'
+  - name: products
+    source: products
+    primary_key:
+      - product_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "product"}'
+    fields:
+      - name: product_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: product_id
+      - name: category
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: category
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "category"}'
+relationships:
+  - name: customer
+    from: sales
+    to: customers
+    from_columns:
+      - customer_id
+    to_columns:
+      - customer_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "optionality": "required"}'
+  - name: product
+    from: sales
+    to: products
+    from_columns:
+      - product_id
+    to_columns:
+      - product_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "optionality": "required"}'
+metrics:
+  - name: revenue
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(CAST(sales.quantity AS DECIMAL(20, 0)) * sales.unit_price)'

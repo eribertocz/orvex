@@ -1,0 +1,10 @@
+sales:
+  sale_id: int64
+  store_id: int64
+  amount: 'decimal(18,2)'
+store:
+  store_id: int64
+  region_id: int64
+region:
+  region_id: int64
+  region_name: utf8

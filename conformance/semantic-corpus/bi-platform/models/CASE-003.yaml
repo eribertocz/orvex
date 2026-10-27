@@ -1,0 +1,68 @@
+version: '0.2.0.dev0'
+name: case-003
+custom_extensions:
+  - vendor_name: bi-platform
+    data: '{"version": 1, "semantic_version": "0.1.0"}'
+datasets:
+  - name: invoices
+    source: invoices
+    primary_key:
+      - invoice_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "invoice"}'
+    fields:
+      - name: invoice_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: invoice_id
+      - name: customer_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: customer_id
+      - name: amount
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: amount
+  - name: customer
+    source: customer
+    primary_key:
+      - customer_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "entity": "customer"}'
+    fields:
+      - name: customer_id
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: customer_id
+      - name: segment
+        expression:
+          dialects:
+            - dialect: OSSIE_SQL_2026
+              expression: segment
+        dimension: {}
+        custom_extensions:
+          - vendor_name: bi-platform
+            data: '{"version": 1, "dimension": "segment"}'
+relationships:
+  - name: customer
+    from: invoices
+    to: customer
+    from_columns:
+      - customer_id
+    to_columns:
+      - customer_id
+    custom_extensions:
+      - vendor_name: bi-platform
+        data: '{"version": 1, "optionality": "required"}'
+metrics:
+  - name: billed_amount
+    expression:
+      dialects:
+        - dialect: OSSIE_SQL_2026
+          expression: 'SUM(invoices.amount)'
