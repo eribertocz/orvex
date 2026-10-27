@@ -123,6 +123,6 @@ Rates other than duplicates are measured on distinct rows. Tests check them with
 
 `large` holds 181,320,000 rows in total (readings, invoices, payments and credit notes: 179,290,000).
 
-`small` takes about 1.5 s; its files total about 9 MB.
+`small` takes about 1.5 s; its files total about 11 MB.
 
 `large`, measured once (2 vCPU, 8 GB RAM, Linux x86_64, DuckDB 2.0.0, Python 3.15): **4 min 43 s**; files `payments.parquet` 1.1 GB, `readings.parquet` 905 MB, `invoices.parquet` 849 MB, `meters.parquet` 12 MB, `consumers.parquet` 7.4 MB, `credit_notes.parquet` 192 KB (2.9 GB in total). It is not part of the test suite.
