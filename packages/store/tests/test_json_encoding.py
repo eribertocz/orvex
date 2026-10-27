@@ -216,4 +216,10 @@ def test_property_decimals_and_hugeints(value: decimal.Decimal, whole: int) -> N
     )
     decoded, huge = document["rows"][0]  # type: ignore[index]
     assert decimal.Decimal(decoded) == value
+    assert decoded == format(
+        value.quantize(decimal.Decimal("1E-10")).copy_abs()
+        if value.is_zero()
+        else value.quantize(decimal.Decimal("1E-10")),
+        "f",
+    )
     assert int(huge) == whole

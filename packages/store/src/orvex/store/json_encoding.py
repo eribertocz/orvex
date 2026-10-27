@@ -108,11 +108,10 @@ def _timestamp_text(microseconds: int, zoned: bool) -> str:
 
 def _timestamps(column: pa.Array) -> list[JsonValue]:
     zoned = column.type.tz is not None
-    unit = {"s": 1_000_000, "ms": 1_000, "us": 1, "ns": None}[column.type.unit]
-    if unit is None:
+    if column.type.unit != "us":
         raise StoreError(
             "STORE_TYPE_UNSUPPORTED",
-            "Nanosecond timestamps have no JSON encoding yet.",
+            "Only microsecond timestamps have a JSON encoding.",
             {"type": str(column.type)},
         )
     values: list[JsonValue] = []
@@ -124,7 +123,7 @@ def _timestamps(column: pa.Array) -> list[JsonValue]:
         elif raw == -TIMESTAMP_INFINITY:
             values.append("-infinity")
         else:
-            values.append(_timestamp_text(raw * unit, zoned))
+            values.append(_timestamp_text(raw, zoned))
     return values
 
 
