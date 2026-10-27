@@ -358,8 +358,12 @@ class Lake:
 
     def _names_of_table_functions(self) -> frozenset[str]:
         row = self._one(
+            # Names that are also scalar or aggregate functions (repeat, version, histogram, …)
+            # are generators or harmless in their table form, and their scalar form is common.
             "SELECT string_agg(DISTINCT lower(function_name), '|') FROM duckdb_functions() "
-            "WHERE function_type IN ('table', 'table_macro', 'pragma')",
+            "WHERE function_type IN ('table', 'table_macro', 'pragma') "
+            "AND lower(function_name) NOT IN (SELECT lower(function_name) FROM duckdb_functions() "
+            "WHERE function_type IN ('scalar', 'aggregate', 'macro'))",
             {},
         )
         text = str(row[0]) if row and row[0] is not None else ""
@@ -392,6 +396,8 @@ class Lake:
 
     def _attach_postgres(self, location: PostgresLakeLocation, password: str) -> None:
         """Attach a lake whose catalog is in PostgreSQL; the password comes from the environment."""
+        if "://" not in location.data_path:
+            Path(location.data_path).mkdir(parents=True, exist_ok=True)
         self._load_extension("postgres")
         try:
             # A temporary default secret supplies the password to every PostgreSQL connection of
