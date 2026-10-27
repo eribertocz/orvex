@@ -1329,10 +1329,12 @@ def _inexact_column_read(
     The columns a statement reads are those DuckDB's plan scans (projections and pushed-down
     filters). A scan is matched by its table name and, when the plan names one, its schema or
     source; when two candidates share a name, any of them counts (refusing beats a lost digit).
-    A statement that names none of these tables is not planned twice.
+    A statement that names none of these sources is not planned twice.
     """
     lowered = sql.lower()
-    candidates = [entry for entry in inexact if entry.table in lowered]
+    # Every inexact column of a source the statement names: a SQLite view is expanded by
+    # DuckDB, so its scan names the underlying table, not the view.
+    candidates = [entry for entry in inexact if entry.source in lowered]
     if not candidates:
         return None
     result = cursor.execute(f"EXPLAIN (FORMAT json) {sql}", parameters)

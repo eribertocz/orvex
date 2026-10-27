@@ -333,8 +333,7 @@ def test_inexact_postgres_columns_are_refused_only_when_read(
         with pytest.raises(StoreError) as filtered:
             write(
                 lake,
-                f"CREATE TABLE x AS SELECT reading_id FROM production.readings "
-                f"WHERE {column} IS NOT NULL",
+                f"CREATE TABLE x AS SELECT reading_id FROM {table} WHERE {column} IS NOT NULL",
             )
         assert filtered.value.code == "UNSUPPORTED_SOURCE_TYPE"
         write(lake, f"CREATE TABLE ok AS SELECT reading_id, kwh FROM {table}")
@@ -416,21 +415,3 @@ def test_synthetic_dataset_through_a_postgres_source(
         "payments": 236_400,
         "credit_notes": 100,
     }
-
-
-def test_zz_show_plans(location: Location, schema: str, sqlite_file: Path) -> None:
-    import json
-
-    lake = open_lake(location, LIMITS, [postgres_source(None), sqlite_source(sqlite_file)])
-    out = []
-    for sql in [
-        f"SELECT loose FROM production.{schema}.readings",
-        "SELECT * FROM field.billed",
-        "SELECT amount FROM field.charges",
-    ]:
-        row = lake._connection.execute(f"EXPLAIN (FORMAT json) {sql}").fetchone()
-        assert row is not None
-        out.append(json.dumps(json.loads(row[1]))[:1500])
-    out.append(repr(sorted(lake._inexact)))
-    lake.close()
-    pytest.fail("\n\n".join(out))
