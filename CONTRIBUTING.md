@@ -1,0 +1,44 @@
+# Contributing
+
+Rules for every change: [`AGENTS.md`](AGENTS.md) and [`docs/process/`](docs/process/README.md). This page only lists the commands. They are the same commands CI runs.
+
+## Python workspace
+
+Requirements: Python 3.15 (also tested on 3.14) and pip 26.2.2 or newer, because pip installs from `pylock.toml` only from 26.1 on.
+
+Every module under `packages/` is its own distribution in the `sextant` namespace (PEP 420). The root `pyproject.toml` holds only tool settings and the `dev` dependency group.
+
+### Set up
+
+```bash
+python3.15 -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
+python -m pip install pip==26.2.2
+python -m pip install -r pylock.toml # Python 3.14: pylock.py314.toml
+for package in packages/*/; do python -m pip install --no-deps --no-build-isolation -e "$package"; done
+```
+
+On Windows PowerShell, replace the last line with:
+`Get-ChildItem packages -Directory | ForEach-Object { python -m pip install --no-deps --no-build-isolation -e $_.FullName }`
+
+### Check
+
+```bash
+ruff format --check .
+ruff check .
+mypy -p sextant.store -p sextant.transform -p sextant.semantic -p sextant.access -p sextant.dashboards -p sextant.mcp -p sextant.server
+mypy packages/*/tests tests .github/workflows/scripts
+pytest
+```
+
+### Update dependencies
+
+1. Change the exact pin (`==`) in `pyproject.toml`.
+2. Regenerate both lock files, each with its own Python version:
+
+   ```bash
+   python3.15 -m pip lock --group dev -o pylock.toml
+   python3.14 -m pip lock --group dev -o pylock.py314.toml
+   ```
+
+`pip lock` is still marked experimental by pip. The lock files are valid for Linux x86_64, the CI platform. Lock files for Windows and macOS arrive with the operating-system matrix (P9-10). `tests/workspace/test_lock_files.py` fails while a lock file disagrees with `pyproject.toml`.

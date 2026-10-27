@@ -1,0 +1,92 @@
+# Python checks (P0-02): format, lint, strict types and tests, with exact versions from the lock files.
+name: python
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Install from the lock file
+        run: |
+          python -m pip install --quiet pip==26.2.2
+          python -m pip install --quiet -r pylock.toml
+      - run: ruff format --check .
+      - run: ruff check .
+
+  python-types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Install from the lock file
+        run: |
+          python -m pip install --quiet pip==26.2.2
+          python -m pip install --quiet -r pylock.toml
+      - name: Strict types (module sources)
+        run: mypy -p sextant.store -p sextant.transform -p sextant.semantic -p sextant.access -p sextant.dashboards -p sextant.mcp -p sextant.server
+      - name: Strict types (tests and scripts)
+        run: mypy packages/*/tests tests .github/workflows/scripts
+
+  python-tests:
+    name: python-tests-${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.15"
+            lock: pylock.toml
+          - python: "3.14"
+            lock: pylock.py314.toml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install from the lock file and the workspace packages
+        run: |
+          python -m pip install --quiet pip==26.2.2
+          python -m pip install --quiet -r ${{ matrix.lock }}
+          for package in packages/*/; do
+            python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
+          done
+      - run: pytest
+
+  python-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Two clean installs from pylock.toml produce identical versions
+        run: |
+          for attempt in first second; do
+            python -m venv "/tmp/$attempt"
+            "/tmp/$attempt/bin/python" -m pip install --quiet pip==26.2.2
+            "/tmp/$attempt/bin/python" -m pip install --quiet -r pylock.toml
+            "/tmp/$attempt/bin/python" -m pip freeze > "/tmp/$attempt.txt"
+          done
+          diff /tmp/first.txt /tmp/second.txt
+          cat /tmp/first.txt

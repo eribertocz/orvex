@@ -1,0 +1,55 @@
+# Workspace configuration only: each module is its own distribution under packages/.
+# There is intentionally no [project] table here.
+
+[dependency-groups]
+dev = [
+  "hypothesis==6.170.12",
+  "mypy==2.4.0",
+  "pytest==9.1.1",
+  "ruff==0.17.3",
+  "setuptools==84.2.1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+extend-exclude = ["web"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W",   # pycodestyle
+  "F",        # pyflakes
+  "I",        # import order
+  "UP",       # modern syntax
+  "B",        # likely bugs
+  "SIM",      # simplifications
+  "C4",       # comprehensions
+  "PT",       # pytest style
+  "RUF",      # ruff-specific checks
+  "ANN",      # type annotations everywhere
+  "BLE",      # no blind `except Exception`
+  "T20",      # no print() in product code
+  "ERA",      # no commented-out code
+  "TD", "FIX" # no TODO / FIXME at merge time
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Repository automation scripts (standard library only, P0-01):
+# - T20: they report to the GitHub Actions log through stdout;
+# - PT009, PT027: their tests use unittest because pytest is not available to them;
+# - ANN401: the REST client returns decoded JSON, whose shape is only known to the caller.
+".github/workflows/scripts/*.py" = ["T20", "PT009", "PT027", "ANN401"]
+
+[tool.mypy]
+strict = true
+python_version = "3.14"
+mypy_path = "$MYPY_CONFIG_DIR/packages/store/src:$MYPY_CONFIG_DIR/packages/transform/src:$MYPY_CONFIG_DIR/packages/semantic/src:$MYPY_CONFIG_DIR/packages/access/src:$MYPY_CONFIG_DIR/packages/dashboards/src:$MYPY_CONFIG_DIR/packages/mcp/src:$MYPY_CONFIG_DIR/packages/server/src"
+namespace_packages = true
+explicit_package_bases = true
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+addopts = ["--import-mode=importlib", "--strict-markers", "--strict-config", "-ra"]
+testpaths = ["packages", "tests"]
+xfail_strict = true
+filterwarnings = ["error"]
