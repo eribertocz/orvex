@@ -1,28 +1,18 @@
-"""P1-01: store contract v1 on DuckLake with a local catalog."""
+"""P1-01 and P1-02: store contract v1 on DuckLake, local and PostgreSQL catalogs."""
 
 from __future__ import annotations
 
 import decimal
 import threading
-from collections.abc import Iterator
 from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from orvex.contracts.store.v1 import LakeLocation, Parameter, ReadRequest, StatementRequest
+from orvex.contracts.store.v1 import LocalLakeLocation, Parameter, ReadRequest, StatementRequest
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, open_lake
 
 LIMITS = Limits(memory_limit="1GB", threads=2)
-
-
-@pytest.fixture
-def lake(tmp_path: Path) -> Iterator[Lake]:
-    opened = open_lake(
-        LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path)), LIMITS
-    )
-    yield opened
-    opened.close()
 
 
 def statement(sql: str, *parameters: tuple[str, str, str | None]) -> StatementRequest:
@@ -159,7 +149,7 @@ def test_read_runs_the_statement_once(lake: Lake) -> None:
 
 def test_large_read_streams_batch_by_batch(tmp_path: Path) -> None:
     """About 4 GB of results under a 512 MB limit: only streaming can pass."""
-    location = LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
+    location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
     small = open_lake(location, Limits(memory_limit="512MB", threads=2))
     try:
         request = ReadRequest(
@@ -236,13 +226,13 @@ def test_invalid_parameters(
 
 @pytest.mark.parametrize("limits", [Limits(None, 2), Limits("1GB", None)])
 def test_limits_are_required(tmp_path: Path, limits: Limits) -> None:
-    location = LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
+    location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
     assert code_of(lambda: open_lake(location, limits)) == "STORE_LIMITS_REQUIRED"
 
 
 def test_missing_extension_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("orvex.store.lake.EXTENSIONS", ("no_such_extension_xyz",))
-    location = LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
+    location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
     with pytest.raises(StoreError) as raised:
         open_lake(location, LIMITS)
     assert raised.value.code == "STORE_EXTENSION_UNAVAILABLE"
@@ -384,7 +374,7 @@ def test_error_while_streaming_is_a_store_error(lake: Lake) -> None:
 
 
 def test_invalid_limits_are_rejected(tmp_path: Path) -> None:
-    location = LakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
+    location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
     assert code_of(lambda: open_lake(location, Limits("lots", 2))) == "STORE_LIMITS_REQUIRED"
 
 

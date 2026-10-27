@@ -58,6 +58,20 @@ jobs:
             lock: pylock.toml
           - python: "3.14"
             lock: pylock.py314.toml
+    # PostgreSQL catalog for the store tests (P1-02); a disposable database, not a secret.
+    services:
+      postgres:
+        # postgres:18.6-trixie
+        image: postgres@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+        env:
+          POSTGRES_PASSWORD: ci-disposable-database
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      STORE_TEST_POSTGRES: host=localhost port=5432 dbname=postgres user=postgres
+      STORE_TEST_POSTGRES_PASSWORD: ci-disposable-database
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

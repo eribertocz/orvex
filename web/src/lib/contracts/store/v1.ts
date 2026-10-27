@@ -5,6 +5,10 @@
 export type StoreMessage =
 	LakeLocation | StatementRequest | ReadRequest | Snapshot | CommitResult | StoreError;
 /**
+ * Where the lake is.
+ */
+export type LakeLocation = LocalLakeLocation | PostgresLakeLocation;
+/**
  * DuckDB type of a parameter.
  */
 export type ParameterType = string;
@@ -14,15 +18,36 @@ export type ErrorCode =
 	| 'STORE_QUERY_FAILED'
 	| 'STORE_PARAMETER_INVALID'
 	| 'STORE_LIMITS_REQUIRED'
-	| 'STORE_EXTENSION_UNAVAILABLE';
+	| 'STORE_EXTENSION_UNAVAILABLE'
+	| 'STORE_TRANSACTION_CONFLICT'
+	| 'STORE_SECRET_MISSING'
+	| 'STORE_SECRET_INLINE'
+	| 'STORE_CATALOG_UNAVAILABLE';
 
 /**
- * A DuckLake lake with a local DuckDB-file catalog at <path>/catalog.ducklake and data files under <path>/data/.
+ * A DuckLake lake with a local DuckDB-file catalog at <path>/catalog.ducklake and data files under <path>/data/ (one process).
  */
-export interface LakeLocation {
+export interface LocalLakeLocation {
 	kind: 'lake_location';
 	catalog: 'local';
 	path: string;
+}
+/**
+ * A DuckLake lake whose catalog lives in PostgreSQL, so several processes can read and write it. The password is never part of the location: it is read from the environment variable named by password_env.
+ */
+export interface PostgresLakeLocation {
+	kind: 'lake_location';
+	catalog: 'postgres';
+	/**
+	 * libpq key=value connection string without a password, e.g. host=db port=5432 dbname=lake user=orvex
+	 */
+	connection: string;
+	password_env: string;
+	/**
+	 * PostgreSQL schema holding the catalog tables (default: public)
+	 */
+	metadata_schema?: string;
+	data_path: string;
 }
 /**
  * One SQL statement executed in a write transaction.

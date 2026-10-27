@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import math
+import os
 import re
 import threading
 from collections.abc import Iterator
@@ -22,15 +23,18 @@ import pyarrow as pa
 from orvex.contracts.store.v1 import (
     CommitResult,
     LakeLocation,
+    LocalLakeLocation,
     Parameter,
+    PostgresLakeLocation,
     ReadRequest,
     Snapshot,
     StatementRequest,
 )
-from orvex.store.errors import StoreError
+from orvex.store.errors import StoreError, register_secret
 
 LAKE = "lake"
 METADATA = f"__ducklake_metadata_{LAKE}"
+_PASSWORD_KEY = re.compile(r"(^|\s)password\s*=", re.IGNORECASE)
 _SUSPICIOUS = re.compile(r"[./\\*?:]")
 EXTENSIONS = ("icu", "ducklake")
 WRITE_STATEMENTS = frozenset(
@@ -220,7 +224,11 @@ READ_TABLE_FUNCTIONS = frozenset({"range", "generate_series", "unnest"})
 class Lake:
     """One open lake. Reads may run concurrently; write transactions run one at a time."""
 
-    def __init__(self, location: LakeLocation, limits: Limits) -> None:
+    def __init__(
+        self, location: LakeLocation | LocalLakeLocation | PostgresLakeLocation, limits: Limits
+    ) -> None:
+        if isinstance(location, LakeLocation):
+            location = location.root
         if not limits.memory_limit or not limits.threads:
             raise StoreError(
                 "STORE_LIMITS_REQUIRED",
@@ -240,22 +248,28 @@ class Lake:
         self._write_lock = threading.Lock()
         self._local = threading.local()
         try:
-            self._prepare(Path(location.path))
+            self._load_extensions()
+            # Catalog tables: `<metadata database>[.<schema>]`; the schema name is validated by
+            # the contract pattern ([a-z_][a-z0-9_]*) before it reaches SQL.
+            self._metadata = METADATA
+            if isinstance(location, PostgresLakeLocation) and location.metadata_schema:
+                self._metadata = f"{METADATA}.{location.metadata_schema}"
+            if isinstance(location, LocalLakeLocation):
+                self._attach_local(Path(location.path))
+            else:
+                self._attach_postgres(location)
+            # Nothing may load code or reach data the lake did not ask for after this point.
+            self._connection.sql("SET autoinstall_known_extensions = false")
+            self._connection.sql("SET autoload_known_extensions = false")
         except BaseException:
             self._connection.close()
             raise
 
-    def _prepare(self, folder: Path) -> None:
+    def _load_extensions(self) -> None:
         for extension in EXTENSIONS:
-            try:
-                self._connection.install_extension(extension)
-                self._connection.load_extension(extension)
-            except duckdb.Error as error:
-                raise StoreError(
-                    "STORE_EXTENSION_UNAVAILABLE",
-                    f"The DuckDB extension {extension} could not be installed or loaded.",
-                    {"extension": extension, "duckdb": str(error)},
-                ) from error
+            self._load_extension(extension)
+
+    def _attach_local(self, folder: Path) -> None:
         (folder / "data").mkdir(parents=True, exist_ok=True)
         catalog = (folder / "catalog.ducklake").as_posix()
         data = (folder / "data").as_posix() + "/"
@@ -263,9 +277,54 @@ class Lake:
         self._connection.sql(
             f"ATTACH {_quote('ducklake:' + catalog)} AS {LAKE} (DATA_PATH {_quote(data)})"
         )
-        # Nothing may load code or reach data the lake did not ask for after this point.
-        self._connection.sql("SET autoinstall_known_extensions = false")
-        self._connection.sql("SET autoload_known_extensions = false")
+
+    def _attach_postgres(self, location: PostgresLakeLocation) -> None:
+        """Attach a lake whose catalog is in PostgreSQL; the password comes from the environment."""
+        if _PASSWORD_KEY.search(location.connection):
+            raise StoreError(
+                "STORE_SECRET_INLINE",
+                "The connection string must not contain a password; use password_env.",
+                {},
+            )
+        password = os.environ.get(location.password_env)
+        if not password:
+            raise StoreError(
+                "STORE_SECRET_MISSING",
+                f"The environment variable {location.password_env} is not set.",
+                {"variable": location.password_env},
+            )
+        register_secret(password)
+        self._load_extension("postgres")
+        try:
+            # A temporary default secret supplies the password to every PostgreSQL connection of
+            # this database; DuckDB never shows secret values (duckdb_secrets() redacts them).
+            self._connection.sql(
+                f"CREATE TEMPORARY SECRET (TYPE postgres, PASSWORD {_quote(password)})"
+            )
+            options = [f"DATA_PATH {_quote(location.data_path)}"]
+            if location.metadata_schema:
+                options.append(f"METADATA_SCHEMA {_quote(location.metadata_schema)}")
+            self._connection.sql(
+                f"ATTACH {_quote('ducklake:postgres:' + location.connection)} AS {LAKE} "
+                f"({', '.join(options)})"
+            )
+        except duckdb.Error as error:
+            raise StoreError(
+                "STORE_CATALOG_UNAVAILABLE",
+                "The PostgreSQL catalog could not be reached.",
+                {"duckdb": str(error)},
+            ) from error
+
+    def _load_extension(self, extension: str) -> None:
+        try:
+            self._connection.install_extension(extension)
+            self._connection.load_extension(extension)
+        except duckdb.Error as error:
+            raise StoreError(
+                "STORE_EXTENSION_UNAVAILABLE",
+                f"The DuckDB extension {extension} could not be installed or loaded.",
+                {"extension": extension, "duckdb": str(error)},
+            ) from error
 
     def close(self) -> None:
         self._connection.close()
@@ -315,8 +374,8 @@ class Lake:
         """(schema, table) of every lake table alive at `snapshot`, lower-cased."""
         row = self._one(
             f"SELECT string_agg(lower(s.schema_name) || '.' || lower(t.table_name), '|') "
-            f"FROM {METADATA}.ducklake_table AS t "
-            f"JOIN {METADATA}.ducklake_schema AS s USING (schema_id) "
+            f"FROM {self._metadata}.ducklake_table AS t "
+            f"JOIN {self._metadata}.ducklake_schema AS s USING (schema_id) "
             "WHERE t.begin_snapshot <= $n AND (t.end_snapshot IS NULL OR t.end_snapshot > $n) "
             "AND s.begin_snapshot <= $n AND (s.end_snapshot IS NULL OR s.end_snapshot > $n)",
             {"n": snapshot},
@@ -474,6 +533,12 @@ class Lake:
                     raise
                 try:
                     cursor.commit()
+                except duckdb.TransactionException as error:
+                    raise StoreError(
+                        "STORE_TRANSACTION_CONFLICT",
+                        "Another writer changed the same data first; nothing was written.",
+                        {"duckdb": str(error)},
+                    ) from error
                 except duckdb.Error as error:
                     raise StoreError(
                         "STORE_QUERY_FAILED",
@@ -637,5 +702,7 @@ def _utc_schema(schema: pa.Schema) -> pa.Schema:
     return pa.schema(fields, metadata=schema.metadata)
 
 
-def open_lake(location: LakeLocation, limits: Limits) -> Lake:
+def open_lake(
+    location: LakeLocation | LocalLakeLocation | PostgresLakeLocation, limits: Limits
+) -> Lake:
     return Lake(location, limits)

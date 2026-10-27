@@ -1,0 +1,8 @@
+{
+  "kind": "lake_location",
+  "catalog": "postgres",
+  "connection": "host=db.internal port=5432 dbname=lake user=analytics",
+  "password_env": "LAKE_CATALOG_PASSWORD",
+  "metadata_schema": "billing",
+  "data_path": "/srv/lake/billing/"
+}
