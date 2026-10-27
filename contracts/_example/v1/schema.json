@@ -5,14 +5,45 @@
   "description": "Fixture contract that exercises the contract tooling. Not part of the product.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["reading_id", "consumer", "kwh", "status", "read_at"],
+  "required": [
+    "reading_id",
+    "consumer",
+    "kwh",
+    "status",
+    "read_at"
+  ],
   "properties": {
-    "reading_id": { "type": "string", "minLength": 1 },
-    "consumer": { "$ref": "#/$defs/Consumer" },
-    "kwh": { "$ref": "#/$defs/Decimal" },
-    "status": { "type": "string", "enum": ["valid", "estimated", "voided"] },
-    "read_at": { "type": "string", "format": "date-time" },
-    "note": { "type": ["string", "null"] }
+    "reading_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "consumer": {
+      "$ref": "#/$defs/Consumer"
+    },
+    "kwh": {
+      "$ref": "#/$defs/Decimal"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "valid",
+        "estimated",
+        "voided"
+      ]
+    },
+    "read_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "note": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "meter_id": {
+      "type": "string"
+    }
   },
   "$defs": {
     "Decimal": {
@@ -23,10 +54,19 @@
     "Consumer": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["consumer_id"],
+      "required": [
+        "consumer_id"
+      ],
       "properties": {
-        "consumer_id": { "type": "string" },
-        "zone": { "type": ["string", "null"] }
+        "consumer_id": {
+          "type": "string"
+        },
+        "zone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     }
   }
