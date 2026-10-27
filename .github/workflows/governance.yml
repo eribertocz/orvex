@@ -1,0 +1,32 @@
+# Required check: pull requests that touch governed paths must carry the `owner-merge` label.
+# `pull_request_target` runs THIS file as it is on the base branch, so a pull request cannot
+# edit the workflow, the script or the rules to weaken its own check
+# (docs/process/git-workflow.md §2). No code from the pull request is checked out or run here.
+name: governance
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: governance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  governance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the base branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Evaluate governed paths
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PULL_NUMBER: ${{ github.event.pull_request.number }}
+          GOVERNANCE_DOCUMENT: docs/process/git-workflow.md
+        run: python3 .github/workflows/scripts/governance.py

@@ -1,0 +1,15 @@
+# LF everywhere, also on Windows checkouts.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.pdf binary
+*.parquet binary
+*.duckdb binary
+*.sqlite binary
+*.xlsx binary
+*.woff binary
+*.woff2 binary

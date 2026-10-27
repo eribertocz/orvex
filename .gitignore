@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+*.egg-info/
+build/
+dist/
+
+# Web
+node_modules/
+web/.svelte-kit/
+web/build/
+
+# Local project state and data (never committed)
+.sextant/
+*.duckdb
+*.duckdb.wal
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
