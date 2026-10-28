@@ -255,9 +255,9 @@ def test_a_failing_model_does_not_stall_the_others(
     out = scheduled(tmp_path, monkeypatch, START + dt.timedelta(minutes=60))
     found = records(tmp_path)
     healthy = [(started, outcome) for model, started, outcome, _ in found if model == "s.healthy"]
-    # The first run fails with the broken model; then the healthy one runs on its own.
-    assert healthy[0] == ("09:50", "failed")
-    assert ("09:55", "success") in healthy
+    # The first run stops at the broken model (it runs first: by name); then the healthy one
+    # runs on its own, five minutes later, while the broken one waits for its retry.
+    assert healthy[0] == ("09:55", "success")
     assert sum(1 for _, outcome in healthy if outcome == "success") >= 4
     assert "SCHEDULE_GAVE_UP s.broken" in out
     assert "SCHEDULE_GAVE_UP s.healthy" not in out
