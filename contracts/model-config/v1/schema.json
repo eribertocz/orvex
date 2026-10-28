@@ -346,7 +346,8 @@
         "TIME_COLUMN_NOT_TEMPORAL",
         "SCHEMA_CHANGED",
         "UNIQUE_KEY_NULL",
-        "UNIQUE_KEY_DUPLICATED"
+        "UNIQUE_KEY_DUPLICATED",
+        "MISSING_PARTITION_BY"
       ]
     },
     "ModelError": {

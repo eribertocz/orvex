@@ -66,7 +66,8 @@ export type ModelErrorCode =
 	| 'TIME_COLUMN_NOT_TEMPORAL'
 	| 'SCHEMA_CHANGED'
 	| 'UNIQUE_KEY_NULL'
-	| 'UNIQUE_KEY_DUPLICATED';
+	| 'UNIQUE_KEY_DUPLICATED'
+	| 'MISSING_PARTITION_BY';
 
 /**
  * Sidecar of one model. Without a sidecar a model is `materialized: table`, fully rebuilt on each run.

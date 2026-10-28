@@ -1,15 +1,24 @@
-"""Incremental models: checks and run steps for `append` and `merge` (P1-11).
+"""Incremental models: checks and run steps for every strategy (P1-11, P1-12).
 
 The loaded rows (what the model's SELECT returns in this run) are first written to a staging
-table inside the run's transaction; checks run on it; then the target is created, appended to or
-merged, and the staging table is dropped — all in the same transaction, so a failure anywhere
-leaves the target as it was. Merging is done as "delete the target rows whose key is loaded,
-insert the loaded rows", which equals updating every column of matched keys and inserting the
-rest, without relying on MERGE support in the lake format.
+table inside the run's transaction; checks run on it; the target's columns are changed when the
+model's `on_schema_change` allows it; then the target is created or written, and the staging
+table is dropped — all in the same transaction, so a failure anywhere leaves the target (data and
+columns) as it was.
+
+Every strategy is "delete the target rows the loaded rows replace, insert the loaded rows":
+- `append` deletes nothing;
+- `merge` deletes the rows whose key is loaded (keys must be unique in the loaded rows), which
+  equals updating every column of matched keys and inserting the rest, without relying on MERGE
+  support in the lake format;
+- `delete_insert` deletes the rows whose key is loaded (a key's rows are replaced as a set);
+- `partition_overwrite` deletes the rows whose partition is loaded (`NULL` is a partition).
+Rows are inserted by column name, so a target whose columns were added at the end still matches.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -19,7 +28,12 @@ from orvex.transform.models import Model, problem
 
 STAGE_SCHEMA = "_stage"
 TEMPORAL_TYPES = frozenset({"DATE", "TIMESTAMP", "TIMESTAMP WITH TIME ZONE"})
-RUNNABLE_STRATEGIES = frozenset({"append", "merge"})
+KEYED_STRATEGIES = frozenset({"merge", "delete_insert"})
+
+# Type changes that keep every existing value exactly (sync_all_columns); nothing else is applied.
+_SIGNED_INTEGERS = ("TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT")
+_UNSIGNED_INTEGERS = ("UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT")
+_DECIMAL = re.compile(r"DECIMAL\((\d+),(\d+)\)")
 
 type Columns = Sequence[tuple[str, str]]
 
@@ -68,11 +82,21 @@ def config_problems(model: Model) -> list[ModelError]:
     file = model.config_file or model.sql_file
     found: list[ModelError] = []
     strategy = incremental.strategy
-    if strategy in {"merge", "delete_insert"} and not incremental.unique_key:
+    if strategy in KEYED_STRATEGIES and not incremental.unique_key:
         found.append(
             problem(
                 "MISSING_UNIQUE_KEY",
                 f"{file}: strategy {strategy} needs unique_key.",
+                file,
+                model=model.name,
+                path="/incremental",
+            )
+        )
+    if strategy == "partition_overwrite" and not incremental.partition_by:
+        found.append(
+            problem(
+                "MISSING_PARTITION_BY",
+                f"{file}: strategy partition_overwrite needs partition_by.",
                 file,
                 model=model.name,
                 path="/incremental",
@@ -114,17 +138,21 @@ def column_problems(model: Model, columns: Columns) -> list[ModelError]:
                 path="/incremental/time_column",
             )
         )
-    for index, key in enumerate(incremental.unique_key or []):
-        if key.root.lower() not in types:
-            found.append(
-                problem(
-                    "MODEL_CONFIG_INVALID",
-                    f"{file}: unique_key column {key.root} is not an output column.",
-                    file,
-                    model=model.name,
-                    path=f"/incremental/unique_key/{index}",
+    for field, listed in (
+        ("unique_key", incremental.unique_key),
+        ("partition_by", incremental.partition_by),
+    ):
+        for index, column in enumerate(listed or []):
+            if column.root.lower() not in types:
+                found.append(
+                    problem(
+                        "MODEL_CONFIG_INVALID",
+                        f"{file}: {field} column {column.root} is not an output column.",
+                        file,
+                        model=model.name,
+                        path=f"/incremental/{field}/{index}",
+                    )
                 )
-            )
     return found
 
 
@@ -153,61 +181,99 @@ def schema_change(model: Model, output: Columns, existing: Columns | None) -> st
     return "; ".join(parts) or "the column order changed"
 
 
+def widens(old: str, new: str) -> bool:
+    """True when every value of type `old` casts to `new` exactly (and back)."""
+    for family in (_SIGNED_INTEGERS, _UNSIGNED_INTEGERS):
+        if old in family and new in family:
+            return family.index(new) > family.index(old)
+    old_decimal, new_decimal = _DECIMAL.fullmatch(old), _DECIMAL.fullmatch(new)
+    if old_decimal and new_decimal:
+        old_precision, old_scale = map(int, old_decimal.groups())
+        new_precision, new_scale = map(int, new_decimal.groups())
+        return new_scale == old_scale and new_precision > old_precision
+    return old == "DATE" and new == "TIMESTAMP"
+
+
+def schema_statements(model: Model, output: Columns, existing: Columns) -> list[str] | str:
+    """The `ALTER TABLE` statements that make the target take the output's columns under the
+    model's `on_schema_change`, or why it cannot (the run then fails with SCHEMA_CHANGED)."""
+    changed = schema_change(model, output, existing)
+    if changed is None:
+        return []
+    policy = model.config.on_schema_change or "fail"
+    if policy == "fail":
+        return changed
+    target = _target(model)
+    old = {name.lower(): (name, kind) for name, kind in existing}
+    new = {name.lower(): (name, kind) for name, kind in output}
+    added = [new[key] for key in new if key not in old]
+    removed = [old[key] for key in old if key not in new]
+    retyped = [(old[key], new[key][1]) for key in new if key in old and old[key][1] != new[key][1]]
+    if policy == "append_new_columns" and (removed or retyped):
+        return changed + "; append_new_columns only adds columns"
+    refused = [f"{name} {kind} → {to}" for (name, kind), to in retyped if not widens(kind, to)]
+    if refused:
+        return "cannot change " + ", ".join(refused) + " without changing values"
+    # Added first, dropped last: the table never has zero columns.
+    return (
+        [f"ALTER TABLE {target} ADD COLUMN {_identifier(name)} {kind}" for name, kind in added]
+        + [
+            f"ALTER TABLE {target} ALTER COLUMN {_identifier(name)} SET DATA TYPE {to}"
+            for (name, _), to in retyped
+        ]
+        + [f"ALTER TABLE {target} DROP COLUMN {_identifier(name)}" for name, _ in removed]
+    )
+
+
+def _target(model: Model) -> str:
+    return f"{_identifier(model.schema)}.{_identifier(model.table)}"
+
+
 def steps(model: Model, sql: str, output: Columns, existing: Columns | None) -> list[Step]:
     """The run steps of one incremental model (`existing`: its table's columns, None if absent)."""
     incremental = model.config.incremental
     assert incremental is not None  # only incremental models get here
     strategy = incremental.strategy
-    if strategy not in RUNNABLE_STRATEGIES:
-        return [
-            Refuse(
-                "UNSUPPORTED_MODEL_KIND",
-                f"{model.name}: strategy {strategy} runs from a later release (P1-12).",
-            )
-        ]
-    changed = schema_change(model, output, existing)
-    if changed is not None:
-        return [
-            Refuse(
-                "SCHEMA_CHANGED",
-                f"{model.name}: the output no longer matches the table ({changed}); with "
-                "on_schema_change: fail nothing is written.",
-            )
-        ]
-    target = f"{_identifier(model.schema)}.{_identifier(model.table)}"
-    stage = f"{STAGE_SCHEMA}.{_identifier(f'{model.schema}__{model.table}')}"
+    policy = model.config.on_schema_change or "fail"
+    alterations: list[str] = []
+    if existing is not None:
+        planned = schema_statements(model, output, existing)
+        if isinstance(planned, str):
+            return [
+                Refuse(
+                    "SCHEMA_CHANGED",
+                    f"{model.name}: the output no longer matches the table ({planned}); with "
+                    f"on_schema_change: {policy} nothing is written.",
+                )
+            ]
+        alterations = planned
+    target = _target(model)
+    stage_table = f"{model.schema}__{model.table}"
+    stage = f"{STAGE_SCHEMA}.{_identifier(stage_table)}"
     result: list[Step] = [
         _statement(f"CREATE SCHEMA IF NOT EXISTS {STAGE_SCHEMA}"),
         _statement(f"CREATE OR REPLACE TABLE {stage} AS {sql}"),
         Count(f"SELECT count(*) FROM {stage}"),
     ]
     keys = [_identifier(key.root) for key in incremental.unique_key or []]
-    if strategy == "merge":
+    listed = ", ".join(keys)
+    if strategy in KEYED_STRATEGIES:
         any_null = " OR ".join(f"{key} IS NULL" for key in keys)
-        listed = ", ".join(keys)
-        result += [
+        result.append(
             Check(
                 f"SELECT count(*) FROM {stage} WHERE {any_null}",
                 "UNIQUE_KEY_NULL",
                 f"{model.name}: loaded rows have a NULL in unique_key ({listed}).",
-            ),
+            )
+        )
+    if strategy == "merge":
+        result.append(
             Check(
                 f"SELECT count(*) FROM (SELECT {listed} FROM {stage} "
                 f"GROUP BY {listed} HAVING count(*) > 1)",
                 "UNIQUE_KEY_DUPLICATED",
                 f"{model.name}: loaded rows repeat a unique_key ({listed}); the result would "
                 "depend on row order.",
-            ),
-        ]
-    if existing is not None:
-        # The columns were compared at validation; compare again on the loaded rows, inside the
-        # transaction, so a source that changed since then cannot be inserted by position.
-        result.append(
-            Check(
-                _same_columns_sql(STAGE_SCHEMA, f"{model.schema}__{model.table}", model),
-                "SCHEMA_CHANGED",
-                f"{model.name}: the loaded rows' columns no longer match the table; nothing is "
-                "written.",
             )
         )
     if existing is None:
@@ -215,17 +281,29 @@ def steps(model: Model, sql: str, output: Columns, existing: Columns | None) -> 
             _statement(f"CREATE SCHEMA IF NOT EXISTS {_identifier(model.schema)}"),
             _statement(f"CREATE TABLE {target} AS SELECT * FROM {stage}"),
         ]
-    elif strategy == "append":
-        result.append(_statement(f"INSERT INTO {target} SELECT * FROM {stage}"))
     else:
-        matched = " AND ".join(f"{target}.{key} = loaded.{key}" for key in keys)
-        result += [
-            _statement(
-                f"DELETE FROM {target} WHERE EXISTS "
-                f"(SELECT 1 FROM {stage} AS loaded WHERE {matched})"
-            ),
-            _statement(f"INSERT INTO {target} SELECT * FROM {stage}"),
-        ]
+        result += [_statement(statement) for statement in alterations]
+        # The columns were compared at validation; compare again on the loaded rows, inside the
+        # transaction, after any column change, so a source that changed since validation cannot
+        # be written. Under `fail` the order must match too; otherwise columns are compared by
+        # name, since added columns go to the end of the table (rows are inserted by name).
+        result.append(
+            Check(
+                _same_columns_sql(stage_table, model, ordered=policy == "fail"),
+                "SCHEMA_CHANGED",
+                f"{model.name}: the loaded rows' columns no longer match the table; nothing is "
+                "written.",
+            )
+        )
+        replaced = _replaced(model, target)
+        if replaced is not None:
+            result.append(
+                _statement(
+                    f"DELETE FROM {target} WHERE EXISTS "
+                    f"(SELECT 1 FROM {stage} AS loaded WHERE {replaced})"
+                )
+            )
+        result.append(_statement(f"INSERT INTO {target} BY NAME SELECT * FROM {stage}"))
     result += [
         _statement(f"DROP TABLE {stage}"),
         _statement(f"DROP SCHEMA IF EXISTS {STAGE_SCHEMA}"),
@@ -233,24 +311,44 @@ def steps(model: Model, sql: str, output: Columns, existing: Columns | None) -> 
     return result
 
 
+def _replaced(model: Model, target: str) -> str | None:
+    """How a target row matches a loaded row it is replaced by (None: nothing is replaced)."""
+    incremental = model.config.incremental
+    assert incremental is not None
+    if incremental.strategy in KEYED_STRATEGIES:
+        # Keys were checked to have no NULL part, so `=` is exact.
+        columns, match = incremental.unique_key or [], "="
+    elif incremental.strategy == "partition_overwrite":
+        columns, match = incremental.partition_by or [], "IS NOT DISTINCT FROM"
+    else:
+        return None
+    return " AND ".join(
+        f"{target}.{_identifier(column.root)} {match} loaded.{_identifier(column.root)}"
+        for column in columns
+    )
+
+
 def _literal(text: str) -> str:
     return "'" + text.replace("'", "''") + "'"
 
 
-def _columns_sql(schema: str, table: str) -> str:
+def _columns_sql(schema: str, table: str, ordered: bool) -> str:
+    order = "ordinal_position" if ordered else "lower(column_name)"
     return (
-        "(SELECT string_agg(column_name || ' ' || data_type, ', ' ORDER BY ordinal_position) "
+        "(SELECT string_agg(lower(column_name) || ' ' || data_type, ', ' "
+        f"ORDER BY {order}) "
         "FROM information_schema.columns WHERE table_catalog = current_database() "
         f"AND table_schema = {_literal(schema)} AND table_name = {_literal(table)})"
     )
 
 
-def _same_columns_sql(stage_schema: str, stage_table: str, model: Model) -> str:
-    """0 only when the stage and the target both exist with the same columns, in order."""
+def _same_columns_sql(stage_table: str, model: Model, ordered: bool) -> str:
+    """0 only when the stage and the target both exist with the same columns (in order, when
+    `ordered`; otherwise by name)."""
     # Both sides must be found: two missing lookups would otherwise compare equal.
     return (
-        f"SELECT CASE WHEN {_columns_sql(stage_schema, stage_table)} = "
-        f"{_columns_sql(model.schema, model.table)} THEN 0 ELSE 1 END"
+        f"SELECT CASE WHEN {_columns_sql(STAGE_SCHEMA, stage_table, ordered)} = "
+        f"{_columns_sql(model.schema, model.table, ordered)} THEN 0 ELSE 1 END"
     )
 
 

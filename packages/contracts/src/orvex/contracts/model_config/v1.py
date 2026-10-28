@@ -148,6 +148,7 @@ class ModelErrorCode(
             "SCHEMA_CHANGED",
             "UNIQUE_KEY_NULL",
             "UNIQUE_KEY_DUPLICATED",
+            "MISSING_PARTITION_BY",
         ]
     ]
 ):
@@ -167,6 +168,7 @@ class ModelErrorCode(
         "SCHEMA_CHANGED",
         "UNIQUE_KEY_NULL",
         "UNIQUE_KEY_DUPLICATED",
+        "MISSING_PARTITION_BY",
     ]
 
 
