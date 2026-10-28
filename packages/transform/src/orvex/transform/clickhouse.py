@@ -10,9 +10,10 @@ the column is refused (`UNSUPPORTED_SOURCE_TYPE`) with a hint to cast it in the 
 
 Describing a query can still make ClickHouse evaluate parts of it (scalar subqueries, also inside
 views). Every validation query therefore carries a row limit that ClickHouse enforces, and the
-reader must not be able to lift it (decision #114). ClickHouse does not apply that limit to
-`Memory`, `Log` and `TinyLog` tables, nor inside views whose own definition sets it: those reads
-are not limited (documented in `contracts/model-config/v1`).
+reader must not be able to lift it (decision #114). ClickHouse applies that limit to
+MergeTree-family tables; it does not to some other engines (`Memory`, `Log`, `TinyLog`, `File`,
+`URL`, and possibly integration engines such as `S3` or `PostgreSQL`): reads of those are not
+limited (documented in `contracts/model-config/v1`).
 
 `clickhouse-connect` is ClickHouse, Inc.'s official client (Apache-2.0, ADR-0002).
 """
@@ -36,14 +37,21 @@ SINCE = "since"
 CONNECT_TIMEOUT = 10  # seconds
 QUERY_TIMEOUT = 30  # seconds, for validation queries (EXPLAIN, DESCRIBE)
 # ClickHouse evaluates scalar subqueries while it describes a query: reading is capped, and a
-# query that would read rows fails (TOO_MANY_ROWS) after at most one block (not for Memory, Log
-# or TinyLog tables, which ClickHouse does not limit).
+# query that would read rows fails (TOO_MANY_ROWS) after at most one block (MergeTree-family
+# tables; ClickHouse does not limit some other engines, see the module docstring).
 VALIDATION_LIMITS: tuple[tuple[str, object], ...] = (
     ("max_execution_time", QUERY_TIMEOUT),
     ("max_rows_to_read", 1),
     ("read_overflow_mode", "throw"),
 )
 _TOO_MANY_ROWS = 158
+_READONLY = 164
+# Values that lift each validation limit, for the connection check.
+_LIFTED_LIMITS = (
+    ("max_rows_to_read", "1000000000"),
+    ("read_overflow_mode", "'break'"),
+    ("max_execution_time", "3600"),
+)
 _REFERENCE = re.compile(r"\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
 
 # --- scanning the SQL text ----------------------------------------------------------------
@@ -677,14 +685,14 @@ class Source:
         readonly = self._client.server_settings.get("readonly")
         # Fixed by the user's profile: only a fixed `readonly = 1` is read-only for data and
         # settings; `0` (read-write) or `2` (settings may change) is refused.
-        self._fixed_read_only = readonly is not None and bool(readonly.readonly)
-        if readonly is not None and self._fixed_read_only and str(readonly.value) != "1":
+        fixed_read_only = readonly is not None and bool(readonly.readonly)
+        if readonly is not None and fixed_read_only and str(readonly.value) != "1":
             self._client.close()
             raise SourceError(
                 "SOURCE_NOT_READ_ONLY",
                 f"ClickHouse connection {name}: the user's profile fixes readonly = "
                 f"{readonly.value}, so its queries cannot be made read-only; use a user whose "
-                "profile allows readonly = 1 (or fixes it to 1).",
+                "profile does not fix readonly (only SELECT grants).",
             )
         # Decision #114 (option C): the reader must accept the validation limits, and SQL run
         # by that reader must not be able to lift them, so ClickHouse itself stops any read (a
@@ -704,13 +712,20 @@ class Source:
             if isinstance(error, OperationalError):
                 raise self._error(error, "SOURCE_CONNECTION_FAILED") from None
             raise refusal from None
-        try:
-            self._client.query("SELECT 1 SETTINGS max_rows_to_read = 0", settings=self.settings())
-        except ClickHouseError as error:
-            if isinstance(error, OperationalError):
-                self._client.close()
-                raise self._error(error, "SOURCE_CONNECTION_FAILED") from None
-        else:
+        # Each limit, lifted by the SQL itself, must be refused as a read-only violation: any
+        # other outcome (it runs, or a constraint refuses only that value) means SQL, or a view's
+        # definition, could lift it.
+        for setting, lifted in _LIFTED_LIMITS:
+            try:
+                self._client.query(
+                    f"SELECT 1 SETTINGS {setting} = {lifted}", settings=self.settings()
+                )
+            except ClickHouseError as error:
+                if isinstance(error, OperationalError):
+                    self._client.close()
+                    raise self._error(error, "SOURCE_CONNECTION_FAILED") from None
+                if getattr(error, "code", None) == _READONLY:
+                    continue
             self._client.close()
             raise refusal
 
@@ -725,13 +740,12 @@ class Source:
         return SourceError(code, f"ClickHouse connection {self.name}: {text}")
 
     def settings(self) -> dict[str, object]:
-        """Settings for each validation query: the limits, then `readonly = 1` (not sent when the
-        profile already fixes it). They are sent with the query, never kept in a session;
-        ClickHouse checks them together before applying them, so the limits are accepted
-        although `readonly = 1` forbids later changes."""
+        """Settings for each validation query: the limits, then `readonly = 1`. They are sent with
+        the query, never kept in a session; ClickHouse checks them together before applying them,
+        so the limits are accepted although `readonly = 1` forbids later changes (the connection
+        check has made sure the user's profile allows exactly that)."""
         settings: dict[str, object] = dict(VALIDATION_LIMITS)
-        if not self._fixed_read_only:
-            settings["readonly"] = 1
+        settings["readonly"] = 1
         return settings
 
     def _parameters(self, since: SinceType | None) -> dict[str, str] | None:

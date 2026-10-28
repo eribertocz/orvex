@@ -93,6 +93,10 @@ def source() -> Iterator[dict[str, str]]:
         # A view whose description evaluates a scalar subquery over every row of events.
         f"CREATE VIEW {database}.totals AS SELECT event_id, "
         f"(SELECT sum(value) FROM {database}.events) AS total FROM {database}.events",
+        # The same, with the view's own definition trying to lift the row limit.
+        f"CREATE VIEW {database}.lifted AS SELECT event_id, "
+        f"(SELECT sum(value) FROM {database}.events) AS total FROM {database}.events "
+        "SETTINGS max_rows_to_read = 1000000000, read_overflow_mode = 'break'",
         f"CREATE USER {reader} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}'",
         f"GRANT SELECT ON {database}.* TO {reader}",
     ]
@@ -331,6 +335,7 @@ def test_reader_profiles(
     suffix = source["reader"]
     profile = f"{suffix}_profile"
     changeable, fixed, loose = f"{suffix}_changeable", f"{suffix}_ro1", f"{suffix}_ro2"
+    bounded, overflow = f"{suffix}_min", f"{suffix}_overflow"
     monkeypatch.setenv(VARIABLE, READER_PASSWORD)
     created = [
         f"CREATE SETTINGS PROFILE {profile} SETTINGS readonly = 1, "
@@ -342,11 +347,16 @@ def test_reader_profiles(
         "SETTINGS readonly = 1",
         f"CREATE USER {loose} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}' "
         "SETTINGS readonly = 2",
+        # Only a MIN on the limit (a higher value can still be set), or only the overflow mode.
+        f"CREATE USER {bounded} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}' "
+        "SETTINGS max_rows_to_read MIN 1 CHANGEABLE_IN_READONLY",
+        f"CREATE USER {overflow} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}' "
+        "SETTINGS read_overflow_mode CHANGEABLE_IN_READONLY",
     ]
     try:
         for statement in created:
             client.command(statement)
-        for user in (changeable, fixed, loose):
+        for user in (changeable, fixed, loose, bounded, overflow):
             client.command(f"GRANT SELECT ON {source['database']}.* TO {user}")
         example = {"models/raw/ch_events.sql": EXAMPLE, "models/raw/ch_events.yaml": EXTRACTION}
 
@@ -359,11 +369,14 @@ def test_reader_profiles(
         # The limits cannot be sent at all: refused.
         assert codes("fixed", fixed, example) == ["SOURCE_LIMITS_REFUSED"]
         assert codes("loose", loose, example) == ["SOURCE_NOT_READ_ONLY"]
+        assert codes("bounded", bounded, example) == ["SOURCE_LIMITS_REFUSED"]
+        assert codes("overflow", overflow, example) == ["SOURCE_LIMITS_REFUSED"]
         reader = source["reader"]  # SELECT grants only: accepted
         assert codes("ok", reader, example) == []
         stopped = [
             # The view's scalar subquery is invisible in the model: the row limit stops it.
             "SELECT event_id FROM totals",
+            "SELECT event_id FROM lifted",
             "SELECT e.event_id FROM events AS e JOIN totals USING (event_id)",
             # A model cannot change the limits.
             "SELECT event_id FROM totals SETTINGS max_rows_to_read = 0",
@@ -383,7 +396,7 @@ def test_reader_profiles(
         ).result_rows
         assert int(heaviest[0][0]) < 1000  # never all the rows of events
     finally:
-        for user in (changeable, fixed, loose):
+        for user in (changeable, fixed, loose, bounded, overflow):
             client.command(f"DROP USER IF EXISTS {user}")
         client.command(f"DROP SETTINGS PROFILE IF EXISTS {profile}")
         client.close()

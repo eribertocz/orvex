@@ -64,11 +64,10 @@ CREATE USER extraction IDENTIFIED BY '…';
 GRANT SELECT ON analytics.* TO extraction;
 ```
 
-When the connection opens, two queries check this: one with the limits must run, and one that lifts them must be refused. Otherwise the connection is refused (`SOURCE_LIMITS_REFUSED`). A profile that fixes `readonly` to `0` or `2` is refused (`SOURCE_NOT_READ_ONLY`).
+When the connection opens, queries check this: one with the limits must run, and one per limit that lifts it (`SETTINGS max_rows_to_read = 1000000000`, `read_overflow_mode = 'break'`, `max_execution_time = 3600`) must be refused as a read-only violation. A view's own `SETTINGS` cannot lift them either. Otherwise the connection is refused (`SOURCE_LIMITS_REFUSED`). A profile that fixes `readonly` to `0` or `2` is refused (`SOURCE_NOT_READ_ONLY`).
 
 Known limits:
-- **Engines the limit does not cover.** ClickHouse does not apply `max_rows_to_read` to `Memory`, `Log` and `TinyLog` tables, so describing SQL whose scalar subqueries (in the model, or in a view it reads) read such a table is not limited.
-- **Views that set their own limits.** A view whose own definition sets these settings can override the limits.
+- **Engines the limit does not cover.** ClickHouse applies `max_rows_to_read` to MergeTree-family tables. It does not apply it to some other engines: `Memory`, `Log`, `TinyLog`, `File` and `URL` (verified), and possibly integration engines such as `S3`, `PostgreSQL` or `MySQL`. Describing SQL whose scalar subqueries, in the model or in a view it reads, read such a table is not limited.
 - **Dictionaries.** Dictionary lookups (`dictGet…`, `joinGet…`) are allowed. Describing them, or a dictionary read as a table, can make ClickHouse load a dictionary that is not in memory yet.
 
 A quoted name with a line break, a control character or a backslash escape is refused, because the checks read ClickHouse's `EXPLAIN AST` text, where names are printed unescaped. Then: `EXPLAIN AST` must show one `SELECT` (otherwise `INVALID_MODEL_SQL` with ClickHouse's message), and `DESCRIBE` gives its output columns. Before that, the text alone is checked (strings, quoted identifiers and comments skipped):
