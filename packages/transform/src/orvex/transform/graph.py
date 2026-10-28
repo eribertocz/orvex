@@ -22,7 +22,7 @@ from orvex.transform import incremental, model_tests, reconciliation
 from orvex.transform.incremental import Columns, Step
 from orvex.transform.model_tests import ModelTest
 from orvex.transform.models import Model, problem
-from orvex.transform.reconciliation import Reconcile
+from orvex.transform.reconciliation import Comparison, Reconcile
 
 LAKE_CATALOG = "lake"
 
@@ -283,7 +283,7 @@ def plan_run(
     since: Mapping[str, str] | None = None,
     full_refresh: frozenset[str] = frozenset(),
     previous: Mapping[str, str | None] | None = None,
-    differences: Mapping[str, Sequence[str]] | None = None,
+    differences: Mapping[str, Sequence[Comparison]] | None = None,
 ) -> list[tuple[Model, list[Step | ModelTest | Reconcile]]]:
     """Steps that build every stored model, in run order (views are not stored).
 
@@ -294,7 +294,7 @@ def plan_run(
 
     Each model's tests (P1-15), then its reconciliation checks (P1-16), follow its write; a
     view with checks gets an entry with only them, run on its SQL. Tests need `outputs`, and
-    reconciliation the type of each check's measure difference (`differences`).
+    reconciliation how each check compares, from the binder (`differences`).
     """
     by_name = {model.name: model for model in models}
     relations = test_relations(models)

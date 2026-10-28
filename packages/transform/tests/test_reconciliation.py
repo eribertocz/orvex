@@ -7,7 +7,14 @@ from pathlib import Path
 import duckdb
 import pytest
 from orvex.transform.models import Model, discover_models
-from orvex.transform.reconciliation import common_type, expression, measures_sql, problems, steps
+from orvex.transform.reconciliation import (
+    Comparison,
+    common_type,
+    expression,
+    measures_sql,
+    problems,
+    steps,
+)
 
 CONNECTIONS = {"feed": "parquet", "ch": "clickhouse"}
 RELATION = '"s"."m"'
@@ -86,8 +93,9 @@ def failing(chosen: Model, connection: duckdb.DuckDBPyConnection) -> list[tuple[
     differences = []
     for check in chosen.config.reconciliation or []:
         rows = connection.execute(f"DESCRIBE {measures_sql(check, RELATION)}").fetchall()
-        differences.append(common_type(str(rows[0][1]), str(rows[1][1])))
         assert all(rows[i][1] == rows[i + 1][1] for i in range(2, len(rows), 2))
+        texts = frozenset(i for i in range(len(rows) // 2 - 1) if rows[2 + 2 * i][1] == "VARCHAR")
+        differences.append(Comparison(common_type(str(rows[0][1]), str(rows[1][1])), texts))
     found = []
     for planned in steps(chosen, RELATION, differences):
         sql = planned.request.sql
@@ -140,7 +148,7 @@ def test_values_travel_as_parameters(tmp_path: Path) -> None:
     )
     connection = lake()
     connection.execute("CREATE TABLE s.m AS SELECT * FROM feed.data")
-    (check,) = steps(chosen, '"s"."m"', ["HUGEINT"])
+    (check,) = steps(chosen, '"s"."m"', [Comparison("HUGEINT")])
     assert "7" not in check.request.sql
     assert [(p.name, p.type.root, p.value) for p in check.request.parameters] == [
         ("p_tolerance", "HUGEINT", "7")
@@ -229,7 +237,7 @@ def test_measures_of_different_scales_are_not_rounded(tmp_path: Path) -> None:
         )
 
 
-def test_group_types_are_bound_on_both_sides(tmp_path: Path) -> None:
+def test_group_types_are_reported_for_both_sides(tmp_path: Path) -> None:
     chosen = model(
         tmp_path, "  - {name: by_meter, measure: sum(kwh), group_by: [meter], source: feed.m}\n"
     )
@@ -243,3 +251,17 @@ def test_group_types_are_bound_on_both_sides(tmp_path: Path) -> None:
     rows = connection.execute(f"DESCRIBE {measures_sql(check, RELATION)}").fetchall()
     # The model groups a VARCHAR and the source an INTEGER: refused at validation.
     assert (rows[2][1], rows[3][1]) == ("VARCHAR", "INTEGER")
+
+
+def test_case_insensitive_source_keys_match_one_to_one(tmp_path: Path) -> None:
+    chosen = model(
+        tmp_path, "  - {name: by_meter, measure: sum(kwh), group_by: [meter], source: feed.x}\n"
+    )
+    connection = lake()
+    connection.execute("CREATE TABLE feed.x (meter VARCHAR COLLATE NOCASE, kwh DECIMAL(18,4))")
+    connection.execute("INSERT INTO feed.x VALUES ('ab', 5)")
+    connection.execute(
+        "CREATE TABLE s.m AS SELECT meter, CAST(kwh AS DECIMAL(18,4)) AS kwh "
+        "FROM (VALUES ('ab', 5), ('AB', 5)) AS t(meter, kwh)"
+    )
+    assert failing(chosen, connection) == [("by_meter", 1)]

@@ -32,6 +32,15 @@ _REFUSED_TYPES = frozenset({"BASE_TABLE", "TABLE_FUNCTION", "SUBQUERY", "JOIN"})
 
 
 @dataclass(frozen=True, slots=True)
+class Comparison:
+    """How one check compares, from the binder: the measures' common type, and the positions
+    of its text groups (compared with the binary collation)."""
+
+    kind: str
+    text_groups: frozenset[int] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
 class Reconcile:
     """One reconciliation check: `request` counts the failing groups (0 passes)."""
 
@@ -138,12 +147,19 @@ def tolerance_text(model: Model, index: int, check: Reconciliation) -> str | Non
     return number_text(model, f"/reconciliation/{index}/tolerance", value)
 
 
-def _sides(check: Reconciliation, relation: str) -> tuple[str, str]:
+def _sides(check: Reconciliation, relation: str, text_groups: frozenset[int]) -> tuple[str, str]:
     groups = [expression(item.root) for item in check.group_by or []]
     measure = expression(check.measure)
     assert measure is not None  # checked at validation
     assert None not in groups
-    selected = [f"{group} AS {_identifier(f'g{i}')}" for i, group in enumerate(groups)]
+    # Text groups use the binary collation on both sides: a case-insensitive column would
+    # otherwise group and match `ab` and `AB` as one key.
+    selected = [
+        f'({group}) COLLATE "binary" AS {_identifier(f"g{i}")}'
+        if i in text_groups
+        else f"{group} AS {_identifier(f'g{i}')}"
+        for i, group in enumerate(groups)
+    ]
     columns = ", ".join([*selected, f"{measure} AS m", "true AS present"])
     # Grouped by position: a measure that is not an aggregate, or an aggregate among the groups,
     # is refused by the binder instead of silently becoming a grouping key.
@@ -156,11 +172,22 @@ def _sides(check: Reconciliation, relation: str) -> tuple[str, str]:
     )
 
 
-def _query(check: Reconciliation, relation: str, select: str, where: str = "") -> str:
+def _query(
+    check: Reconciliation,
+    relation: str,
+    select: str,
+    where: str = "",
+    text_groups: frozenset[int] = frozenset(),
+) -> str:
     """Both sides grouped alike, full-outer-joined on their groups (`NULL` is a group)."""
-    model_side, source_side = _sides(check, relation)
+    model_side, source_side = _sides(check, relation, text_groups)
+
+    def key(side: str, i: int) -> str:
+        column = f"{side}.{_identifier(f'g{i}')}"
+        return f'{column} COLLATE "binary"' if i in text_groups else column
+
     matched = " AND ".join(
-        f"model.{_identifier(f'g{i}')} IS NOT DISTINCT FROM source.{_identifier(f'g{i}')}"
+        f"{key('model', i)} IS NOT DISTINCT FROM {key('source', i)}"
         for i in range(len(check.group_by or []))
     )
     return (
@@ -210,13 +237,14 @@ def _difference(kind: str) -> tuple[str, str]:
     return difference, f"({model} IS NULL OR {source} IS NULL OR {difference} IS NULL)"
 
 
-def steps(model: Model, relation: str, differences: Sequence[str]) -> list[Reconcile]:
-    """The reconciliation checks of a model whose rows are `relation`; `differences` holds the
-    type each check compares its measures in (`common_type` of the bound measure types)."""
+def steps(model: Model, relation: str, comparisons: Sequence[Comparison]) -> list[Reconcile]:
+    """The reconciliation checks of a model whose rows are `relation`, compared as the binder
+    found (`comparisons`, one per check)."""
     found: list[Reconcile] = []
-    for index, (check, kind) in enumerate(
-        zip(model.config.reconciliation or [], differences, strict=True)
+    for index, (check, comparison) in enumerate(
+        zip(model.config.reconciliation or [], comparisons, strict=True)
     ):
+        kind = comparison.kind
         difference, unfit = _difference(kind)
         wide = kind
         text = tolerance_text(model, index, check)
@@ -240,7 +268,7 @@ def steps(model: Model, relation: str, differences: Sequence[str]) -> list[Recon
             f"OR (model.m IS NOT NULL AND source.m IS NOT NULL AND {unfit}) "
             f"OR {beyond}"
         )
-        sql = _query(check, relation, "count(*)", failing)
+        sql = _query(check, relation, "count(*)", failing, comparison.text_groups)
         found.append(
             Reconcile(
                 check.name, StatementRequest(kind="statement", sql=sql, parameters=parameters)

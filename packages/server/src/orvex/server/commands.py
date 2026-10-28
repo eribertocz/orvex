@@ -48,7 +48,7 @@ from orvex.transform.graph import Graph, build_graph, compiled_sql, plan_run, te
 from orvex.transform.incremental import Columns, Count, Refuse, Step, Watermark
 from orvex.transform.model_tests import ModelTest
 from orvex.transform.models import Discovery, Model, discover_models
-from orvex.transform.reconciliation import Reconcile
+from orvex.transform.reconciliation import Comparison, Reconcile
 from orvex.transform.run_records import history_request, record_statements
 from orvex.transform.sources import source_attachments
 
@@ -79,7 +79,7 @@ class Checked:
     problems: tuple[Problem, ...]
     columns: Mapping[str, Columns] = field(default_factory=dict)
     # Each model's reconciliation checks: the type of their measure difference.
-    differences: Mapping[str, list[str]] = field(default_factory=dict)
+    differences: Mapping[str, list[Comparison]] = field(default_factory=dict)
 
 
 class ProjectLocked(Exception):
@@ -108,7 +108,7 @@ def check_project(folder: Path) -> Checked:
         problems += [_from_model_error(item) for item in incremental.config_problems(model)]
         problems += [_from_model_error(item) for item in reconciliation.problems(model, kinds)]
     columns: dict[str, Columns] = {}
-    differences: dict[str, list[str]] = {}
+    differences: dict[str, list[Comparison]] = {}
     needs_binding = any(
         m.config.materialized == "incremental" or m.config.tests or m.config.reconciliation
         for m in discovery.models
@@ -124,7 +124,7 @@ def check_project(folder: Path) -> Checked:
 
 def _bind(
     project: Project, discovery: Discovery, graph: Graph
-) -> tuple[dict[str, Columns], dict[str, list[str]], list[Problem]]:
+) -> tuple[dict[str, Columns], dict[str, list[Comparison]], list[Problem]]:
     """Output columns of every model, from DuckDB's binder; nothing is executed.
 
     Binding happens in a scratch lake in a temporary folder (never the project's): upstream
@@ -134,7 +134,7 @@ def _bind(
     by_name = {model.name: model for model in discovery.models}
     relations = test_relations(discovery.models)
     columns: dict[str, Columns] = {}
-    differences: dict[str, list[str]] = {}
+    differences: dict[str, list[Comparison]] = {}
     problems: list[Problem] = []
     failed: set[str] = set()
     scratch = Path(tempfile.mkdtemp(prefix="bind-"))
@@ -181,12 +181,12 @@ def _bind(
 
 def _bind_reconciliation(
     lake: Lake, model: Model, relation: str
-) -> tuple[list[Problem], list[str]]:
+) -> tuple[list[Problem], list[Comparison]]:
     """Each check bound on the model and its source: the type of its measure difference, which
     must be an exact number (integers or DECIMAL, law 11)."""
     file = model.config_file or model.sql_file
     problems: list[Problem] = []
-    kinds: list[str] = []
+    kinds: list[Comparison] = []
     for index, check in enumerate(model.config.reconciliation or []):
         pointer = f"/reconciliation/{index}"
         try:
@@ -222,6 +222,11 @@ def _bind_reconciliation(
                 )
             )
             continue
+        text_groups = frozenset(
+            position
+            for position in range(len(check.group_by or []))
+            if described[2 + 2 * position][1] == "VARCHAR"
+        )
         described = described[:2]
         kind = reconciliation.common_type(described[0][1], described[1][1])
         inexact = [typ for _, typ in described if not reconciliation.exact_difference(typ)]
@@ -237,7 +242,7 @@ def _bind_reconciliation(
                 )
             )
             continue
-        kinds.append(kind)
+        kinds.append(Comparison(kind, text_groups))
     return problems, kinds
 
 
