@@ -211,3 +211,17 @@ def test_invalid_checks_are_refused_before_anything_runs(
     assert out.startswith(f"{code} models/s/m.yaml"), out
     assert where in out
     assert not (tmp_path / f".{SLUG}").exists()
+
+
+def test_group_keys_must_have_the_same_type_on_both_sides(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project(
+        tmp_path,
+        "SELECT CAST(read_at AS VARCHAR) AS read_at, kwh FROM feed.data",
+        "  - {name: a, measure: sum(kwh), group_by: [read_at], source: feed.data}\n",
+    )
+    exit_code, out = command(capsys, "validate", str(tmp_path))
+    assert exit_code == 1
+    assert out.startswith("MODEL_CONFIG_INVALID models/s/m.yaml"), out
+    assert "/reconciliation/0/group_by/0" in out

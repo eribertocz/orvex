@@ -201,6 +201,28 @@ def _bind_reconciliation(
                 )
             )
             continue
+        mismatched = [
+            position
+            for position in range(len(check.group_by or []))
+            if described[2 + 2 * position][1] != described[3 + 2 * position][1]
+        ]
+        if mismatched:
+            # Different key types would be converted implicitly, and two model groups could
+            # match one source group: the comparison would no longer be one-to-one.
+            position = mismatched[0]
+            problems.append(
+                Problem(
+                    "MODEL_CONFIG_INVALID",
+                    file,
+                    None,
+                    f"{file}: {pointer}/group_by/{position}: {check.name} groups a "
+                    f"{described[2 + 2 * position][1]} in the model and a "
+                    f"{described[3 + 2 * position][1]} in the source; cast one side so both "
+                    "have the same type.",
+                )
+            )
+            continue
+        described = described[:2]
         kind = reconciliation.common_type(described[0][1], described[1][1])
         inexact = [typ for _, typ in described if not reconciliation.exact_difference(typ)]
         if inexact:

@@ -87,6 +87,7 @@ def failing(chosen: Model, connection: duckdb.DuckDBPyConnection) -> list[tuple[
     for check in chosen.config.reconciliation or []:
         rows = connection.execute(f"DESCRIBE {measures_sql(check, RELATION)}").fetchall()
         differences.append(common_type(str(rows[0][1]), str(rows[1][1])))
+        assert all(rows[i][1] == rows[i + 1][1] for i in range(2, len(rows), 2))
     found = []
     for planned in steps(chosen, RELATION, differences):
         sql = planned.request.sql
@@ -226,3 +227,19 @@ def test_measures_of_different_scales_are_not_rounded(tmp_path: Path) -> None:
             source_type,
             tolerance,
         )
+
+
+def test_group_types_are_bound_on_both_sides(tmp_path: Path) -> None:
+    chosen = model(
+        tmp_path, "  - {name: by_meter, measure: sum(kwh), group_by: [meter], source: feed.m}\n"
+    )
+    connection = lake()
+    connection.execute("CREATE TABLE feed.m AS SELECT 1 AS meter, 5.0000::DECIMAL(18,4) AS kwh")
+    connection.execute(
+        "CREATE TABLE s.m AS SELECT * FROM (VALUES ('1', 5.0000::DECIMAL(18,4)), "
+        "('01', 5.0000::DECIMAL(18,4))) AS t(meter, kwh)"
+    )
+    (check,) = chosen.config.reconciliation or []
+    rows = connection.execute(f"DESCRIBE {measures_sql(check, RELATION)}").fetchall()
+    # The model groups a VARCHAR and the source an INTEGER: refused at validation.
+    assert (rows[2][1], rows[3][1]) == ("VARCHAR", "INTEGER")

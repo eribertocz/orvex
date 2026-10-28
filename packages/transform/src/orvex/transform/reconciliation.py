@@ -156,26 +156,28 @@ def _sides(check: Reconciliation, relation: str) -> tuple[str, str]:
     )
 
 
-def _joined(check: Reconciliation, relation: str) -> tuple[str, str]:
-    """(the CTEs and join of both sides, the difference expression)."""
+def _query(check: Reconciliation, relation: str, select: str, where: str = "") -> str:
+    """Both sides grouped alike, full-outer-joined on their groups (`NULL` is a group)."""
     model_side, source_side = _sides(check, relation)
     matched = " AND ".join(
         f"model.{_identifier(f'g{i}')} IS NOT DISTINCT FROM source.{_identifier(f'g{i}')}"
         for i in range(len(check.group_by or []))
     )
     return (
-        f"WITH model AS ({model_side}), source AS ({source_side}) SELECT {{select}} "
-        f"FROM model FULL OUTER JOIN source ON {matched or 'TRUE'}",
-        # Larger minus smaller, in the measures' own type (for binding: its type is checked).
-        "greatest(model.m, source.m) - least(model.m, source.m)",
+        f"WITH model AS ({model_side}), source AS ({source_side}) SELECT {select} "
+        f"FROM model FULL OUTER JOIN source ON {matched or 'TRUE'}"
+        + (f" WHERE {where}" if where else "")
     )
 
 
 def measures_sql(check: Reconciliation, relation: str) -> str:
-    """A query whose columns have the types of the model's and the source's measure (for
-    binding)."""
-    template, _ = _joined(check, relation)
-    return template.replace("{select}", "model.m AS model, source.m AS source", 1)
+    """A query whose columns have the types of the model's and the source's measure, then of
+    each group on the model and on the source (for binding)."""
+    groups = [
+        f"model.{_identifier(f'g{i}')}, source.{_identifier(f'g{i}')}"
+        for i in range(len(check.group_by or []))
+    ]
+    return _query(check, relation, ", ".join(["model.m", "source.m", *groups]))
 
 
 def exact_difference(kind: str) -> bool:
@@ -185,8 +187,9 @@ def exact_difference(kind: str) -> bool:
 def common_type(model_kind: str, source_kind: str) -> str:
     """The type both measures are compared in, without rounding either: DECIMAL(38, the larger
     scale) when either is a decimal, else UHUGEINT when both are unsigned, else HUGEINT. A value
-    that does not fit it cannot equal the other side's value (which fits by construction), and
-    a difference that does not fit is beyond any tolerance: both count as a failing group."""
+    that does not fit it cannot equal the other side's value (which fits by construction), so it
+    counts as a failing group; so does a difference that does not fit, which is beyond any
+    tolerance except one of at least 10^(38 - scale) (refusing then is the safe side)."""
     scales = [
         int(m.group(2)) for k in (model_kind, source_kind) if (m := _DECIMAL_TYPE.fullmatch(k))
     ]
@@ -214,7 +217,6 @@ def steps(model: Model, relation: str, differences: Sequence[str]) -> list[Recon
     for index, (check, kind) in enumerate(
         zip(model.config.reconciliation or [], differences, strict=True)
     ):
-        template, _ = _joined(check, relation)
         difference, unfit = _difference(kind)
         wide = kind
         text = tolerance_text(model, index, check)
@@ -238,7 +240,7 @@ def steps(model: Model, relation: str, differences: Sequence[str]) -> list[Recon
             f"OR (model.m IS NOT NULL AND source.m IS NOT NULL AND {unfit}) "
             f"OR {beyond}"
         )
-        sql = template.replace("{select}", "count(*)", 1) + f" WHERE {failing}"
+        sql = _query(check, relation, "count(*)", failing)
         found.append(
             Reconcile(
                 check.name, StatementRequest(kind="statement", sql=sql, parameters=parameters)
