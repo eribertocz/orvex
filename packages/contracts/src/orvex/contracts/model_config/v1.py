@@ -156,6 +156,7 @@ class ModelErrorCode(
             "FRESHNESS_TOO_SHORT",
             "UNSUPPORTED_SOURCE_TYPE",
             "SOURCE_CONNECTION_FAILED",
+            "SOURCE_NOT_READ_ONLY",
         ]
     ]
 ):
@@ -183,6 +184,7 @@ class ModelErrorCode(
         "FRESHNESS_TOO_SHORT",
         "UNSUPPORTED_SOURCE_TYPE",
         "SOURCE_CONNECTION_FAILED",
+        "SOURCE_NOT_READ_ONLY",
     ]
 
 

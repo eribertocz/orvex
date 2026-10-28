@@ -29,6 +29,14 @@ from orvex.transform.models import Model, problem
 SINCE = "since"
 CONNECT_TIMEOUT = 10  # seconds
 QUERY_TIMEOUT = 30  # seconds, for validation queries (EXPLAIN, DESCRIBE)
+# Validation reads no row: ClickHouse evaluates scalar subqueries while it describes a query, so
+# reading is capped and a query that would read rows fails (TOO_MANY_ROWS) instead.
+VALIDATION_LIMITS: tuple[tuple[str, object], ...] = (
+    ("max_execution_time", QUERY_TIMEOUT),
+    ("max_rows_to_read", 1),
+    ("read_overflow_mode", "throw"),
+)
+_TOO_MANY_ROWS = 158
 _REFERENCE = re.compile(r"\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
 
 # --- scanning the SQL text ----------------------------------------------------------------
@@ -86,8 +94,10 @@ def _skip_block_comment(sql: str, start: int) -> int:
     raise ScanError(f"unterminated /* comment at offset {start}")
 
 
-_HEREDOC = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
-_PARAMETER = re.compile(r"\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*:")
+# ClickHouse heredoc strings: `$$…$$` and `$tag$…$tag$`, where a tag may start with a digit.
+_HEREDOC = re.compile(r"\$([A-Za-z0-9_]*)\$")
+# `{name:Type}`: ClickHouse reads a parameter only without spaces before the `:`.
+_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*):")
 
 
 def _tokens(sql: str) -> Iterator[tuple[int, int, str]]:
@@ -472,6 +482,47 @@ def _zone(argument: _Type | str) -> str | None:
     return None
 
 
+# Subqueries ClickHouse does not evaluate while it describes a query: tables in FROM, named WITH
+# tables, and the right side of IN.
+_TABLE_PARENTS = frozenset({"TableExpression", "WithElement"})
+_IN_FUNCTIONS = frozenset(
+    {
+        "in",
+        "notIn",
+        "globalIn",
+        "globalNotIn",
+        "nullIn",
+        "notNullIn",
+        "globalNullIn",
+        "globalNotNullIn",
+    }
+)
+
+
+def evaluated_subquery(tree: str) -> bool:
+    """Whether the `EXPLAIN AST` tree has a subquery ClickHouse evaluates while it describes the
+    query (a scalar or EXISTS subquery): describing it would read the source's rows."""
+    stack: list[tuple[int, str]] = []  # (depth, node text) of the current node's ancestors
+    for line in tree.splitlines():
+        depth = len(line) - len(line.lstrip(" "))
+        node = line.strip()
+        while stack and stack[-1][0] >= depth:
+            stack.pop()
+        if node.startswith("Subquery"):
+            parent = stack[-1][1].split(" ", 1)[0] if stack else ""
+            grandparent = stack[-2][1].split(" ") if len(stack) >= 2 else []
+            in_function = (
+                parent == "ExpressionList"
+                and grandparent[:1] == ["Function"]
+                and len(grandparent) > 1
+                and grandparent[1] in _IN_FUNCTIONS
+            )
+            if parent not in _TABLE_PARENTS and not in_function:
+                return True
+        stack.append((depth, node))
+    return False
+
+
 # --- the server -----------------------------------------------------------------------------
 
 
@@ -535,25 +586,42 @@ class Source:
             )
         except ClickHouseError as error:
             raise self._error(error, "SOURCE_CONNECTION_FAILED") from None
+        readonly = self._client.server_settings.get("readonly")
+        # Fixed by the user's profile: only a fixed `readonly = 1` is read-only for data and
+        # settings; `0` (read-write) or `2` (settings may change) is refused.
+        self._fixed_read_only = readonly is not None and bool(readonly.readonly)
+        if readonly is not None and self._fixed_read_only and str(readonly.value) != "1":
+            self._client.close()
+            raise SourceError(
+                "SOURCE_NOT_READ_ONLY",
+                f"ClickHouse connection {name}: the user's profile fixes readonly = "
+                f"{readonly.value}, so its queries cannot be made read-only; use a user whose "
+                "profile allows readonly = 1 (or fixes it to 1).",
+            )
 
     def _error(self, error: BaseException, code: str) -> SourceError:
         """The failure as the user reads it: network and server-unavailable failures are the
         connection's (`SOURCE_CONNECTION_FAILED`); a query ClickHouse rejects is `code`."""
         if isinstance(error, OperationalError):
             code = "SOURCE_CONNECTION_FAILED"
+        if getattr(error, "code", None) == _TOO_MANY_ROWS:
+            return SourceError("INVALID_MODEL_SQL", self._rows_read_message())
         text = " ".join(_clean(str(error), self._password).split())
         return SourceError(code, f"ClickHouse connection {self.name}: {text}")
 
     def settings(self) -> dict[str, object]:
-        """Settings for each query: a time limit, then read-only. They are sent with the query,
-        never kept in a session; ClickHouse checks them together before applying them, so the
-        time limit is accepted although `readonly = 1` forbids later changes."""
+        """Settings for each validation query: the limits, then `readonly = 1`. They are sent
+        with the query, never kept in a session; ClickHouse checks them together before applying
+        them, so the limits are accepted although `readonly = 1` forbids later changes. A setting
+        the user's profile fixes is not sent (a profile fixed to `readonly = 1` fixes them all:
+        its queries are read-only, but the limits cannot be added)."""
         settings: dict[str, object] = {}
-        for key, value in (("max_execution_time", QUERY_TIMEOUT), ("readonly", 1)):
+        for key, value in VALIDATION_LIMITS:
             known = self._client.server_settings.get(key)
-            if known is not None and known.readonly:
-                continue  # fixed by the user's profile (a read-only user): nothing to change
-            settings[key] = value
+            if known is None or not known.readonly:
+                settings[key] = value
+        if not self._fixed_read_only:
+            settings["readonly"] = 1
         return settings
 
     def _parameters(self, since: SinceType | None) -> dict[str, str] | None:
@@ -580,13 +648,23 @@ class Source:
             )
         except ClickHouseError as error:
             raise self._error(error, "INVALID_MODEL_SQL") from None
-        first = answer.decode("utf-8", "replace").lstrip().split("\n", 1)[0].strip()
+        tree = answer.decode("utf-8", "replace").strip("\n")
+        first = tree.lstrip().split("\n", 1)[0].strip()
         if not first.startswith("SelectWithUnionQuery"):
             kind = first.split(" ", 1)[0] or "nothing"
             raise SourceError(
                 "INVALID_MODEL_SQL",
                 f"an extraction model is one SELECT; ClickHouse reads {kind}.",
             )
+        if evaluated_subquery(tree):
+            raise SourceError("INVALID_MODEL_SQL", self._rows_read_message())
+
+    def _rows_read_message(self) -> str:
+        return (
+            f"ClickHouse connection {self.name}: validation would read rows of the source "
+            "(ClickHouse runs scalar and EXISTS subqueries while it describes a query); move "
+            "the subquery into a JOIN or a WITH … AS (SELECT …) table."
+        )
 
     def describe(self, text: str, since: SinceType | None) -> Described:
         """The output columns (`DESCRIBE`, nothing executed) and the server's time zone."""

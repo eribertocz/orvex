@@ -50,10 +50,11 @@ New cross-field rules are added by the issues that implement those behaviors, as
 | `FRESHNESS_TOO_SHORT` | `freshness` below `5m` (sources must not be polled more often) |
 | `UNSUPPORTED_SOURCE_TYPE` | An extraction model's output column whose ClickHouse type has no exact DuckDB type (see below); the message names each such column and its type, with a hint to cast it in the SQL |
 | `SOURCE_CONNECTION_FAILED` | An extraction model's ClickHouse connection cannot be reached or refuses the credentials; the message never contains the password |
+| `SOURCE_NOT_READ_ONLY` | An extraction model's ClickHouse user whose profile fixes `readonly` to `0` or `2`: its queries cannot be made read-only (`readonly = 1`) |
 
 ## Extraction models (ClickHouse)
 
-A model whose sidecar names a `clickhouse` `connection` is ClickHouse SQL. Validation sends it to ClickHouse, read-only (`readonly = 1`), and reads no row: `EXPLAIN AST` must show one `SELECT` (otherwise `INVALID_MODEL_SQL` with ClickHouse's message), and `DESCRIBE` gives its output columns. Before that, the text alone is checked (strings, quoted identifiers and comments skipped):
+A model whose sidecar names a `clickhouse` `connection` is ClickHouse SQL. Validation sends it to ClickHouse, read-only (`readonly = 1`), and reads no row. ClickHouse evaluates scalar and `EXISTS` subqueries while it describes a query, so a model with one is refused (`INVALID_MODEL_SQL`; subqueries in `FROM`, named `WITH` tables and `IN` are fine), and reading is also capped (`max_rows_to_read = 1`) unless the user's profile fixes its settings. A user whose profile fixes `readonly` to anything but `1` is refused (`SOURCE_NOT_READ_ONLY`). Then: `EXPLAIN AST` must show one `SELECT` (otherwise `INVALID_MODEL_SQL` with ClickHouse's message), and `DESCRIBE` gives its output columns. Before that, the text alone is checked (strings, quoted identifiers and comments skipped):
 
 - one statement (a final `;` is allowed) → otherwise `INVALID_MODEL_SQL`;
 - incremental models need `filter: manual` (`filter: auto` → `INCREMENTAL_FILTER_NOT_PROVABLE`, reason `extraction`) and `{since:Type}` (→ `MISSING_SINCE_PARAMETER`), with `Type` one of `Date`, `Date32`, `DateTime`, `DateTime('zone')`, `DateTime64(p)`, `DateTime64(p, 'zone')` (→ `MODEL_CONFIG_INVALID`); validation binds the lowest value of that type;

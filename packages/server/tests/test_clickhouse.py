@@ -247,6 +247,14 @@ def test_unsupported_types_are_named(tmp_path: Path, source: dict[str, str]) -> 
         ("INSERT INTO events (event_id) VALUES (1)", TABLE, "INVALID_MODEL_SQL"),
         ("SELEC event_id FROM events", TABLE, "INVALID_MODEL_SQL"),
         ("SELECT event_id FROM missing_table", TABLE, "INVALID_MODEL_SQL"),
+        # The session stays read-only: the SQL cannot lift it.
+        ("SELECT event_id FROM events SETTINGS readonly = 0", TABLE, "INVALID_MODEL_SQL"),
+        # A scalar subquery would be evaluated (reading rows) while ClickHouse describes it.
+        (
+            "SELECT event_id, (SELECT sum(value) FROM events) AS s FROM events",
+            TABLE,
+            "INVALID_MODEL_SQL",
+        ),
         (
             "SELECT * FROM events -- WHERE event_time > {since:DateTime64(6, 'UTC')}",
             EXTRACTION,
@@ -287,6 +295,22 @@ def test_connection_rules(
     (missing,) = problems(folder)
     assert missing.startswith("PROJECT_SECRET_MISSING connections.yaml ")
     assert VARIABLE in missing
+    # A user whose profile fixes readonly to 0 (read-write) cannot be made read-only.
+    client = admin()
+    writer = f"{source['reader']}_rw"
+    try:
+        client.command(
+            f"CREATE USER {writer} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}' "
+            "SETTINGS readonly = 0 CONST"
+        )
+        client.command(f"GRANT SELECT ON {source['database']}.* TO {writer}")
+        monkeypatch.setenv(VARIABLE, READER_PASSWORD)
+        fixed = project(tmp_path / "c", {**source, "reader": writer}, models)
+        (refused_writer,) = problems(fixed)
+        assert refused_writer.startswith("SOURCE_NOT_READ_ONLY models/raw/ch_events.sql ")
+    finally:
+        client.command(f"DROP USER IF EXISTS {writer}")
+        client.close()
     wrong = "wrong-" + uuid.uuid4().hex
     monkeypatch.setenv(VARIABLE, wrong)
     (refused,) = problems(folder)

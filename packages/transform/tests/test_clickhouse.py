@@ -6,7 +6,14 @@ from pathlib import Path
 
 import pytest
 from orvex.contracts.project.v1 import ClickhouseConnection
-from orvex.transform.clickhouse import ScanError, map_type, scan, since_problems, since_type
+from orvex.transform.clickhouse import (
+    ScanError,
+    evaluated_subquery,
+    map_type,
+    scan,
+    since_problems,
+    since_type,
+)
 from orvex.transform.models import Model, discover_models
 
 CONNECTION = ClickhouseConnection.model_validate(
@@ -58,6 +65,9 @@ def test_the_example_model_passes(tmp_path: Path) -> None:
         ("SELECT 1 AS `{since:Date}`", "MISSING_SINCE_PARAMETER"),
         ("SELECT 1 AS a # {since:Date}", "MISSING_SINCE_PARAMETER"),
         ("SELECT $$ {since:Date} $$ AS a", "MISSING_SINCE_PARAMETER"),
+        ("SELECT $1$ {since:Date} $1$ AS a", "MISSING_SINCE_PARAMETER"),
+        ("SELECT $tag_2$ {since:Date} $tag_2$ AS a", "MISSING_SINCE_PARAMETER"),
+        ("SELECT 1 WHERE t > { since:Date}", "MISSING_SINCE_PARAMETER"),  # not a parameter
         ("SELECT 1 WHERE t > {since:String}", "MODEL_CONFIG_INVALID"),
         ("SELECT 1 WHERE t > {since: Date} AND u > {since:Date32}", "MODEL_CONFIG_INVALID"),
         ("SELECT 1 WHERE t > {since:Date} AND k = {key:String}", "INVALID_MODEL_SQL"),
@@ -189,3 +199,52 @@ def test_time_zones_are_kept() -> None:
 )
 def test_unsupported_types(clickhouse: str) -> None:
     assert map_type(clickhouse) is None
+
+
+def ast(*lines: str) -> str:
+    return "\n".join(lines)
+
+
+SELECT_HEAD = (
+    "SelectWithUnionQuery (children 1)",
+    " ExpressionList (children 1)",
+    "  SelectQuery (children 3)",
+)
+
+
+def test_subqueries_clickhouse_evaluates_while_describing() -> None:
+    from_and_in = ast(
+        *SELECT_HEAD,
+        "   TablesInSelectQuery (children 1)",
+        "    TablesInSelectQueryElement (children 1)",
+        "     TableExpression (children 1)",
+        "      Subquery (alias t) (children 1)",
+        "       SelectWithUnionQuery (children 1)",
+        "   Function in (children 1)",
+        "    ExpressionList (children 2)",
+        "     Identifier a",
+        "     Subquery (children 1)",
+        "      SelectWithUnionQuery (children 1)",
+    )
+    assert not evaluated_subquery(from_and_in)
+    named = ast(
+        *SELECT_HEAD,
+        "   ExpressionList (children 1)",
+        "    WithElement (children 1)",
+        "     Subquery (children 1)",
+    )
+    assert not evaluated_subquery(named)
+    scalar = ast(
+        *SELECT_HEAD,
+        "   ExpressionList (children 2)",
+        "    Identifier a",
+        "    Subquery (alias s) (children 1)",
+    )
+    assert evaluated_subquery(scalar)
+    exists = ast(
+        *SELECT_HEAD,
+        "   Function exists (children 1)",
+        "    ExpressionList (children 1)",
+        "     Subquery (children 1)",
+    )
+    assert evaluated_subquery(exists)
