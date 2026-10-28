@@ -96,6 +96,7 @@ def test_validate_reports_every_problem_and_writes_nothing(
             "models/c/a.sql": "SELECT * FROM c.b",
             "models/c/b.sql": "SELECT * FROM c.a",
             "models/s/unknown.sql": "SELECT *\nFROM nowhere.t",
+            "models/s/itself.sql": "SELECT x + 1 AS x FROM s.itself",
             "models/s/orphan.yaml": "version: 1\n",
         },
     )
@@ -107,6 +108,7 @@ def test_validate_reports_every_problem_and_writes_nothing(
     assert any(line.startswith("MODEL_REFERENCE_UNKNOWN models/s/unknown.sql:2") for line in lines)
     assert any(line.startswith("DEPENDENCY_CYCLE models/c/a.sql") for line in lines)
     assert "c.a → c.b → c.a" in out
+    assert "s.itself → s.itself" in out
     after = sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*"))
     assert after == before
     assert not (tmp_path / f".{SLUG}").exists()

@@ -178,6 +178,7 @@ def _run_locked(
         default_timeout_ms=DEFAULT_TIMEOUT_MS,
     )
     current = ""
+    committed = False
     try:
         lake = open_lake(location, limits, source_attachments(project.connections))
         try:
@@ -187,7 +188,9 @@ def _run_locked(
                     for statement in statements:
                         transaction.execute(statement)
             current = ""
+            committed = True
             snapshot = lake.current_snapshot().id
+            print(f"snapshot {snapshot}", file=out)
             for model, _ in plan:
                 request = ReadRequest(
                     kind="read",
@@ -206,6 +209,6 @@ def _run_locked(
         detail = error.details.get("duckdb", "")
         message = f"{prefix}{error.message}" + (f" {detail}" if detail else "")
         print(Problem(error.code, where, None, message), file=out)
-        return 1
-    print(f"snapshot {snapshot}", file=out)
+        # After the commit only the row counts can fail: the run itself is saved.
+        return 0 if committed else 1
     return 0

@@ -127,13 +127,14 @@ def build_graph(models: Sequence[Model], sources: set[str]) -> Graph:
                         line=_line(model.sql, node.get("query_location")),
                     )
                 )
-            needs.discard(model.name)
+            # A model reading itself stays an edge: it is a cycle of one, reported below (each
+            # run would otherwise read the table the previous run left).
             dependencies[model.name] = tuple(sorted(needs))
             used_sources[model.name] = tuple(sorted(reads))
     finally:
         connection.close()
-    order, cycle = _order(dependencies)
-    if cycle:
+    order, cycles = _order(dependencies)
+    for cycle in cycles:
         first = by_name[cycle[0]]
         problems.append(
             problem(
@@ -146,8 +147,10 @@ def build_graph(models: Sequence[Model], sources: set[str]) -> Graph:
     return Graph(tuple(order), dependencies, used_sources, tuple(problems))
 
 
-def _order(dependencies: Mapping[str, tuple[str, ...]]) -> tuple[list[str], list[str]]:
-    """Topological order taking, at each step, the first ready model by name; or a cycle."""
+def _order(
+    dependencies: Mapping[str, tuple[str, ...]],
+) -> tuple[list[str], list[list[str]]]:
+    """Topological order taking, at each step, the first ready model by name; or the cycles."""
     waiting = {name: set(needs) & set(dependencies) for name, needs in dependencies.items()}
     users: dict[str, set[str]] = {name: set() for name in dependencies}
     for name, needs in waiting.items():
@@ -165,17 +168,32 @@ def _order(dependencies: Mapping[str, tuple[str, ...]]) -> tuple[list[str], list
                 heapq.heappush(ready, user)
     if len(order) == len(dependencies):
         return order, []
-    return [], _cycle({name: needs for name, needs in waiting.items() if needs})
+    return [], _cycles({name: set(needs) for name, needs in waiting.items() if needs})
 
 
-def _cycle(remaining: Mapping[str, set[str]]) -> list[str]:
-    """One cycle among models that never became ready, starting from the first by name."""
-    path: list[str] = []
-    name = min(remaining)
-    while name not in path:
-        path.append(name)
-        name = min(remaining[name])
-    return path[path.index(name) :]
+def _cycles(remaining: dict[str, set[str]]) -> list[list[str]]:
+    """Every independent cycle among models that never became ready (each from its first
+    model by name); models that only wait on a cycle are not reported."""
+    found: list[list[str]] = []
+    while True:
+        # Drop models whose remaining needs are all gone: they wait on a cycle, not in one.
+        changed = True
+        while changed:
+            changed = False
+            for name in [n for n, needs in remaining.items() if not needs & remaining.keys()]:
+                del remaining[name]
+                changed = True
+        if not remaining:
+            return found
+        path: list[str] = []
+        name = min(remaining)
+        while name not in path:
+            path.append(name)
+            name = min(remaining[name] & remaining.keys())
+        cycle = path[path.index(name) :]
+        found.append(cycle)
+        for member in cycle:
+            del remaining[member]
 
 
 def compiled_sql(model: Model, models: Mapping[str, Model]) -> str:

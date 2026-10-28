@@ -137,3 +137,36 @@ def test_lake_qualified_and_source_three_part_names(tmp_path: Path) -> None:
     assert graph.problems == ()
     assert graph.dependencies["s.b"] == ("s.a",)
     assert graph.sources["s.b"] == ("legacy",)
+
+
+def test_a_model_reading_itself_is_a_cycle(tmp_path: Path) -> None:
+    found = project(
+        tmp_path,
+        {
+            "models/s/a.sql": "SELECT x + 1 AS x FROM s.a",
+            "models/s/v.sql": "SELECT * FROM s.v",
+            "models/s/v.yaml": "version: 1\nmaterialized: view\n",
+        },
+    )
+    graph = build_graph(found.models, set())
+    assert [p.code.root for p in graph.problems] == ["DEPENDENCY_CYCLE", "DEPENDENCY_CYCLE"]
+    assert "s.a → s.a" in graph.problems[0].message
+    assert "s.v → s.v" in graph.problems[1].message
+
+
+def test_every_independent_cycle_is_reported(tmp_path: Path) -> None:
+    found = project(
+        tmp_path,
+        {
+            "models/c/a.sql": "SELECT * FROM c.b",
+            "models/c/b.sql": "SELECT * FROM c.a",
+            "models/d/a.sql": "SELECT * FROM d.b",
+            "models/d/b.sql": "SELECT * FROM d.a",
+            "models/e/waits.sql": "SELECT * FROM c.a",
+        },
+    )
+    graph = build_graph(found.models, set())
+    assert [p.message.split(": ", 1)[1] for p in graph.problems] == [
+        "c.a → c.b → c.a.",
+        "d.a → d.b → d.a.",
+    ]
