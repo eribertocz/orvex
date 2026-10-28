@@ -1,4 +1,4 @@
-"""P1-10: every run leaves a record per model, also when it fails; `orvex runs` lists them."""
+"""P1-10: every run leaves a record per model, also when it fails; the runs command lists them."""
 
 from __future__ import annotations
 
