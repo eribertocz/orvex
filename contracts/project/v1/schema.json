@@ -50,6 +50,9 @@
         },
         "retention": {
           "$ref": "#/$defs/Retention"
+        },
+        "lineage": {
+          "$ref": "#/$defs/Lineage"
         }
       }
     },
@@ -363,6 +366,25 @@
         "variable": {
           "type": "string",
           "pattern": "^[A-Z_][A-Z0-9_]*$"
+        }
+      }
+    },
+    "Lineage": {
+      "description": "Where OpenLineage events are also sent (P1-18); they are always written under the project's local folder.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "description": "An OpenLineage HTTP endpoint: `https://`, or `http://` only on this machine (`localhost`, `127.0.0.1`); no user or password in the URL (use `api_key`). Events are POSTed to it after each run.",
+          "type": "string",
+          "pattern": "^(https://[^\\s/@]+(/[^\\s]*)?|http://(localhost|127\\.0\\.0\\.1)(:[0-9]{1,5})?(/[^\\s]*)?)$",
+          "maxLength": 2048
+        },
+        "api_key": {
+          "$ref": "#/$defs/SecretReference"
         }
       }
     }

@@ -162,6 +162,27 @@ class ProjectErrorDetails(BaseModel):
     variable: Annotated[str | None, Field(pattern="^[A-Z_][A-Z0-9_]*$")] = None
 
 
+class Lineage(BaseModel):
+    """
+    Where OpenLineage events are also sent (P1-18); they are always written under the project's local folder.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    url: Annotated[
+        str,
+        Field(
+            max_length=2048,
+            pattern="^(https://[^\\s/@]+(/[^\\s]*)?|http://(localhost|127\\.0\\.0\\.1)(:[0-9]{1,5})?(/[^\\s]*)?)$",
+        ),
+    ]
+    """
+    An OpenLineage HTTP endpoint: `https://`, or `http://` only on this machine (`localhost`, `127.0.0.1`); no user or password in the URL (use `api_key`). Events are POSTed to it after each run.
+    """
+    api_key: SecretReference | None = None
+
+
 class ProjectFile(BaseModel):
     """
     `project.yaml`.
@@ -186,6 +207,7 @@ class ProjectFile(BaseModel):
     """
     locale: Literal["es", "en"] | None = "es"
     retention: Retention | None = None
+    lineage: Lineage | None = None
 
 
 class Connection(
