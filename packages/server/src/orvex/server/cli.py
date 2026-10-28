@@ -25,6 +25,7 @@ from orvex.server.instance import (
     open_project,
 )
 from orvex.server.logs import configure_logging
+from orvex.server.scheduler import schedule
 from orvex.server.versions import (
     ContractVersionIncompatible,
     Versions,
@@ -34,7 +35,7 @@ from orvex.server.versions import (
 )
 
 LOCAL_HOST = "127.0.0.1"
-COMMANDS = frozenset({"validate", "run", "runs"})
+COMMANDS = frozenset({"validate", "run", "runs", "schedule"})
 DEFAULT_PORT = 7878
 PORT_ATTEMPTS = 100
 
@@ -109,6 +110,10 @@ def command_parser(identity: Identity) -> argparse.ArgumentParser:
         default=None,
         help="rebuild incremental models from every row (the named ones, or all of them)",
     )
+    scheduled = commands.add_parser(
+        "schedule", help="keep a project's models as fresh as they declare (Ctrl+C stops)"
+    )
+    scheduled.add_argument("project", type=Path, help="project folder")
     history = commands.add_parser("runs", help="list recent runs of a project")
     history.add_argument("project", type=Path, help="project folder")
     history.add_argument("--limit", type=int, default=20, help="how many runs (default 20)")
@@ -124,6 +129,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         command = command_parser(identity).parse_args(given)
         if command.command == "validate":
             return validate(command.project, sys.stdout)
+        if command.command == "schedule":
+            return schedule(command.project, identity, sys.stdout)
         if command.command == "runs":
             if command.limit < 1:
                 print("--limit must be at least 1", file=sys.stderr)
