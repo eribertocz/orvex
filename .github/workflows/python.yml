@@ -104,7 +104,7 @@ jobs:
             python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
           done
       - name: Image digests (temporary, to pin the service images)
-        run: docker image inspect --format '{{.RepoTags}} {{.RepoDigests}}' clickhouse/clickhouse-server:26.9.25.15
+        run: echo "::notice::$(docker image inspect --format '{{json .RepoDigests}}' clickhouse/clickhouse-server:26.9.25.15)"
       - run: pytest --junitxml=junit.xml
       - name: Report failures as annotations
         if: failure()
