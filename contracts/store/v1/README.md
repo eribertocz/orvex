@@ -14,6 +14,7 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 | `Parameter` | A value bound to `$name`; `value` is text (or `null`) converted to the declared DuckDB type, so exact values never travel as JSON numbers. Values are never concatenated into SQL. `DATE`, `TIMESTAMP` and `TIMESTAMPTZ` values are ISO 8601 (`YYYY-MM-DD`, `YYYY-MM-DDTHH:MM:SS[.ffffff]`, the same with `Z` or `±HH:MM`), or `"infinity"` / `"-infinity"` |
 | `Snapshot` | A lake snapshot: `id` and `committed_at` (with offset) |
 | `CommitResult` | The one snapshot a committed transaction created, or `null` when it changed nothing |
+| `MaintenanceReport` | What one `maintain` call did (below) |
 | `StoreError` | `code`, `message`, `details` |
 | `ResultJson` | A read result as JSON: `columns` (`name`, DuckDB `type`) and positional `rows`, encoded exactly (below) |
 | `SourceAttachment` | A source given to `open_lake` — files (`parquet`, `csv`, `duckdb`) or databases (`sqlite`, `postgres`); readable by name inside write transactions only (below) |
@@ -96,6 +97,28 @@ Other types (lists, structs, maps, unions, `TIME`, geometry, …) are refused wi
 
 `ReadRequest` and `StatementRequest` accept `timeout_ms` (1–3,600,000; default set by the lake). A lake runs a bounded number of statements at once (reads until their stream ends, transactions until they commit or roll back); further requests wait in arrival order in a bounded queue, and are refused with `STORE_BUSY` when it is full. Waiting counts against the timeout. A statement past its time limit is interrupted (`STORE_TIMEOUT`); a read or a transaction can be cancelled from another thread (`STORE_CANCELLED`); an interrupted or cancelled transaction rolls back.
 
+## Maintenance (`MaintenanceReport`)
+
+`Lake.maintain(expire_before, orphans_before)` takes two aware instants. It runs like a write transaction: one at a time, after the writer ahead. It follows DuckLake's own `CHECKPOINT` order, step by step, so that each step is counted:
+
+1. flush inlined data;
+2. expire the snapshots committed before `expire_before`;
+3. merge adjacent small files;
+4. rewrite files with many deleted rows;
+5. expire again (the snapshot that merging replaced, when it is older than the cutoff);
+6. delete the files no remaining snapshot uses;
+7. delete orphaned files in the data folder that are older than `orphans_before` (a newer one may belong to a writer that has not committed yet).
+
+The current snapshot is never expired. Merging never changes what any kept snapshot reads. The report counts:
+- `snapshots_expired`;
+- `files_merged` and `files_rewritten`, the files processed by steps 3 and 4;
+- `files_created`, the files those steps wrote;
+- `files_deleted`;
+- `orphaned_files_deleted`;
+- `oldest_snapshot`, the oldest snapshot kept.
+
+A read pinned to a snapshot older than the oldest one kept fails with `STORE_SNAPSHOT_EXPIRED`, which names the oldest one kept. Snapshot ids only grow, so a lower id existed once. A snapshot id that never existed is `STORE_SNAPSHOT_NOT_FOUND`.
+
 ## Guarantees
 
 - A write transaction commits to exactly one snapshot, or rolls back and creates none.
@@ -107,6 +130,7 @@ Other types (lists, structs, maps, unions, `TIME`, geometry, …) are refused wi
 | Code | Meaning |
 |---|---|
 | `STORE_SNAPSHOT_NOT_FOUND` | The requested snapshot does not exist |
+| `STORE_SNAPSHOT_EXPIRED` | The requested snapshot existed but was expired by maintenance (older than the oldest snapshot kept) |
 | `STORE_STATEMENT_INVALID` | Not exactly one statement, a non-`SELECT` in a read, a statement kind not allowed in a transaction, or a read naming another catalog |
 | `STORE_QUERY_FAILED` | DuckDB rejected or failed the statement; its message is in `details` |
 | `STORE_PARAMETER_INVALID` | A parameter is missing, extra, or not convertible to its declared type |

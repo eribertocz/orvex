@@ -38,10 +38,29 @@ class CommitResult(BaseModel):
     snapshot: Snapshot | None
 
 
+class MaintenanceReport(BaseModel):
+    """
+    What one maintenance call did: snapshots older than its cutoff expired, small files merged, files with many deletes rewritten, files no snapshot uses deleted, and orphaned files deleted. `oldest_snapshot` is the oldest snapshot kept; reads pinned to an older one fail with `STORE_SNAPSHOT_EXPIRED`.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["maintenance_report"]
+    snapshots_expired: Annotated[int, Field(ge=0)]
+    files_merged: Annotated[int, Field(ge=0)]
+    files_created: Annotated[int, Field(ge=0)]
+    files_rewritten: Annotated[int, Field(ge=0)]
+    files_deleted: Annotated[int, Field(ge=0)]
+    orphaned_files_deleted: Annotated[int, Field(ge=0)]
+    oldest_snapshot: Snapshot
+
+
 class ErrorCode(
     RootModel[
         Literal[
             "STORE_SNAPSHOT_NOT_FOUND",
+            "STORE_SNAPSHOT_EXPIRED",
             "STORE_STATEMENT_INVALID",
             "STORE_QUERY_FAILED",
             "STORE_PARAMETER_INVALID",
@@ -64,6 +83,7 @@ class ErrorCode(
 ):
     root: Literal[
         "STORE_SNAPSHOT_NOT_FOUND",
+        "STORE_SNAPSHOT_EXPIRED",
         "STORE_STATEMENT_INVALID",
         "STORE_QUERY_FAILED",
         "STORE_PARAMETER_INVALID",
@@ -297,6 +317,7 @@ class StoreMessage(
         | ReadRequest
         | Snapshot
         | CommitResult
+        | MaintenanceReport
         | StoreError
         | ResultJson
         | SourceAttachment
@@ -308,11 +329,12 @@ class StoreMessage(
         | ReadRequest
         | Snapshot
         | CommitResult
+        | MaintenanceReport
         | StoreError
         | ResultJson
         | SourceAttachment,
         Field(title="StoreMessage"),
     ]
     """
-    Messages of the store contract: where the lake is, statements and reads with bound parameters, snapshots, commit results and errors. Read results are Arrow record-batch streams (see README).
+    Messages of the store contract: where the lake is, statements and reads with bound parameters, snapshots, commit results, maintenance reports and errors. Read results are Arrow record-batch streams (see README).
     """

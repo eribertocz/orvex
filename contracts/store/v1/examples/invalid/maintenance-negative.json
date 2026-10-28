@@ -1,0 +1,14 @@
+{
+  "kind": "maintenance_report",
+  "snapshots_expired": 12,
+  "files_merged": 7,
+  "files_created": 1,
+  "files_rewritten": 0,
+  "files_deleted": -1,
+  "orphaned_files_deleted": 1,
+  "oldest_snapshot": {
+    "kind": "snapshot",
+    "id": 41,
+    "committed_at": "2026-10-28T03:00:00.123456+00:00"
+  }
+}
