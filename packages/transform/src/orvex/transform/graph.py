@@ -18,6 +18,8 @@ from typing import Any
 import duckdb
 from orvex.contracts.model_config.v1 import ModelError
 from orvex.contracts.store.v1 import StatementRequest
+from orvex.transform import incremental
+from orvex.transform.incremental import Columns, Step
 from orvex.transform.models import Model, problem
 
 LAKE_CATALOG = "lake"
@@ -251,15 +253,28 @@ def _identifier(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def plan_run(models: Sequence[Model], graph: Graph) -> list[tuple[Model, list[StatementRequest]]]:
-    """Statements that build every stored model, in run order (views are not stored)."""
+def plan_run(
+    models: Sequence[Model],
+    graph: Graph,
+    outputs: Mapping[str, Columns] | None = None,
+    existing: Mapping[str, Columns | None] | None = None,
+) -> list[tuple[Model, list[Step]]]:
+    """Steps that build every stored model, in run order (views are not stored).
+
+    `outputs` are the models' output columns and `existing` the columns of their tables in the
+    lake (None when absent); both are needed for incremental models only.
+    """
     by_name = {model.name: model for model in models}
-    plan: list[tuple[Model, list[StatementRequest]]] = []
+    plan: list[tuple[Model, list[Step]]] = []
     for name in graph.order:
         model = by_name[name]
         if model.config.materialized == "view":
             continue
         sql = compiled_sql(model, by_name)
+        if model.config.materialized == "incremental":
+            output = (outputs or {}).get(name, [])
+            plan.append((model, incremental.steps(model, sql, output, (existing or {}).get(name))))
+            continue
         schema, table = _identifier(model.schema), _identifier(model.table)
         plan.append(
             (

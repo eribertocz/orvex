@@ -11,23 +11,34 @@ import contextlib
 import datetime as dt
 import importlib.metadata
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
-from collections.abc import Iterator
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
 
 from orvex.contracts.model_config.v1 import ModelError
-from orvex.contracts.run_record.v1 import ModuleVersion, RowsWritten, RunError, RunRecord, Versions
-from orvex.contracts.store.v1 import LocalLakeLocation, ReadRequest
+from orvex.contracts.run_record.v1 import (
+    ModuleVersion,
+    RowsRead,
+    RowsWritten,
+    RunError,
+    RunRecord,
+    Versions,
+)
+from orvex.contracts.store.v1 import LocalLakeLocation, ReadRequest, StatementRequest
 from orvex.server.identity import Identity
 from orvex.server.project import Project, ProjectLoadError, load_project
 from orvex.server.versions import module_versions
 from orvex.store.errors import StoreError
-from orvex.store.lake import Lake, Limits, open_lake
-from orvex.transform.graph import Graph, build_graph, plan_run
+from orvex.store.lake import Lake, Limits, Transaction, open_lake
+from orvex.transform import incremental
+from orvex.transform.graph import Graph, build_graph, compiled_sql, plan_run
+from orvex.transform.incremental import Columns, Count, Refuse, Step
 from orvex.transform.models import Discovery, Model, discover_models
 from orvex.transform.run_records import history_request, record_statements
 from orvex.transform.sources import source_attachments
@@ -57,6 +68,7 @@ class Checked:
     discovery: Discovery
     graph: Graph | None
     problems: tuple[Problem, ...]
+    columns: Mapping[str, Columns] = field(default_factory=dict)
 
 
 class ProjectLocked(Exception):
@@ -80,7 +92,87 @@ def check_project(folder: Path) -> Checked:
     sources = set(project.connections)
     graph = build_graph(discovery.models, sources)
     problems = [_from_model_error(item) for item in (*discovery.problems, *graph.problems)]
-    return Checked(project, discovery, graph, tuple(problems))
+    for model in discovery.models:
+        problems += [_from_model_error(item) for item in incremental.config_problems(model)]
+    columns: dict[str, Columns] = {}
+    needs_binding = any(m.config.materialized == "incremental" for m in discovery.models)
+    if needs_binding and not problems:
+        bound, bind_problems = _bind(project, discovery, graph)
+        columns = bound
+        problems += bind_problems
+        problems += [
+            _from_model_error(item) for item in incremental.problems_for(discovery.models, columns)
+        ]
+    return Checked(project, discovery, graph, tuple(problems), columns)
+
+
+def _bind(
+    project: Project, discovery: Discovery, graph: Graph
+) -> tuple[dict[str, Columns], list[Problem]]:
+    """Output columns of every model, from DuckDB's binder; nothing is executed.
+
+    Binding happens in a scratch lake in a temporary folder (never the project's): upstream
+    models are stand-in empty tables with the columns found for them, and sources are attached
+    as for a run.
+    """
+    by_name = {model.name: model for model in discovery.models}
+    columns: dict[str, Columns] = {}
+    problems: list[Problem] = []
+    failed: set[str] = set()
+    scratch = Path(tempfile.mkdtemp(prefix="bind-"))
+    try:
+        location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(scratch))
+        try:
+            lake = open_lake(location, _limits(), source_attachments(project.connections))
+        except StoreError as error:
+            return {}, [_store_problem(error, ".", "")]
+        try:
+            for name in graph.order:
+                model = by_name[name]
+                if model.extraction or failed & set(graph.dependencies.get(name, ())):
+                    failed.add(name)
+                    continue
+                try:
+                    output = lake.describe(compiled_sql(model, by_name))
+                except StoreError as error:
+                    failed.add(name)
+                    problems.append(
+                        Problem(
+                            "INVALID_MODEL_SQL",
+                            model.sql_file,
+                            None,
+                            f"{name}: {_store_message(error)}",
+                        )
+                    )
+                    continue
+                columns[name] = output
+                if model.config.materialized != "view":
+                    _stand_in(lake, model, output)
+        finally:
+            lake.close()
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    return columns, problems
+
+
+def _stand_in(lake: Lake, model: Model, output: Columns) -> None:
+    """An empty table with the model's columns, so models reading it can be bound."""
+    quoted = ", ".join(f'"{name.replace(chr(34), chr(34) * 2)}" {kind}' for name, kind in output)
+    with lake.transaction() as transaction:
+        transaction.execute(
+            StatementRequest(
+                kind="statement",
+                sql=f'CREATE SCHEMA IF NOT EXISTS "{model.schema}"',
+                parameters=[],
+            )
+        )
+        transaction.execute(
+            StatementRequest(
+                kind="statement",
+                sql=f'CREATE TABLE "{model.schema}"."{model.table}" ({quoted})',
+                parameters=[],
+            )
+        )
 
 
 def _memory_limit() -> str:
@@ -132,13 +224,6 @@ def _not_runnable(model: Model) -> Problem | None:
             None,
             f"{model.name}: extraction models run from a later release (P1-17).",
         )
-    if model.config.materialized == "incremental":
-        return Problem(
-            "UNSUPPORTED_MODEL_KIND",
-            model.config_file or model.sql_file,
-            None,
-            f"{model.name}: incremental models run from a later release (P1-11).",
-        )
     return None
 
 
@@ -157,7 +242,7 @@ def run(folder: Path, identity: Identity, out: IO[str]) -> int:
     home = project.folder / f".{identity.slug}"
     try:
         with project_lock(home):
-            return _run_locked(project, graph, checked.discovery, home, identity, out)
+            return _run_locked(project, graph, checked, home, identity, out)
     except ProjectLocked:
         print(
             Problem(
@@ -239,6 +324,7 @@ class _Outcome:
     started_at: str
     finished_at: str
     outcome: str = "not_run"
+    rows_read: str | None = None
     rows_written: str | None = None
     error: RunError | None = None
 
@@ -246,27 +332,36 @@ class _Outcome:
 def _run_locked(
     project: Project,
     graph: Graph,
-    discovery: Discovery,
+    checked: Checked,
     home: Path,
     identity: Identity,
     out: IO[str],
 ) -> int:
-    plan = plan_run(discovery.models, graph)
+    discovery = checked.discovery
     run_id = str(uuid.uuid4())
     print(f"run {run_id}", file=out)
     commit, dirty = _project_commit(project.folder)
     started = _now()
-    outcomes = [_Outcome(model, started, started) for model, _ in plan]
     snapshot: int | None = None
     failure: Problem | None = None
     lake = None
+    open_error: StoreError | None = None
     try:
         lake = open_lake(_location(home), _limits(), source_attachments(project.connections))
     except StoreError as error:
-        failure = _store_problem(error, ".", "")
+        open_error = error
+    existing: dict[str, Columns | None] = {}
+    if lake is not None:
+        for model in discovery.models:
+            if model.config.materialized == "incremental":
+                existing[model.name] = _table_columns(lake, model)
+    plan = plan_run(discovery.models, graph, checked.columns, existing)
+    outcomes = [_Outcome(model, started, started) for model, _ in plan]
+    if open_error is not None:
+        failure = _store_problem(open_error, ".", "")
         for item in outcomes:
             item.outcome = "failed"
-            item.error = RunError(code=error.code, message=error.message)
+            item.error = RunError(code=open_error.code, message=open_error.message)
     if lake is None:
         # The run could not start (a source is unreachable, say): it is still recorded, in a
         # lake opened without sources.
@@ -279,13 +374,13 @@ def _run_locked(
         current: _Outcome | None = None
         try:
             with lake.transaction() as transaction:
-                for item, (_, statements) in zip(outcomes, plan, strict=True):
+                for item, (_, steps) in zip(outcomes, plan, strict=True):
                     if failure is not None:
                         break
                     current = item
                     item.started_at = _now()
-                    for statement in statements:
-                        transaction.execute(statement)
+                    for step in steps:
+                        _run_step(transaction, step, item)
                     item.finished_at = _now()
                     item.outcome = "ran"
                 current = None
@@ -293,23 +388,33 @@ def _run_locked(
                     raise _NothingToCommit
         except _NothingToCommit:
             pass
-        except StoreError as error:
+        except (StoreError, _StepFailed) as error:
             for item in outcomes:
                 if item.outcome == "ran":
                     item.outcome = "failed"  # rolled back with the run
-            reason = RunError(code=error.code, message=_store_message(error))
+            if isinstance(error, _StepFailed):
+                reason = RunError(code=error.code, message=error.message)
+            else:
+                reason = RunError(code=error.code, message=_store_message(error))
             if current is not None:
                 current.finished_at = _now()
                 current.outcome = "failed"
                 current.error = reason
-                failure = _store_problem(error, current.model.sql_file, current.model.name)
+                failure = Problem(
+                    reason.code,
+                    current.model.sql_file,
+                    None,
+                    f"{current.model.name}: {reason.message}"
+                    if isinstance(error, StoreError)
+                    else reason.message,
+                )
             else:
                 # Not a model's fault (the transaction could not start or commit): every
                 # model failed for the same reason.
                 for item in outcomes:
                     item.outcome = "failed"
                     item.error = reason
-                failure = _store_problem(error, ".", "")
+                failure = Problem(reason.code, ".", None, reason.message)
         warning: Problem | None = None
         if failure is None:
             for item in outcomes:
@@ -317,7 +422,8 @@ def _run_locked(
             try:
                 snapshot = lake.current_snapshot().id
                 for item in outcomes:
-                    item.rows_written = str(_count(lake, item.model, snapshot))
+                    if item.rows_written is None:
+                        item.rows_written = str(_count(lake, item.model, snapshot))
             except StoreError as error:
                 # The run is committed: it is recorded as such, without what could not be read.
                 warning = _store_problem(error, ".", "after the commit")
@@ -331,8 +437,10 @@ def _run_locked(
                 project_dirty=dirty,
                 versions=_versions(identity),
                 since=None,
-                rows_read=None,
-                rows_written=None if item.rows_written is None else RowsWritten(item.rows_written),
+                rows_read=None if item.rows_read is None else RowsRead(item.rows_read),
+                rows_written=None
+                if item.rows_written is None or item.outcome != "success"
+                else RowsWritten(item.rows_written),
                 watermark=None,
                 tests=[],
                 reconciliation=[],
@@ -364,6 +472,49 @@ def _run_locked(
     for item in outcomes:
         print(f"built {item.model.name}: {item.rows_written} rows", file=out)
     return 0
+
+
+class _StepFailed(Exception):
+    """A model's run step refused to go on (a check failed, or the model cannot run)."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def _run_step(transaction: Transaction, step: Step, item: _Outcome) -> None:
+    if isinstance(step, StatementRequest):
+        transaction.execute(step)
+    elif isinstance(step, Refuse):
+        raise _StepFailed(step.code, step.message)
+    else:
+        value = transaction.value(StatementRequest(kind="statement", sql=step.sql, parameters=[]))
+        if isinstance(step, Count):
+            item.rows_read = value or "0"
+            item.rows_written = item.rows_read
+        elif value not in {None, "0"}:
+            raise _StepFailed(step.code, step.message)
+
+
+def _table_columns(lake: Lake, model: Model) -> Columns | None:
+    """The columns of a model's table in the lake now, or None when it does not exist."""
+    request = ReadRequest(
+        kind="read",
+        sql=f'SELECT * FROM "{model.schema}"."{model.table}" LIMIT 0',
+        parameters=[],
+        snapshot=lake.current_snapshot().id,
+        batch_size=1,
+    )
+    try:
+        schema = lake.read(request).schema
+    except StoreError as error:
+        if error.code == "STORE_STATEMENT_INVALID":
+            return None  # not a table of the lake (yet)
+        raise
+    return [
+        (field.name, (field.metadata or {}).get(b"duckdb_type", b"").decode()) for field in schema
+    ]
 
 
 class _NothingToCommit(Exception):

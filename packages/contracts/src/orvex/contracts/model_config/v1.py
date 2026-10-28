@@ -142,6 +142,12 @@ class ModelErrorCode(
             "MODEL_REFERENCE_UNKNOWN",
             "DEPENDENCY_CYCLE",
             "PROJECT_LOCKED",
+            "MISSING_UNIQUE_KEY",
+            "LOOKBACK_REQUIRES_UNIQUE_KEY",
+            "TIME_COLUMN_NOT_TEMPORAL",
+            "SCHEMA_CHANGED",
+            "UNIQUE_KEY_NULL",
+            "UNIQUE_KEY_DUPLICATED",
         ]
     ]
 ):
@@ -155,6 +161,12 @@ class ModelErrorCode(
         "MODEL_REFERENCE_UNKNOWN",
         "DEPENDENCY_CYCLE",
         "PROJECT_LOCKED",
+        "MISSING_UNIQUE_KEY",
+        "LOOKBACK_REQUIRES_UNIQUE_KEY",
+        "TIME_COLUMN_NOT_TEMPORAL",
+        "SCHEMA_CHANGED",
+        "UNIQUE_KEY_NULL",
+        "UNIQUE_KEY_DUPLICATED",
     ]
 
 
