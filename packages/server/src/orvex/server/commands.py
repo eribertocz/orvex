@@ -24,7 +24,7 @@ import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO
+from typing import IO, Literal
 
 from orvex.contracts.model_config.v1 import ModelError
 from orvex.contracts.run_record.v1 import (
@@ -48,7 +48,7 @@ from orvex.server.project import Project, ProjectLoadError, load_project, resolv
 from orvex.server.versions import module_versions
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, Transaction, open_lake
-from orvex.transform import incremental, lineage, model_tests, reconciliation
+from orvex.transform import incremental, lineage, model_tests, reconciliation, schedule
 from orvex.transform.graph import Graph, build_graph, compiled_sql, plan_run, test_relations
 from orvex.transform.incremental import Columns, Count, Refuse, Step, Watermark
 from orvex.transform.model_tests import ModelTest
@@ -109,7 +109,9 @@ def check_project(folder: Path) -> Checked:
     graph = build_graph(discovery.models, sources)
     problems = [_from_model_error(item) for item in (*discovery.problems, *graph.problems)]
     kinds = {name: connection.type for name, connection in project.connections.items()}
+    zone = project.settings.time_zone
     for model in discovery.models:
+        problems += [_from_model_error(item) for item in schedule.config_problems(model, zone)]
         problems += [_from_model_error(item) for item in incremental.config_problems(model)]
         problems += [_from_model_error(item) for item in reconciliation.problems(model, kinds)]
     columns: dict[str, Columns] = {}
@@ -380,11 +382,24 @@ def _not_runnable(model: Model) -> Problem | None:
     return None
 
 
+@dataclass(frozen=True, slots=True)
+class Selection:
+    """A scheduled run: the models to build (dependencies first) and how to record it."""
+
+    models: tuple[str, ...]
+    trigger: Literal["freshness", "schedule"]
+    full_refresh: frozenset[str] = frozenset()  # recorded as full_refresh (incremental: rebuilt)
+
+
 def run(
-    folder: Path, identity: Identity, out: IO[str], full_refresh: Sequence[str] | None = None
+    folder: Path,
+    identity: Identity,
+    out: IO[str],
+    full_refresh: Sequence[str] | None = None,
+    selection: Selection | None = None,
 ) -> int:
-    """Build every model. `full_refresh`: incremental models to rebuild from every row (all of
-    them when empty; None: no full refresh)."""
+    """Build every model, or only the `selection` of a scheduled run. `full_refresh`:
+    incremental models to rebuild from every row (all of them when empty; None: none)."""
     checked = check_project(folder)
     if checked.problems or checked.project is None or checked.graph is None:
         for problem in checked.problems:
@@ -410,6 +425,8 @@ def run(
                 )
             return 1
         refreshed = frozenset(full_refresh or incremental_names)
+    if selection is not None:
+        refreshed = selection.full_refresh & incremental_names
     refused = [p for p in map(_not_runnable, checked.discovery.models) if p is not None]
     if refused:
         for problem in refused:
@@ -418,7 +435,7 @@ def run(
     home = project.folder / f".{identity.slug}"
     try:
         with project_lock(home):
-            return _run_locked(project, graph, checked, home, identity, out, refreshed)
+            return _run_locked(project, graph, checked, home, identity, out, refreshed, selection)
     except ProjectLocked:
         print(
             Problem(
@@ -430,6 +447,14 @@ def run(
             file=out,
         )
         return 1
+
+
+def _trigger(
+    name: str, refreshed: frozenset[str], selection: Selection | None
+) -> Literal["manual", "schedule", "freshness", "full_refresh"]:
+    if name in refreshed or (selection is not None and name in selection.full_refresh):
+        return "full_refresh"
+    return "manual" if selection is None else selection.trigger
 
 
 def _limits() -> Limits:
@@ -519,6 +544,7 @@ def _run_locked(
     identity: Identity,
     out: IO[str],
     refreshed: frozenset[str] = frozenset(),
+    selection: Selection | None = None,
 ) -> int:
     discovery = checked.discovery
     run_id = str(uuid.uuid4())
@@ -561,6 +587,8 @@ def _run_locked(
         previous,
         checked.differences,
     )
+    if selection is not None:
+        plan = [(model, steps) for model, steps in plan if model.name in selection.models]
     outcomes = [
         _Outcome(
             model,
@@ -653,7 +681,7 @@ def _run_locked(
             RunRecord(
                 run_id=run_id,
                 model=item.model.name,
-                trigger="full_refresh" if item.model.name in refreshed else "manual",
+                trigger=_trigger(item.model.name, refreshed, selection),
                 materialized=item.model.config.materialized or "table",
                 project_commit=commit,
                 project_dirty=dirty,
