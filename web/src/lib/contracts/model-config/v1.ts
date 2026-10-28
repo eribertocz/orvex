@@ -57,7 +57,10 @@ export type ModelErrorCode =
 	| 'MODEL_SCHEMA_CONFLICT'
 	| 'ORPHAN_MODEL_CONFIG'
 	| 'INVALID_MODEL_SQL'
-	| 'UNSUPPORTED_MODEL_KIND';
+	| 'UNSUPPORTED_MODEL_KIND'
+	| 'MODEL_REFERENCE_UNKNOWN'
+	| 'DEPENDENCY_CYCLE'
+	| 'PROJECT_LOCKED';
 
 /**
  * Sidecar of one model. Without a sidecar a model is `materialized: table`, fully rebuilt on each run.
