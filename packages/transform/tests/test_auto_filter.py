@@ -57,13 +57,13 @@ PROVABLE = [
     "SELECT s.reading_id, s.read_at FROM (SELECT * FROM staging.readings) AS s",
     "SELECT r.read_at, c.tariff FROM staging.readings AS r "
     "LEFT JOIN staging.consumers AS c USING (consumer_id)",
-    "SELECT ts FROM (SELECT read_at FROM staging.readings) AS s(ts)",
+    "SELECT a.read_at FROM staging.readings AS a JOIN staging.readings AS b USING (reading_id)",
 ]
 
 
 @pytest.mark.parametrize("sql", PROVABLE)
 def test_proven_filters_keep_exactly_the_newer_rows(sql: str) -> None:
-    column = "ts" if " ts" in sql or "(ts)" in sql else "read_at"
+    column = "ts" if " ts" in sql else "read_at"
     result = filtered_sql(sql, column, COLUMNS)
     assert isinstance(result, str), result
     assert "$since" in result
@@ -113,6 +113,49 @@ def test_proven_filters_keep_exactly_the_newer_rows(sql: str) -> None:
             "expression",
         ),
         ("SELECT kwh AS read_at2, read_at2 AS read_at FROM staging.readings", "expression"),
+        (
+            "SELECT max(read_at) OVER (PARTITION BY consumer_id) AS read_at FROM staging.readings",
+            "window",
+        ),
+        (
+            "SELECT r.read_at FROM staging.readings AS r "
+            "FULL JOIN staging.consumers AS c USING (consumer_id)",
+            "outer join",
+        ),
+        # Renamed by position: the name may belong to another column of the table.
+        ("SELECT read_at FROM staging.readings AS r(read_at)", "expression"),
+        ("SELECT read_at FROM (SELECT read_at FROM staging.readings) AS s(read_at)", "expression"),
+        (
+            "SELECT read_at FROM (SELECT reading_id, consumer_id, read_at FROM staging.readings)"
+            " AS s(read_at)",
+            "expression",
+        ),
+        (
+            "WITH c(read_at) AS (SELECT reading_id, read_at AS x FROM staging.readings) "
+            "SELECT read_at FROM c",
+            "expression",
+        ),
+        ("SELECT *, kwh AS read_at FROM staging.readings", "several tables"),
+        (
+            "SELECT u.data.ts AS read_at FROM "
+            "(SELECT {'ts': read_at} AS data FROM staging.readings) AS u",
+            "expression",
+        ),
+        (
+            "WITH c AS (SELECT * FROM staging.readings) SELECT read_at FROM "
+            "(WITH c AS (SELECT * FROM staging.other) SELECT * FROM c) AS x",
+            "several tables",
+        ),
+        (
+            "WITH c AS (SELECT * FROM staging.readings) SELECT read_at FROM c "
+            "WHERE reading_id IN (SELECT reading_id FROM query_table('c'))",
+            "several tables",
+        ),
+        (
+            "SELECT readings.read_at FROM staging.readings "
+            "JOIN archive.readings USING (reading_id)",
+            "several tables",
+        ),
     ],
 )
 def test_unprovable_filters_are_refused_with_a_reason(sql: str, reason: str) -> None:
@@ -126,7 +169,7 @@ def test_the_rewrite_is_deterministic_and_strict() -> None:
     first = filtered_sql(sql, "read_at", COLUMNS)
     assert first == filtered_sql(sql, "read_at", COLUMNS)
     assert isinstance(first, str)
-    assert "(staging.readings.read_at > $since)" in first
+    assert "(readings.read_at > $since)" in first
 
 
 def test_the_location_of_the_column_is_reported() -> None:

@@ -237,15 +237,18 @@ def _prove_filter(
             "INCREMENTAL_FILTER_NOT_PROVABLE",
             model.sql_file,
             None,
-            f"{model.name}: the filtered SQL does not bind ({_store_message(error)}); set "
-            "filter: manual.",
+            f"{model.name}: a filter on {time_column} cannot be proven safe "
+            f"(reason: the filtered SQL does not bind: {_store_message(error)}); set "
+            "filter: manual and place $since in the SQL.",
         )
     if [name for name, _ in rewritten] != [name for name, _ in output]:
         return Problem(
             "INCREMENTAL_FILTER_NOT_PROVABLE",
             model.sql_file,
             None,
-            f"{model.name}: the filtered SQL changes the output columns; set filter: manual.",
+            f"{model.name}: a filter on {time_column} cannot be proven safe "
+            "(reason: the filtered SQL changes the output columns); set filter: manual and "
+            "place $since in the SQL.",
         )
     return result
 

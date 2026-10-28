@@ -32,7 +32,7 @@ New cross-field rules are added by the issues that implement those behaviors, as
 | `ORPHAN_MODEL_CONFIG` | A sidecar without its `.sql` |
 | `UNSUPPORTED_MODEL_KIND` | A `.py` model (reserved for after v1.0.0, ADR-0023) |
 | `INVALID_MODEL_SQL` | A DuckDB-SQL model that is not exactly one `SELECT` (or `WITH … SELECT`) |
-| `MODEL_CONFIG_INVALID` | A sidecar that is not valid YAML or does not match `ModelConfig`, or whose `connection` is not a `clickhouse` connection of the project |
+| `MODEL_CONFIG_INVALID` | A sidecar that is not valid YAML or does not match `ModelConfig`, or whose `connection` is not a `clickhouse` connection of the project, or an incremental model with `filter: auto` whose SQL already uses `$since` (`path` `/incremental/filter`) |
 | `MODEL_REFERENCE_UNKNOWN` | A model reads a table that is neither a model (`<folder>.<name>`) nor a source (`<connection>.<table>`) |
 | `DEPENDENCY_CYCLE` | Models depend on each other in a cycle (the message lists it in order) |
 | `PROJECT_LOCKED` | Another process holds the project's local lake (`orvex run`) |
@@ -44,10 +44,27 @@ New cross-field rules are added by the issues that implement those behaviors, as
 | `UNIQUE_KEY_DUPLICATED` | Loaded rows of a `merge` with the same key twice (the run rolls back; `delete_insert` allows it) |
 | `MISSING_PARTITION_BY` | `partition_overwrite` without `partition_by` |
 | `MISSING_SINCE_PARAMETER` | An incremental model with `filter: manual` whose SQL does not use `$since` |
-| `INCREMENTAL_FILTER_NOT_PROVABLE` | An incremental model with `filter: auto` whose filter cannot be proven; until the automatic filter exists, any `filter: auto` model whose SQL does not use `$since` (use `filter: manual` and place `$since`) |
+| `INCREMENTAL_FILTER_NOT_PROVABLE` | An incremental model with `filter: auto` whose filter cannot be proven safe (see below), or that is an extraction model; `line` is the time column's line when known, and the message names the reason (use `filter: manual` and place `$since`) |
 | `MODEL_TEST_FAILED` | A model test found failing rows after the model was written (the run rolls back; the run record lists every test with its failing-row count) |
 | `RECONCILIATION_FAILED` | A reconciliation check found groups where the model and its source differ by more than the tolerance, or exist on one side only (the run rolls back) |
 | `FRESHNESS_TOO_SHORT` | `freshness` below `5m` (sources must not be polled more often) |
+
+## The automatic filter (`filter: auto`)
+
+The filter `<table>.<time_column> > $since` is added to the query that reads the time column's base table only when DuckDB's parse tree proves it removes exactly the rows a filter on the model's output would remove: the column comes unchanged (or only renamed) from exactly one table reference, followed through `FROM` subqueries and CTEs used once, and nothing in between changes which rows survive. The `.sql` file is never changed; `orvex validate --show-sql <model>` prints the compiled SQL. Otherwise the model is refused with one reason:
+
+| Reason | For example |
+|---|---|
+| `aggregation` | `GROUP BY`, `HAVING`, aggregate functions |
+| `window` | Window functions, `QUALIFY` |
+| `set operation` | `UNION`, `INTERSECT`, `EXCEPT` |
+| `limit` | `LIMIT`, `USING SAMPLE` |
+| `distinct` | `DISTINCT`, `DISTINCT ON` |
+| `outer join` | The table on the side of an outer join that can be missing, `FULL`, `SEMI`/`ANTI` right sides, `ASOF` right side |
+| `expression` | The column computed, renamed by position (`AS t(a, b)`), a struct field, or not a column of the table |
+| `several tables` | The column could come from more than one reference, a CTE used more than once, `NATURAL` or `POSITIONAL` joins, `query()`/`query_table()` |
+| `not found` | The time column is not in the output |
+| `extraction` | An extraction model (its SQL runs on the source) |
 
 `details` holds `file` (relative to the project folder), and when known `model`, `path` (a JSON pointer into the sidecar) and `line`. Discovery reports every problem of a project at once.
 

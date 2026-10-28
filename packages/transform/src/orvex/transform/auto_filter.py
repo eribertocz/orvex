@@ -157,12 +157,12 @@ def _join_reason(leaf: Tree, joins: list[Tree]) -> str | None:
     for join in joins:
         kind, ref = join.get("join_type"), join.get("ref_type")
         on_left = _in(join["left"], leaf)
-        if ref in {"POSITIONAL", "DEPENDENT"}:
+        if ref in {"POSITIONAL", "NATURAL"}:
             return "several tables"
         if ref == "ASOF" and not on_left:
             return "outer join"
         if (
-            kind == "OUTER"
+            kind in {"OUTER", "FULL"}
             or (kind == "LEFT" and not on_left)
             or (kind == "RIGHT" and on_left)
             or (kind in {"SEMI", "ANTI", "MARK", "SINGLE"} and not on_left)
@@ -207,11 +207,21 @@ class _Proof:
         self.columns_of = columns_of
         self.ctes: dict[str, Tree] = {}
         self.cte_uses: dict[str, int] = {}
+        self.shadowed: set[str] = set()  # CTE names defined in more than one scope
         for node in _walk(statement["node"]):
             cte_map = node.get("cte_map")
             if isinstance(cte_map, dict):
                 for entry in cte_map.get("map", []):
-                    self.ctes[str(entry["key"]).lower()] = entry["value"]
+                    key = str(entry["key"]).lower()
+                    if key in self.ctes:
+                        self.shadowed.add(key)
+                    self.ctes[key] = entry["value"]
+        # `query('…')` and `query_table('…')` read relations by name at run time: their uses of a
+        # CTE cannot be counted, so a statement with them is not followed.
+        self.dynamic = any(
+            str(node.get("function_name", "")).lower() in {"query", "query_table"}
+            for node in _walk(statement["node"])
+        )
         for node in _walk(statement["node"]):
             if node.get("type") == "BASE_TABLE" and not node.get("schema_name"):
                 name = str(node.get("table_name", "")).lower()
@@ -233,6 +243,9 @@ class _Proof:
         if item.get("class") != "COLUMN_REF":
             return Refusal("expression", item.get("query_location"))
         names = [str(name) for name in item.get("column_names", [])]
+        if len(names) > 2:
+            # `t.struct.field` or `schema.table.column`: not followed (never guessed).
+            return Refusal("expression", item.get("query_location"))
         if len(names) == 1:
             return self._unqualified(node, names[0], leaves, depth, item.get("query_location"))
         qualifier = names[-2].lower()
@@ -249,13 +262,15 @@ class _Proof:
             for item in node.get("select_list") or []
             if (_output_name(item) or "").lower() == wanted and item.get("class") != "STAR"
         ]
-        if len(named) == 1:
-            return named[0]
-        if len(named) > 1:
-            return Refusal("expression", named[0].get("query_location"))
         stars: list[Tree] = [
             item for item in node.get("select_list") or [] if item.get("class") == "STAR"
         ]
+        if len(named) > 1 or (named and stars) or len(stars) > 1:
+            # The name could be output more than once: which one a reader gets is not proven.
+            located = (named or stars)[0]
+            return Refusal("several tables", located.get("query_location"))
+        if len(named) == 1:
+            return named[0]
         for star in stars:
             if star.get("columns") or star.get("expr") or star.get("rename_list"):
                 return Refusal("expression", star.get("query_location"))
@@ -296,32 +311,23 @@ class _Proof:
     def _has(self, leaf: Tree, column: str) -> bool | None:
         """Whether a table reference outputs `column` (None: unknown)."""
         wanted = column.lower()
-        aliases = [str(name).lower() for name in leaf.get("column_name_alias") or []]
-        if aliases and wanted in aliases:
-            return True
+        if leaf.get("column_name_alias"):
+            return None  # renamed by position: not followed
         if leaf.get("type") == "SUBQUERY":
             outputs = _query_outputs(leaf["subquery"]["node"])
-            if outputs is None:
-                return None
-            names = aliases + [name.lower() for name in outputs[len(aliases) :]]
-            return wanted in names
-        if leaf.get("type") == "BASE_TABLE":
-            name = str(leaf.get("table_name", "")).lower()
-            if not leaf.get("schema_name") and name in self.ctes:
-                cte = self.ctes[name]
-                outputs = _query_outputs(cte["query_node"])
-                if outputs is None:
-                    return None
-                names = [str(a).lower() for a in cte.get("aliases") or []]
-                names += [o.lower() for o in outputs[len(names) :]]
-                return wanted in names
+        elif leaf.get("type") != "BASE_TABLE":
+            return None
+        elif not leaf.get("schema_name") and str(leaf.get("table_name", "")).lower() in self.ctes:
+            cte = self.ctes[str(leaf.get("table_name", "")).lower()]
+            if cte.get("aliases"):
+                return None  # renamed by position: not followed
+            outputs = _query_outputs(cte["query_node"])
+        else:
             columns = self.columns_of(_path(leaf))
-            if columns is None:
-                return None
-            known = [c.lower() for c in columns]
-            names = aliases + known[len(aliases) :]
-            return wanted in names
-        return None
+            outputs = None if columns is None else list(columns)
+        if outputs is None:
+            return None
+        return wanted in (name.lower() for name in outputs)
 
     def _unqualified(
         self,
@@ -347,55 +353,36 @@ class _Proof:
         reason = _join_reason(leaf, joins)
         if reason is not None:
             return Refusal(reason)
+        same = [other for other, _ in _leaves(node.get("from_table") or {})]
+        if sum(1 for other in same if _name(other) == _name(leaf)) != 1:
+            return Refusal("several tables")  # two references with one name in this FROM
         if leaf.get("sample"):
             return Refusal("limit")
-        aliases = [str(name).lower() for name in leaf.get("column_name_alias") or []]
+        if leaf.get("column_name_alias"):
+            # `t(a, b)` renames by position: not followed (never guessed).
+            return Refusal("expression")
         kind = leaf.get("type")
         if kind == "SUBQUERY":
-            inner = leaf["subquery"]["node"]
-            target = self._unalias(inner, aliases, column)
-            if target is None:
-                return Refusal("not found")
-            return self.trace(inner, target, depth + 1)
+            return self.trace(leaf["subquery"]["node"], column, depth + 1)
         if kind != "BASE_TABLE":
             return Refusal("several tables")
         name = str(leaf.get("table_name", "")).lower()
         if not leaf.get("schema_name") and name in self.ctes:
-            if self.cte_uses.get(name, 0) != 1:
-                return Refusal("several tables")  # a filter in it would reach every use
             cte = self.ctes[name]
+            if self.cte_uses.get(name, 0) != 1 or name in self.shadowed:
+                return Refusal("several tables")  # a filter in it would reach every use
             if cte.get("materialized") not in (None, "CTE_MATERIALIZE_DEFAULT"):
                 return Refusal("several tables")
-            cte_aliases = [str(a).lower() for a in cte.get("aliases") or []]
-            target = self._unalias(cte["query_node"], cte_aliases + aliases, column)
-            if target is None:
-                return Refusal("not found")
-            return self.trace(cte["query_node"], target, depth + 1)
+            if cte.get("aliases"):
+                return Refusal("expression")  # `c(a, b)` renames by position
+            return self.trace(cte["query_node"], column, depth + 1)
         columns = self.columns_of(_path(leaf))
         if columns is None:
             return Refusal("several tables")  # the table's columns are not known
-        names = list(columns)
-        if column.lower() in aliases:
-            position = aliases.index(column.lower())
-            if position >= len(names):
-                return Refusal("not found")
-            column = names[position]
-        elif column.lower() in aliases + [n.lower() for n in names[len(aliases) :]]:
-            column = next(n for n in names if n.lower() == column.lower())
-        else:
+        matches = [n for n in columns if n.lower() == column.lower()]
+        if len(matches) != 1:
             return Refusal("expression")  # not a column of the table (a lateral alias, say)
-        return _Found(node, leaf, column)
-
-    @staticmethod
-    def _unalias(inner: Tree, aliases: list[str], column: str) -> str | None:
-        """The inner query's output name of an outer column renamed by `t(a, b)`."""
-        if column.lower() not in aliases:
-            return column
-        outputs = _query_outputs(inner)
-        position = aliases.index(column.lower())
-        if outputs is None or position >= len(outputs):
-            return None
-        return outputs[position]
+        return _Found(node, leaf, matches[0])
 
 
 def _tree(connection: duckdb.DuckDBPyConnection, sql: str) -> Tree:
@@ -415,6 +402,8 @@ def prove(sql: str, time_column: str, columns_of: ColumnsOf) -> Tree | Refusal:
         return Refusal("expression")
     rewritten = copy.deepcopy(tree)
     proof = _Proof(rewritten, columns_of)
+    if proof.dynamic:
+        return Refusal("several tables")
     found = proof.trace(rewritten["statements"][0]["node"], time_column)
     if isinstance(found, Refusal):
         if found.location is None:
@@ -434,7 +423,9 @@ def _first_item(node: Tree, column: str) -> int | None:
 
 
 def _inject(found: _Found) -> None:
-    qualifier = [_name(found.table)] if found.table.get("alias") else _path(found.table)
+    # The reference's own name in its FROM (its alias, or its table name, which is unique there):
+    # it still binds when a view model is inlined as `(…) AS <name>`.
+    qualifier = [str(found.table.get("alias") or found.table.get("table_name"))]
     comparison: Tree = {
         "class": "COMPARISON",
         "type": "COMPARE_GREATERTHAN",
