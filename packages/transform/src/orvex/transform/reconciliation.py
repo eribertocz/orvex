@@ -160,7 +160,10 @@ def _sides(check: Reconciliation, relation: str, text_groups: frozenset[int]) ->
         else f"{group} AS {_identifier(f'g{i}')}"
         for i, group in enumerate(groups)
     ]
-    columns = ", ".join([*selected, f"{measure} AS m", "true AS present"])
+    # `rid` numbers each side's groups, so a group matched more than once can be caught.
+    columns = ", ".join(
+        [*selected, f"{measure} AS m", "true AS present", "row_number() OVER () AS rid"]
+    )
     # Grouped by position: a measure that is not an aggregate, or an aggregate among the groups,
     # is refused by the binder instead of silently becoming a grouping key.
     positions = ", ".join(str(i + 1) for i in range(len(groups)))
@@ -183,6 +186,7 @@ def _query(
     model_side, source_side = _sides(check, relation, text_groups)
 
     def key(side: str, i: int) -> str:
+        # Also on the join: the binary collation must hold where the keys are compared.
         column = f"{side}.{_identifier(f'g{i}')}"
         return f'{column} COLLATE "binary"' if i in text_groups else column
 
@@ -268,7 +272,22 @@ def steps(model: Model, relation: str, comparisons: Sequence[Comparison]) -> lis
             f"OR (model.m IS NOT NULL AND source.m IS NOT NULL AND {unfit}) "
             f"OR {beyond}"
         )
-        sql = _query(check, relation, "count(*)", failing, comparison.text_groups)
+        # A group matched more than once on either side (a collation hidden inside a list or
+        # struct key, say) is never compared one-to-one: every such joined row fails.
+        joined = _query(
+            check,
+            relation,
+            f"coalesce({failing}, false) AS bad, model.rid AS model_rid, "
+            "source.rid AS source_rid, count(*) OVER (PARTITION BY model.rid) AS model_matches, "
+            "count(*) OVER (PARTITION BY source.rid) AS source_matches",
+            "",
+            comparison.text_groups,
+        )
+        sql = (
+            f"SELECT count(*) FROM ({joined}) WHERE bad "
+            "OR (model_rid IS NOT NULL AND model_matches > 1) "
+            "OR (source_rid IS NOT NULL AND source_matches > 1)"
+        )
         found.append(
             Reconcile(
                 check.name, StatementRequest(kind="statement", sql=sql, parameters=parameters)

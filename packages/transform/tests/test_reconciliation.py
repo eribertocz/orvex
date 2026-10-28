@@ -265,3 +265,19 @@ def test_case_insensitive_source_keys_match_one_to_one(tmp_path: Path) -> None:
         "FROM (VALUES ('ab', 5), ('AB', 5)) AS t(meter, kwh)"
     )
     assert failing(chosen, connection) == [("by_meter", 1)]
+
+
+def test_a_group_matched_twice_always_fails(tmp_path: Path) -> None:
+    """A collation hidden inside a list key: two model groups match one source group."""
+    chosen = model(
+        tmp_path, "  - {name: by_meter, measure: sum(kwh), group_by: [k], source: feed.x}\n"
+    )
+    connection = lake()
+    connection.execute("CREATE TABLE feed.raw (meter VARCHAR COLLATE NOCASE, kwh DECIMAL(18,4))")
+    connection.execute("INSERT INTO feed.raw VALUES ('ab', 5)")
+    connection.execute("CREATE TABLE feed.x AS SELECT [meter] AS k, kwh FROM feed.raw")
+    connection.execute(
+        "CREATE TABLE s.m AS SELECT [meter] AS k, CAST(kwh AS DECIMAL(18,4)) AS kwh "
+        "FROM (VALUES ('ab', 5), ('AB', 5)) AS t(meter, kwh)"
+    )
+    assert failing(chosen, connection) == [("by_meter", 2)]
