@@ -51,10 +51,21 @@ New cross-field rules are added by the issues that implement those behaviors, as
 | `UNSUPPORTED_SOURCE_TYPE` | An extraction model's output column whose ClickHouse type has no exact DuckDB type (see below); the message names each such column and its type, with a hint to cast it in the SQL |
 | `SOURCE_CONNECTION_FAILED` | An extraction model's ClickHouse connection cannot be reached or refuses the credentials; the message never contains the password |
 | `SOURCE_NOT_READ_ONLY` | An extraction model's ClickHouse user whose profile fixes `readonly` to `0` or `2`: its queries cannot be made read-only (`readonly = 1`) |
+| `SOURCE_LIMITS_REFUSED` | An extraction model's ClickHouse user whose profile does not let queries set the validation limits (`max_execution_time`, `max_rows_to_read`, `read_overflow_mode`); the message gives the configuration (decision #114) |
 
 ## Extraction models (ClickHouse)
 
-A model whose sidecar names a `clickhouse` `connection` is ClickHouse SQL. Validation sends it to ClickHouse, read-only (`readonly = 1`), and reads no row. ClickHouse evaluates scalar and `EXISTS` subqueries, and dictionary or join lookups on constant arguments (`dictGet…`, `joinGet…`), while it describes a query, so a model with one is refused (`INVALID_MODEL_SQL`; subqueries in `FROM`, named `WITH` tables and the right side of `IN` are fine; a quoted name with a line break, control character or backslash escape is refused too, since ClickHouse prints names unescaped in the tree that is checked), and reading is also capped (`max_rows_to_read = 1`) unless the user's profile fixes its settings. A user whose profile fixes `readonly` to anything but `1` is refused (`SOURCE_NOT_READ_ONLY`). ClickHouse may still load a dictionary that the SQL reads as a table while describing it. Then: `EXPLAIN AST` must show one `SELECT` (otherwise `INVALID_MODEL_SQL` with ClickHouse's message), and `DESCRIBE` gives its output columns. Before that, the text alone is checked (strings, quoted identifiers and comments skipped):
+A model whose sidecar names a `clickhouse` `connection` is ClickHouse SQL. Validation sends it to ClickHouse, read-only (`readonly = 1`), and reads no row of the source. ClickHouse may evaluate parts of a query while it describes it (scalar and `EXISTS` subqueries, also inside a view the SQL reads), so every validation query carries limits that ClickHouse enforces: `max_rows_to_read = 1` with `read_overflow_mode = 'throw'` and `max_execution_time`. A query that would read rows fails (`INVALID_MODEL_SQL`, at most one block read); a scalar or `EXISTS` subquery written in the model itself is refused before that (subqueries in `FROM`, named `WITH` tables and the right side of `IN` are fine). The ClickHouse user must therefore accept those limits (decision #114): a user with only `SELECT` grants, or a profile with `readonly = 1` and `max_rows_to_read`, `read_overflow_mode` and `max_execution_time` declared `CHANGEABLE_IN_READONLY`, for example:
+
+```sql
+CREATE SETTINGS PROFILE extraction_reader SETTINGS readonly = 1,
+  max_rows_to_read CHANGEABLE_IN_READONLY, read_overflow_mode CHANGEABLE_IN_READONLY,
+  max_execution_time CHANGEABLE_IN_READONLY;
+CREATE USER extraction IDENTIFIED BY '…' SETTINGS PROFILE extraction_reader;
+GRANT SELECT ON analytics.* TO extraction;
+```
+
+Otherwise the connection is refused (`SOURCE_LIMITS_REFUSED`); a profile that fixes `readonly` to `0` or `2` is refused too (`SOURCE_NOT_READ_ONLY`). Dictionary lookups (`dictGet…`, `joinGet…`) are allowed; describing them can make ClickHouse load a dictionary that is not in memory yet. A quoted name with a line break, a control character or a backslash escape is refused, since the subquery check reads ClickHouse's `EXPLAIN AST` text, where names are printed unescaped. Then: `EXPLAIN AST` must show one `SELECT` (otherwise `INVALID_MODEL_SQL` with ClickHouse's message), and `DESCRIBE` gives its output columns. Before that, the text alone is checked (strings, quoted identifiers and comments skipped):
 
 - one statement (a final `;` is allowed) → otherwise `INVALID_MODEL_SQL`;
 - incremental models need `filter: manual` (`filter: auto` → `INCREMENTAL_FILTER_NOT_PROVABLE`, reason `extraction`) and `{since:Type}` (→ `MISSING_SINCE_PARAMETER`), with `Type` one of `Date`, `Date32`, `DateTime`, `DateTime('zone')`, `DateTime64(p)`, `DateTime64(p, 'zone')` (→ `MODEL_CONFIG_INVALID`); validation binds the lowest value of that type;

@@ -280,11 +280,8 @@ def test_subqueries_clickhouse_evaluates_while_describing() -> None:
         "       ExpressionList (children 1)",
         "        Literal UInt64_5",
     )
-    assert evaluated_while_describing(constant_lookup)
-    column_lookup = constant_lookup.replace("Literal UInt64_5", "Identifier meter_id")
-    assert not evaluated_while_describing(column_lookup)
-    joined = constant_lookup.replace("Function dictGet", "Function joinGetOrNull")
-    assert evaluated_while_describing(joined)
+    # Dictionary lookups are allowed (decision #114); the row limit is ClickHouse's guard.
+    assert not evaluated_while_describing(constant_lookup)
     # A line whose node announces other children than it has, or a second root, fails closed.
     assert evaluated_while_describing(named.replace("WithElement (children 1)", "WithElement"))
     assert evaluated_while_describing(

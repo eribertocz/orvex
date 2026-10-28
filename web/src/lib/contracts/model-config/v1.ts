@@ -75,7 +75,8 @@ export type ModelErrorCode =
 	| 'FRESHNESS_TOO_SHORT'
 	| 'UNSUPPORTED_SOURCE_TYPE'
 	| 'SOURCE_CONNECTION_FAILED'
-	| 'SOURCE_NOT_READ_ONLY';
+	| 'SOURCE_NOT_READ_ONLY'
+	| 'SOURCE_LIMITS_REFUSED';
 
 /**
  * Sidecar of one model. Without a sidecar a model is `materialized: table`, fully rebuilt on each run.

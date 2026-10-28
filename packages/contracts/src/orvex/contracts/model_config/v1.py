@@ -157,6 +157,7 @@ class ModelErrorCode(
             "UNSUPPORTED_SOURCE_TYPE",
             "SOURCE_CONNECTION_FAILED",
             "SOURCE_NOT_READ_ONLY",
+            "SOURCE_LIMITS_REFUSED",
         ]
     ]
 ):
@@ -185,6 +186,7 @@ class ModelErrorCode(
         "UNSUPPORTED_SOURCE_TYPE",
         "SOURCE_CONNECTION_FAILED",
         "SOURCE_NOT_READ_ONLY",
+        "SOURCE_LIMITS_REFUSED",
     ]
 
 

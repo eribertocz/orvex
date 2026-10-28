@@ -90,6 +90,9 @@ def source() -> Iterator[dict[str, str]]:
         f"INSERT INTO {database}.events SELECT number, concat('M', toString(number % 7)), "
         "toDateTime64('2024-01-01 00:00:00', 6, 'UTC') + number, number / 10 FROM numbers(1000)",
         f"CREATE TABLE {database}.types ({columns}) ENGINE = MergeTree ORDER BY tuple()",
+        # A view whose description evaluates a scalar subquery over every row of events.
+        f"CREATE VIEW {database}.totals AS SELECT event_id, "
+        f"(SELECT sum(value) FROM {database}.events) AS total FROM {database}.events",
         f"CREATE USER {reader} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}'",
         f"GRANT SELECT ON {database}.* TO {reader}",
     ]
@@ -319,49 +322,61 @@ def test_connection_rules(
     assert READER_PASSWORD not in refused
 
 
-def test_a_reader_with_a_fixed_read_only_profile(
+def test_reader_profiles(
     tmp_path: Path, source: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The usual read-only ClickHouse user: no setting can be sent, so the refusal of what
-    ClickHouse would evaluate while describing is the only guard; nothing reads the source."""
+    """Decision #114: the reader must accept the validation limits, so that ClickHouse itself
+    stops any read (a view, a subquery) while it describes a model."""
     client = admin()
-    fixed, loose = f"{source['reader']}_ro1", f"{source['reader']}_ro2"
+    suffix = source["reader"]
+    profile = f"{suffix}_profile"
+    accepting, fixed, loose = f"{suffix}_ok", f"{suffix}_ro1", f"{suffix}_ro2"
     monkeypatch.setenv(VARIABLE, READER_PASSWORD)
+    created = [
+        f"CREATE SETTINGS PROFILE {profile} SETTINGS readonly = 1, "
+        "max_rows_to_read CHANGEABLE_IN_READONLY, read_overflow_mode CHANGEABLE_IN_READONLY, "
+        "max_execution_time CHANGEABLE_IN_READONLY",
+        f"CREATE USER {accepting} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}' "
+        f"SETTINGS PROFILE {profile}",
+        f"CREATE USER {fixed} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}' "
+        "SETTINGS readonly = 1",
+        f"CREATE USER {loose} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}' "
+        "SETTINGS readonly = 2",
+    ]
     try:
-        for user, level in ((fixed, 1), (loose, 2)):
-            client.command(
-                f"CREATE USER {user} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}' "
-                f"SETTINGS readonly = {level}"
-            )
+        for statement in created:
+            client.command(statement)
+        for user in (accepting, fixed, loose):
             client.command(f"GRANT SELECT ON {source['database']}.* TO {user}")
-        reader = {**source, "reader": fixed}
         example = {"models/raw/ch_events.sql": EXAMPLE, "models/raw/ch_events.yaml": EXTRACTION}
-        assert problems(project(tmp_path / "ok", reader, example)) == []
-        loose_project = project(tmp_path / "loose", {**source, "reader": loose}, example)
-        assert [item.split(" ", 1)[0] for item in problems(loose_project)] == [
-            "SOURCE_NOT_READ_ONLY"
-        ]
-        evaluated = [
+
+        def codes(folder: str, user: str, models: dict[str, str]) -> list[str]:
+            found = problems(project(tmp_path / folder, {**source, "reader": user}, models))
+            return [item.split(" ", 1)[0] for item in found]
+
+        assert codes("ok", accepting, example) == []
+        assert codes("fixed", fixed, example) == ["SOURCE_LIMITS_REFUSED"]
+        assert codes("loose", loose, example) == ["SOURCE_NOT_READ_ONLY"]
+        stopped = [
+            # The view's scalar subquery is invisible in the model: the row limit stops it.
+            "SELECT event_id FROM totals",
+            "SELECT e.event_id FROM events AS e JOIN totals USING (event_id)",
+            # Written in the model: refused before ClickHouse describes it.
             "SELECT event_id, (SELECT sum(value) FROM events) IN (1) AS c FROM events",
-            "SELECT event_id, 1 AS `a\n   TableExpression x`, "
-            "(SELECT sum(value) FROM events) AS s FROM events",
             "SELECT event_id FROM events WHERE EXISTS (SELECT 1 FROM events WHERE value > 1)",
         ]
-        for position, sql in enumerate(evaluated):
-            folder = project(
-                tmp_path / str(position),
-                reader,
-                {"models/raw/m.sql": sql, "models/raw/m.yaml": TABLE},
-            )
-            assert [item.split(" ", 1)[0] for item in problems(folder)] == ["INVALID_MODEL_SQL"]
+        for position, sql in enumerate(stopped):
+            models = {"models/raw/m.sql": sql, "models/raw/m.yaml": TABLE}
+            assert codes(f"stopped{position}", accepting, models) == ["INVALID_MODEL_SQL"], sql
         client.command("SYSTEM FLUSH LOGS")
         heaviest = client.query(
             "SELECT max(read_rows) FROM system.query_log WHERE user = {user:String} "
             "AND query_kind IN ('Explain', 'Describe')",
-            parameters={"user": fixed},
+            parameters={"user": accepting},
         ).result_rows
-        assert int(heaviest[0][0]) < 100  # never the 1000 rows of events
+        assert int(heaviest[0][0]) < 1000  # never all the rows of events
     finally:
-        for user in (fixed, loose):
+        for user in (accepting, fixed, loose):
             client.command(f"DROP USER IF EXISTS {user}")
+        client.command(f"DROP SETTINGS PROFILE IF EXISTS {profile}")
         client.close()

@@ -564,17 +564,11 @@ def _function_name(node: _Node) -> str:
     return node.detail.split(" ", 1)[0] if node.kind == "Function" else ""
 
 
-def _has_identifier(node: _Node) -> bool:
-    return node.kind in {"Identifier", "Asterisk", "QualifiedAsterisk", "ColumnsMatcher"} or any(
-        _has_identifier(child) for child in node.children
-    )
-
-
 def evaluated_while_describing(tree: str) -> bool:
     """Whether describing the query would make ClickHouse read data: a scalar or EXISTS subquery
-    (anything but a table in FROM, a named WITH table or the right side of IN), or a dictionary
-    or join lookup on constant arguments (folded while the query is analyzed). An `EXPLAIN AST`
-    text that cannot be read as a tree counts as yes."""
+    (anything but a table in FROM, a named WITH table or the right side of IN). An `EXPLAIN AST`
+    text that cannot be read as a tree counts as yes. This refuses early, with a clear message,
+    what the row limit would stop anyway (views the SQL reads are covered only by the limit)."""
     root = _ast(tree)
     if root is None:
         return True
@@ -590,9 +584,6 @@ def evaluated_while_describing(tree: str) -> bool:
             )
             if not right_of_in and (parent is None or parent.kind not in _TABLE_PARENTS):
                 return True
-        name = _function_name(node)
-        if (name.startswith("dict") or name.startswith("joinGet")) and not _has_identifier(node):
-            return True
         return any(
             visit(child, node, parent, position) for position, child in enumerate(node.children)
         )
@@ -675,6 +666,22 @@ class Source:
                 f"{readonly.value}, so its queries cannot be made read-only; use a user whose "
                 "profile allows readonly = 1 (or fixes it to 1).",
             )
+        # Decision #114 (option C): the reader must accept the validation limits, so ClickHouse
+        # itself stops any read (a view, a subquery) after the first block, whatever the SQL is.
+        fixed = sorted(
+            key
+            for key, _ in VALIDATION_LIMITS
+            if (known := self._client.server_settings.get(key)) is not None and known.readonly
+        )
+        if fixed:
+            self._client.close()
+            raise SourceError(
+                "SOURCE_LIMITS_REFUSED",
+                f"ClickHouse connection {name}: the user's profile does not let queries set "
+                f"{', '.join(fixed)}, which keep validation from reading the source's rows; give "
+                "the user only SELECT grants, or a profile with readonly = 1 and "
+                f"{', '.join(f'{key} CHANGEABLE_IN_READONLY' for key, _ in VALIDATION_LIMITS)}.",
+            )
 
     def _error(self, error: BaseException, code: str) -> SourceError:
         """The failure as the user reads it: network and server-unavailable failures are the
@@ -687,16 +694,11 @@ class Source:
         return SourceError(code, f"ClickHouse connection {self.name}: {text}")
 
     def settings(self) -> dict[str, object]:
-        """Settings for each validation query: the limits, then `readonly = 1`. They are sent
-        with the query, never kept in a session; ClickHouse checks them together before applying
-        them, so the limits are accepted although `readonly = 1` forbids later changes. A setting
-        the user's profile fixes is not sent (a profile fixed to `readonly = 1` fixes them all:
-        its queries are read-only, but the limits cannot be added)."""
-        settings: dict[str, object] = {}
-        for key, value in VALIDATION_LIMITS:
-            known = self._client.server_settings.get(key)
-            if known is None or not known.readonly:
-                settings[key] = value
+        """Settings for each validation query: the limits, then `readonly = 1` (not sent when the
+        profile already fixes it). They are sent with the query, never kept in a session;
+        ClickHouse checks them together before applying them, so the limits are accepted
+        although `readonly = 1` forbids later changes."""
+        settings: dict[str, object] = dict(VALIDATION_LIMITS)
         if not self._fixed_read_only:
             settings["readonly"] = 1
         return settings
@@ -739,9 +741,9 @@ class Source:
     def _rows_read_message(self) -> str:
         return (
             f"ClickHouse connection {self.name}: validation would read rows of the source "
-            "(ClickHouse evaluates scalar and EXISTS subqueries, and dictionary or join lookups "
-            "on constant arguments, while it describes a query); move a subquery into a JOIN "
-            "or a WITH … AS (SELECT …) table."
+            "(ClickHouse evaluates scalar and EXISTS subqueries, including those inside a view "
+            "the SQL reads, while it describes a query); move a subquery into a JOIN or a "
+            "WITH … AS (SELECT …) table."
         )
 
     def describe(self, text: str, since: SinceType | None) -> Described:
