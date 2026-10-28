@@ -14,7 +14,7 @@ from pathlib import Path
 
 import uvicorn
 from orvex.server.app import create_app
-from orvex.server.commands import run, validate
+from orvex.server.commands import run, runs, validate
 from orvex.server.identity import Identity, load_identity
 from orvex.server.instance import (
     Project,
@@ -34,7 +34,7 @@ from orvex.server.versions import (
 )
 
 LOCAL_HOST = "127.0.0.1"
-COMMANDS = frozenset({"validate", "run"})
+COMMANDS = frozenset({"validate", "run", "runs"})
 DEFAULT_PORT = 7878
 PORT_ATTEMPTS = 100
 
@@ -102,6 +102,9 @@ def command_parser(identity: Identity) -> argparse.ArgumentParser:
     validate.add_argument("project", type=Path, help="project folder")
     run = commands.add_parser("run", help="build every model of a project into its local lake")
     run.add_argument("project", type=Path, help="project folder")
+    history = commands.add_parser("runs", help="list recent runs of a project")
+    history.add_argument("project", type=Path, help="project folder")
+    history.add_argument("--limit", type=int, default=20, help="how many runs (default 20)")
     return parser
 
 
@@ -114,6 +117,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         command = command_parser(identity).parse_args(given)
         if command.command == "validate":
             return validate(command.project, sys.stdout)
+        if command.command == "runs":
+            return runs(command.project, identity, max(1, command.limit), sys.stdout)
         return run(command.project, identity, sys.stdout)
     arguments = parser_for(identity).parse_args(given)
     try:
