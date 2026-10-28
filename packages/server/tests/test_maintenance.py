@@ -271,6 +271,8 @@ def test_a_due_model_runs_before_maintenance(
         == 0
     )
     text = out.getvalue()
+    assert "running raw.r (freshness)" in text, text
+    assert "running lake maintenance" in text, text
     assert text.index("running raw.r (freshness)") < text.index("running lake maintenance")
     ((run_start, maintenance_start),) = lake_rows(
         folder,
