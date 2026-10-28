@@ -260,12 +260,14 @@ def plan_run(
     existing: Mapping[str, Columns | None] | None = None,
     since: Mapping[str, str] | None = None,
     full_refresh: frozenset[str] = frozenset(),
+    previous: Mapping[str, str | None] | None = None,
 ) -> list[tuple[Model, list[Step]]]:
     """Steps that build every stored model, in run order (views are not stored).
 
     For incremental models only: `outputs` are the models' output columns, `existing` the
     columns of their tables in the lake (None when absent), `since` the `$since` value of each
-    (`-infinity` when missing), and `full_refresh` the models whose table is replaced.
+    (`-infinity` when missing), `full_refresh` the models whose table is replaced, and
+    `previous` their stored watermarks.
     """
     by_name = {model.name: model for model in models}
     plan: list[tuple[Model, list[Step]]] = []
@@ -286,6 +288,7 @@ def plan_run(
                         (existing or {}).get(name),
                         (since or {}).get(name, incremental.LOWEST),
                         name in full_refresh,
+                        (previous or {}).get(name),
                     ),
                 )
             )

@@ -46,7 +46,7 @@ from orvex.transform import incremental
 from orvex.transform.graph import Graph, build_graph, compiled_sql, plan_run
 from orvex.transform.incremental import Columns, Count, Refuse, Step, Watermark
 from orvex.transform.models import Discovery, Model, discover_models
-from orvex.transform.run_records import history_request, record_statements, watermark_request
+from orvex.transform.run_records import history_request, record_statements
 from orvex.transform.sources import source_attachments
 
 LOCK_FILE = "lake.lock"
@@ -428,7 +428,7 @@ def _run_locked(
         except StoreError as error:
             lake.close()
             lake, open_error = None, error
-    plan = plan_run(discovery.models, graph, checked.columns, existing, since, refreshed)
+    plan = plan_run(discovery.models, graph, checked.columns, existing, since, refreshed, previous)
     outcomes = [
         _Outcome(
             model,
@@ -571,9 +571,11 @@ def _run_step(transaction: Transaction, step: Step, item: _Outcome) -> None:
     elif isinstance(step, Refuse):
         raise _StepFailed(step.code, step.message)
     elif isinstance(step, Watermark):
-        value = transaction.value(StatementRequest(kind="statement", sql=step.sql, parameters=[]))
-        if value is not None:  # no row loaded: the previous watermark stays
-            item.watermark = value
+        # Stored with the rows, in this transaction: it moves only if they commit.
+        value = transaction.value(step.request)
+        for statement in incremental.watermark_statements(step, value):
+            transaction.execute(statement)
+        item.watermark = value
     else:
         value = transaction.value(StatementRequest(kind="statement", sql=step.sql, parameters=[]))
         if isinstance(step, Count):
@@ -589,23 +591,31 @@ def _since(
     """The model's previous watermark and its `$since`.
 
     No table, or a full refresh: no watermark, `$since` is `-infinity` (every row loads). Else
-    the watermark of its last successful run, from the run records.
+    the watermark stored with its table; for a table written before watermarks were stored, the
+    largest `time_column` in it.
     """
     incremental_config = model.config.incremental
     assert incremental_config is not None
+    time_column = incremental_config.time_column.root.lower()
+    kind = {name.lower(): typ for name, typ in output}.get(time_column, "")
     watermark: str | None = None
     if table is not None and not full_refresh:
-        request = watermark_request(lake.current_snapshot().id, model.name)
+        snapshot = lake.current_snapshot().id
         try:
-            rows = lake.read(request).read_all().column("watermark").to_pylist()
+            rows = _column(lake, incremental.watermark_request(snapshot, model))
         except StoreError as error:
             if error.code != "STORE_STATEMENT_INVALID":
                 raise
-            rows = []  # no run records yet
+            rows = []  # no watermarks table yet
+        if not rows and kind in incremental.PARAMETER_TYPES:
+            rows = _column(lake, incremental.table_watermark_request(snapshot, model, kind))
         watermark = rows[0] if rows else None
-    time_column = incremental_config.time_column.root.lower()
-    kind = {name.lower(): typ for name, typ in output}.get(time_column, "")
     return watermark, incremental.since_value(kind, watermark, incremental_config.lookback)
+
+
+def _column(lake: Lake, request: ReadRequest) -> list[str | None]:
+    values: list[str | None] = lake.read(request).read_all().column("watermark").to_pylist()
+    return values
 
 
 def _table_columns(lake: Lake, model: Model) -> Columns | None:

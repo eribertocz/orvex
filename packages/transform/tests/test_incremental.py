@@ -16,6 +16,7 @@ from orvex.transform.incremental import (
     schema_statements,
     since_value,
     steps,
+    watermark_statements,
     widens,
 )
 from orvex.transform.models import Model, discover_models
@@ -376,7 +377,12 @@ def test_since_reaches_the_store_only_as_a_bound_parameter(tmp_path: Path) -> No
     (parameter,) = with_since[0].parameters
     assert (parameter.name, parameter.type.root, parameter.value) == ("since", "TIMESTAMPTZ", value)
     assert "$since" in with_since[0].sql
-    assert all("2024" not in s.sql for s in planned if not isinstance(s, Refuse))
+    texts = [
+        s.request.sql if isinstance(s, Watermark) else s.sql
+        for s in planned
+        if not isinstance(s, Refuse)
+    ]
+    assert all("2024" not in text for text in texts)
 
 
 def test_full_refresh_replaces_the_table(tmp_path: Path) -> None:
@@ -406,7 +412,50 @@ def test_watermark_is_the_largest_loaded_value(tmp_path: Path) -> None:
         (mark,) = [s for s in planned if isinstance(s, Watermark)]
         for step in planned:
             if step is mark:
-                assert connection.execute(step.sql).fetchall()[0][0] == expected
+                assert connection.execute(step.request.sql).fetchall()[0][0] == expected
                 break
             if isinstance(step, StatementRequest):
                 connection.execute(step.sql)
+
+
+def test_the_watermark_never_goes_back_and_is_stored_with_the_rows(tmp_path: Path) -> None:
+    connection = lake()
+    chosen = model(tmp_path, MERGE)
+    sql = "SELECT * FROM (VALUES (1, DATE '2024-01-03')) AS t(id, read_at)"
+    columns = [("id", "INTEGER"), ("read_at", "DATE")]
+
+    def new_watermark(previous: str | None, full_refresh: bool = False) -> str | None:
+        planned = steps(chosen, sql, columns, None, full_refresh=full_refresh, previous=previous)
+        for step in planned:
+            if isinstance(step, Watermark):
+                parameters = {p.name: p.value for p in step.request.parameters}
+                typed = step.request.sql.replace("$p_previous", "CAST($p_previous AS DATE)")
+                value: str | None = connection.execute(typed, parameters).fetchall()[0][0]
+                for statement in watermark_statements(step, value):
+                    connection.execute(
+                        statement.sql, {p.name: p.value for p in statement.parameters}
+                    )
+                return value
+            if isinstance(step, StatementRequest):
+                connection.execute(step.sql)
+        raise AssertionError("no watermark step")
+
+    stored = "SELECT model, watermark FROM _meta.watermarks"
+    assert new_watermark(None) == "2024-01-03"
+    assert connection.execute(stored).fetchall() == [("s.m", "2024-01-03")]
+    # Re-read rows older than the previous watermark (lookback): it stays where it was.
+    assert new_watermark("2024-02-01") == "2024-02-01"
+    assert new_watermark("2023-12-01") == "2024-01-03"
+    assert connection.execute(stored).fetchall() == [("s.m", "2024-01-03")]
+    # A full refresh starts again from the loaded rows, whatever was stored.
+    assert new_watermark("2099-01-01", full_refresh=True) == "2024-01-03"
+    assert connection.execute(stored).fetchall() == [("s.m", "2024-01-03")]
+
+
+def test_a_full_refresh_loading_nothing_drops_the_watermark() -> None:
+    step = Watermark(StatementRequest(kind="statement", sql="SELECT 1", parameters=[]), "s.m", True)
+    sqls = [s.sql for s in watermark_statements(step, None)]
+    assert any(sql.startswith("DELETE FROM _meta.watermarks") for sql in sqls)
+    assert not any(sql.startswith("INSERT") for sql in sqls)
+    kept = Watermark(step.request, "s.m", False)
+    assert watermark_statements(kept, None) == []

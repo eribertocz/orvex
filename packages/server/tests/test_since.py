@@ -6,6 +6,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from orvex.contracts.store.v1 import StatementRequest
 from orvex.server import commands
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
@@ -240,3 +241,75 @@ def test_since_rules_are_checked_before_anything_runs(
     code, out = command(capsys, "validate", str(tmp_path))
     assert (code, out.split(" ")[:2]) == (1, ["INCREMENTAL_FILTER_NOT_PROVABLE", "models/s/m.yaml"])
     assert not (tmp_path / f".{SLUG}").exists()
+
+
+def broken_records(*_: object) -> list[StatementRequest]:
+    """Run-record statements that fail: the records transaction rolls back."""
+    return [StatementRequest(kind="statement", sql="INSERT INTO nowhere VALUES (1)", parameters=[])]
+
+
+@pytest.mark.parametrize("first_run_fails", [True, False])
+def test_a_failed_record_write_never_reloads_rows(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    first_run_fails: bool,
+) -> None:
+    """The watermark is stored with the rows, not in the run records written afterwards."""
+    project(tmp_path, APPEND)
+    feed(tmp_path, (1, "1.0000", "2024-01-01 10:00:00+00"))
+    if not first_run_fails:
+        assert command(capsys, "run", str(tmp_path))[0] == 0
+        feed(
+            tmp_path,
+            (1, "1.0000", "2024-01-01 10:00:00+00"),
+            (2, "2.0000", "2024-01-02 10:00:00+00"),
+        )
+    with monkeypatch.context() as patch:
+        patch.setattr(commands, "record_statements", broken_records)
+        code, out = command(capsys, "run", str(tmp_path))
+    assert code == 1  # the rows committed; the records could not be written
+    assert "run records were not written" in out
+    expected = [1] if first_run_fails else [1, 2]
+    assert ids(tmp_path) == expected
+    code, out = command(capsys, "run", str(tmp_path))  # same source again
+    assert code == 0, out
+    assert "built s.m: 0 rows" in out
+    assert ids(tmp_path) == expected
+
+
+def test_watermarks_progress_with_a_frozen_clock(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(commands, "_now", lambda: "2000-01-01T00:00:00.000000+00:00")
+    project(tmp_path, APPEND)
+    rows: list[tuple[int, str, str]] = []
+    for day in range(1, 5):
+        rows.append((day, f"{day}.0000", f"2024-01-0{day} 10:00:00+00"))
+        feed(tmp_path, *rows)  # the source grows by one row each run
+        code, out = command(capsys, "run", str(tmp_path))
+        assert code == 0, out
+        assert "built s.m: 1 rows" in out
+    assert ids(tmp_path) == [1, 2, 3, 4]
+    (stored,) = lake_value(tmp_path, "SELECT watermark FROM lake._meta.watermarks")
+    assert stored == ("2024-01-04T10:00:00.000000+00:00",)
+
+
+def test_a_table_without_a_stored_watermark_continues_from_its_rows(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project(tmp_path, APPEND)
+    feed(tmp_path, (1, "1.0000", "2024-01-01 10:00:00+00"))
+    assert command(capsys, "run", str(tmp_path))[0] == 0
+    # A table written before watermarks were stored: no stored row.
+    lake = duckdb.connect()
+    lake.execute("LOAD ducklake")
+    catalog = tmp_path / f".{SLUG}" / "lake" / "catalog.ducklake"
+    lake.execute(f"ATTACH 'ducklake:{catalog}' AS lake")
+    lake.execute("DELETE FROM lake._meta.watermarks")
+    lake.close()
+    feed(tmp_path, (1, "1.0000", "2024-01-01 10:00:00+00"), (2, "2.0000", "2024-01-02 10:00:00+00"))
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    assert last_record(tmp_path)[1] == "2024-01-01T10:00:00.000000+00:00"
+    assert ids(tmp_path) == [1, 2]
