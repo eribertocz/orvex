@@ -22,7 +22,7 @@ SERVER = os.environ.get("TRANSFORM_TEST_CLICKHOUSE")
 pytestmark = pytest.mark.skipif(SERVER is None, reason="no ClickHouse server for tests")
 
 READER_PASSWORD = "reader-" + uuid.uuid4().hex
-VARIABLE = "ORVEX_TEST_CH_PASSWORD"
+VARIABLE = "TEST_CLICKHOUSE_READER_PASSWORD"
 
 # One column per mapped type, plain and Nullable; the expected DuckDB type of each.
 TYPES = {
@@ -76,7 +76,7 @@ def admin() -> Client:
 def source() -> Iterator[dict[str, str]]:
     """A database with `events` and `types`, and a user that may only SELECT from it."""
     suffix = uuid.uuid4().hex[:12]
-    database, reader = f"orvex_test_{suffix}", f"orvex_reader_{suffix}"
+    database, reader = f"test_{suffix}", f"reader_{suffix}"
     client = admin()
     columns = ", ".join(
         [f"{name} {kind}" for name, (kind, _) in TYPES.items()]
@@ -197,12 +197,13 @@ def test_the_example_validates_without_reading_rows(tmp_path: Path, source: dict
         ).result_rows
     finally:
         client.close()
-    # Orvex's queries on the model: EXPLAIN and DESCRIBE only (nothing executed), read-only.
+    # The engine's queries on the model: EXPLAIN and DESCRIBE only (nothing executed), read-only.
     assert sorted(str(row[0]) for row in rows) == ["Describe", "Explain"]
     assert all(str(row[1]) == "1" for row in rows)
     assert reads == [(0,)]  # no SELECT ever read the source table
 
 
+@pytest.mark.usefixtures("password")
 def test_every_mapped_type(tmp_path: Path, source: dict[str, str]) -> None:
     plain = ", ".join(TYPES)
     nullable = ", ".join(f"n_{name}" for name, (kind, _) in TYPES.items() if "Low" not in kind)

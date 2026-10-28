@@ -1,12 +1,12 @@
 """ClickHouse extraction models: validated on ClickHouse itself, without reading a row (P1-17).
 
-An extraction model's SQL is ClickHouse SQL and runs on ClickHouse (ADR-0026); Orvex never parses
-it as SQL. It only scans the text for what it must know before asking the server: whether there
-is more than one statement, and the `{since:Type}` query parameter (strings, quoted identifiers
-and comments skipped). ClickHouse then parses the SQL (`EXPLAIN AST`: one `SELECT`) and describes
-its output columns (`DESCRIBE`, nothing executed), with `since` bound server-side and the session
-read-only (`readonly = 1`). Every output type maps to an exact DuckDB type, or the column is
-refused (`UNSUPPORTED_SOURCE_TYPE`) with a hint to cast it in the SQL.
+An extraction model's SQL is ClickHouse SQL and runs on ClickHouse (ADR-0026); it is never parsed
+here as SQL. Only its text is scanned, for what must be known before asking the server: whether
+there is more than one statement, and the `{since:Type}` query parameter (strings, quoted
+identifiers and comments skipped). ClickHouse then parses the SQL (`EXPLAIN AST`: one `SELECT`)
+and describes its output columns (`DESCRIBE`, nothing executed), with `since` bound server-side
+and every query read-only (`readonly = 1`). Every output type maps to an exact DuckDB type, or
+the column is refused (`UNSUPPORTED_SOURCE_TYPE`) with a hint to cast it in the SQL.
 
 `clickhouse-connect` is ClickHouse, Inc.'s official client (Apache-2.0, ADR-0002).
 """
@@ -513,7 +513,7 @@ def _clean(text: str, secret: str) -> str:
 
 
 class Source:
-    """A read-only client of a ClickHouse connection: every query Orvex sends carries
+    """A read-only client of a ClickHouse connection: every query the engine sends carries
     `readonly = 1` (unless the user's profile already enforces it) and a time limit; connect and
     receive timeouts are explicit, and no session state is kept. On connecting, the client
     itself reads the server's version, time zone and settings (system tables, no user data)."""
