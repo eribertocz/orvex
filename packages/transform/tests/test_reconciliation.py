@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
+import pytest
 from orvex.transform.models import Model, discover_models
 from orvex.transform.reconciliation import difference_sql, expression, problems, steps
 
@@ -84,9 +85,8 @@ def lake() -> duckdb.DuckDBPyConnection:
 def failing(chosen: Model, connection: duckdb.DuckDBPyConnection) -> list[tuple[str, int]]:
     differences = []
     for check in chosen.config.reconciliation or []:
-        row = connection.execute(f"DESCRIBE {difference_sql(check, RELATION)}").fetchone()
-        assert row is not None
-        differences.append(str(row[1]))
+        rows = connection.execute(f"DESCRIBE {difference_sql(check, RELATION)}").fetchall()
+        differences.append(str(rows[-1][1]))
     found = []
     for planned in steps(chosen, RELATION, differences):
         sql = planned.request.sql
@@ -144,3 +144,29 @@ def test_values_travel_as_parameters(tmp_path: Path) -> None:
     assert [(p.name, p.type.root, p.value) for p in check.request.parameters] == [
         ("p_tolerance", "BIGINT", "7")
     ]
+
+
+def test_measures_must_aggregate_and_groups_must_not(tmp_path: Path) -> None:
+    connection = lake()
+    connection.execute("CREATE TABLE s.m AS SELECT * FROM feed.data")
+    for checks in [
+        "  - {name: raw, measure: kwh, source: feed.data}\n",
+        "  - {name: raw, measure: kwh, group_by: [read_at], source: feed.data}\n",
+        "  - {name: agg, measure: count(*), group_by: ['sum(kwh)'], source: feed.data}\n",
+    ]:
+        chosen = model(tmp_path / str(len(checks)), checks)
+        (check,) = chosen.config.reconciliation or []
+        with pytest.raises(duckdb.BinderException):
+            connection.execute(f"DESCRIBE {difference_sql(check, RELATION)}")
+
+
+def test_unsigned_measures_compare_both_ways(tmp_path: Path) -> None:
+    chosen = model(tmp_path, "  - {name: top, measure: max(id), source: feed.ids}\n")
+    connection = lake()
+    connection.execute("CREATE TABLE feed.ids AS SELECT CAST(7 AS UBIGINT) AS id")
+    connection.execute("CREATE TABLE s.m AS SELECT CAST(6 AS UBIGINT) AS id")
+    assert failing(chosen, connection) == [("top", 1)]
+    connection.execute("UPDATE s.m SET id = 8")
+    assert failing(chosen, connection) == [("top", 1)]
+    connection.execute("UPDATE s.m SET id = 7")
+    assert failing(chosen, connection) == [("top", 0)]

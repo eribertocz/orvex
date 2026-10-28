@@ -190,7 +190,7 @@ def _bind_reconciliation(
     for index, check in enumerate(model.config.reconciliation or []):
         pointer = f"/reconciliation/{index}"
         try:
-            ((_, kind),) = lake.describe(reconciliation.difference_sql(check, relation))
+            described = lake.describe(reconciliation.difference_sql(check, relation))
         except StoreError as error:
             problems.append(
                 Problem(
@@ -201,13 +201,15 @@ def _bind_reconciliation(
                 )
             )
             continue
-        if not reconciliation.exact_difference(kind):
+        kind = described[-1][1]
+        inexact = [typ for _, typ in described if not reconciliation.exact_difference(typ)]
+        if inexact:
             problems.append(
                 Problem(
                     "MODEL_CONFIG_INVALID",
                     file,
                     None,
-                    f"{file}: {pointer}/measure: {check.name} compares {kind} values; use a "
+                    f"{file}: {pointer}/measure: {check.name} compares {inexact[0]} values; use a "
                     "measure with an exact type (integer or DECIMAL) — floats are not "
                     "compared (law 11).",
                 )

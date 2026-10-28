@@ -145,7 +145,10 @@ def _sides(check: Reconciliation, relation: str) -> tuple[str, str]:
     assert None not in groups
     selected = [f"{group} AS {_identifier(f'g{i}')}" for i, group in enumerate(groups)]
     columns = ", ".join([*selected, f"{measure} AS m", "true AS present"])
-    grouping = " GROUP BY ALL" if groups else ""
+    # Grouped by position: a measure that is not an aggregate, or an aggregate among the groups,
+    # is refused by the binder instead of silently becoming a grouping key.
+    positions = ", ".join(str(i + 1) for i in range(len(groups)))
+    grouping = f" GROUP BY {positions}" if groups else " GROUP BY ()"
     source = ".".join(_identifier(part) for part in _source(check.source))
     return (
         f"SELECT {columns} FROM {relation} AS t{grouping}",
@@ -163,14 +166,17 @@ def _joined(check: Reconciliation, relation: str) -> tuple[str, str]:
     return (
         f"WITH model AS ({model_side}), source AS ({source_side}) SELECT {{select}} "
         f"FROM model FULL OUTER JOIN source ON {matched or 'TRUE'}",
-        "abs(model.m - source.m)",
+        # Larger minus smaller: never below zero, so unsigned measures cannot overflow.
+        "greatest(model.m, source.m) - least(model.m, source.m)",
     )
 
 
 def difference_sql(check: Reconciliation, relation: str) -> str:
-    """A query whose only column has the type of the measures' difference (for binding)."""
+    """A query whose columns have the types of the model's measure, the source's measure and
+    their difference (for binding)."""
     template, difference = _joined(check, relation)
-    return template.replace("{select}", f"{difference} AS difference", 1)
+    columns = f"model.m AS model, source.m AS source, {difference} AS difference"
+    return template.replace("{select}", columns, 1)
 
 
 def exact_difference(kind: str) -> bool:

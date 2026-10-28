@@ -141,14 +141,17 @@ def test_missing_groups_fail_and_null_groups_match(
     assert "rows failed on 1 groups" in out
 
 
-def test_later_models_do_not_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    project(
-        tmp_path,
-        OFF,
-        f"  - {{name: monthly, {MONTHLY}}}\n",
-        {"models/t/after.sql": "SELECT count(*) AS n FROM s.m"},
-    )
-    assert command(capsys, "run", str(tmp_path))[0] == 1
+def test_one_failing_check_of_two_fails_the_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project(tmp_path, OFF, BOTH, {"models/t/after.sql": "SELECT count(*) AS n FROM s.m"})
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 1
+    assert results(tmp_path) == [
+        {"name": "monthly", "outcome": "failed", "failing_rows": "1"},
+        {"name": "rows", "outcome": "passed", "failing_rows": "0"},
+    ]
+    assert out.count("RECONCILIATION_FAILED") == 1
     assert lake_value(
         tmp_path, "SELECT outcome FROM lake._meta.run_records WHERE model = 't.after'"
     ) == [("not_run",)]
@@ -181,6 +184,16 @@ def test_later_models_do_not_run(tmp_path: Path, capsys: pytest.CaptureFixture[s
             "  - {name: a, measure: count(*), group_by: [nothing], source: feed.data}\n",
             "MODEL_CONFIG_INVALID",
             "/reconciliation/0",
+        ),
+        (
+            "  - {name: a, measure: kwh, source: feed.data}\n",
+            "MODEL_CONFIG_INVALID",
+            "/reconciliation/0",
+        ),
+        (
+            "  - {name: a, measure: 'max(read_at)', source: feed.data}\n",
+            "MODEL_CONFIG_INVALID",
+            "/reconciliation/0/measure",
         ),
         (
             "  - {name: a, measure: count(*), source: feed.data, tolerance: -1}\n",
