@@ -23,7 +23,7 @@ def write(folder: Path, files: dict[str, str]) -> None:
 
 
 def feed(folder: Path, rows: str) -> None:
-    """Replace the source rows: id, region, kwh DECIMAL(18,4), big DECIMAL(38,0), read_at TIMESTAMPTZ.
+    """Replace the source rows: id, region, kwh, big, read_at (TIMESTAMPTZ).
 
     Parquet has no 128-bit integer (DuckDB would write a HUGEINT as DOUBLE), so the widest exact
     integer of a Parquet source is DECIMAL(38,0)."""
