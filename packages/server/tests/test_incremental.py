@@ -210,3 +210,54 @@ def test_column_rules_are_checked_by_binding_without_running(
     assert code == 1
     assert out.startswith("MODEL_CONFIG_INVALID models/s/m.yaml")
     assert not (tmp_path / f".{SLUG}").exists()
+
+
+def lake_value(folder: Path, sql: str) -> list[tuple[object, ...]]:
+    lake = duckdb.connect()
+    lake.execute("LOAD ducklake")
+    catalog = folder / f".{SLUG}" / "lake" / "catalog.ducklake"
+    lake.execute(f"ATTACH 'ducklake:{catalog}' AS lake (READ_ONLY)")
+    result = lake.execute(sql).fetchall()
+    lake.close()
+    return result
+
+
+def test_hugeint_survives_append_and_merge_exactly(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    hugeint = "SELECT id, region, kwh, CAST(big AS HUGEINT) AS big, read_at FROM feed.data"
+    project(tmp_path, MERGE, hugeint)
+    feed(tmp_path, rows((1, "n", "1.0000"), (2, "n", "2.0000")))
+    assert command(capsys, "run", str(tmp_path))[0] == 0
+    feed(tmp_path, rows((2, "s", "2.5001"), (3, "s", "3.0000")))
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    assert lake_value(tmp_path, "SELECT typeof(big) FROM lake.s.m LIMIT 1") == [("HUGEINT",)]
+    # Every column of a matched key is replaced, not only the ones that changed.
+    assert table(tmp_path) == [
+        (1, "n", "1.0000", BIG, "1704189600000000"),
+        (2, "s", "2.5001", BIG, "1704276000000000"),
+        (3, "s", "3.0000", BIG, "1704362400000000"),
+    ]
+
+
+@pytest.mark.parametrize("sidecar", [APPEND, MERGE])
+def test_a_later_failure_rolls_back_what_the_incremental_model_wrote(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], sidecar: str
+) -> None:
+    project(tmp_path, sidecar)
+    feed(tmp_path, rows((1, "n", "1.0000"), (2, "n", "2.0000")))
+    assert command(capsys, "run", str(tmp_path))[0] == 0
+    before = table(tmp_path)
+    # s.later runs after s.m (it reads it) and fails on the data, after s.m already wrote.
+    write(tmp_path, {"models/s/later.sql": "SELECT CAST(region || 'x' AS INTEGER) AS n FROM s.m"})
+    feed(tmp_path, rows((2, "s", "2.5001"), (3, "s", "3.0000")))
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 1
+    assert "s.later" in out
+    assert table(tmp_path) == before
+    assert lake_value(
+        tmp_path,
+        "SELECT count(*) FROM duckdb_schemas() "
+        "WHERE database_name = 'lake' AND schema_name = '_stage'",
+    ) == [(0,)]

@@ -61,6 +61,8 @@ def test_merge_steps_run_in_duckdb(tmp_path: Path) -> None:
     """The planned SQL itself: first run creates, second merges, checks count offending rows."""
     merge = model(tmp_path, MERGE)
     connection = duckdb.connect()
+    connection.execute("ATTACH ':memory:' AS lake")  # the store names its catalog `lake`
+    connection.execute("USE lake")
     connection.execute("CREATE TABLE src (id BIGINT, kwh DECIMAL(18,4), read_at TIMESTAMPTZ)")
 
     def run(existing: list[tuple[str, str]] | None) -> list[int]:
@@ -78,11 +80,14 @@ def test_merge_steps_run_in_duckdb(tmp_path: Path) -> None:
     assert run(None) == [2, 0, 0]
     connection.execute("DELETE FROM src")
     connection.execute("INSERT INTO src VALUES (2, 2.5001, '2024-01-02'), (3, 3.0, '2024-01-02')")
-    assert run(COLUMNS) == [2, 0, 0]
+    assert run(COLUMNS) == [2, 0, 0, 0]  # count, NULL keys, repeated keys, column check
     rows = connection.execute("SELECT id, CAST(kwh AS VARCHAR) FROM s.m ORDER BY id").fetchall()
     assert rows == [(1, "1.0000"), (2, "2.5001"), (3, "3.0000")]
+    assert connection.execute(
+        "SELECT count(*) FROM information_schema.schemata WHERE schema_name = '_stage'"
+    ).fetchall() == [(0,)]
     connection.execute("INSERT INTO src VALUES (NULL, 1, '2024-01-03'), (3, 1, '2024-01-03')")
-    assert run(COLUMNS)[1:] == [1, 1]  # a NULL key and a duplicated key are both counted
+    assert run(COLUMNS)[1:3] == [1, 1]  # a NULL key and a duplicated key are both counted
 
 
 def test_schema_change_and_unsupported_strategy_refuse(tmp_path: Path) -> None:
@@ -95,3 +100,23 @@ def test_schema_change_and_unsupported_strategy_refuse(tmp_path: Path) -> None:
     (refuse,) = steps(later, "SELECT 1", COLUMNS, None)
     assert isinstance(refuse, Refuse)
     assert refuse.code == "UNSUPPORTED_MODEL_KIND"
+
+
+def test_columns_changed_after_validation_are_caught(tmp_path: Path) -> None:
+    append = model(tmp_path, APPEND)
+    connection = duckdb.connect()
+    connection.execute("ATTACH ':memory:' AS lake")
+    connection.execute("USE lake")
+    connection.execute("CREATE SCHEMA s")
+    connection.execute("CREATE TABLE s.m (id BIGINT, kwh DECIMAL(18,4), read_at TIMESTAMPTZ)")
+    # The source now returns the columns in another order (validation saw the old order).
+    source = "SELECT kwh, id, read_at FROM (SELECT 1::BIGINT AS id, 1.0::DECIMAL(18,4) AS kwh, "
+    source += "now() AS read_at)"
+    checks = []
+    for step in steps(append, source, COLUMNS, COLUMNS):
+        if isinstance(step, Check):
+            checks.append((step.code, connection.execute(step.sql).fetchall()[0][0]))
+            break
+        if isinstance(step, StatementRequest):
+            connection.execute(step.sql)
+    assert checks == [("SCHEMA_CHANGED", 1)]

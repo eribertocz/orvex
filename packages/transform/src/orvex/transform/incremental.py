@@ -199,6 +199,17 @@ def steps(model: Model, sql: str, output: Columns, existing: Columns | None) -> 
                 "depend on row order.",
             ),
         ]
+    if existing is not None:
+        # The columns were compared at validation; compare again on the loaded rows, inside the
+        # transaction, so a source that changed since then cannot be inserted by position.
+        result.append(
+            Check(
+                _same_columns_sql(STAGE_SCHEMA, f"{model.schema}__{model.table}", model),
+                "SCHEMA_CHANGED",
+                f"{model.name}: the loaded rows' columns no longer match the table; nothing is "
+                "written.",
+            )
+        )
     if existing is None:
         result += [
             _statement(f"CREATE SCHEMA IF NOT EXISTS {_identifier(model.schema)}"),
@@ -215,8 +226,31 @@ def steps(model: Model, sql: str, output: Columns, existing: Columns | None) -> 
             ),
             _statement(f"INSERT INTO {target} SELECT * FROM {stage}"),
         ]
-    result.append(_statement(f"DROP TABLE {stage}"))
+    result += [
+        _statement(f"DROP TABLE {stage}"),
+        _statement(f"DROP SCHEMA IF EXISTS {STAGE_SCHEMA}"),
+    ]
     return result
+
+
+def _literal(text: str) -> str:
+    return "'" + text.replace("'", "''") + "'"
+
+
+def _columns_sql(schema: str, table: str) -> str:
+    return (
+        "(SELECT string_agg(column_name || ' ' || data_type, ', ' ORDER BY ordinal_position) "
+        "FROM information_schema.columns WHERE table_catalog = current_database() "
+        f"AND table_schema = {_literal(schema)} AND table_name = {_literal(table)})"
+    )
+
+
+def _same_columns_sql(stage_schema: str, stage_table: str, model: Model) -> str:
+    """A count that is 0 when the stage and the target have the same columns, in order."""
+    return (
+        f"SELECT CASE WHEN {_columns_sql(stage_schema, stage_table)} IS NOT DISTINCT FROM "
+        f"{_columns_sql(model.schema, model.table)} THEN 0 ELSE 1 END"
+    )
 
 
 def problems_for(models: Sequence[Model], columns: Mapping[str, Columns]) -> list[ModelError]:
