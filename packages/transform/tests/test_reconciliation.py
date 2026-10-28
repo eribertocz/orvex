@@ -142,7 +142,7 @@ def test_values_travel_as_parameters(tmp_path: Path) -> None:
     (check,) = steps(chosen, '"s"."m"', ["BIGINT"])
     assert "7" not in check.request.sql
     assert [(p.name, p.type.root, p.value) for p in check.request.parameters] == [
-        ("p_tolerance", "BIGINT", "7")
+        ("p_tolerance", "HUGEINT", "7")
     ]
 
 
@@ -170,3 +170,29 @@ def test_unsigned_measures_compare_both_ways(tmp_path: Path) -> None:
     assert failing(chosen, connection) == [("top", 1)]
     connection.execute("UPDATE s.m SET id = 7")
     assert failing(chosen, connection) == [("top", 0)]
+
+
+def test_differences_never_overflow(tmp_path: Path) -> None:
+    connection = lake()
+    for kind, low, high in [
+        ("TINYINT", "-100", "100"),
+        ("BIGINT", "-9000000000000000000", "9000000000000000000"),
+        (
+            "HUGEINT",
+            "-170141183460469231731687303715884105727",
+            "170141183460469231731687303715884105727",
+        ),
+        (
+            "DECIMAL(38,0)",
+            "-99999999999999999999999999999999999999",
+            "99999999999999999999999999999999999999",
+        ),
+    ]:
+        chosen = model(tmp_path / kind[:5], "  - {name: top, measure: max(v), source: feed.v}\n")
+        connection.execute(
+            f"CREATE OR REPLACE TABLE feed.v AS SELECT CAST('{high}' AS {kind}) AS v"
+        )
+        connection.execute(f"CREATE OR REPLACE TABLE s.m AS SELECT CAST('{low}' AS {kind}) AS v")
+        assert failing(chosen, connection) == [("top", 1)], kind
+        connection.execute("CREATE OR REPLACE TABLE s.m AS SELECT * FROM feed.v")
+        assert failing(chosen, connection) == [("top", 0)], kind

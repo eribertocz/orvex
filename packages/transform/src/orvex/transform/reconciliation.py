@@ -166,7 +166,7 @@ def _joined(check: Reconciliation, relation: str) -> tuple[str, str]:
     return (
         f"WITH model AS ({model_side}), source AS ({source_side}) SELECT {{select}} "
         f"FROM model FULL OUTER JOIN source ON {matched or 'TRUE'}",
-        # Larger minus smaller: never below zero, so unsigned measures cannot overflow.
+        # Larger minus smaller, in the measures' own type (for binding: its type is checked).
         "greatest(model.m, source.m) - least(model.m, source.m)",
     )
 
@@ -183,6 +183,28 @@ def exact_difference(kind: str) -> bool:
     return kind in INTEGER_RANGES or _DECIMAL_TYPE.fullmatch(kind) is not None
 
 
+def widened(kind: str) -> str:
+    """The type the difference is computed in: wide enough for any difference of two values of
+    `kind`, except for the widest types (HUGEINT, UHUGEINT, DECIMAL(38,s)), where a difference
+    that does not fit counts as beyond any tolerance."""
+    match = _DECIMAL_TYPE.fullmatch(kind)
+    if match is not None:
+        return f"DECIMAL(38,{match.group(2)})"
+    if kind in {"HUGEINT", "UHUGEINT"}:
+        return kind
+    return "HUGEINT"
+
+
+def _difference(kind: str) -> str:
+    """The non-negative difference of the two measures in the widened type; NULL when it does
+    not fit (only possible for the widest types)."""
+    wide = widened(kind)
+    return (
+        f"TRY(CAST(greatest(model.m, source.m) AS {wide}) - "
+        f"CAST(least(model.m, source.m) AS {wide}))"
+    )
+
+
 def steps(model: Model, relation: str, differences: Sequence[str]) -> list[Reconcile]:
     """The reconciliation checks of a model whose rows are `relation`; `differences` holds the
     type of each check's measure difference (from the binder)."""
@@ -190,11 +212,13 @@ def steps(model: Model, relation: str, differences: Sequence[str]) -> list[Recon
     for index, (check, kind) in enumerate(
         zip(model.config.reconciliation or [], differences, strict=True)
     ):
-        template, difference = _joined(check, relation)
+        template, _ = _joined(check, relation)
+        difference = _difference(kind)
+        wide = widened(kind)
         text = tolerance_text(model, index, check)
         assert text is not None  # checked at validation
-        convert = integer_bound if kind in INTEGER_RANGES else decimal_bound
-        tolerance, everything = convert(text, "max", kind)
+        convert = integer_bound if wide in INTEGER_RANGES else decimal_bound
+        tolerance, everything = convert(text, "max", wide)
         parameters: list[Parameter] = []
         if everything:
             beyond = "TRUE"  # cannot happen for a non-negative tolerance; kept for symmetry
@@ -202,12 +226,14 @@ def steps(model: Model, relation: str, differences: Sequence[str]) -> list[Recon
             beyond = "FALSE"  # a tolerance beyond the type's range: no difference exceeds it
         else:
             parameters.append(
-                Parameter(name="p_tolerance", type=ParameterType(kind), value=tolerance)
+                Parameter(name="p_tolerance", type=ParameterType(wide), value=tolerance)
             )
             beyond = f"{difference} > $p_tolerance"
         failing = (
             "model.present IS NULL OR source.present IS NULL "
             "OR (model.m IS NULL) <> (source.m IS NULL) "
+            # A difference too large for the widest types is beyond any tolerance.
+            f"OR (model.m IS NOT NULL AND source.m IS NOT NULL AND {difference} IS NULL) "
             f"OR {beyond}"
         )
         sql = template.replace("{select}", "count(*)", 1) + f" WHERE {failing}"
