@@ -210,7 +210,7 @@ def test_run_builds_models_in_order_all_or_nothing(
     lake.execute(f"ATTACH 'ducklake:{catalog}' AS lake (READ_ONLY)")
     tables = lake.execute(
         "SELECT schema_name || '.' || table_name FROM duckdb_tables() "
-        "WHERE database_name = 'lake' ORDER BY 1"
+        "WHERE database_name = 'lake' AND schema_name <> '_meta' ORDER BY 1"
     ).fetchall()
     assert tables == [("marts.consumption",), ("staging.consumers",), ("staging.readings",)]
     built = lake.execute(

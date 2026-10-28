@@ -73,7 +73,8 @@ def records(folder: Path) -> list[dict[str, object]]:
         "SELECT run_id, model, outcome, CAST(rows_written AS VARCHAR) AS rows_written, "
         "snapshot_id, project_commit, project_dirty, error_code, error_message, versions, "
         "CAST(epoch_us(started_at) AS VARCHAR) AS started_us "
-        "FROM lake._meta.run_records ORDER BY started_at, model"
+        "FROM lake._meta.run_records "
+        "ORDER BY min(started_at) OVER (PARTITION BY run_id), model"
     )
     names = [column[0] for column in cursor.description]
     rows = [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
