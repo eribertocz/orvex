@@ -62,7 +62,7 @@ export interface Retention {
  */
 export interface Lineage {
 	/**
-	 * An OpenLineage HTTP endpoint: `https://`, or `http://` only on this machine (`localhost`, `127.0.0.1`); events are POSTed to it after each run.
+	 * An OpenLineage HTTP endpoint: `https://`, or `http://` only on this machine (`localhost`, `127.0.0.1`); no user or password in the URL (use `api_key`). Events are POSTed to it after each run.
 	 */
 	url: string;
 	api_key?: SecretReference;

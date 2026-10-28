@@ -8,7 +8,7 @@ A project folder holds plain YAML files under version control (law 8). This cont
 
 | Message | File | Content |
 |---|---|---|
-| `ProjectFile` | `project.yaml` (required) | `version: 1`; `name` (1–100 characters); `time_zone`, an IANA name, required (no implicit zone); `locale` `es` or `en` (default `es`); `retention.snapshots` `<n>d`, at least `1d` (default `90d`, decision #70); optional `lineage` (`url`, `https://`, or `http://` only to `localhost`/`127.0.0.1`; optional `api_key`, a `${env:NAME}` reference sent as a bearer token) where OpenLineage events are also sent (P1-18) |
+| `ProjectFile` | `project.yaml` (required) | `version: 1`; `name` (1–100 characters); `time_zone`, an IANA name, required (no implicit zone); `locale` `es` or `en` (default `es`); `retention.snapshots` `<n>d`, at least `1d` (default `90d`, decision #70); optional `lineage` (`url`, `https://`, or `http://` only to `localhost`/`127.0.0.1`, never with a user or password; optional `api_key`, a `${env:NAME}` reference sent as a bearer token) where OpenLineage events are also sent (P1-18) |
 | `ConnectionsFile` | `connections.yaml` (optional; absent = no connections) | `version: 1`; `connections`, a map from a name (`^[a-z][a-z0-9_]{0,62}$`, not `lake`) to one connection |
 | `ProjectError` | — | `code`, `message`, `details` (`file`, `path` as a JSON pointer into the file, `line`, `connection`, `variable`) |
 

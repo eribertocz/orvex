@@ -174,11 +174,11 @@ class Lineage(BaseModel):
         str,
         Field(
             max_length=2048,
-            pattern="^(https://[^\\s]+|http://(localhost|127\\.0\\.0\\.1)(:[0-9]{1,5})?(/[^\\s]*)?)$",
+            pattern="^(https://[^\\s/@]+(/[^\\s]*)?|http://(localhost|127\\.0\\.0\\.1)(:[0-9]{1,5})?(/[^\\s]*)?)$",
         ),
     ]
     """
-    An OpenLineage HTTP endpoint: `https://`, or `http://` only on this machine (`localhost`, `127.0.0.1`); events are POSTed to it after each run.
+    An OpenLineage HTTP endpoint: `https://`, or `http://` only on this machine (`localhost`, `127.0.0.1`); no user or password in the URL (use `api_key`). Events are POSTed to it after each run.
     """
     api_key: SecretReference | None = None
 

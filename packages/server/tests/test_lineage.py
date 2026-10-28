@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -189,6 +190,7 @@ def test_a_collector_that_is_down_never_fails_the_run(
     [
         "lineage:\n  url: http://collector.example.com/api\n",
         "lineage:\n  url: https://collector.example.com/api\n  api_key: plain-text-key\n",
+        "lineage:\n  url: https://user:plain-text-key@collector.example.com/api\n",
     ],
 )
 def test_unsafe_collector_settings_are_refused(
@@ -260,3 +262,117 @@ def test_redirects_are_refused_and_reported(
     assert code == 0, out
     assert "LINEAGE_NOT_SENT" in out
     assert Redirect.hits == []  # the key never followed the redirect
+
+
+def test_the_second_of_three_models_failing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project(
+        tmp_path,
+        {
+            "models/marts/by_consumer.yaml": "version: 1\ntests:\n  - accepted_values: "
+            "{column: consumer_id, values: [C1]}\n"
+        },
+    )
+    code, _ = command(capsys, "run", str(tmp_path))
+    assert code == 1
+    events = written(tmp_path)
+    assert [(e["job"]["name"], e["eventType"]) for e in events] == [
+        ("staging.readings", "START"),
+        ("staging.readings", "FAIL"),
+        ("marts.by_consumer", "START"),
+        ("marts.by_consumer", "FAIL"),
+    ]
+    assert "errorMessage" not in events[1]["run"]["facets"]
+    assert "errorMessage" in events[3]["run"]["facets"]
+
+
+def test_a_malformed_collector_answer_is_a_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+
+    def answer() -> None:
+        connection, _ = listener.accept()
+        with connection:
+            connection.recv(65536)
+            connection.sendall(b"this is not HTTP\r\n\r\n")
+
+    thread = threading.Thread(target=answer, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{listener.getsockname()[1]}/api"
+        project(tmp_path, settings=f"lineage:\n  url: {url}\n")
+        code, out = command(capsys, "run", str(tmp_path))
+    finally:
+        listener.close()
+    assert code == 0, out
+    assert "LINEAGE_NOT_SENT" in out
+
+
+def test_a_local_collector_is_reached_without_the_proxy(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    collector: str,
+) -> None:
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    project(tmp_path, settings=f"lineage:\n  url: {collector}\n")
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    assert "LINEAGE_NOT_SENT" not in out
+    assert len(Collector.received) == 6
+
+
+def test_column_lineage_follows_the_select_after_a_column_is_added(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "data").mkdir(parents=True)
+    duckdb.connect().execute(
+        "COPY (SELECT 1::BIGINT AS reading_id, 'C1' AS consumer_id, 1.5::DECIMAL(18,4) AS kwh, "
+        "TIMESTAMPTZ '2024-01-01 10:00:00+00' AS read_at) "
+        f"TO '{tmp_path / 'data' / 'r.parquet'}'"
+    )
+    sidecar = (
+        "version: 1\nmaterialized: incremental\non_schema_change: append_new_columns\n"
+        "incremental: {strategy: append, time_column: read_at, filter: manual}\n"
+    )
+    files = {
+        "project.yaml": PROJECT,
+        "connections.yaml": CONNECTIONS,
+        "models/s/m.sql": (
+            "SELECT reading_id, kwh, read_at FROM archive.data WHERE read_at > $since"
+        ),
+        "models/s/m.yaml": sidecar,
+    }
+    for relative, text in files.items():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    assert command(capsys, "run", str(tmp_path))[0] == 0
+    (tmp_path / "models" / "s" / "m.sql").write_text(
+        "SELECT reading_id, consumer_id AS tag, kwh, read_at FROM archive.data "
+        "WHERE read_at >= $since",
+        encoding="utf-8",
+    )
+    for old in (tmp_path / f".{SLUG}" / "lineage").glob("*.ndjson"):
+        old.unlink()
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    (complete,) = [e for e in written(tmp_path) if e["eventType"] == "COMPLETE"]
+    facets = complete["outputs"][0]["facets"]
+    # The table keeps its order (tag added at the end); lineage follows the SELECT.
+    assert [f["name"] for f in facets["schema"]["fields"]] == [
+        "reading_id",
+        "kwh",
+        "read_at",
+        "tag",
+    ]
+    fields = facets["columnLineage"]["fields"]
+    assert fields["tag"]["inputFields"][0]["field"] == "consumer_id"
+    assert fields["kwh"]["inputFields"][0]["field"] == "kwh"

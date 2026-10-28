@@ -16,7 +16,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -719,7 +721,7 @@ def _run_locked(
 
 
 LINEAGE_FOLDER = "lineage"
-LINEAGE_TIMEOUT_S = 10
+LINEAGE_TIMEOUT_S = 30  # for all of a run's events together
 
 
 def _lineage_events(
@@ -758,7 +760,10 @@ def _lineage_events(
     for item in outcomes:
         if not item.started:
             continue
-        output: Columns = checked.columns.get(item.model.name, [])
+        # Column lineage pairs the SELECT's items with its own columns, in its order; the
+        # schema facet shows the table as stored (columns added later go to its end).
+        selected: Columns = checked.columns.get(item.model.name, [])
+        output: Columns = selected
         if item.outcome == "success" and item.model.config.materialized != "view":
             # When the table cannot be read, the schema facet keeps the bound columns, if any.
             with contextlib.suppress(StoreError):
@@ -776,7 +781,7 @@ def _lineage_events(
                 ),
                 column_lineage=lineage.column_lineage(
                     item.model,
-                    output,
+                    selected or output,
                     by_name,
                     project.connections,
                     scope.lake_namespace,
@@ -827,8 +832,14 @@ def _publish_lineage(
             return Problem("LINEAGE_NOT_SENT", "project.yaml", None, error.error.message)
     # Redirects are refused: following one would turn the POST into a GET without the event,
     # and would carry the key to another host.
-    opener = urllib.request.build_opener(_NoRedirect)
+    handlers: list[urllib.request.BaseHandler] = [_NoRedirect()]
+    if urllib.parse.urlsplit(settings.url).scheme == "http":
+        # A collector on this machine is reached directly: a proxy would see the key in clear.
+        handlers.append(urllib.request.ProxyHandler({}))
+    opener = urllib.request.build_opener(*handlers)
+    deadline = time.monotonic() + LINEAGE_TIMEOUT_S
     for event in events:
+        remaining = deadline - time.monotonic()
         request = urllib.request.Request(
             settings.url,
             data=json.dumps(event).encode("utf-8"),
@@ -836,12 +847,14 @@ def _publish_lineage(
             method="POST",
         )
         try:
-            with opener.open(request, timeout=LINEAGE_TIMEOUT_S) as response:
+            if remaining <= 0:
+                raise TimeoutError
+            with opener.open(request, timeout=remaining) as response:
                 response.read()
-        except (OSError, ValueError) as error:
+        except Exception as error:  # noqa: BLE001 (any failure is a warning, never the run's)
             if isinstance(error, urllib.error.HTTPError):
                 error.close()  # an HTTP error keeps the response open until closed
-            # Never the key: only the kind of failure and the file that keeps the events.
+            # Never the key or the URL: only the kind of failure and the file with the events.
             reason = getattr(error, "code", None) or type(error).__name__
             return Problem(
                 "LINEAGE_NOT_SENT",
