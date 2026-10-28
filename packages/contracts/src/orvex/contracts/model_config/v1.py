@@ -151,6 +151,7 @@ class ModelErrorCode(
             "MISSING_PARTITION_BY",
             "MISSING_SINCE_PARAMETER",
             "INCREMENTAL_FILTER_NOT_PROVABLE",
+            "MODEL_TEST_FAILED",
         ]
     ]
 ):
@@ -173,6 +174,7 @@ class ModelErrorCode(
         "MISSING_PARTITION_BY",
         "MISSING_SINCE_PARAMETER",
         "INCREMENTAL_FILTER_NOT_PROVABLE",
+        "MODEL_TEST_FAILED",
     ]
 
 

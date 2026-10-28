@@ -268,6 +268,27 @@ class ConfigFile:
             for index, item in enumerate(node.value):
                 self._check_nodes(item, f"{pointer}/{index}", seen_nodes, depth + 1)
 
+    def numbers(self) -> dict[str, str]:
+        """The text of every number in the file, by JSON pointer: what was written, before YAML
+        turned it into a Python int or float (`0.1`, `99999999999999.9999`)."""
+        found: dict[str, str] = {}
+
+        def walk(node: yaml.Node | None, pointer: str) -> None:
+            if isinstance(node, yaml.MappingNode):
+                for key, value in node.value:
+                    walk(value, f"{pointer}/{token(key.value)}")
+            elif isinstance(node, yaml.SequenceNode):
+                for index, item in enumerate(node.value):
+                    walk(item, f"{pointer}/{index}")
+            elif isinstance(node, yaml.ScalarNode) and node.tag in {
+                "tag:yaml.org,2002:int",
+                "tag:yaml.org,2002:float",
+            }:
+                found[pointer] = node.value
+
+        walk(self._root, "")
+        return found
+
     def line(self, pointer: str) -> int | None:
         """The line of the value at a JSON pointer, or of its closest existing parent."""
         node = self._root

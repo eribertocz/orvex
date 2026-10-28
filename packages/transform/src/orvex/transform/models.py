@@ -11,7 +11,7 @@ import os
 import re
 import stat
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import duckdb
@@ -41,6 +41,8 @@ class Model:
     sql: str
     config: ModelConfig
     config_file: str | None
+    # The sidecar's numbers as written, by JSON pointer (exact text for bounds and tolerances).
+    numbers: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
@@ -205,6 +207,7 @@ def _model(
     name = f"{schema}.{stem}"
     problems: list[ModelError] = []
     config = ModelConfig(version=1)
+    numbers: dict[str, str] = {}
     sidecar = path.with_suffix(".yaml")
     config_file: str | None = None
     if sidecar.exists() or sidecar.is_symlink():
@@ -213,7 +216,7 @@ def _model(
         if isinstance(loaded, ModelError):
             problems.append(loaded)
         else:
-            config = loaded
+            config, numbers = loaded
     sql = _read_sql(path, relative, name)
     if isinstance(sql, ModelError):
         return [*problems, sql]
@@ -223,12 +226,12 @@ def _model(
             problems.append(invalid)
     if problems:
         return problems
-    return Model(schema, stem, relative, sql, config, config_file)
+    return Model(schema, stem, relative, sql, config, config_file, numbers)
 
 
 def _config(
     path: Path, relative: str, name: str, connections: Mapping[str, Connection]
-) -> ModelConfig | ModelError:
+) -> tuple[ModelConfig, dict[str, str]] | ModelError:
     issue: ConfigProblem | None = None
     try:
         document = ConfigFile(path, SUPPORTED_VERSION, name=relative)
@@ -268,7 +271,7 @@ def _config(
                 path="/connection",
                 line=document.line("/connection"),
             )
-    return config
+    return config, document.numbers()
 
 
 def _repeated_item(data: object) -> str | None:

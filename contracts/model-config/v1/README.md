@@ -45,6 +45,7 @@ Cross-field rules not listed below (`FRESHNESS_TOO_SHORT`) are added by the issu
 | `MISSING_PARTITION_BY` | `partition_overwrite` without `partition_by` |
 | `MISSING_SINCE_PARAMETER` | An incremental model with `filter: manual` whose SQL does not use `$since` |
 | `INCREMENTAL_FILTER_NOT_PROVABLE` | An incremental model with `filter: auto` whose filter cannot be proven; until the automatic filter exists, any `filter: auto` model whose SQL does not use `$since` (use `filter: manual` and place `$since`) |
+| `MODEL_TEST_FAILED` | A model test found failing rows after the model was written (the run rolls back; the run record lists every test with its failing-row count) |
 
 `details` holds `file` (relative to the project folder), and when known `model`, `path` (a JSON pointer into the sidecar) and `line`. Discovery reports every problem of a project at once.
 
