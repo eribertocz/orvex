@@ -82,9 +82,16 @@ def name_of(test: Test) -> str:
     return f"{kind_of(test)}({body.column.root})"
 
 
-def _bound_text(model: Model, pointer: str, value: int | float | str) -> str | None:
-    """A bound as exact decimal text: the YAML text of a number, or a quoted string."""
-    text = model.numbers.get(pointer, value) if not isinstance(value, str) else value
+def number_text(model: Model, pointer: str, value: int | float | str) -> str | None:
+    """A number as exact decimal text: the YAML text it was written as, or a quoted string."""
+    if isinstance(value, str):
+        text: object = value
+    elif pointer in model.numbers:
+        text = model.numbers[pointer]
+    elif type(value) is int:  # a default, not written in the file
+        text = str(value)
+    else:
+        return None
     if not isinstance(text, str) or not _NUMBER.fullmatch(text):
         return None
     if len(text.lstrip("+-").replace(".", "").lstrip("0")) > MAX_DIGITS:
@@ -171,7 +178,7 @@ def problems(
                         invalid(f"{base}/{side}", "a date or time bound is written in quotes.")
                     elif (reason := _moment_problem(bound.root, column_type)) is not None:
                         invalid(f"{base}/{side}", reason)
-                elif _bound_text(model, f"{base}/{side}", bound.root) is None:
+                elif number_text(model, f"{base}/{side}", bound.root) is None:
                     invalid(
                         f"{base}/{side}",
                         "write the bound as a decimal number of at most 38 digits (quote it to "
@@ -203,7 +210,7 @@ def problems(
     return found
 
 
-def _integer_bound(text: str, side: str, kind: str) -> tuple[str | None, bool]:
+def integer_bound(text: str, side: str, kind: str) -> tuple[str | None, bool]:
     """(the bound in the column's integer type, or None; whether every value is outside)."""
     with localcontext(prec=_PRECISION):
         return _integer_bound_exact(text, side, kind)
@@ -220,7 +227,7 @@ def _integer_bound_exact(text: str, side: str, kind: str) -> tuple[str | None, b
     return (None, False) if whole >= high else (None, True) if whole < low else (str(whole), False)
 
 
-def _decimal_bound(text: str, side: str, kind: str) -> tuple[str | None, bool]:
+def decimal_bound(text: str, side: str, kind: str) -> tuple[str | None, bool]:
     with localcontext(prec=_PRECISION):
         return _decimal_bound_exact(text, side, kind)
 
@@ -257,13 +264,13 @@ def _range_sql(
             parameters.append(_parameter(name, "VARCHAR", str(bound.root)))
             conditions.append(f"{column} {operator} CAST(${name} AS {kind})")
             continue
-        text = _bound_text(model, f"/tests/{index}/accepted_range/{side}", bound.root)
+        text = number_text(model, f"/tests/{index}/accepted_range/{side}", bound.root)
         assert text is not None  # checked at validation
         if family == "float":
             parameters.append(_parameter(name, "DOUBLE", text))
             conditions.append(f"{column} {operator} ${name}")
             continue
-        converter = _integer_bound if family == "integer" else _decimal_bound
+        converter = integer_bound if family == "integer" else decimal_bound
         value, everything = converter(text, side, kind)
         if everything:
             conditions.append("TRUE")

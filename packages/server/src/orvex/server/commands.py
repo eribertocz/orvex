@@ -43,11 +43,12 @@ from orvex.server.project import Project, ProjectLoadError, load_project
 from orvex.server.versions import module_versions
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, Transaction, open_lake
-from orvex.transform import incremental, model_tests
+from orvex.transform import incremental, model_tests, reconciliation
 from orvex.transform.graph import Graph, build_graph, compiled_sql, plan_run, test_relations
 from orvex.transform.incremental import Columns, Count, Refuse, Step, Watermark
 from orvex.transform.model_tests import ModelTest
 from orvex.transform.models import Discovery, Model, discover_models
+from orvex.transform.reconciliation import Comparison, Reconcile
 from orvex.transform.run_records import history_request, record_statements
 from orvex.transform.sources import source_attachments
 
@@ -77,6 +78,8 @@ class Checked:
     graph: Graph | None
     problems: tuple[Problem, ...]
     columns: Mapping[str, Columns] = field(default_factory=dict)
+    # Each model's reconciliation checks: the type of their measure difference.
+    differences: Mapping[str, list[Comparison]] = field(default_factory=dict)
 
 
 class ProjectLocked(Exception):
@@ -100,25 +103,28 @@ def check_project(folder: Path) -> Checked:
     sources = set(project.connections)
     graph = build_graph(discovery.models, sources)
     problems = [_from_model_error(item) for item in (*discovery.problems, *graph.problems)]
+    kinds = {name: connection.type for name, connection in project.connections.items()}
     for model in discovery.models:
         problems += [_from_model_error(item) for item in incremental.config_problems(model)]
+        problems += [_from_model_error(item) for item in reconciliation.problems(model, kinds)]
     columns: dict[str, Columns] = {}
+    differences: dict[str, list[Comparison]] = {}
     needs_binding = any(
-        m.config.materialized == "incremental" or m.config.tests for m in discovery.models
+        m.config.materialized == "incremental" or m.config.tests or m.config.reconciliation
+        for m in discovery.models
     )
     if needs_binding and not problems:
-        bound, bind_problems = _bind(project, discovery, graph)
-        columns = bound
+        columns, differences, bind_problems = _bind(project, discovery, graph)
         problems += bind_problems
         problems += [
             _from_model_error(item) for item in incremental.problems_for(discovery.models, columns)
         ]
-    return Checked(project, discovery, graph, tuple(problems), columns)
+    return Checked(project, discovery, graph, tuple(problems), columns, differences)
 
 
 def _bind(
     project: Project, discovery: Discovery, graph: Graph
-) -> tuple[dict[str, Columns], list[Problem]]:
+) -> tuple[dict[str, Columns], dict[str, list[Comparison]], list[Problem]]:
     """Output columns of every model, from DuckDB's binder; nothing is executed.
 
     Binding happens in a scratch lake in a temporary folder (never the project's): upstream
@@ -128,6 +134,7 @@ def _bind(
     by_name = {model.name: model for model in discovery.models}
     relations = test_relations(discovery.models)
     columns: dict[str, Columns] = {}
+    differences: dict[str, list[Comparison]] = {}
     problems: list[Problem] = []
     failed: set[str] = set()
     scratch = Path(tempfile.mkdtemp(prefix="bind-"))
@@ -136,7 +143,7 @@ def _bind(
         try:
             lake = open_lake(location, _limits(), source_attachments(project.connections))
         except StoreError as error:
-            return {}, [_store_problem(error, ".", "")]
+            return {}, {}, [_store_problem(error, ".", "")]
         try:
             for name in graph.order:
                 model = by_name[name]
@@ -161,11 +168,82 @@ def _bind(
                     _stand_in(lake, model, output)
                 if model.config.tests:
                     problems += _bind_tests(lake, model, columns, by_name, relations)
+                if model.config.reconciliation:
+                    found, kinds = _bind_reconciliation(lake, model, relations[name])
+                    problems += found
+                    differences[name] = kinds
         finally:
             lake.close()
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
-    return columns, problems
+    return columns, differences, problems
+
+
+def _bind_reconciliation(
+    lake: Lake, model: Model, relation: str
+) -> tuple[list[Problem], list[Comparison]]:
+    """Each check bound on the model and its source: the type of its measure difference, which
+    must be an exact number (integers or DECIMAL, law 11)."""
+    file = model.config_file or model.sql_file
+    problems: list[Problem] = []
+    kinds: list[Comparison] = []
+    for index, check in enumerate(model.config.reconciliation or []):
+        pointer = f"/reconciliation/{index}"
+        try:
+            described = lake.describe(reconciliation.measures_sql(check, relation))
+        except StoreError as error:
+            problems.append(
+                Problem(
+                    "MODEL_CONFIG_INVALID",
+                    file,
+                    None,
+                    f"{file}: {pointer}: {check.name} cannot run: {_store_message(error)}",
+                )
+            )
+            continue
+        mismatched = [
+            position
+            for position in range(len(check.group_by or []))
+            if described[2 + 2 * position][1] != described[3 + 2 * position][1]
+        ]
+        if mismatched:
+            # Different key types would be converted implicitly, and two model groups could
+            # match one source group: the comparison would no longer be one-to-one.
+            position = mismatched[0]
+            problems.append(
+                Problem(
+                    "MODEL_CONFIG_INVALID",
+                    file,
+                    None,
+                    f"{file}: {pointer}/group_by/{position}: {check.name} groups a "
+                    f"{described[2 + 2 * position][1]} in the model and a "
+                    f"{described[3 + 2 * position][1]} in the source; cast one side so both "
+                    "have the same type.",
+                )
+            )
+            continue
+        text_groups = frozenset(
+            position
+            for position in range(len(check.group_by or []))
+            if described[2 + 2 * position][1] == "VARCHAR"
+        )
+        described = described[:2]
+        kind = reconciliation.common_type(described[0][1], described[1][1])
+        inexact = [typ for _, typ in described if not reconciliation.exact_difference(typ)]
+        if inexact:
+            problems.append(
+                Problem(
+                    "MODEL_CONFIG_INVALID",
+                    file,
+                    None,
+                    f"{file}: {pointer}/measure: {check.name} compares {inexact[0]} values; use a "
+                    "measure with an exact type (integer or DECIMAL) — floats are not "
+                    "compared (law 11).",
+                )
+            )
+            continue
+        kinds.append(Comparison(kind, text_groups))
+    return problems, kinds
 
 
 def _bind_tests(
@@ -423,6 +501,7 @@ class _Outcome:
     since: str | None = None
     watermark: str | None = None
     tests: list[CheckResult] = field(default_factory=list)
+    reconciliation: list[CheckResult] = field(default_factory=list)
 
 
 def _run_locked(
@@ -465,7 +544,16 @@ def _run_locked(
         except StoreError as error:
             lake.close()
             lake, open_error = None, error
-    plan = plan_run(discovery.models, graph, checked.columns, existing, since, refreshed, previous)
+    plan = plan_run(
+        discovery.models,
+        graph,
+        checked.columns,
+        existing,
+        since,
+        refreshed,
+        previous,
+        checked.differences,
+    )
     outcomes = [
         _Outcome(
             model,
@@ -569,7 +657,7 @@ def _run_locked(
                 else RowsWritten(item.rows_written),
                 watermark=item.watermark if item.outcome == "success" else None,
                 tests=item.tests,
-                reconciliation=[],
+                reconciliation=item.reconciliation,
                 snapshot_id=snapshot if item.outcome == "success" else None,
                 started_at=item.started_at,
                 finished_at=item.finished_at,
@@ -615,23 +703,29 @@ class _StepFailed(Exception):
 
 
 def _check_tests(item: _Outcome) -> None:
-    """After every test of a model ran: the run stops if any failed (MODEL_TEST_FAILED)."""
-    failed = [result for result in item.tests if result.outcome == "failed"]
-    if not failed:
-        return
+    """After every test and reconciliation check of a model ran: the run stops if any failed
+    (MODEL_TEST_FAILED first, then RECONCILIATION_FAILED); every result is recorded."""
     file = item.model.config_file or item.model.sql_file
-    lines = [f"{result.name} failed on {result.failing_rows} rows" for result in failed]
-    raise _StepFailed(
-        "MODEL_TEST_FAILED",
-        f"{item.model.name}: " + "; ".join(lines) + ".",
-        [Problem("MODEL_TEST_FAILED", file, None, line) for line in lines],
-    )
+    for code, results, unit in (
+        ("MODEL_TEST_FAILED", item.tests, "rows"),
+        ("RECONCILIATION_FAILED", item.reconciliation, "groups"),
+    ):
+        failed = [result for result in results if result.outcome == "failed"]
+        if not failed:
+            continue
+        lines = [f"{result.name} failed on {result.failing_rows} {unit}" for result in failed]
+        raise _StepFailed(
+            code,
+            f"{item.model.name}: " + "; ".join(lines) + ".",
+            [Problem(code, file, None, line) for line in lines],
+        )
 
 
-def _run_step(transaction: Transaction, step: Step | ModelTest, item: _Outcome) -> None:
-    if isinstance(step, ModelTest):
+def _run_step(transaction: Transaction, step: Step | ModelTest | Reconcile, item: _Outcome) -> None:
+    if isinstance(step, ModelTest | Reconcile):
         failing = transaction.value(step.request) or "0"
-        item.tests.append(
+        results = item.tests if isinstance(step, ModelTest) else item.reconciliation
+        results.append(
             CheckResult(
                 name=step.name,
                 outcome="passed" if failing == "0" else "failed",

@@ -18,10 +18,11 @@ from typing import Any
 import duckdb
 from orvex.contracts.model_config.v1 import ModelError, Relationship
 from orvex.contracts.store.v1 import StatementRequest
-from orvex.transform import incremental, model_tests
+from orvex.transform import incremental, model_tests, reconciliation
 from orvex.transform.incremental import Columns, Step
 from orvex.transform.model_tests import ModelTest
 from orvex.transform.models import Model, problem
+from orvex.transform.reconciliation import Comparison, Reconcile
 
 LAKE_CATALOG = "lake"
 
@@ -282,7 +283,8 @@ def plan_run(
     since: Mapping[str, str] | None = None,
     full_refresh: frozenset[str] = frozenset(),
     previous: Mapping[str, str | None] | None = None,
-) -> list[tuple[Model, list[Step | ModelTest]]]:
+    differences: Mapping[str, Sequence[Comparison]] | None = None,
+) -> list[tuple[Model, list[Step | ModelTest | Reconcile]]]:
     """Steps that build every stored model, in run order (views are not stored).
 
     For incremental models only: `outputs` are the models' output columns, `existing` the
@@ -290,20 +292,22 @@ def plan_run(
     (`-infinity` when missing), `full_refresh` the models whose table is replaced, and
     `previous` their stored watermarks.
 
-    Each model's tests follow its write (P1-15); a view with tests gets an entry with only its
-    tests, run on its SQL. Tests need `outputs`.
+    Each model's tests (P1-15), then its reconciliation checks (P1-16), follow its write; a
+    view with checks gets an entry with only them, run on its SQL. Tests need `outputs`, and
+    reconciliation how each check compares, from the binder (`differences`).
     """
     by_name = {model.name: model for model in models}
     relations = test_relations(models)
-    plan: list[tuple[Model, list[Step | ModelTest]]] = []
+    plan: list[tuple[Model, list[Step | ModelTest | Reconcile]]] = []
     for name in graph.order:
         model = by_name[name]
         # Extraction models have no relation (tests do not read them until they run, P1-17).
-        tests = (
-            model_tests.steps(model, relations[name], (outputs or {}).get(name, []), relations)
-            if name in relations
-            else []
-        )
+        tests: list[ModelTest | Reconcile] = []
+        if name in relations:
+            tests += model_tests.steps(
+                model, relations[name], (outputs or {}).get(name, []), relations
+            )
+            tests += reconciliation.steps(model, relations[name], (differences or {}).get(name, []))
         if model.config.materialized == "view":
             if tests:
                 plan.append((model, list(tests)))

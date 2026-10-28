@@ -1,0 +1,296 @@
+"""Reconciliation: compare a model with its source after each run (P1-16).
+
+Each check groups the model's table and its source the same way, computes the same measure on
+both, and counts the groups that differ by more than the tolerance (or exist on one side only).
+It runs in DuckDB inside the run transaction, after the model's tests. The sidecar's `measure`
+and `group_by` are SQL expressions: each must parse as exactly one expression that reads no
+other table, and what reaches the query is DuckDB's own rendering of that checked parse tree.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+import duckdb
+from orvex.contracts.model_config.v1 import ModelError, Reconciliation
+from orvex.contracts.store.v1 import Parameter, ParameterType, StatementRequest
+from orvex.transform.model_tests import (
+    INTEGER_RANGES,
+    decimal_bound,
+    integer_bound,
+    number_text,
+)
+from orvex.transform.models import Model, problem
+
+_DECIMAL_TYPE = re.compile(r"DECIMAL\((\d+),(\d+)\)")
+_REFUSED_CLASSES = frozenset({"SUBQUERY", "WINDOW", "PARAMETER", "STAR"})
+_REFUSED_TYPES = frozenset({"BASE_TABLE", "TABLE_FUNCTION", "SUBQUERY", "JOIN"})
+
+
+@dataclass(frozen=True, slots=True)
+class Comparison:
+    """How one check compares, from the binder: the measures' common type, and the positions
+    of its text groups (compared with the binary collation)."""
+
+    kind: str
+    text_groups: frozenset[int] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class Reconcile:
+    """One reconciliation check: `request` counts the failing groups (0 passes)."""
+
+    name: str
+    request: StatementRequest
+
+
+def _walk(node: object) -> Iterator[dict[str, Any]]:
+    if isinstance(node, dict):
+        yield node
+        for value in node.values():
+            yield from _walk(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _walk(item)
+
+
+def expression(text: str) -> str | None:
+    """DuckDB's rendering of `text` when it is exactly one expression that reads no table and
+    has no subquery, window, parameter or alias; None otherwise."""
+    connection = duckdb.connect()
+    try:
+        connection.execute("SET enable_external_access = false")
+        row = connection.execute("SELECT json_serialize_sql($sql)", {"sql": f"SELECT {text}"})
+        tree: dict[str, Any] = json.loads(str(row.fetchone()[0]))  # type: ignore[index]
+        if tree.get("error") or len(tree.get("statements", [])) != 1:
+            return None
+        node = tree["statements"][0]["node"]
+        wanted = {"type", "cte_map", "select_list", "from_table", "aggregate_handling"}
+        filled = {key for key, value in node.items() if value not in (None, [], {}, "")}
+        if node.get("type") != "SELECT_NODE" or not filled <= wanted:
+            return None
+        if node["from_table"].get("type") != "EMPTY" or node["cte_map"].get("map"):
+            return None
+        (item,) = node["select_list"] if len(node["select_list"]) == 1 else (None,)
+        if item is None or item.get("alias"):
+            return None
+        for part in _walk(item):
+            if part.get("class") in _REFUSED_CLASSES or part.get("type") in _REFUSED_TYPES:
+                return None
+            if part.get("class") == "COLUMN_REF" and len(part.get("column_names", [])) != 1:
+                return None  # `t.column` would name another relation
+        rendered = connection.execute(
+            "SELECT json_deserialize_sql($tree)", {"tree": json.dumps(tree)}
+        )
+        text_out = str(rendered.fetchone()[0])  # type: ignore[index]
+    except duckdb.Error:
+        return None
+    finally:
+        connection.close()
+    return text_out.removeprefix("SELECT ")
+
+
+def _identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _source(text: str) -> list[str]:
+    return text.split(".")
+
+
+def problems(model: Model, connections: Mapping[str, str]) -> list[ModelError]:
+    """Rules that need only the sidecar and the project's connections (`name` → type)."""
+    file = model.config_file or model.sql_file
+    found: list[ModelError] = []
+
+    def invalid(pointer: str, message: str, code: str = "MODEL_CONFIG_INVALID") -> None:
+        found.append(
+            problem(code, f"{file}: {pointer}: {message}", file, model=model.name, path=pointer)
+        )
+
+    names: set[str] = set()
+    for index, check in enumerate(model.config.reconciliation or []):
+        base = f"/reconciliation/{index}"
+        if check.name in names:
+            invalid(f"{base}/name", f"{check.name} is used twice in this model.")
+        names.add(check.name)
+        if expression(check.measure) is None:
+            invalid(
+                f"{base}/measure",
+                "write one expression (for example sum(kwh)) without subqueries, windows, "
+                "parameters or other tables.",
+            )
+        for position, item in enumerate(check.group_by or []):
+            if expression(item.root) is None:
+                invalid(f"{base}/group_by/{position}", "write one expression per item.")
+        parts = _source(check.source)
+        if len(parts) not in {2, 3} or connections.get(parts[0]) in {None, "clickhouse"}:
+            invalid(
+                f"{base}/source",
+                f"{check.source} is not a table of a connection (<connection>.<table>).",
+                "MODEL_REFERENCE_UNKNOWN",
+            )
+        text = tolerance_text(model, index, check)
+        if text is None or text.startswith("-"):
+            invalid(
+                f"{base}/tolerance", "write a non-negative decimal number of at most 38 digits."
+            )
+    return found
+
+
+def tolerance_text(model: Model, index: int, check: Reconciliation) -> str | None:
+    value = check.tolerance if check.tolerance is not None else 0
+    return number_text(model, f"/reconciliation/{index}/tolerance", value)
+
+
+def _sides(check: Reconciliation, relation: str, text_groups: frozenset[int]) -> tuple[str, str]:
+    groups = [expression(item.root) for item in check.group_by or []]
+    measure = expression(check.measure)
+    assert measure is not None  # checked at validation
+    assert None not in groups
+    # Text groups use the binary collation on both sides: a case-insensitive column would
+    # otherwise group and match `ab` and `AB` as one key.
+    selected = [
+        f'({group}) COLLATE "binary" AS {_identifier(f"g{i}")}'
+        if i in text_groups
+        else f"{group} AS {_identifier(f'g{i}')}"
+        for i, group in enumerate(groups)
+    ]
+    # `rid` numbers each side's groups, so a group matched more than once can be caught.
+    columns = ", ".join(
+        [*selected, f"{measure} AS m", "true AS present", "row_number() OVER () AS rid"]
+    )
+    # Grouped by position: a measure that is not an aggregate, or an aggregate among the groups,
+    # is refused by the binder instead of silently becoming a grouping key.
+    positions = ", ".join(str(i + 1) for i in range(len(groups)))
+    grouping = f" GROUP BY {positions}" if groups else " GROUP BY ()"
+    source = ".".join(_identifier(part) for part in _source(check.source))
+    return (
+        f"SELECT {columns} FROM {relation} AS t{grouping}",
+        f"SELECT {columns} FROM {source} AS t{grouping}",
+    )
+
+
+def _query(
+    check: Reconciliation,
+    relation: str,
+    select: str,
+    where: str = "",
+    text_groups: frozenset[int] = frozenset(),
+) -> str:
+    """Both sides grouped alike, full-outer-joined on their groups (`NULL` is a group)."""
+    model_side, source_side = _sides(check, relation, text_groups)
+
+    def key(side: str, i: int) -> str:
+        # Also on the join: the binary collation must hold where the keys are compared.
+        column = f"{side}.{_identifier(f'g{i}')}"
+        return f'{column} COLLATE "binary"' if i in text_groups else column
+
+    matched = " AND ".join(
+        f"{key('model', i)} IS NOT DISTINCT FROM {key('source', i)}"
+        for i in range(len(check.group_by or []))
+    )
+    return (
+        f"WITH model AS ({model_side}), source AS ({source_side}) SELECT {select} "
+        f"FROM model FULL OUTER JOIN source ON {matched or 'TRUE'}"
+        + (f" WHERE {where}" if where else "")
+    )
+
+
+def measures_sql(check: Reconciliation, relation: str) -> str:
+    """A query whose columns have the types of the model's and the source's measure, then of
+    each group on the model and on the source (for binding)."""
+    groups = [
+        f"model.{_identifier(f'g{i}')}, source.{_identifier(f'g{i}')}"
+        for i in range(len(check.group_by or []))
+    ]
+    return _query(check, relation, ", ".join(["model.m", "source.m", *groups]))
+
+
+def exact_difference(kind: str) -> bool:
+    return kind in INTEGER_RANGES or _DECIMAL_TYPE.fullmatch(kind) is not None
+
+
+def common_type(model_kind: str, source_kind: str) -> str:
+    """The type both measures are compared in, without rounding either: DECIMAL(38, the larger
+    scale) when either is a decimal, else UHUGEINT when both are unsigned, else HUGEINT. A value
+    that does not fit it cannot equal the other side's value (which fits by construction), so it
+    counts as a failing group; so does a difference that does not fit, which is beyond any
+    tolerance except one of at least 10^(38 - scale) (refusing then is the safe side)."""
+    scales = [
+        int(m.group(2)) for k in (model_kind, source_kind) if (m := _DECIMAL_TYPE.fullmatch(k))
+    ]
+    if scales:
+        return f"DECIMAL(38,{max(scales)})"
+    if model_kind.startswith("U") and source_kind.startswith("U"):
+        return "UHUGEINT"
+    return "HUGEINT"
+
+
+def _difference(kind: str) -> tuple[str, str]:
+    """(the non-negative difference of the two measures in `kind`, from `common_type`; the
+    condition that a measure or the difference does not fit it)."""
+    model = f"TRY(CAST(model.m AS {kind}))"
+    source = f"TRY(CAST(source.m AS {kind}))"
+    # `greatest` and `least` skip NULLs: the casts are checked on their own.
+    difference = f"TRY(greatest({model}, {source}) - least({model}, {source}))"
+    return difference, f"({model} IS NULL OR {source} IS NULL OR {difference} IS NULL)"
+
+
+def steps(model: Model, relation: str, comparisons: Sequence[Comparison]) -> list[Reconcile]:
+    """The reconciliation checks of a model whose rows are `relation`, compared as the binder
+    found (`comparisons`, one per check)."""
+    found: list[Reconcile] = []
+    for index, (check, comparison) in enumerate(
+        zip(model.config.reconciliation or [], comparisons, strict=True)
+    ):
+        kind = comparison.kind
+        difference, unfit = _difference(kind)
+        wide = kind
+        text = tolerance_text(model, index, check)
+        assert text is not None  # checked at validation
+        convert = integer_bound if wide in INTEGER_RANGES else decimal_bound
+        tolerance, everything = convert(text, "max", wide)
+        parameters: list[Parameter] = []
+        if everything:
+            beyond = "TRUE"  # cannot happen for a non-negative tolerance; kept for symmetry
+        elif tolerance is None:
+            beyond = "FALSE"  # a tolerance beyond the type's range: no difference exceeds it
+        else:
+            parameters.append(
+                Parameter(name="p_tolerance", type=ParameterType(wide), value=tolerance)
+            )
+            beyond = f"{difference} > $p_tolerance"
+        failing = (
+            "model.present IS NULL OR source.present IS NULL "
+            "OR (model.m IS NULL) <> (source.m IS NULL) "
+            # A difference too large for the widest types is beyond any tolerance.
+            f"OR (model.m IS NOT NULL AND source.m IS NOT NULL AND {unfit}) "
+            f"OR {beyond}"
+        )
+        # A group matched more than once on either side (a collation hidden inside a list or
+        # struct key, say) is never compared one-to-one: every such joined row fails.
+        joined = _query(
+            check,
+            relation,
+            f"coalesce({failing}, false) AS bad, model.rid AS model_rid, "
+            "source.rid AS source_rid, count(*) OVER (PARTITION BY model.rid) AS model_matches, "
+            "count(*) OVER (PARTITION BY source.rid) AS source_matches",
+            "",
+            comparison.text_groups,
+        )
+        sql = (
+            f"SELECT count(*) FROM ({joined}) WHERE bad "
+            "OR (model_rid IS NOT NULL AND model_matches > 1) "
+            "OR (source_rid IS NOT NULL AND source_matches > 1)"
+        )
+        found.append(
+            Reconcile(
+                check.name, StatementRequest(kind="statement", sql=sql, parameters=parameters)
+            )
+        )
+    return found
