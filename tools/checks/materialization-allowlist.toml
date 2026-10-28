@@ -23,3 +23,8 @@ reason = "Lake metadata and SQL rewriting: one snapshot row or one serialized st
 file = "packages/transform/src/orvex/transform/graph.py"
 call = "fetchone"
 reason = "SQL parsing on a data-less connection: one serialized or rewritten statement, never data rows"
+
+[[allow]]
+file = "packages/transform/src/orvex/transform/reconciliation.py"
+call = "fetchone"
+reason = "Expression parsing on a data-less connection: one serialized or rendered expression, never data rows"

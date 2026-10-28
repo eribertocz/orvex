@@ -88,14 +88,14 @@ def failing(chosen: Model, connection: duckdb.DuckDBPyConnection) -> list[tuple[
         assert row is not None
         differences.append(str(row[1]))
     found = []
-    for check in steps(chosen, RELATION, differences):
-        sql = check.request.sql
-        for parameter in check.request.parameters:
+    for planned in steps(chosen, RELATION, differences):
+        sql = planned.request.sql
+        for parameter in planned.request.parameters:
             sql = sql.replace(
                 f"${parameter.name}", f"CAST(${parameter.name} AS {parameter.type.root})"
             )
-        values = {parameter.name: parameter.value for parameter in check.request.parameters}
-        found.append((check.name, connection.execute(sql, values).fetchall()[0][0]))
+        values = {parameter.name: parameter.value for parameter in planned.request.parameters}
+        found.append((planned.name, connection.execute(sql, values).fetchall()[0][0]))
     return found
 
 
