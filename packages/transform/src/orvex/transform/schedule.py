@@ -112,7 +112,7 @@ def refresh_due(
     return next_time(parse(refresh.cron), history.last_full_refresh or since, zone)
 
 
-def _closure(name: str, dependencies: Mapping[str, Sequence[str]], known: set[str]) -> set[str]:
+def closure(name: str, dependencies: Mapping[str, Sequence[str]], known: set[str]) -> set[str]:
     """A model and every model it reads, transitively."""
     found = {name}
     pending = [name]
@@ -166,7 +166,7 @@ def plan(
     runnable = {
         name: reason
         for name, reason in due.items()
-        if not _closure(name, dependencies, known) & blocked
+        if not closure(name, dependencies, known) & blocked
     }
     earliest = now
     if last_run_start is not None:
@@ -177,7 +177,7 @@ def plan(
         return Plan((), frozenset(), (), min([now + LOOK_AGAIN, *candidates]))
     needed: set[str] = set()
     for name in runnable:
-        needed |= _closure(name, dependencies, known)
+        needed |= closure(name, dependencies, known)
     selected = tuple(name for name in order if name in needed)
     reasons = tuple(f"{name}: {runnable[name]}" for name in selected if name in runnable)
     return Plan(selected, frozenset(refreshed & set(runnable)), reasons, now + LOOK_AGAIN)

@@ -370,3 +370,28 @@ def test_a_source_that_comes_back_is_noticed(
     scheduled(tmp_path, monkeypatch, START + dt.timedelta(minutes=30), source_back)
     (started,) = [started for _, started, _, _ in records(tmp_path)]
     assert minutes("10:02") <= minutes(started) <= minutes("10:07")
+
+
+def test_a_failing_model_reading_a_busy_model_is_still_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    feed(tmp_path, "voided")
+    write(
+        tmp_path,
+        {
+            "project.yaml": PROJECT,
+            "connections.yaml": CONNECTIONS,
+            "models/s/up.sql": "SELECT * FROM feed.data",
+            "models/s/up.yaml": "version: 1\nfreshness: 5m\n",
+            "models/s/down.sql": "SELECT * FROM s.up",
+            "models/s/down.yaml": (
+                "version: 1\nfreshness: 1h\n"
+                "tests:\n  - accepted_values: {column: status, values: [valid]}\n"
+            ),
+        },
+    )
+    out = scheduled(tmp_path, monkeypatch, START + dt.timedelta(minutes=90))
+    down = [started for model, started, _, _ in records(tmp_path) if model == "s.down"]
+    assert len(down) == 4  # the first run and three retries
+    assert "SCHEDULE_GAVE_UP s.down" in out
+    assert_five_minutes_apart(records(tmp_path))

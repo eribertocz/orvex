@@ -34,6 +34,7 @@ from orvex.transform.schedule import (
     RETRY_DELAYS,
     History,
     Plan,
+    closure,
     next_due,
     plan,
 )
@@ -232,7 +233,11 @@ def _cycle(
         # too). Turns alternate: the healthy ones first, then the retries, so neither waits
         # more than one run.
         if recovering <= state.deferred:
-            decided = decide({**state.held, **dict.fromkeys(healthy, now + LOOK_AGAIN)})
+            # The models a retry reads run with it: only the other healthy ones wait.
+            known = {model.name for model in checked.discovery.models}
+            read = set().union(*(closure(n, graph.dependencies, known) for n in recovering))
+            waiting = healthy - read
+            decided = decide({**state.held, **dict.fromkeys(waiting, now + LOOK_AGAIN)})
             state.deferred -= recovering
         else:
             decided = decide({**state.held, **dict.fromkeys(recovering, now + LOOK_AGAIN)})
