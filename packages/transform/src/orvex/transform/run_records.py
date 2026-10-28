@@ -114,3 +114,41 @@ def history_request(snapshot: int, time_zone: str, limit: int) -> ReadRequest:
         snapshot=snapshot,
         batch_size=1000,
     )
+
+
+_ISO = "'%Y-%m-%dT%H:%M:%S.%f+00:00'"
+
+
+def _iso(column: str) -> str:
+    return f"strftime(timezone('UTC', {column}), {_ISO})"
+
+
+REFRESHED = "max(started_at) FILTER (WHERE trigger = 'full_refresh')"
+
+
+def model_history_request(snapshot: int) -> ReadRequest:
+    """Per model: start and end of its last successful run, and start of its last successful
+    full refresh (UTC, ISO 8601 text)."""
+    return ReadRequest(
+        kind="read",
+        sql=(
+            f"SELECT model, {_iso('arg_max(started_at, finished_at)')} AS success_start, "
+            f"{_iso('max(finished_at)')} AS success_end, "
+            f"{_iso(REFRESHED)} AS full_refresh "
+            f"FROM {TABLE} WHERE outcome = 'success' GROUP BY model"
+        ),
+        parameters=[],
+        snapshot=snapshot,
+        batch_size=1000,
+    )
+
+
+def last_run_request(snapshot: int) -> ReadRequest:
+    """The start of the project's last run that started a model (UTC, ISO 8601 text)."""
+    return ReadRequest(
+        kind="read",
+        sql=f"SELECT {_iso('max(started_at)')} AS started FROM {TABLE} WHERE outcome <> 'not_run'",
+        parameters=[],
+        snapshot=snapshot,
+        batch_size=1,
+    )
