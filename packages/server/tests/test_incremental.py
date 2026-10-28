@@ -283,3 +283,203 @@ def test_a_later_failure_rolls_back_what_the_incremental_model_wrote(
         "SELECT count(*) FROM duckdb_schemas() "
         "WHERE database_name = 'lake' AND schema_name = '_stage'",
     ) == [(0,)]
+
+
+# --- P1-12: delete_insert, partition_overwrite, on_schema_change ---------------------------------
+
+DELETE_INSERT = MERGE.replace("merge", "delete_insert")
+PARTITION = (
+    "version: 1\nmaterialized: incremental\n"
+    "incremental: {strategy: partition_overwrite, time_column: read_at, partition_by: [month]}\n"
+)
+BY_MONTH = "SELECT id, region, kwh, strftime(read_at, '%Y-%m') AS month, read_at FROM feed.data"
+
+
+def test_delete_insert_replaces_every_row_of_a_loaded_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The key is `region`: A ("n") has 2 rows and B ("s") 1; the second run loads 3 rows of A.
+    project(tmp_path, DELETE_INSERT.replace("[id]", "[region]"))
+    feed(tmp_path, rows((1, "n", "1.0000"), (2, "n", "2.0000"), (3, "s", "3.0000")))
+    assert command(capsys, "run", str(tmp_path))[0] == 0
+    feed(tmp_path, rows((4, "n", "4.0001"), (5, "n", "5.0002"), (6, "n", "6.0003")))
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    assert "built s.m: 3 rows" in out  # rows inserted; the 2 deleted rows are not counted
+    assert [(row[0], row[1], row[2]) for row in table(tmp_path)] == [
+        (3, "s", "3.0000"),
+        (4, "n", "4.0001"),
+        (5, "n", "5.0002"),
+        (6, "n", "6.0003"),
+    ]
+
+
+def test_delete_insert_refuses_a_null_key_and_rolls_back(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project(tmp_path, DELETE_INSERT)
+    feed(tmp_path, rows((1, "n", "1.0000")))
+    assert command(capsys, "run", str(tmp_path))[0] == 0
+    feed(
+        tmp_path,
+        "(NULL, 'n', 1, 1, '2024-01-01 00:00:00+00'), (2, 'n', 1, 1, '2024-01-01 00:00:00+00')",
+    )
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 1
+    assert out.splitlines()[-1].startswith("UNIQUE_KEY_NULL ")
+    assert [row[0] for row in table(tmp_path)] == [1]
+
+
+def test_partition_overwrite_replaces_only_loaded_partitions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project(tmp_path, PARTITION, BY_MONTH)
+    first = (
+        "(1, 'n', '1.0000', 1, '2024-01-10 10:00:00+00'), "
+        "(2, 'n', '2.0000', 1, '2024-02-10 10:00:00+00'), "
+        "(3, 's', '3.0000', 1, '2024-02-11 10:00:00+00'), "
+        "(4, 's', '4.0000', 1, NULL)"
+    )
+    feed(tmp_path, first)
+    assert command(capsys, "run", str(tmp_path))[0] == 0
+    feed(
+        tmp_path,
+        "(5, 'n', '5.0000', 1, '2024-02-20 10:00:00+00'), (6, 'n', '6.0000', 1, NULL)",
+    )
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    assert lake_value(
+        tmp_path, "SELECT month, id, CAST(kwh AS VARCHAR) FROM lake.s.m ORDER BY month, id"
+    ) == [("2024-01", 1, "1.0000"), ("2024-02", 5, "5.0000"), (None, 6, "6.0000")]
+
+
+def test_partition_overwrite_needs_partition_by(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project(tmp_path, PARTITION.replace(", partition_by: [month]", ""), BY_MONTH)
+    code, out = command(capsys, "validate", str(tmp_path))
+    assert code == 1
+    assert out.startswith("MISSING_PARTITION_BY models/s/m.yaml")
+    assert not (tmp_path / f".{SLUG}").exists()
+
+
+def columns(folder: Path) -> list[tuple[object, ...]]:
+    return lake_value(
+        folder,
+        "SELECT column_name, data_type FROM information_schema.columns "
+        "WHERE table_catalog = 'lake' AND table_schema = 's' AND table_name = 'm' "
+        "ORDER BY ordinal_position",
+    )
+
+
+NARROW = "SELECT id, read_at FROM feed.data"
+WITH_KWH = "SELECT id, kwh, read_at FROM feed.data"
+
+
+def test_append_new_columns_adds_a_column_and_refuses_removing_one(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project(tmp_path, APPEND + "on_schema_change: append_new_columns\n", NARROW)
+    feed(tmp_path, rows((1, "n", "1.0001")))
+    assert command(capsys, "run", str(tmp_path))[0] == 0
+    write(tmp_path, {"models/s/m.sql": WITH_KWH})
+    feed(tmp_path, rows((2, "n", "2.0002")))
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    assert columns(tmp_path) == [
+        ("id", "BIGINT"),
+        ("read_at", "TIMESTAMP WITH TIME ZONE"),
+        ("kwh", "DECIMAL(18,4)"),
+    ]
+    assert lake_value(tmp_path, "SELECT id, CAST(kwh AS VARCHAR) FROM lake.s.m ORDER BY id") == [
+        (1, None),
+        (2, "2.0002"),
+    ]
+    # Back to fewer columns: removing is not allowed under append_new_columns.
+    write(tmp_path, {"models/s/m.sql": NARROW})
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 1
+    assert "SCHEMA_CHANGED" in out
+    assert len(columns(tmp_path)) == 3
+    assert lake_value(tmp_path, "SELECT count(*) FROM lake.s.m") == [(2,)]
+
+
+def test_sync_all_columns_drops_widens_and_refuses_lossy_changes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    narrow_decimal = "SELECT id, CAST(kwh AS DECIMAL(10,2)) AS kwh, region, read_at FROM feed.data"
+    project(tmp_path, APPEND + "on_schema_change: sync_all_columns\n", narrow_decimal)
+    feed(tmp_path, rows((1, "n", "12345678.99"), (2, "n", "-0.01")))
+    assert command(capsys, "run", str(tmp_path))[0] == 0
+    # region removed, kwh widened to DECIMAL(18,2) (the source is DECIMAL(18,4), so the new
+    # value has 14 integer digits, more than DECIMAL(10,2) holds).
+    write(
+        tmp_path,
+        {"models/s/m.sql": "SELECT id, CAST(kwh AS DECIMAL(18,2)) AS kwh, read_at FROM feed.data"},
+    )
+    feed(tmp_path, rows((3, "n", "99999999999999.99")))
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    assert columns(tmp_path) == [
+        ("id", "BIGINT"),
+        ("kwh", "DECIMAL(18,2)"),
+        ("read_at", "TIMESTAMP WITH TIME ZONE"),
+    ]
+    assert lake_value(tmp_path, "SELECT id, CAST(kwh AS VARCHAR) FROM lake.s.m ORDER BY id") == [
+        (1, "12345678.99"),
+        (2, "-0.01"),
+        (3, "99999999999999.99"),
+    ]
+    # A VARCHAR column that would become INTEGER: refused, nothing written.
+    write(
+        tmp_path,
+        {
+            "models/s/m.sql": (
+                "SELECT id, CAST(kwh AS DECIMAL(18,2)) AS kwh, region AS code, read_at "
+                "FROM feed.data"
+            )
+        },
+    )
+    assert command(capsys, "run", str(tmp_path))[0] == 0  # adds `code` VARCHAR
+    write(
+        tmp_path,
+        {
+            "models/s/m.sql": (
+                "SELECT id, CAST(kwh AS DECIMAL(18,2)) AS kwh, CAST(id AS INTEGER) AS code, "
+                "read_at FROM feed.data"
+            )
+        },
+    )
+    before = lake_value(tmp_path, "SELECT count(*) FROM lake.s.m")
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 1
+    assert "SCHEMA_CHANGED" in out
+    assert columns(tmp_path)[-1] == ("code", "VARCHAR")
+    assert lake_value(tmp_path, "SELECT count(*) FROM lake.s.m") == before
+
+
+@pytest.mark.parametrize("policy", ["append_new_columns", "sync_all_columns"])
+def test_a_later_failure_rolls_back_a_schema_change(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], policy: str
+) -> None:
+    project(tmp_path, APPEND + f"on_schema_change: {policy}\n", NARROW)
+    feed(tmp_path, rows((1, "n", "1.0000")))
+    assert command(capsys, "run", str(tmp_path))[0] == 0
+    before = (columns(tmp_path), lake_value(tmp_path, "SELECT * FROM lake.s.m ORDER BY ALL"))
+    write(
+        tmp_path,
+        {
+            "models/s/m.sql": WITH_KWH,
+            "models/s/later.sql": (
+                "SELECT CAST(CAST(kwh AS VARCHAR) || 'x' AS INTEGER) AS n FROM s.m"
+            ),
+        },
+    )
+    feed(tmp_path, rows((2, "n", "2.0000")))
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 1
+    assert "s.later" in out
+    assert (
+        columns(tmp_path),
+        lake_value(tmp_path, "SELECT * FROM lake.s.m ORDER BY ALL"),
+    ) == before

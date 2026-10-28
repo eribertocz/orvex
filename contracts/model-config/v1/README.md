@@ -21,7 +21,7 @@ A model is `models/<folder>/<name>.sql`: one `SELECT` in DuckDB SQL (or, for an 
 
 Durations are `<n>s|m|h|d`. Unknown keys are errors. The sidecar is read like the project files: a regular UTF-8 file under 1 MiB, one document, no duplicate keys, anchors, aliases or merge keys, no null values.
 
-Cross-field rules not listed below (`MISSING_PARTITION_BY`, `FRESHNESS_TOO_SHORT`, filter checks) are added by the issues that implement those behaviors, as compatible extensions of the error list.
+Cross-field rules not listed below (`FRESHNESS_TOO_SHORT`, filter checks) are added by the issues that implement those behaviors, as compatible extensions of the error list.
 
 ## `ModelError`
 
@@ -39,9 +39,10 @@ Cross-field rules not listed below (`MISSING_PARTITION_BY`, `FRESHNESS_TOO_SHORT
 | `MISSING_UNIQUE_KEY` | `merge` (or `delete_insert`) without `unique_key` |
 | `LOOKBACK_REQUIRES_UNIQUE_KEY` | `append` with a `lookback` other than `0s` (re-reading would duplicate rows) |
 | `TIME_COLUMN_NOT_TEMPORAL` | `time_column` missing from the output, or not `DATE`, `TIMESTAMP` or `TIMESTAMP WITH TIME ZONE` |
-| `SCHEMA_CHANGED` | An incremental model's output columns (names, order, types) differ from its existing table |
-| `UNIQUE_KEY_NULL` | Loaded rows of a `merge` with a `NULL` key part (the run rolls back) |
-| `UNIQUE_KEY_DUPLICATED` | Loaded rows of a `merge` with the same key twice (the run rolls back) |
+| `SCHEMA_CHANGED` | An incremental model's output columns (names, order, types) differ from its existing table and `on_schema_change` does not allow the change: `fail` allows none; `append_new_columns` only new columns; `sync_all_columns` new and removed columns and exact widenings (signed or unsigned integer to a wider one, `DECIMAL(p,s)` to `DECIMAL(p2,s)` with `p2 > p`, `DATE` to `TIMESTAMP`) |
+| `UNIQUE_KEY_NULL` | Loaded rows of a `merge` or `delete_insert` with a `NULL` key part (the run rolls back) |
+| `UNIQUE_KEY_DUPLICATED` | Loaded rows of a `merge` with the same key twice (the run rolls back; `delete_insert` allows it) |
+| `MISSING_PARTITION_BY` | `partition_overwrite` without `partition_by` |
 
 `details` holds `file` (relative to the project folder), and when known `model`, `path` (a JSON pointer into the sidecar) and `line`. Discovery reports every problem of a project at once.
 
