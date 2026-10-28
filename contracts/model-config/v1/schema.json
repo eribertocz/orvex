@@ -18,11 +18,6 @@
       "minLength": 1,
       "maxLength": 128
     },
-    "Duration": {
-      "description": "`<n>s|m|h|d` (`90s`, `10m`, `1h`, `7d`); `0s` only where a zero is allowed.",
-      "type": "string",
-      "pattern": "^(0s|[1-9][0-9]{0,8}(s|m|h|d))$"
-    },
     "PositiveDuration": {
       "type": "string",
       "pattern": "^[1-9][0-9]{0,8}(s|m|h|d)$"
@@ -119,7 +114,9 @@
           "$ref": "#/$defs/Column"
         },
         "lookback": {
-          "$ref": "#/$defs/Duration",
+          "description": "Re-read window for late rows: `0s` or `<n>s|m|h|d`.",
+          "type": "string",
+          "pattern": "^(0s|[1-9][0-9]{0,8}(s|m|h|d))$",
           "default": "0s"
         },
         "partition_by": {

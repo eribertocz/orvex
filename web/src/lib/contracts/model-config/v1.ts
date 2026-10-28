@@ -86,7 +86,7 @@ export interface Incremental {
 	unique_key?: [Column, ...Column[]];
 	time_column: Column;
 	/**
-	 * `<n>s|m|h|d` (`90s`, `10m`, `1h`, `7d`); `0s` only where a zero is allowed.
+	 * Re-read window for late rows: `0s` or `<n>s|m|h|d`.
 	 */
 	lookback?: string;
 	/**

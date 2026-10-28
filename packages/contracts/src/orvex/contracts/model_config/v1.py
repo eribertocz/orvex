@@ -12,13 +12,6 @@ class Column(RootModel[str]):
     """
 
 
-class Duration(RootModel[str]):
-    root: Annotated[str, Field(pattern="^(0s|[1-9][0-9]{0,8}(s|m|h|d))$")]
-    """
-    `<n>s|m|h|d` (`90s`, `10m`, `1h`, `7d`); `0s` only where a zero is allowed.
-    """
-
-
 class PositiveDuration(RootModel[str]):
     root: Annotated[str, Field(pattern="^[1-9][0-9]{0,8}(s|m|h|d)$")]
 
@@ -30,7 +23,10 @@ class Incremental(BaseModel):
     strategy: Literal["append", "merge", "delete_insert", "partition_overwrite"]
     unique_key: Annotated[list[Column] | None, Field(min_length=1)] = None
     time_column: Column
-    lookback: Annotated[Duration | None, Field(validate_default=True)] = "0s"
+    lookback: Annotated[str | None, Field(pattern="^(0s|[1-9][0-9]{0,8}(s|m|h|d))$")] = "0s"
+    """
+    Re-read window for late rows: `0s` or `<n>s|m|h|d`.
+    """
     partition_by: Annotated[list[Column] | None, Field(min_length=1)] = None
     filter: Literal["auto", "manual"] | None = "auto"
 
