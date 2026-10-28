@@ -190,7 +190,7 @@ def _bind_reconciliation(
     for index, check in enumerate(model.config.reconciliation or []):
         pointer = f"/reconciliation/{index}"
         try:
-            described = lake.describe(reconciliation.difference_sql(check, relation))
+            described = lake.describe(reconciliation.measures_sql(check, relation))
         except StoreError as error:
             problems.append(
                 Problem(
@@ -201,7 +201,7 @@ def _bind_reconciliation(
                 )
             )
             continue
-        kind = described[-1][1]
+        kind = reconciliation.common_type(described[0][1], described[1][1])
         inexact = [typ for _, typ in described if not reconciliation.exact_difference(typ)]
         if inexact:
             problems.append(

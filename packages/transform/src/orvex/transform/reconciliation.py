@@ -171,50 +171,52 @@ def _joined(check: Reconciliation, relation: str) -> tuple[str, str]:
     )
 
 
-def difference_sql(check: Reconciliation, relation: str) -> str:
-    """A query whose columns have the types of the model's measure, the source's measure and
-    their difference (for binding)."""
-    template, difference = _joined(check, relation)
-    columns = f"model.m AS model, source.m AS source, {difference} AS difference"
-    return template.replace("{select}", columns, 1)
+def measures_sql(check: Reconciliation, relation: str) -> str:
+    """A query whose columns have the types of the model's and the source's measure (for
+    binding)."""
+    template, _ = _joined(check, relation)
+    return template.replace("{select}", "model.m AS model, source.m AS source", 1)
 
 
 def exact_difference(kind: str) -> bool:
     return kind in INTEGER_RANGES or _DECIMAL_TYPE.fullmatch(kind) is not None
 
 
-def widened(kind: str) -> str:
-    """The type the difference is computed in: wide enough for any difference of two values of
-    `kind`, except for the widest types (HUGEINT, UHUGEINT, DECIMAL(38,s)), where a difference
-    that does not fit counts as beyond any tolerance."""
-    match = _DECIMAL_TYPE.fullmatch(kind)
-    if match is not None:
-        return f"DECIMAL(38,{match.group(2)})"
-    if kind in {"HUGEINT", "UHUGEINT"}:
-        return kind
+def common_type(model_kind: str, source_kind: str) -> str:
+    """The type both measures are compared in, without rounding either: DECIMAL(38, the larger
+    scale) when either is a decimal, else UHUGEINT when both are unsigned, else HUGEINT. A value
+    that does not fit it cannot equal the other side's value (which fits by construction), and
+    a difference that does not fit is beyond any tolerance: both count as a failing group."""
+    scales = [
+        int(m.group(2)) for k in (model_kind, source_kind) if (m := _DECIMAL_TYPE.fullmatch(k))
+    ]
+    if scales:
+        return f"DECIMAL(38,{max(scales)})"
+    if model_kind.startswith("U") and source_kind.startswith("U"):
+        return "UHUGEINT"
     return "HUGEINT"
 
 
-def _difference(kind: str) -> str:
-    """The non-negative difference of the two measures in the widened type; NULL when it does
-    not fit (only possible for the widest types)."""
-    wide = widened(kind)
-    return (
-        f"TRY(CAST(greatest(model.m, source.m) AS {wide}) - "
-        f"CAST(least(model.m, source.m) AS {wide}))"
-    )
+def _difference(kind: str) -> tuple[str, str]:
+    """(the non-negative difference of the two measures in `kind`, from `common_type`; the
+    condition that a measure or the difference does not fit it)."""
+    model = f"TRY(CAST(model.m AS {kind}))"
+    source = f"TRY(CAST(source.m AS {kind}))"
+    # `greatest` and `least` skip NULLs: the casts are checked on their own.
+    difference = f"TRY(greatest({model}, {source}) - least({model}, {source}))"
+    return difference, f"({model} IS NULL OR {source} IS NULL OR {difference} IS NULL)"
 
 
 def steps(model: Model, relation: str, differences: Sequence[str]) -> list[Reconcile]:
     """The reconciliation checks of a model whose rows are `relation`; `differences` holds the
-    type of each check's measure difference (from the binder)."""
+    type each check compares its measures in (`common_type` of the bound measure types)."""
     found: list[Reconcile] = []
     for index, (check, kind) in enumerate(
         zip(model.config.reconciliation or [], differences, strict=True)
     ):
         template, _ = _joined(check, relation)
-        difference = _difference(kind)
-        wide = widened(kind)
+        difference, unfit = _difference(kind)
+        wide = kind
         text = tolerance_text(model, index, check)
         assert text is not None  # checked at validation
         convert = integer_bound if wide in INTEGER_RANGES else decimal_bound
@@ -233,7 +235,7 @@ def steps(model: Model, relation: str, differences: Sequence[str]) -> list[Recon
             "model.present IS NULL OR source.present IS NULL "
             "OR (model.m IS NULL) <> (source.m IS NULL) "
             # A difference too large for the widest types is beyond any tolerance.
-            f"OR (model.m IS NOT NULL AND source.m IS NOT NULL AND {difference} IS NULL) "
+            f"OR (model.m IS NOT NULL AND source.m IS NOT NULL AND {unfit}) "
             f"OR {beyond}"
         )
         sql = template.replace("{select}", "count(*)", 1) + f" WHERE {failing}"

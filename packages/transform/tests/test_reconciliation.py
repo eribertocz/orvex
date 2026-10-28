@@ -7,7 +7,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from orvex.transform.models import Model, discover_models
-from orvex.transform.reconciliation import difference_sql, expression, problems, steps
+from orvex.transform.reconciliation import common_type, expression, measures_sql, problems, steps
 
 CONNECTIONS = {"feed": "parquet", "ch": "clickhouse"}
 RELATION = '"s"."m"'
@@ -85,8 +85,8 @@ def lake() -> duckdb.DuckDBPyConnection:
 def failing(chosen: Model, connection: duckdb.DuckDBPyConnection) -> list[tuple[str, int]]:
     differences = []
     for check in chosen.config.reconciliation or []:
-        rows = connection.execute(f"DESCRIBE {difference_sql(check, RELATION)}").fetchall()
-        differences.append(str(rows[-1][1]))
+        rows = connection.execute(f"DESCRIBE {measures_sql(check, RELATION)}").fetchall()
+        differences.append(common_type(str(rows[0][1]), str(rows[1][1])))
     found = []
     for planned in steps(chosen, RELATION, differences):
         sql = planned.request.sql
@@ -139,7 +139,7 @@ def test_values_travel_as_parameters(tmp_path: Path) -> None:
     )
     connection = lake()
     connection.execute("CREATE TABLE s.m AS SELECT * FROM feed.data")
-    (check,) = steps(chosen, '"s"."m"', ["BIGINT"])
+    (check,) = steps(chosen, '"s"."m"', ["HUGEINT"])
     assert "7" not in check.request.sql
     assert [(p.name, p.type.root, p.value) for p in check.request.parameters] == [
         ("p_tolerance", "HUGEINT", "7")
@@ -157,7 +157,7 @@ def test_measures_must_aggregate_and_groups_must_not(tmp_path: Path) -> None:
         chosen = model(tmp_path / str(len(checks)), checks)
         (check,) = chosen.config.reconciliation or []
         with pytest.raises(duckdb.BinderException):
-            connection.execute(f"DESCRIBE {difference_sql(check, RELATION)}")
+            connection.execute(f"DESCRIBE {measures_sql(check, RELATION)}")
 
 
 def test_unsigned_measures_compare_both_ways(tmp_path: Path) -> None:
@@ -196,3 +196,33 @@ def test_differences_never_overflow(tmp_path: Path) -> None:
         assert failing(chosen, connection) == [("top", 1)], kind
         connection.execute("CREATE OR REPLACE TABLE s.m AS SELECT * FROM feed.v")
         assert failing(chosen, connection) == [("top", 0)], kind
+
+
+def test_measures_of_different_scales_are_not_rounded(tmp_path: Path) -> None:
+    connection = lake()
+    for model_type, model_value, source_type, source_value, tolerance, expected in [
+        ("DECIMAL(18,4)", "1.0049", "DECIMAL(18,2)", "1.00", "0", 1),
+        ("DECIMAL(18,4)", "1.0040", "DECIMAL(18,2)", "1.00", "0.001", 1),
+        ("DECIMAL(18,4)", "1.0040", "DECIMAL(18,2)", "1.00", "0.004", 0),
+        ("DECIMAL(38,4)", "1.4000", "DECIMAL(38,0)", "1", "0", 1),
+        ("HUGEINT", "-1", "UHUGEINT", "340282366920938463463374607431768211455", "0", 1),
+        ("BIGINT", "5", "UBIGINT", "5", "0", 0),
+    ]:
+        folder = tmp_path / f"{model_type}{source_type}{tolerance}".replace("(", "").replace(
+            ")", ""
+        )
+        chosen = model(
+            folder,
+            f"  - {{name: top, measure: max(v), source: feed.v, tolerance: '{tolerance}'}}\n",
+        )
+        connection.execute(
+            f"CREATE OR REPLACE TABLE feed.v AS SELECT CAST('{source_value}' AS {source_type}) AS v"
+        )
+        connection.execute(
+            f"CREATE OR REPLACE TABLE s.m AS SELECT CAST('{model_value}' AS {model_type}) AS v"
+        )
+        assert failing(chosen, connection) == [("top", expected)], (
+            model_type,
+            source_type,
+            tolerance,
+        )
