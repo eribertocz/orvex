@@ -458,6 +458,9 @@ def test_sync_all_columns_drops_widens_and_refuses_lossy_changes(
     assert lake_value(tmp_path, "SELECT count(*) FROM lake.s.m") == before
 
 
+ALL_AS_TEXT = "SELECT CAST(COLUMNS(*) AS VARCHAR) FROM lake.s.m ORDER BY ALL"
+
+
 @pytest.mark.parametrize("policy", ["append_new_columns", "sync_all_columns"])
 def test_a_later_failure_rolls_back_a_schema_change(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], policy: str
@@ -465,7 +468,7 @@ def test_a_later_failure_rolls_back_a_schema_change(
     project(tmp_path, APPEND + f"on_schema_change: {policy}\n", NARROW)
     feed(tmp_path, rows((1, "n", "1.0000")))
     assert command(capsys, "run", str(tmp_path))[0] == 0
-    before = (columns(tmp_path), lake_value(tmp_path, "SELECT * FROM lake.s.m ORDER BY ALL"))
+    before = (columns(tmp_path), lake_value(tmp_path, ALL_AS_TEXT))
     write(
         tmp_path,
         {
@@ -481,5 +484,5 @@ def test_a_later_failure_rolls_back_a_schema_change(
     assert "s.later" in out
     assert (
         columns(tmp_path),
-        lake_value(tmp_path, "SELECT * FROM lake.s.m ORDER BY ALL"),
+        lake_value(tmp_path, ALL_AS_TEXT),
     ) == before
