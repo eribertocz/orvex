@@ -164,12 +164,12 @@ def config_problems(model: Model) -> list[ModelError]:
                     path="/incremental/filter",
                 )
             )
-    if strategy == "append" and (incremental.lookback or "0s") != "0s":
+    if strategy not in KEYED_STRATEGIES and lookback_microseconds(incremental.lookback) > 0:
         found.append(
             problem(
                 "LOOKBACK_REQUIRES_UNIQUE_KEY",
-                f"{file}: append with lookback would load the re-read rows twice; use merge "
-                "with a unique_key, or lookback: 0s.",
+                f"{file}: {strategy} with lookback would not replace the re-read rows by key; use "
+                "merge or delete_insert with a unique_key, or lookback: 0s.",
                 file,
                 model=model.name,
                 path="/incremental/lookback",

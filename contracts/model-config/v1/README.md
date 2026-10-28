@@ -37,7 +37,7 @@ Cross-field rules not listed below (`FRESHNESS_TOO_SHORT`) are added by the issu
 | `DEPENDENCY_CYCLE` | Models depend on each other in a cycle (the message lists it in order) |
 | `PROJECT_LOCKED` | Another process holds the project's local lake (`orvex run`) |
 | `MISSING_UNIQUE_KEY` | `merge` (or `delete_insert`) without `unique_key` |
-| `LOOKBACK_REQUIRES_UNIQUE_KEY` | `append` with a `lookback` other than `0s` (re-reading would duplicate rows) |
+| `LOOKBACK_REQUIRES_UNIQUE_KEY` | `append` or `partition_overwrite` with a `lookback` greater than zero (re-read rows are only replaced by key: `merge` or `delete_insert`) |
 | `TIME_COLUMN_NOT_TEMPORAL` | `time_column` missing from the output, or not `DATE`, `TIMESTAMP` or `TIMESTAMP WITH TIME ZONE` |
 | `SCHEMA_CHANGED` | An incremental model's output columns (names, order, types) differ from its existing table and `on_schema_change` does not allow the change: `fail` allows none; `append_new_columns` only new columns; `sync_all_columns` new and removed columns and exact widenings (signed or unsigned integer to a wider one, `DECIMAL(p,s)` to `DECIMAL(p2,s)` with `p2 > p`, `DATE` to `TIMESTAMP`) |
 | `UNIQUE_KEY_NULL` | Loaded rows of a `merge` or `delete_insert` with a `NULL` key part (the run rolls back) |

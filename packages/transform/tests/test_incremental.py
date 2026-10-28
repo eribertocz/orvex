@@ -104,6 +104,8 @@ def test_config_rules(tmp_path: Path) -> None:
         tmp_path / "d", MERGE.replace("merge", "delete_insert").replace(", unique_key: [id]", "")
     )
     assert [p.code.root for p in config_problems(keyless)] == ["MISSING_UNIQUE_KEY"]
+    looking_back = model(tmp_path / "f", PARTITION.replace("[month]}", "[month], lookback: 1h}"))
+    assert [p.code.root for p in config_problems(looking_back)] == ["LOOKBACK_REQUIRES_UNIQUE_KEY"]
     unpartitioned = model(tmp_path / "e", APPEND.replace("append", "partition_overwrite"))
     assert [p.code.root for p in config_problems(unpartitioned)] == ["MISSING_PARTITION_BY"]
 
