@@ -5,7 +5,7 @@ snapshot stays exactly readable: maintenance expires the snapshots committed bef
 `now - retention`, merges small files, and deletes the files no remaining snapshot uses, then
 records what it did (`contracts/maintenance-record/v1`) in `_meta.maintenance_runs`, in its own
 transaction, whether it succeeded or failed. It holds the project lock, so it never runs during
-a model run. `orvex schedule` runs it once a day when no model is due.
+a model run. the `schedule` command runs it once a day when no model is due.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ TABLE = "_meta.maintenance_runs"
 DEFAULT_RETENTION = "90d"
 # An orphaned file younger than this may belong to a writer that has not committed yet.
 ORPHAN_GRACE = dt.timedelta(hours=1)
-# `orvex schedule`: once a day after a success, again an hour after a failure.
+# The `schedule` command: once a day after a success, again an hour after a failure.
 INTERVAL = dt.timedelta(hours=24)
 RETRY = dt.timedelta(hours=1)
 

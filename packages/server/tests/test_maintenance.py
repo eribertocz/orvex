@@ -1,4 +1,4 @@
-"""P1-20 (#68): `orvex maintain`, its record, and lake maintenance in `orvex schedule`.
+"""P1-20 (#68): the `maintain` command, its record, and lake maintenance in `schedule`.
 
 Clocks are fake where time matters: a lake ages two days in a moment.
 """
