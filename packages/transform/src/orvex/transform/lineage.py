@@ -10,7 +10,7 @@ No secret is ever part of an event: connection namespaces carry hosts, databases
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -117,8 +117,7 @@ def inputs(
 ) -> list[Dataset]:
     """The datasets a model reads, in order of first appearance, without repeats."""
     if model.extraction:
-        connection = connections.get(str(model.config.connection))
-        return [] if connection is None else [source_dataset(connection, ["query"])]
+        return []  # its source query is described when extraction runs (P1-17)
     connection_ = _parser()
     try:
         tree = _tree(connection_, model.sql)
@@ -153,8 +152,14 @@ def column_lineage(
     models: Mapping[str, Model],
     connections: Mapping[str, Connection],
     lake: str,
+    columns_of: Callable[[list[str]], Collection[str] | None] = lambda _: None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Output column → the input fields it is computed from, when the parse tree proves it."""
+    """Output column → the input fields it is computed from, when the parse tree proves it.
+
+    `columns_of` gives the column names of a relation named by its path (`["archive", "data"]`,
+    `["staging", "readings"]`), or None when unknown: an unqualified name counts only when it
+    is a real column of the single table read, never a lateral alias or a lambda parameter.
+    """
     if model.extraction:
         return {}
     connection = _parser()
@@ -169,6 +174,7 @@ def column_lineage(
     if node.get("type") != "SELECT_NODE" or _cte_names(tree):
         return {}
     tables: dict[str, Dataset] = {}
+    paths: dict[str, list[str]] = {}
     pending = [node.get("from_table") or {}]
     while pending:
         part = pending.pop()
@@ -178,12 +184,16 @@ def column_lineage(
             dataset = _relation(_path(part), set(), models, connections, lake)
             if dataset is None:
                 return {}
-            tables[str(part.get("alias") or part.get("table_name")).lower()] = dataset
+            alias = str(part.get("alias") or part.get("table_name")).lower()
+            tables[alias] = dataset
+            paths[alias] = _path(part)
         else:
             return {}  # a subquery, a table function or no table: not provable
     items = node.get("select_list") or []
     if len(items) != len(output) or any(
-        sub.get("class") in {"STAR", "SUBQUERY", "WINDOW"} for item in items for sub in _walk(item)
+        sub.get("class") in {"STAR", "SUBQUERY", "WINDOW", "LAMBDA"}
+        for item in items
+        for sub in _walk(item)
     ):
         return {}
     aggregates = _aggregates()
@@ -208,7 +218,11 @@ def column_lineage(
             if len(names) == 2 and names[0].lower() in tables:
                 dataset = tables[names[0].lower()]
             elif len(names) == 1 and len(tables) == 1:
-                (dataset,) = tables.values()
+                ((alias, dataset),) = tables.items()
+                known = columns_of(paths[alias])
+                if known is None or names[0].lower() not in {c.lower() for c in known}:
+                    provable = False  # a lateral alias, or a column not known to be the table's
+                    break
             else:
                 provable = False
                 break

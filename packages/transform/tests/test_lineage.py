@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 from typing import Any
 
 import jsonschema
+from orvex.contracts.model_config.v1 import ModelConfig
 from orvex.contracts.project.v1 import ParquetConnection, PostgresConnection
 from orvex.transform.lineage import (
     Connection,
@@ -194,3 +196,39 @@ def test_events_follow_the_specification(tmp_path: Path) -> None:
 def test_project_keys() -> None:
     assert project_key("Energía — Facturación 2026") == "energ-a-facturaci-n-2026"
     assert project_key("  ") == "project"
+
+
+def test_unqualified_names_must_be_real_columns(tmp_path: Path) -> None:
+    models = project(
+        tmp_path,
+        {
+            "models/staging/readings.sql": "SELECT 1 AS consumer_id, 1.0 AS kwh",
+            "models/marts/lateral.sql": (
+                "SELECT kwh * 2 AS doubled, doubled + 1 AS plus FROM staging.readings"
+            ),
+            "models/marts/lambda.sql": (
+                "SELECT list_transform([1, 2], kwh -> kwh + 1) AS l FROM staging.readings"
+            ),
+        },
+    )
+
+    def columns_of(path: list[str]) -> list[str] | None:
+        return ["consumer_id", "kwh"] if path == ["staging", "readings"] else None
+
+    lateral = [("doubled", "DECIMAL(18,1)"), ("plus", "DECIMAL(18,1)")]
+    found = column_lineage(models["marts.lateral"], lateral, models, CONNECTIONS, LAKE, columns_of)
+    assert list(found) == ["doubled"]  # `doubled` in `plus` is an alias, not a column
+    assert found["doubled"][0]["field"] == "kwh"
+    assert column_lineage(models["marts.lateral"], lateral, models, CONNECTIONS, LAKE) == {}
+    lambdas = [("l", "INTEGER[]")]
+    assert (
+        column_lineage(models["marts.lambda"], lambdas, models, CONNECTIONS, LAKE, columns_of) == {}
+    )
+
+
+def test_extraction_models_have_no_invented_input(tmp_path: Path) -> None:
+    models = project(tmp_path, {"models/raw/events.sql": "SELECT 1"})
+    extraction = dataclasses.replace(
+        models["raw.events"], config=ModelConfig(version=1, connection="ch")
+    )
+    assert inputs(extraction, models, CONNECTIONS, LAKE) == []

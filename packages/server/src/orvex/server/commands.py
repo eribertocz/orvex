@@ -671,7 +671,17 @@ def _run_locked(
             )
             for item in outcomes
         ]
-        events = _lineage_events(project, identity, run_id, outcomes, checked, lake, snapshot)
+        events: list[lineage.Event] = []
+        lineage_failure: Problem | None = None
+        try:
+            events = _lineage_events(project, identity, run_id, outcomes, checked, lake)
+        except Exception as error:  # noqa: BLE001 (lineage must never change the run's outcome)
+            lineage_failure = Problem(
+                "LINEAGE_NOT_SENT",
+                ".",
+                None,
+                f"lineage events could not be built ({type(error).__name__}).",
+            )
         records_error: StoreError | None = None
         try:
             with lake.transaction() as transaction:
@@ -681,7 +691,7 @@ def _run_locked(
             records_error = error
     finally:
         lake.close()
-    lineage_warning = _publish_lineage(project, home, run_id, events)
+    lineage_warning = lineage_failure or _publish_lineage(project, home, run_id, events)
     if records_error is not None:
         for problem in failures:
             print(problem, file=out)
@@ -718,7 +728,6 @@ def _lineage_events(
     outcomes: list[_Outcome],
     checked: Checked,
     lake: Lake,
-    snapshot: int | None,
 ) -> list[lineage.Event]:
     """OpenLineage events of the models that started (none for those that never did)."""
     key = lineage.project_key(project.settings.name)
@@ -729,6 +738,21 @@ def _lineage_events(
         lake_namespace=f"ducklake://{key}",
     )
     by_name = {model.name: model for model in checked.discovery.models}
+    described: dict[tuple[str, ...], list[str] | None] = {}
+
+    def columns_of(path: list[str]) -> list[str] | None:
+        """The columns of a relation the model reads, from the binder (None when unknown)."""
+        parts = tuple(path[1:] if len(path) == 3 and path[0] == "lake" else path)
+        if parts not in described:
+            relation = ".".join('"' + part.replace('"', '""') + '"' for part in parts)
+            try:
+                described[parts] = [name for name, _ in lake.describe(f"SELECT * FROM {relation}")]
+            except StoreError:
+                described[parts] = None
+        return described[parts]
+
+    # Models rolled back by a later failure end when the run did, not when they finished.
+    ended = max((item.finished_at for item in outcomes if item.started), default=_now())
     runs: list[lineage.ModelRun] = []
     for item in outcomes:
         if not item.started:
@@ -743,20 +767,30 @@ def _lineage_events(
                 model=item.model,
                 run_id=item.lineage_run_id,
                 started_at=item.started_at,
-                finished_at=item.finished_at,
+                finished_at=item.finished_at if item.outcome == "success" else ended,
                 outcome="success" if item.outcome == "success" else "failed",
                 output=output,
                 inputs=lineage.inputs(
                     item.model, by_name, project.connections, scope.lake_namespace
                 ),
                 column_lineage=lineage.column_lineage(
-                    item.model, output, by_name, project.connections, scope.lake_namespace
+                    item.model,
+                    output,
+                    by_name,
+                    project.connections,
+                    scope.lake_namespace,
+                    columns_of,
                 ),
                 rows_written=item.rows_written if item.outcome == "success" else None,
                 error=None if item.error is None else f"{item.error.code}: {item.error.message}",
             )
         )
     return lineage.events(scope, run_id, runs)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_: object, **__: object) -> None:
+        return None  # the 3xx response is then raised as an HTTPError
 
 
 def _publish_lineage(
@@ -790,6 +824,9 @@ def _publish_lineage(
             headers["Authorization"] = f"Bearer {resolve_secret(settings.api_key)}"
         except ProjectLoadError as error:
             return Problem("LINEAGE_NOT_SENT", "project.yaml", None, error.error.message)
+    # Redirects are refused: following one would turn the POST into a GET without the event,
+    # and would carry the key to another host.
+    opener = urllib.request.build_opener(_NoRedirect)
     for event in events:
         request = urllib.request.Request(
             settings.url,
@@ -798,7 +835,7 @@ def _publish_lineage(
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=LINEAGE_TIMEOUT_S) as response:
+            with opener.open(request, timeout=LINEAGE_TIMEOUT_S) as response:
                 response.read()
         except (OSError, ValueError) as error:
             # Never the key: only the kind of failure and the file that keeps the events.

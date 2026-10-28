@@ -199,3 +199,64 @@ def test_unsafe_collector_settings_are_refused(
     assert code == 1
     assert out.startswith("PROJECT_SCHEMA_INVALID project.yaml")
     assert "plain-text-key" not in out
+
+
+def test_models_that_never_started_emit_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project(
+        tmp_path,
+        {
+            "models/staging/readings.yaml": "version: 1\ntests:\n  - accepted_values: "
+            "{column: consumer_id, values: [C1]}\n"
+        },
+    )
+    code, _ = command(capsys, "run", str(tmp_path))
+    assert code == 1
+    assert [(e["job"]["name"], e["eventType"]) for e in written(tmp_path)] == [
+        ("staging.readings", "START"),
+        ("staging.readings", "FAIL"),
+    ]
+
+
+class Redirect(BaseHTTPRequestHandler):
+    target = ""
+    hits: ClassVar[list[str]] = []
+
+    def do_POST(self) -> None:
+        self.send_response(302)
+        self.send_header("Location", Redirect.target)
+        self.end_headers()
+
+    def do_GET(self) -> None:
+        Redirect.hits.append(self.headers.get("Authorization", ""))
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, *_: object) -> None:
+        return
+
+
+def test_redirects_are_refused_and_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    servers = [HTTPServer(("127.0.0.1", 0), Redirect) for _ in range(2)]
+    threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]
+    for thread in threads:
+        thread.start()
+    Redirect.hits = []
+    Redirect.target = f"http://127.0.0.1:{servers[1].server_address[1]}/elsewhere"
+    try:
+        monkeypatch.setenv("LINEAGE_TEST_KEY", "very-secret-key")
+        url = f"http://127.0.0.1:{servers[0].server_address[1]}/api/v1/lineage"
+        project(
+            tmp_path, settings=f"lineage:\n  url: {url}\n  api_key: ${{env:LINEAGE_TEST_KEY}}\n"
+        )
+        code, out = command(capsys, "run", str(tmp_path))
+    finally:
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+    assert code == 0, out
+    assert "LINEAGE_NOT_SENT" in out
+    assert Redirect.hits == []  # the key never followed the redirect
