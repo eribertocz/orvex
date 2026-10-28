@@ -575,6 +575,7 @@ class Lake:
                 {"duckdb": str(error)},
             ) from error
         self._write_lock = threading.Lock()
+        self._maintenance_lock = threading.Lock()
         # DuckDB spills to this folder when a query exceeds the memory limit.
         self._spill = tempfile.mkdtemp(prefix="lake-spill-")
         self._local = threading.local()
@@ -954,8 +955,11 @@ class Lake:
         cutoff = expire_before.astimezone(dt.UTC).isoformat()
         orphans = orphans_before.astimezone(dt.UTC).isoformat()
         deadline = time.monotonic() + self._timeout_ms(None) / 1000
-        # Every admission slot, then the writer lock: no read or write of this lake runs during
-        # maintenance (a read pinned to a snapshot being expired would lose its files).
+        # One maintenance at a time (two taking part of the slots each would wait for each
+        # other), then every admission slot, then the writer lock: no read or write of this lake
+        # runs during maintenance (a read pinned to a snapshot being expired would lose its files).
+        if not self._maintenance_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise StoreError("STORE_TIMEOUT", "Another maintenance of this lake is running.", {})
         taken = 0
         try:
             for _ in range(int(self._limits.max_concurrent or 1)):
@@ -976,6 +980,7 @@ class Lake:
         finally:
             for _ in range(taken):
                 self._admission.release()
+            self._maintenance_lock.release()
         return report
 
     def _maintain(
@@ -1176,6 +1181,10 @@ class Lake:
         deadline = time.monotonic() + self._timeout_ms(request.timeout_ms) / 1000
         self._admission.acquire(deadline)
         try:
+            # Checked again once admitted: maintenance may have expired the snapshot while this
+            # read waited behind it (maintenance runs alone, so it cannot expire it from now on).
+            if self._snapshot(request.snapshot) is None:
+                raise self._missing_snapshot(request.snapshot)
             cursor = self._cursor()
         except BaseException:
             self._admission.release()

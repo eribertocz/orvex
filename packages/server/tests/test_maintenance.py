@@ -258,7 +258,8 @@ def test_a_due_model_runs_before_maintenance(
         now[0] += dt.timedelta(seconds=max(seconds, 1.0))
 
     out = io.StringIO()
-    until = start + dt.timedelta(minutes=3)
+    # Past the 5-minute gap the scheduler keeps after a run, before the model's next due time.
+    until = start + dt.timedelta(minutes=8)
     assert (
         schedule(
             folder,

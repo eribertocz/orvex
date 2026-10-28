@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -142,3 +143,35 @@ def test_cutoffs_must_be_aware(lake: Lake) -> None:
     with pytest.raises(StoreError) as refused:
         lake.maintain(dt.datetime(2026, 1, 1), now())
     assert refused.value.code == "STORE_PARAMETER_INVALID"
+
+
+def test_a_read_waiting_behind_maintenance_sees_its_snapshot_expired(lake: Lake) -> None:
+    """A read admitted after maintenance expired its snapshot fails with the expired code."""
+    first = build(lake)
+    current = lake.current_snapshot().id
+    held = lake.start_read(
+        ReadRequest(kind="read", sql="SELECT id FROM t", parameters=[], snapshot=current)
+    )  # holds an admission slot until its stream is read
+    results: dict[str, object] = {}
+
+    def maintain() -> None:
+        results["report"] = lake.maintain(now() + dt.timedelta(days=1), now())
+
+    def late_read() -> None:
+        try:
+            rows(lake, first)
+            results["read"] = "read"
+        except StoreError as error:
+            results["read"] = error.code
+
+    maintenance = threading.Thread(target=maintain)
+    maintenance.start()
+    time.sleep(0.5)  # maintenance now waits for the held slot
+    reader = threading.Thread(target=late_read)
+    reader.start()
+    time.sleep(0.5)  # the read passed its first check and waits behind maintenance
+    assert held.reader.read_all().num_rows == 6000  # frees the slot
+    maintenance.join(120)
+    reader.join(120)
+    assert "report" in results
+    assert results["read"] == "STORE_SNAPSHOT_EXPIRED"
