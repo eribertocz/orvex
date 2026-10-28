@@ -79,6 +79,17 @@ url = "https://files.pythonhosted.org/packages/b1/28/9dd29175c1db777e6189e2a0bb5
 sha256 = "28842f9a8207cc1df6eb983a35a14c5a0dfcd603d214fe82d84bef552afd2e3a"
 
 [[packages]]
+name = "certifi"
+version = "2026.10.23"
+
+[[packages.wheels]]
+name = "certifi-2026.10.23-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/32/d1/a3652fe2c19134d0d15922177821d863cbd7e842d53a21bbe7e8e3a1b5ac/certifi-2026.10.23-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1"
+
+[[packages]]
 name = "click"
 version = "8.5.0"
 
@@ -88,6 +99,17 @@ url = "https://files.pythonhosted.org/packages/58/50/6c0d534c5f134586a8e1ba4e330
 
 [packages.wheels.hashes]
 sha256 = "255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360"
+
+[[packages]]
+name = "clickhouse-connect"
+version = "1.11.0"
+
+[[packages.wheels]]
+name = "clickhouse_connect-1.11.0-cp315-cp315-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/4a/a1/d601c482a3d6d1da4e5486b2ce91c90679715ea02319f6a8557c3a9f08e5/clickhouse_connect-1.11.0-cp315-cp315-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+
+[packages.wheels.hashes]
+sha256 = "72d97d8cca934c039d08cd82dada7699dfbd258e97c05d7aa426911052318006"
 
 [[packages]]
 name = "datamodel-code-generator"
@@ -299,6 +321,17 @@ url = "https://files.pythonhosted.org/packages/e1/6f/53762927a32e9dc9eb1d1c1f352
 sha256 = "e56aaf8c167548dc8e5d6f3bd0f48dcdd299a23c73be3f744aab79d99e9c7f5d"
 
 [[packages]]
+name = "lz4"
+version = "4.4.5"
+
+[packages.sdist]
+name = "lz4-4.4.5.tar.gz"
+url = "https://files.pythonhosted.org/packages/57/51/f1b86d93029f418033dddf9b9f79c8d2641e7454080478ee2aab5123173e/lz4-4.4.5.tar.gz"
+
+[packages.sdist.hashes]
+sha256 = "5f0b9e53c1e82e88c10d7c180069363980136b9d7a8306c4dca4f760d60c39f0"
+
+[[packages]]
 name = "markupsafe"
 version = "3.0.4"
 
@@ -410,14 +443,14 @@ sha256 = "a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189"
 
 [[packages]]
 name = "platformdirs"
-version = "4.13.6"
+version = "4.13.7"
 
 [[packages.wheels]]
-name = "platformdirs-4.13.6-py3-none-any.whl"
-url = "https://files.pythonhosted.org/packages/a8/24/b312a9466839b1f708eed42790b47e927dc7f774a528bb49b1cdf8b734b9/platformdirs-4.13.6-py3-none-any.whl"
+name = "platformdirs-4.13.7-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/46/ff/8ed4a836cbf7de39708a2d305d6b67575990908d072bc3565dd8ad71748e/platformdirs-4.13.7-py3-none-any.whl"
 
 [packages.wheels.hashes]
-sha256 = "21fc198fb09f3e78cadcdfd8a6ae4fd65cadc64a3cba78b694321c2996114a3e"
+sha256 = "47664602fbecad0a6efa561fb690d20dbc26875fe8aedf65ba362935df619bbb"
 
 [[packages]]
 name = "pluggy"
@@ -465,14 +498,14 @@ sha256 = "7689580e72a642ab5ec64d5f55b2e33636fa43b4ebe63c0c2c965ef307c7d1aa"
 
 [[packages]]
 name = "pydantic-settings"
-version = "2.16.1"
+version = "2.16.2"
 
 [[packages.wheels]]
-name = "pydantic_settings-2.16.1-py3-none-any.whl"
-url = "https://files.pythonhosted.org/packages/3c/74/fdf926afe145d8629c4b2ff57f4ea1d64ed7abc4d84d97463b2517a2547e/pydantic_settings-2.16.1-py3-none-any.whl"
+name = "pydantic_settings-2.16.2-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/39/88/4131c51ff87b7cd7f82a1194d0c0a2b7ca68c72d9da04c3b7e69ab91a79f/pydantic_settings-2.16.2-py3-none-any.whl"
 
 [packages.wheels.hashes]
-sha256 = "30f5313340da4e8f1b440d1910b92a5bc3ccbb6b4ba70ec2b8395bc921f418f5"
+sha256 = "8d523e5c129b097686bde019bd6109bff53f4c8c3f63f1ddf9933ffa42e5ab4f"
 
 [[packages]]
 name = "pygments"
@@ -693,6 +726,17 @@ url = "https://files.pythonhosted.org/packages/94/21/1e5995a1c920cce14e4bffae20c
 
 [packages.wheels.hashes]
 sha256 = "b683bd1b6659ddcd810ff02ad09ba821d4bf1065072805063eb35c49617905ac"
+
+[[packages]]
+name = "urllib3"
+version = "2.8.0"
+
+[[packages.wheels]]
+name = "urllib3-2.8.0-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3"
 
 [[packages]]
 name = "uvicorn"

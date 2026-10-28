@@ -48,6 +48,51 @@ New cross-field rules are added by the issues that implement those behaviors, as
 | `MODEL_TEST_FAILED` | A model test found failing rows after the model was written (the run rolls back; the run record lists every test with its failing-row count) |
 | `RECONCILIATION_FAILED` | A reconciliation check found groups where the model and its source differ by more than the tolerance, or exist on one side only (the run rolls back) |
 | `FRESHNESS_TOO_SHORT` | `freshness` below `5m` (sources must not be polled more often) |
+| `UNSUPPORTED_SOURCE_TYPE` | An extraction model's output column whose ClickHouse type has no exact DuckDB type (see below); the message names each such column and its type, with a hint to cast it in the SQL |
+| `SOURCE_CONNECTION_FAILED` | An extraction model's ClickHouse connection cannot be reached or refuses the credentials; the message never contains the password |
+| `SOURCE_NOT_READ_ONLY` | An extraction model's ClickHouse user whose profile fixes `readonly` to `0` or `2`: its queries cannot be made read-only (`readonly = 1`) |
+| `SOURCE_LIMITS_REFUSED` | An extraction model's ClickHouse user that does not accept the validation limits (`max_execution_time`, `max_rows_to_read`, `read_overflow_mode`), or whose queries could lift them; the message gives the configuration (decision #114) |
+
+## Extraction models (ClickHouse)
+
+A model whose sidecar names a `clickhouse` `connection` is ClickHouse SQL. Validation sends it to ClickHouse, read-only (`readonly = 1`), and does not run it. ClickHouse may evaluate parts of a query while it describes it (scalar and `EXISTS` subqueries, also inside a view the SQL reads), so every validation query carries limits that ClickHouse enforces: `max_rows_to_read = 1` with `read_overflow_mode = 'throw'` and `max_execution_time`. A query that would read rows fails (`INVALID_MODEL_SQL`) after at most one block. A scalar or `EXISTS` subquery written in the model itself is refused before that; subqueries in `FROM`, named `WITH` tables and the right side of `IN` are fine. A model cannot set ClickHouse settings (`SETTINGS …` → `INVALID_MODEL_SQL`).
+
+The ClickHouse user must accept those limits and must not be able to lift them (decision #114). Use a user with only `SELECT` grants, without a settings profile or role that fixes `readonly` or makes these settings changeable in read-only mode (`CHANGEABLE_IN_READONLY`):
+
+```sql
+CREATE USER extraction IDENTIFIED BY '…';
+GRANT SELECT ON analytics.* TO extraction;
+```
+
+When the connection opens, queries check this: one with the limits must run, and one per limit that lifts it (`SETTINGS max_rows_to_read = 1000000000`, `read_overflow_mode = 'break'`, `max_execution_time = 3600`) must be refused as a read-only violation. A view's own `SETTINGS` cannot lift them either. Otherwise the connection is refused (`SOURCE_LIMITS_REFUSED`). A profile that fixes `readonly` to `0` or `2` is refused (`SOURCE_NOT_READ_ONLY`).
+
+Known limits:
+- **Engines the limit does not cover.** ClickHouse applies `max_rows_to_read` to MergeTree-family tables. It does not apply it to some other engines: `Memory`, `Log`, `TinyLog`, `File` and `URL` (verified), and possibly integration engines such as `S3`, `PostgreSQL` or `MySQL`. When describing SQL makes ClickHouse read such a table (a scalar subquery in a view the model reads), only the time limit (`max_execution_time`) bounds it.
+- **Block size.** The row limit stops a read after the first block. Verified: MergeTree-family tables stopped before reading (or after fewer than 1,000 rows); `Join` and `EmbeddedRocksDB` tables after one ordinary block (about 65,000 rows); `StripeLog` and `Buffer` tables keep the blocks they were written with, so one read can be as large as one insert. `Merge`, `Distributed` and views (also `SQL SECURITY DEFINER` views) pass the limit on to the tables they read and cost what those tables cost.
+- **Dictionaries.** Dictionary lookups (`dictGet…`, `joinGet…`) are allowed. Describing them, or a dictionary read as a table, can make ClickHouse load a dictionary that is not in memory yet.
+
+A quoted name with a line break, a control character or a backslash escape is refused, because the checks read ClickHouse's `EXPLAIN AST` text, where names are printed unescaped. Then: `EXPLAIN AST` must show one `SELECT` (otherwise `INVALID_MODEL_SQL` with ClickHouse's message), and `DESCRIBE` gives its output columns. Before that, the text alone is checked (strings, quoted identifiers and comments skipped):
+
+- one statement (a final `;` is allowed) → otherwise `INVALID_MODEL_SQL`;
+- incremental models need `filter: manual` (`filter: auto` → `INCREMENTAL_FILTER_NOT_PROVABLE`, reason `extraction`) and `{since:Type}` (→ `MISSING_SINCE_PARAMETER`), with `Type` one of `Date`, `Date32`, `DateTime`, `DateTime('zone')`, `DateTime64(p)`, `DateTime64(p, 'zone')` (→ `MODEL_CONFIG_INVALID`); validation binds the lowest value of that type;
+- a non-incremental model must not use `{since:…}`, and no other query parameter can be bound → `INVALID_MODEL_SQL`.
+
+Output types map exactly; anything else is `UNSUPPORTED_SOURCE_TYPE`:
+
+| ClickHouse | DuckDB |
+|---|---|
+| `Int8` `Int16` `Int32` `Int64` `Int128` | `TINYINT` `SMALLINT` `INTEGER` `BIGINT` `HUGEINT` |
+| `UInt8` `UInt16` `UInt32` `UInt64` `UInt128` | `UTINYINT` `USMALLINT` `UINTEGER` `UBIGINT` `UHUGEINT` |
+| `Decimal(p, s)`, `p ≤ 38` | `DECIMAL(p,s)` |
+| `Float32` `Float64` | `FLOAT` `DOUBLE` |
+| `String`, `FixedString(n)`, `LowCardinality(String)`, `Enum8`, `Enum16` | `VARCHAR` |
+| `Bool` | `BOOLEAN` |
+| `UUID` | `UUID` |
+| `Date`, `Date32` | `DATE` |
+| `DateTime`, `DateTime('zone')`, `DateTime64(p)` and `DateTime64(p, 'zone')` with `p ≤ 6` | `TIMESTAMPTZ` (the instant; the zone is the column's, or the server's when it declares none) |
+| `Nullable(T)` | `T`, nullable |
+
+Refused, for example: `Int256`, `UInt256`, `Decimal` with `p > 38`, `DateTime64` with `p > 6`, arrays, maps, tuples, JSON, geo types, `Nothing`. The password is read from its `${env:NAME}` variable when validation runs (unset → `PROJECT_SECRET_MISSING`, naming the variable).
 
 ## The automatic filter (`filter: auto`)
 

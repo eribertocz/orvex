@@ -10,7 +10,13 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.14"
-dependencies = ["duckdb==2.0.0", "orvex-contracts==0.1.0", "pydantic==2.14.1", "pyyaml==6.0.3"]
+dependencies = [
+  "clickhouse-connect==1.11.0",
+  "duckdb==2.0.0",
+  "orvex-contracts==0.1.0",
+  "pydantic==2.14.1",
+  "pyyaml==6.0.3",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
