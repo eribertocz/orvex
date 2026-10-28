@@ -14,6 +14,7 @@ from pathlib import Path
 
 import uvicorn
 from orvex.server.app import create_app
+from orvex.server.commands import run, validate
 from orvex.server.identity import Identity, load_identity
 from orvex.server.instance import (
     Project,
@@ -33,6 +34,7 @@ from orvex.server.versions import (
 )
 
 LOCAL_HOST = "127.0.0.1"
+COMMANDS = frozenset({"validate", "run"})
 DEFAULT_PORT = 7878
 PORT_ATTEMPTS = 100
 
@@ -93,9 +95,27 @@ def server_config(port: int, versions: Versions, web_build: Path | None) -> uvic
     )
 
 
+def command_parser(identity: Identity) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=identity.slug)
+    commands = parser.add_subparsers(dest="command", required=True)
+    validate = commands.add_parser("validate", help="check a project without changing anything")
+    validate.add_argument("project", type=Path, help="project folder")
+    run = commands.add_parser("run", help="build every model of a project into its local lake")
+    run.add_argument("project", type=Path, help="project folder")
+    return parser
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     identity = load_identity()
-    arguments = parser_for(identity).parse_args(argv)
+    given = list(sys.argv[1:] if argv is None else argv)
+    if given and given[0] in COMMANDS:
+        # `<slug> validate <folder>` and `<slug> run <folder>`; a project folder literally named
+        # like a command is opened with `<slug> ./validate`.
+        command = command_parser(identity).parse_args(given)
+        if command.command == "validate":
+            return validate(command.project, sys.stdout)
+        return run(command.project, identity, sys.stdout)
+    arguments = parser_for(identity).parse_args(given)
     try:
         declarations = installed_declarations(identity)
     except ValueError as error:

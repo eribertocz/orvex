@@ -33,6 +33,9 @@ Cross-field rules (`MISSING_UNIQUE_KEY`, `MISSING_PARTITION_BY`, `LOOKBACK_REQUI
 | `UNSUPPORTED_MODEL_KIND` | A `.py` model (reserved for after v1.0.0, ADR-0023) |
 | `INVALID_MODEL_SQL` | A DuckDB-SQL model that is not exactly one `SELECT` (or `WITH … SELECT`) |
 | `MODEL_CONFIG_INVALID` | A sidecar that is not valid YAML or does not match `ModelConfig`, or whose `connection` is not a `clickhouse` connection of the project |
+| `MODEL_REFERENCE_UNKNOWN` | A model reads a table that is neither a model (`<folder>.<name>`) nor a source (`<connection>.<table>`) |
+| `DEPENDENCY_CYCLE` | Models depend on each other in a cycle (the message lists it in order) |
+| `PROJECT_LOCKED` | Another process holds the project's local lake (`orvex run`) |
 
 `details` holds `file` (relative to the project folder), and when known `model`, `path` (a JSON pointer into the sidecar) and `line`. Discovery reports every problem of a project at once.
 
