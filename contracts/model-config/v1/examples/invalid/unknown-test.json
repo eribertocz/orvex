@@ -1,0 +1,1 @@
+{"version": 1, "tests": [{"unique_together": ["a"]}]}

@@ -2,5 +2,5 @@
 # produces: { "<contract>" = "vN" }; consumes: { "<contract>" = ["vN", ...] }.
 # The server checks the installed combination before it starts.
 
-produces = {}
+produces = { "model-config" = "v1" }
 consumes = { "project" = ["v1"], "store" = ["v1"] }
