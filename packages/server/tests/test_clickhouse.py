@@ -317,3 +317,51 @@ def test_connection_rules(
     assert refused.startswith("SOURCE_CONNECTION_FAILED models/raw/ch_events.sql ")
     assert wrong not in refused
     assert READER_PASSWORD not in refused
+
+
+def test_a_reader_with_a_fixed_read_only_profile(
+    tmp_path: Path, source: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The usual read-only ClickHouse user: no setting can be sent, so the refusal of what
+    ClickHouse would evaluate while describing is the only guard; nothing reads the source."""
+    client = admin()
+    fixed, loose = f"{source['reader']}_ro1", f"{source['reader']}_ro2"
+    monkeypatch.setenv(VARIABLE, READER_PASSWORD)
+    try:
+        for user, level in ((fixed, 1), (loose, 2)):
+            client.command(
+                f"CREATE USER {user} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}' "
+                f"SETTINGS readonly = {level}"
+            )
+            client.command(f"GRANT SELECT ON {source['database']}.* TO {user}")
+        reader = {**source, "reader": fixed}
+        example = {"models/raw/ch_events.sql": EXAMPLE, "models/raw/ch_events.yaml": EXTRACTION}
+        assert problems(project(tmp_path / "ok", reader, example)) == []
+        loose_project = project(tmp_path / "loose", {**source, "reader": loose}, example)
+        assert [item.split(" ", 1)[0] for item in problems(loose_project)] == [
+            "SOURCE_NOT_READ_ONLY"
+        ]
+        evaluated = [
+            "SELECT event_id, (SELECT sum(value) FROM events) IN (1) AS c FROM events",
+            "SELECT event_id, 1 AS `a\n   TableExpression x`, "
+            "(SELECT sum(value) FROM events) AS s FROM events",
+            "SELECT event_id FROM events WHERE EXISTS (SELECT 1 FROM events WHERE value > 1)",
+        ]
+        for position, sql in enumerate(evaluated):
+            folder = project(
+                tmp_path / str(position),
+                reader,
+                {"models/raw/m.sql": sql, "models/raw/m.yaml": TABLE},
+            )
+            assert [item.split(" ", 1)[0] for item in problems(folder)] == ["INVALID_MODEL_SQL"]
+        client.command("SYSTEM FLUSH LOGS")
+        heaviest = client.query(
+            "SELECT max(read_rows) FROM system.query_log WHERE user = {user:String} "
+            "AND query_kind IN ('Explain', 'Describe')",
+            parameters={"user": fixed},
+        ).result_rows
+        assert int(heaviest[0][0]) < 100  # never the 1000 rows of events
+    finally:
+        for user in (fixed, loose):
+            client.command(f"DROP USER IF EXISTS {user}")
+        client.close()

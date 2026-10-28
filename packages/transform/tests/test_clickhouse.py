@@ -8,7 +8,7 @@ import pytest
 from orvex.contracts.project.v1 import ClickhouseConnection
 from orvex.transform.clickhouse import (
     ScanError,
-    evaluated_subquery,
+    evaluated_while_describing,
     map_type,
     scan,
     since_problems,
@@ -68,6 +68,11 @@ def test_the_example_model_passes(tmp_path: Path) -> None:
         ("SELECT $1$ {since:Date} $1$ AS a", "MISSING_SINCE_PARAMETER"),
         ("SELECT $tag_2$ {since:Date} $tag_2$ AS a", "MISSING_SINCE_PARAMETER"),
         ("SELECT 1 WHERE t > { since:Date}", "MISSING_SINCE_PARAMETER"),  # not a parameter
+        # A line break in a quoted name could forge a line of ClickHouse's EXPLAIN AST output.
+        ("SELECT 1 AS `a\n   TableExpression x`", "INVALID_MODEL_SQL"),
+        ("SELECT 1 AS `a\\n   TableExpression x`", "INVALID_MODEL_SQL"),
+        ('SELECT 1 AS "a\u2028b"', "INVALID_MODEL_SQL"),
+        ("SELECT 1 AS `a\x1cb`", "INVALID_MODEL_SQL"),
         ("SELECT 1 WHERE t > {since:String}", "MODEL_CONFIG_INVALID"),
         ("SELECT 1 WHERE t > {since: Date} AND u > {since:Date32}", "MODEL_CONFIG_INVALID"),
         ("SELECT 1 WHERE t > {since:Date} AND k = {key:String}", "INVALID_MODEL_SQL"),
@@ -226,25 +231,53 @@ def test_subqueries_clickhouse_evaluates_while_describing() -> None:
         "     Subquery (children 1)",
         "      SelectWithUnionQuery (children 1)",
     )
-    assert not evaluated_subquery(from_and_in)
+    assert not evaluated_while_describing(from_and_in)
     named = ast(
         *SELECT_HEAD,
         "   ExpressionList (children 1)",
         "    WithElement (children 1)",
         "     Subquery (children 1)",
     )
-    assert not evaluated_subquery(named)
+    assert not evaluated_while_describing(named)
     scalar = ast(
         *SELECT_HEAD,
         "   ExpressionList (children 2)",
         "    Identifier a",
         "    Subquery (alias s) (children 1)",
     )
-    assert evaluated_subquery(scalar)
+    assert evaluated_while_describing(scalar)
+    left_of_in = ast(
+        *SELECT_HEAD,
+        "   Function in (children 1)",
+        "    ExpressionList (children 2)",
+        "     Subquery (children 1)",
+        "      SelectWithUnionQuery (children 1)",
+        "     Literal UInt64_1",
+    )
+    assert evaluated_while_describing(left_of_in)
+    constant_lookup = ast(
+        *SELECT_HEAD,
+        "   ExpressionList (children 2)",
+        "    Function dictGet (alias g) (children 1)",
+        "     ExpressionList (children 3)",
+        "      Literal \\'d\\'",
+        "      Literal \\'v\\'",
+        "      Function toUInt64 (children 1)",
+        "       ExpressionList (children 1)",
+        "        Literal UInt64_5",
+    )
+    assert evaluated_while_describing(constant_lookup)
+    column_lookup = constant_lookup.replace("Literal UInt64_5", "Identifier meter_id")
+    assert not evaluated_while_describing(column_lookup)
+    joined = constant_lookup.replace("Function dictGet", "Function joinGetOrNull")
+    assert evaluated_while_describing(joined)
+    # Text that is not a tree of node lines fails closed.
+    assert evaluated_while_describing(named + "\n   x not a node")
+    assert evaluated_while_describing(named.replace("    WithElement", "      WithElement"))
     exists = ast(
         *SELECT_HEAD,
         "   Function exists (children 1)",
         "    ExpressionList (children 1)",
         "     Subquery (children 1)",
     )
-    assert evaluated_subquery(exists)
+    assert evaluated_while_describing(exists)

@@ -56,6 +56,10 @@ class Scan:
     parameters: tuple[Parameter, ...]
     statements: int  # statements separated by `;` (a final `;` alone does not count)
     text: str  # the SQL without a final `;`, for wrapping in EXPLAIN and DESCRIBE
+    # A quoted name with a backslash escape or a character that is not printable (a line break,
+    # a separator): ClickHouse prints names unescaped in `EXPLAIN AST`, where it could forge a
+    # line of the tree.
+    unsafe_name: bool = False
 
 
 class ScanError(ValueError):
@@ -157,9 +161,13 @@ def scan(sql: str) -> Scan:
     quoted identifier, comment or parameter is not terminated."""
     # The SQL with strings, quoted identifiers and comments blanked out (same offsets).
     masked = list(sql)
+    unsafe_name = False
     for start, end, kind in _tokens(sql):
         if kind == "skipped":
             masked[start:end] = [" "] * (end - start)
+            if sql[start] in '"`':
+                name = sql[start + 1 : end - 1]
+                unsafe_name = unsafe_name or "\\" in name or not name.isprintable()
     code = "".join(masked)
     parameters: list[Parameter] = []
     index = 0
@@ -179,7 +187,7 @@ def scan(sql: str) -> Scan:
     if len(segments) > 1 and not segments[-1].strip():
         last = code.rindex(";")
         text = sql[:last] + sql[last + 1 :]
-    return Scan(tuple(parameters), statements, text)
+    return Scan(tuple(parameters), statements, text, unsafe_name)
 
 
 # --- the `since` parameter type -------------------------------------------------------------
@@ -240,6 +248,16 @@ def since_problems(model: Model) -> list[ModelError]:
         found = scan(model.sql)
     except ScanError as error:
         return [problem("INVALID_MODEL_SQL", f"{file}: {error}.", file, model=model.name)]
+    if found.unsafe_name:
+        return [
+            problem(
+                "INVALID_MODEL_SQL",
+                f"{file}: a quoted name of an extraction model cannot contain a line break, a "
+                "control character or a backslash escape.",
+                file,
+                model=model.name,
+            )
+        ]
     if found.statements != 1:
         return [
             problem(
@@ -497,30 +515,77 @@ _IN_FUNCTIONS = frozenset(
         "globalNotNullIn",
     }
 )
+# A line of `EXPLAIN AST`: indentation, a node kind, then its details.
+_AST_LINE = re.compile(r"( *)([A-Z][A-Za-z]*)(?: (.*))?")
 
 
-def evaluated_subquery(tree: str) -> bool:
-    """Whether the `EXPLAIN AST` tree has a subquery ClickHouse evaluates while it describes the
-    query (a scalar or EXISTS subquery): describing it would read the source's rows."""
-    stack: list[tuple[int, str]] = []  # (depth, node text) of the current node's ancestors
-    for line in tree.splitlines():
-        depth = len(line) - len(line.lstrip(" "))
-        node = line.strip()
-        while stack and stack[-1][0] >= depth:
+@dataclass
+class _Node:
+    kind: str
+    detail: str
+    children: list[_Node]
+
+
+def _ast(tree: str) -> _Node | None:
+    """The `EXPLAIN AST` text as a tree, or None when a line is not a node line (a name with a
+    line break would forge one; names with them are refused before, this fails closed)."""
+    root = _Node("", "", [])
+    stack: list[tuple[int, _Node]] = [(-1, root)]
+    for line in tree.split("\n"):
+        if not line:
+            continue
+        match = _AST_LINE.fullmatch(line)
+        if match is None:
+            return None
+        depth = len(match.group(1))
+        if depth > stack[-1][0] + 1:
+            return None
+        while stack[-1][0] >= depth:
             stack.pop()
-        if node.startswith("Subquery"):
-            parent = stack[-1][1].split(" ", 1)[0] if stack else ""
-            grandparent = stack[-2][1].split(" ") if len(stack) >= 2 else []
-            in_function = (
-                parent == "ExpressionList"
-                and grandparent[:1] == ["Function"]
-                and len(grandparent) > 1
-                and grandparent[1] in _IN_FUNCTIONS
-            )
-            if parent not in _TABLE_PARENTS and not in_function:
-                return True
+        node = _Node(match.group(2), match.group(3) or "", [])
+        stack[-1][1].children.append(node)
         stack.append((depth, node))
-    return False
+    return root
+
+
+def _function_name(node: _Node) -> str:
+    return node.detail.split(" ", 1)[0] if node.kind == "Function" else ""
+
+
+def _has_identifier(node: _Node) -> bool:
+    return node.kind in {"Identifier", "Asterisk", "QualifiedAsterisk", "ColumnsMatcher"} or any(
+        _has_identifier(child) for child in node.children
+    )
+
+
+def evaluated_while_describing(tree: str) -> bool:
+    """Whether describing the query would make ClickHouse read data: a scalar or EXISTS subquery
+    (anything but a table in FROM, a named WITH table or the right side of IN), or a dictionary
+    or join lookup on constant arguments (folded while the query is analyzed). An `EXPLAIN AST`
+    text that cannot be read as a tree counts as yes."""
+    root = _ast(tree)
+    if root is None:
+        return True
+
+    def visit(node: _Node, parent: _Node | None, grandparent: _Node | None, index: int) -> bool:
+        if node.kind == "Subquery":
+            right_of_in = (
+                parent is not None
+                and parent.kind == "ExpressionList"
+                and grandparent is not None
+                and _function_name(grandparent) in _IN_FUNCTIONS
+                and index == 1
+            )
+            if not right_of_in and (parent is None or parent.kind not in _TABLE_PARENTS):
+                return True
+        name = _function_name(node)
+        if (name.startswith("dict") or name.startswith("joinGet")) and not _has_identifier(node):
+            return True
+        return any(
+            visit(child, node, parent, position) for position, child in enumerate(node.children)
+        )
+
+    return any(visit(child, None, None, position) for position, child in enumerate(root.children))
 
 
 # --- the server -----------------------------------------------------------------------------
@@ -656,14 +721,15 @@ class Source:
                 "INVALID_MODEL_SQL",
                 f"an extraction model is one SELECT; ClickHouse reads {kind}.",
             )
-        if evaluated_subquery(tree):
+        if evaluated_while_describing(tree):
             raise SourceError("INVALID_MODEL_SQL", self._rows_read_message())
 
     def _rows_read_message(self) -> str:
         return (
             f"ClickHouse connection {self.name}: validation would read rows of the source "
-            "(ClickHouse runs scalar and EXISTS subqueries while it describes a query); move "
-            "the subquery into a JOIN or a WITH … AS (SELECT …) table."
+            "(ClickHouse evaluates scalar and EXISTS subqueries, and dictionary or join lookups "
+            "on constant arguments, while it describes a query); move a subquery into a JOIN "
+            "or a WITH … AS (SELECT …) table."
         )
 
     def describe(self, text: str, since: SinceType | None) -> Described:
@@ -698,6 +764,8 @@ def describe_model(
     file = model.sql_file
     assert model.config.connection is not None
     found = scan(model.sql)
+    if found.unsafe_name or found.statements != 1:  # `since_problems` reports why
+        return problem("INVALID_MODEL_SQL", f"{model.name}: not one plain SELECT.", file)
     since = declared_since(model)
     try:
         source = Source(model.config.connection, connection, password)
