@@ -203,7 +203,8 @@ def _unnamed(node: Tree) -> Tree | None:
     """A SELECT item whose output name is not known from the SQL text, or None: an expansion,
     a star inside an expression (`COLUMNS(…)`), a positional reference (`#2`, named after the
     column it points to), or an unaliased constant (named after its value)."""
-    for item in node.get("select_list") or []:
+    items: list[Tree] = node.get("select_list") or []
+    for item in items:
         parts = _walk(item)
         if any(
             part.get("class") in {"FUNCTION", "AGGREGATE"}
@@ -284,9 +285,9 @@ class _Proof:
         reason = _reason_in_query(node)
         if reason is not None:
             return Refusal(reason)
-        names = _names_reason(node, column)
-        if names is not None:
-            return names
+        naming = _names_reason(node, column)
+        if naming is not None:
+            return naming
         item = self._item(node, column)
         if isinstance(item, Refusal):
             return item
