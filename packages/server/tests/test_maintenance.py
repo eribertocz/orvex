@@ -98,6 +98,8 @@ def test_an_aged_lake_is_maintained_and_recorded(tmp_path: Path) -> None:
     before = lake_rows(folder, "SELECT count(*), sum(id) FROM lake.raw.r")
     assert before == [(6000, sum(range(6000)))]
     assert len(model_files(folder)) >= 6
+    data = folder / f".{SLUG}" / "lake" / "data"
+    on_disk = set(data.rglob("*.parquet"))
     out = io.StringIO()
     # Two days later, one day of retention: everything but the current snapshot expires.
     assert maintenance.maintain(folder, IDENTITY, out, clock=later(2)) == 0, out.getvalue()
@@ -114,8 +116,10 @@ def test_an_aged_lake_is_maintained_and_recorded(tmp_path: Path) -> None:
     assert row[5] is None
     report = json.loads(str(row[3]))
     assert report["files_merged"] >= 6
+    # Exactly the files that left the disk, and every snapshot below the one kept.
+    assert report["files_deleted"] == len(on_disk - set(data.rglob("*.parquet")))
     assert report["files_deleted"] >= 6
-    assert report["snapshots_expired"] >= 6
+    assert report["snapshots_expired"] == report["oldest_snapshot_id"]
     history = io.StringIO()
     assert maintenance.history(folder, IDENTITY, 5, history) == 0
     assert history.getvalue().startswith(f"{row[0]}  ")
@@ -237,3 +241,44 @@ def test_the_scheduler_maintains_when_nothing_is_due(
     assert starts[1][0] == "28 11:00"
     assert starts[2][0] == "28 11:30"
     assert out.getvalue().count("running lake maintenance") == 3
+
+
+def test_a_due_model_runs_before_maintenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = project(tmp_path, retention="90d")
+    grow(folder, 1)  # the lake exists; no maintenance yet, so maintenance is due at once
+    write(folder, {"models/raw/r.yaml": INCREMENTAL + "freshness: 10m\n"})
+    # A day after that run: the model is stale, so both are due in the first cycle.
+    start = dt.datetime.now(dt.UTC) + dt.timedelta(days=1)
+    now = [start]
+    monkeypatch.setattr(commands, "_now", lambda: now[0].isoformat(timespec="microseconds"))
+
+    def sleep(seconds: float) -> None:
+        now[0] += dt.timedelta(seconds=max(seconds, 1.0))
+
+    out = io.StringIO()
+    until = start + dt.timedelta(minutes=3)
+    assert (
+        schedule(
+            folder,
+            IDENTITY,
+            out,
+            sleep=sleep,
+            should_stop=lambda: now[0] >= until,
+            monotonic=lambda: (now[0] - start).total_seconds(),
+        )
+        == 0
+    )
+    text = out.getvalue()
+    assert text.index("running raw.r (freshness)") < text.index("running lake maintenance")
+    ((run_start, maintenance_start),) = lake_rows(
+        folder,
+        "SELECT (SELECT strftime(timezone('UTC', max(started_at)), '%Y-%m-%dT%H:%M:%S.%f') "
+        "FROM lake._meta.run_records WHERE trigger = 'freshness'), "
+        "(SELECT strftime(timezone('UTC', min(started_at)), '%Y-%m-%dT%H:%M:%S.%f') "
+        "FROM lake._meta.maintenance_runs)",
+    )
+    assert run_start is not None
+    assert maintenance_start is not None
+    assert str(run_start) < str(maintenance_start)

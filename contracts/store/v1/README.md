@@ -99,7 +99,7 @@ Other types (lists, structs, maps, unions, `TIME`, geometry, …) are refused wi
 
 ## Maintenance (`MaintenanceReport`)
 
-`Lake.maintain(expire_before, orphans_before)` takes two aware instants. It runs like a write transaction: one at a time, after the writer ahead. It follows DuckLake's own `CHECKPOINT` order, step by step, so that each step is counted:
+`Lake.maintain(expire_before, orphans_before)` takes two aware instants. It waits for every read and write of the lake to end and runs alone: it takes every admission slot, then the writer lock. It follows DuckLake's own `CHECKPOINT` order, step by step, so that each step is counted:
 
 1. flush inlined data;
 2. expire the snapshots committed before `expire_before`;
@@ -117,7 +117,12 @@ The current snapshot is never expired. Merging never changes what any kept snaps
 - `orphaned_files_deleted`;
 - `oldest_snapshot`, the oldest snapshot kept.
 
-A read pinned to a snapshot older than the oldest one kept fails with `STORE_SNAPSHOT_EXPIRED`, which names the oldest one kept. Snapshot ids only grow, so a lower id existed once. A snapshot id that never existed is `STORE_SNAPSHOT_NOT_FOUND`.
+A read pinned to a snapshot that maintenance expired fails with `STORE_SNAPSHOT_EXPIRED`, which names the oldest one kept. Snapshot ids are never reused and every id up to the current one was committed, so a missing id in that range expired. Any other id is `STORE_SNAPSHOT_NOT_FOUND`.
+
+Preconditions:
+- **No other process uses the lake.** In this process, `maintain` excludes reads and writes itself. Other processes are excluded by the caller; the server holds the project lock.
+- **One data path per lake.** A data folder shared by two lakes would make each delete the other's files as orphans.
+- **Partial work.** If a step fails, `maintain` raises, and the steps already done (expired snapshots, merged or deleted files) stay done. None of them changes what a kept snapshot reads.
 
 ## Guarantees
 

@@ -914,10 +914,12 @@ class Lake:
         return None if row is None else _snapshot_of(row)
 
     def _missing_snapshot(self, snapshot_id: int) -> StoreError:
-        """Why a snapshot cannot be read: expired by maintenance (snapshot ids only grow, so an
-        id below the oldest kept existed once), or never existed."""
+        """Why a snapshot cannot be read: expired by maintenance (ids are never reused and every
+        id up to the current one was committed, so a missing one among them expired), or never
+        existed."""
         oldest = self._oldest_snapshot()
-        if oldest is not None and 0 <= snapshot_id < oldest.id:
+        current = self._snapshot(None)
+        if oldest is not None and current is not None and 0 <= snapshot_id <= current.id:
             return StoreError(
                 "STORE_SNAPSHOT_EXPIRED",
                 f"Snapshot {snapshot_id} has expired: the oldest snapshot kept is {oldest.id} "
@@ -952,8 +954,13 @@ class Lake:
         cutoff = expire_before.astimezone(dt.UTC).isoformat()
         orphans = orphans_before.astimezone(dt.UTC).isoformat()
         deadline = time.monotonic() + self._timeout_ms(None) / 1000
-        self._admission.acquire(deadline)
+        # Every admission slot, then the writer lock: no read or write of this lake runs during
+        # maintenance (a read pinned to a snapshot being expired would lose its files).
+        taken = 0
         try:
+            for _ in range(int(self._limits.max_concurrent or 1)):
+                self._admission.acquire(deadline)
+                taken += 1
             if not self._write_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
                 raise StoreError(
                     "STORE_TIMEOUT", "Maintenance waited too long for the writer ahead.", {}
@@ -967,7 +974,8 @@ class Lake:
             finally:
                 self._write_lock.release()
         finally:
-            self._admission.release()
+            for _ in range(taken):
+                self._admission.release()
         return report
 
     def _maintain(

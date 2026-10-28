@@ -82,17 +82,21 @@ def test_an_aged_lake_keeps_only_its_current_snapshot(
     before = rows(lake)
     folder = data_folder(location)
     assert len(files_of(folder, "t")) >= 6
-    current = lake.current_snapshot()
+    on_disk = set(folder.rglob("*.parquet"))
     # Two days later, with one day of retention: every snapshot is older than the cutoff.
     report = lake.maintain(now() + dt.timedelta(days=1), now() - dt.timedelta(hours=1))
     assert report.files_merged >= 6
-    assert report.snapshots_expired >= current.id - first + 1
-    assert report.oldest_snapshot.id == lake.current_snapshot().id  # only the current one is left
+    # Only the current snapshot is left. Ids 0 … current were all committed, so every id below
+    # it, and only those, expired: exactly as many as its id.
+    assert report.oldest_snapshot.id == lake.current_snapshot().id
+    assert report.snapshots_expired == report.oldest_snapshot.id
     assert rows(lake) == before  # the same data
     assert read(lake, "SELECT name FROM u").column("name").to_pylist() == ["x"]
     remaining = files_of(folder, "t")
     assert len(remaining) == 1
-    assert report.files_deleted >= 6  # the small files, gone from disk
+    # Exactly the files that left the disk (the six small ones, and nothing else).
+    assert report.files_deleted == len(on_disk - set(folder.rglob("*.parquet")))
+    assert report.files_deleted >= 6
     with pytest.raises(StoreError) as expired:
         rows(lake, first)
     assert expired.value.code == "STORE_SNAPSHOT_EXPIRED"
