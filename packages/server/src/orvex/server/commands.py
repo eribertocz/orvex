@@ -238,7 +238,7 @@ def _prove_filter(
             model.sql_file,
             None,
             f"{model.name}: a filter on {time_column} cannot be proven safe "
-            f"(reason: the filtered SQL does not bind: {_store_message(error)}); set "
+            f"(reason: rebind, the filtered SQL does not bind: {_store_message(error)}); set "
             "filter: manual and place $since in the SQL.",
         )
     if [name for name, _ in rewritten] != [name for name, _ in output]:
@@ -247,7 +247,7 @@ def _prove_filter(
             model.sql_file,
             None,
             f"{model.name}: a filter on {time_column} cannot be proven safe "
-            "(reason: the filtered SQL changes the output columns); set filter: manual and "
+            "(reason: rebind, the filtered SQL changes the output columns); set filter: manual and "
             "place $since in the SQL.",
         )
     return result

@@ -16,6 +16,7 @@ COLUMNS = known(
         "staging.readings": ["reading_id", "consumer_id", "read_at", "status", "kwh"],
         "staging.consumers": ["consumer_id", "tariff", "created_at"],
         "staging.other": ["reading_id", "consumer_id", "read_at", "status", "kwh"],
+        "staging.u": ["consumer_id", "read_at", "data"],
     }
 )
 SINCE = dt.datetime(2024, 1, 2, 12, 0)  # plain TIMESTAMP columns here
@@ -149,6 +150,47 @@ def test_proven_filters_keep_exactly_the_newer_rows(sql: str) -> None:
         (
             "WITH c AS (SELECT * FROM staging.readings) SELECT read_at FROM c "
             "WHERE reading_id IN (SELECT reading_id FROM query_table('c'))",
+            "several tables",
+        ),
+        # Output names DuckDB takes from the data or renames (second review).
+        (
+            "SELECT read_at FROM (SELECT #3, kwh AS read_at FROM staging.readings) AS s",
+            "expression",
+        ),
+        ("SELECT read_at FROM (SELECT unnest(data), read_at FROM staging.u) AS s", "expression"),
+        (
+            "SELECT read_at FROM (SELECT CAST(COLUMNS('^read_at$') AS TIMESTAMP), "
+            "kwh AS read_at FROM staging.readings) AS s",
+            "expression",
+        ),
+        (
+            "SELECT unnest(u.data), r.read_at FROM staging.readings AS r "
+            "JOIN staging.u AS u USING (consumer_id)",
+            "expression",
+        ),
+        (
+            "SELECT read_at_1 AS read_at FROM "
+            "(SELECT kwh AS read_at, read_at, kwh AS read_at_1 FROM staging.readings) AS s",
+            "several tables",
+        ),
+        (
+            "SELECT read_at_1 AS read_at FROM "
+            "(SELECT *, kwh AS read_at FROM staging.readings) AS s",
+            "several tables",
+        ),
+        (
+            "SELECT read_at FROM (SELECT r.read_at FROM staging.readings AS r "
+            "FULL JOIN staging.consumers AS c USING (consumer_id)) AS s",
+            "outer join",
+        ),
+        (
+            "WITH f AS (SELECT r.read_at FROM staging.readings AS r "
+            "FULL JOIN staging.consumers AS c USING (consumer_id)) SELECT read_at FROM f",
+            "outer join",
+        ),
+        (
+            "WITH c AS (SELECT * FROM staging.readings) SELECT read_at FROM c "
+            "WHERE reading_id IN (SELECT reading_id FROM query('SELECT * FROM c'))",
             "several tables",
         ),
         (

@@ -61,9 +61,10 @@ The filter `<table>.<time_column> > $since` is added to the query that reads the
 | `limit` | `LIMIT`, `USING SAMPLE` |
 | `distinct` | `DISTINCT`, `DISTINCT ON` |
 | `outer join` | The table on the side of an outer join that can be missing, `FULL`, `SEMI`/`ANTI` right sides, `ASOF` right side |
-| `expression` | The column computed, renamed by position (`AS t(a, b)`), a struct field, or not a column of the table |
-| `several tables` | The column could come from more than one reference, a CTE used more than once, `NATURAL` or `POSITIONAL` joins, `query()`/`query_table()` |
+| `expression` | The column computed, renamed by position (`AS t(a, b)`), a struct field, or not a column of the table; an item named by the data rather than the SQL text (`unnest(…)`, `COLUMNS(…)` in an expression, `#n`, an unaliased constant) where the column is traced |
+| `several tables` | The column could come from more than one reference, a CTE used more than once, `NATURAL` or `POSITIONAL` joins, `query()`/`query_table()`, an output name repeated (or, next to a star, one that may be a renamed copy such as `ts_1`) |
 | `not found` | The time column is not in the output |
+| `rebind` | A safety net: the filtered SQL no longer binds, or its output columns differ from the model's |
 | `extraction` | An extraction model (its SQL runs on the source) |
 
 `details` holds `file` (relative to the project folder), and when known `model`, `path` (a JSON pointer into the sidecar) and `line`. Discovery reports every problem of a project at once.

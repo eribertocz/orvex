@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import functools
 import json
+import re
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -191,14 +192,63 @@ def _path(leaf: Tree) -> list[str]:
     return parts
 
 
+# Expansions whose output names DuckDB takes from the data, not from the SQL text, even under an
+# alias: `unnest(<struct>)` and `unlist` name their columns after the struct's fields.
+_EXPANDING = frozenset({"unnest", "unlist"})
+# DuckDB renames a repeated output name of a subquery or CTE to `<name>_1`, `<name>_2`, …
+_RENAMED = re.compile(r".+?(_[0-9]+)+")
+
+
+def _unnamed(node: Tree) -> Tree | None:
+    """A SELECT item whose output name is not known from the SQL text, or None: an expansion,
+    a star inside an expression (`COLUMNS(…)`), a positional reference (`#2`, named after the
+    column it points to), or an unaliased constant (named after its value)."""
+    for item in node.get("select_list") or []:
+        parts = _walk(item)
+        if any(
+            part.get("class") in {"FUNCTION", "AGGREGATE"}
+            and str(part.get("function_name", "")).lower() in _EXPANDING
+            for part in parts
+        ):
+            return item
+        if item.get("class") != "STAR" and any(part.get("class") == "STAR" for part in parts):
+            return item
+        if not item.get("alias") and item.get("class") in {"POSITIONAL_REFERENCE", "CONSTANT"}:
+            return item
+    return None
+
+
+def _names_reason(node: Tree, column: str) -> Refusal | None:
+    """Why the output name `column` of a SELECT may not be the item the SQL text names it."""
+    unnamed = _unnamed(node)
+    if unnamed is not None:
+        return Refusal("expression", unnamed.get("query_location"))
+    items = node.get("select_list") or []
+    names = [
+        name.lower()
+        for item in items
+        if item.get("class") != "STAR" and (name := _output_name(item)) is not None
+    ]
+    if len(names) != len(set(names)):
+        return Refusal(
+            "several tables"
+        )  # a repeated name is renamed: which one is read is not proven
+    if _RENAMED.fullmatch(column.lower()) and any(item.get("class") == "STAR" for item in items):
+        return Refusal("several tables")  # the name may be a renamed copy from the star
+    return None
+
+
 def _query_outputs(node: Tree) -> list[str] | None:
     """The output names of a SELECT, when they are known without the binder."""
-    if node.get("type") != "SELECT_NODE":
+    if node.get("type") != "SELECT_NODE" or _unnamed(node) is not None:
         return None
     names = [_output_name(item) for item in node.get("select_list") or []]
     if any(name is None for name in names):
         return None
-    return [str(name) for name in names]
+    known_names = [str(name) for name in names]
+    if len({name.lower() for name in known_names}) != len(known_names):
+        return None
+    return known_names
 
 
 class _Proof:
@@ -234,6 +284,9 @@ class _Proof:
         reason = _reason_in_query(node)
         if reason is not None:
             return Refusal(reason)
+        names = _names_reason(node, column)
+        if names is not None:
+            return names
         item = self._item(node, column)
         if isinstance(item, Refusal):
             return item
