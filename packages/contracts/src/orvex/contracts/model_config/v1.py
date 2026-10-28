@@ -154,6 +154,8 @@ class ModelErrorCode(
             "MODEL_TEST_FAILED",
             "RECONCILIATION_FAILED",
             "FRESHNESS_TOO_SHORT",
+            "UNSUPPORTED_SOURCE_TYPE",
+            "SOURCE_CONNECTION_FAILED",
         ]
     ]
 ):
@@ -179,6 +181,8 @@ class ModelErrorCode(
         "MODEL_TEST_FAILED",
         "RECONCILIATION_FAILED",
         "FRESHNESS_TOO_SHORT",
+        "UNSUPPORTED_SOURCE_TYPE",
+        "SOURCE_CONNECTION_FAILED",
     ]
 
 

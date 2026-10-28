@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import IO, Literal
 
 from orvex.contracts.model_config.v1 import ModelError
+from orvex.contracts.project.v1 import ClickhouseConnection
 from orvex.contracts.run_record.v1 import (
     CheckResult,
     ModuleVersion,
@@ -50,6 +51,7 @@ from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, Transaction, open_lake
 from orvex.transform import (
     auto_filter,
+    clickhouse,
     incremental,
     lineage,
     model_tests,
@@ -123,11 +125,16 @@ def check_project(folder: Path) -> Checked:
         problems += [_from_model_error(item) for item in schedule.config_problems(model, zone)]
         problems += [_from_model_error(item) for item in incremental.config_problems(model)]
         problems += [_from_model_error(item) for item in reconciliation.problems(model, kinds)]
+        if model.extraction:
+            problems += [_from_model_error(item) for item in clickhouse.since_problems(model)]
     columns: dict[str, Columns] = {}
     differences: dict[str, list[Comparison]] = {}
     filtered: dict[str, str] = {}
     needs_binding = any(
-        m.config.materialized == "incremental" or m.config.tests or m.config.reconciliation
+        m.config.materialized == "incremental"
+        or m.config.tests
+        or m.config.reconciliation
+        or m.extraction  # validated on its ClickHouse connection (P1-17)
         for m in discovery.models
     )
     if needs_binding and not problems:
@@ -165,8 +172,18 @@ def _bind(
         try:
             for name in graph.order:
                 model = by_name[name]
-                if model.extraction or failed & set(graph.dependencies.get(name, ())):
+                if failed & set(graph.dependencies.get(name, ())):
                     failed.add(name)
+                    continue
+                if model.extraction:
+                    extracted = _describe_extraction(project, model)
+                    if isinstance(extracted, Problem):
+                        failed.add(name)
+                        problems.append(extracted)
+                        continue
+                    _stand_in(lake, model, extracted)
+                    # DuckDB's own names for the mapped types, as for every other model.
+                    columns[name] = lake.describe(_relation_sql(model))
                     continue
                 try:
                     output = _describe(lake, model, compiled_sql(model, by_name))
@@ -201,6 +218,33 @@ def _bind(
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     return columns, differences, filtered, problems
+
+
+def _describe_extraction(project: Project, model: Model) -> Columns | Problem:
+    """An extraction model's output columns, mapped to DuckDB types: ClickHouse parses and
+    describes its SQL on the model's connection, read-only; no row is read (P1-17)."""
+    name = model.config.connection
+    connection = project.connections.get(name or "")
+    if not isinstance(connection, ClickhouseConnection):  # discovery already refused it
+        return Problem("MODEL_CONFIG_INVALID", model.config_file or model.sql_file, None, "")
+    password = clickhouse.read_password(connection)
+    if password is None:
+        variable = clickhouse.password_variable(connection)
+        return Problem(
+            "PROJECT_SECRET_MISSING",
+            "connections.yaml",
+            None,
+            f"Environment variable {variable} is not set (the password of connection {name}).",
+        )
+    described = clickhouse.describe_model(model, connection, password)
+    if isinstance(described, ModelError):
+        return _from_model_error(described)
+    return [(column.name, column.mapped.duckdb) for column in described.columns]
+
+
+def _relation_sql(model: Model) -> str:
+    schema, table = (part.replace('"', '""') for part in (model.schema, model.table))
+    return f'SELECT * FROM "{schema}"."{table}"'
 
 
 def _automatic(model: Model) -> bool:

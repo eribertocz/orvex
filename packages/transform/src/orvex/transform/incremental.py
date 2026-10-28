@@ -146,7 +146,9 @@ def config_problems(model: Model) -> list[ModelError]:
             )
         )
     automatic = (incremental.filter or "auto") == "auto"
-    if not automatic and not uses_since(model.sql):
+    # Extraction models are ClickHouse SQL: their `{since:Type}` is checked by
+    # `clickhouse.since_problems`, never by DuckDB's parser.
+    if not automatic and not model.extraction and not uses_since(model.sql):
         found.append(
             problem(
                 "MISSING_SINCE_PARAMETER",
@@ -167,7 +169,7 @@ def config_problems(model: Model) -> list[ModelError]:
                 path="/incremental/filter",
             )
         )
-    elif automatic and uses_since(model.sql):
+    elif automatic and not model.extraction and uses_since(model.sql):
         found.append(
             problem(
                 "MODEL_CONFIG_INVALID",

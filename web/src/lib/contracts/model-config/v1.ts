@@ -72,7 +72,9 @@ export type ModelErrorCode =
 	| 'INCREMENTAL_FILTER_NOT_PROVABLE'
 	| 'MODEL_TEST_FAILED'
 	| 'RECONCILIATION_FAILED'
-	| 'FRESHNESS_TOO_SHORT';
+	| 'FRESHNESS_TOO_SHORT'
+	| 'UNSUPPORTED_SOURCE_TYPE'
+	| 'SOURCE_CONNECTION_FAILED';
 
 /**
  * Sidecar of one model. Without a sidecar a model is `materialized: table`, fully rebuilt on each run.

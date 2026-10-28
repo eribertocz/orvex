@@ -48,6 +48,33 @@ New cross-field rules are added by the issues that implement those behaviors, as
 | `MODEL_TEST_FAILED` | A model test found failing rows after the model was written (the run rolls back; the run record lists every test with its failing-row count) |
 | `RECONCILIATION_FAILED` | A reconciliation check found groups where the model and its source differ by more than the tolerance, or exist on one side only (the run rolls back) |
 | `FRESHNESS_TOO_SHORT` | `freshness` below `5m` (sources must not be polled more often) |
+| `UNSUPPORTED_SOURCE_TYPE` | An extraction model's output column whose ClickHouse type has no exact DuckDB type (see below); the message names each such column and its type, with a hint to cast it in the SQL |
+| `SOURCE_CONNECTION_FAILED` | An extraction model's ClickHouse connection cannot be reached or refuses the credentials; the message never contains the password |
+
+## Extraction models (ClickHouse)
+
+A model whose sidecar names a `clickhouse` `connection` is ClickHouse SQL. Validation sends it to ClickHouse, read-only (`readonly = 1`), and reads no row: `EXPLAIN AST` must show one `SELECT` (otherwise `INVALID_MODEL_SQL` with ClickHouse's message), and `DESCRIBE` gives its output columns. Before that, the text alone is checked (strings, quoted identifiers and comments skipped):
+
+- one statement (a final `;` is allowed) → otherwise `INVALID_MODEL_SQL`;
+- incremental models need `filter: manual` (`filter: auto` → `INCREMENTAL_FILTER_NOT_PROVABLE`, reason `extraction`) and `{since:Type}` (→ `MISSING_SINCE_PARAMETER`), with `Type` one of `Date`, `Date32`, `DateTime`, `DateTime('zone')`, `DateTime64(p)`, `DateTime64(p, 'zone')` (→ `MODEL_CONFIG_INVALID`); validation binds the lowest value of that type;
+- a non-incremental model must not use `{since:…}`, and no other query parameter can be bound → `INVALID_MODEL_SQL`.
+
+Output types map exactly; anything else is `UNSUPPORTED_SOURCE_TYPE`:
+
+| ClickHouse | DuckDB |
+|---|---|
+| `Int8` `Int16` `Int32` `Int64` `Int128` | `TINYINT` `SMALLINT` `INTEGER` `BIGINT` `HUGEINT` |
+| `UInt8` `UInt16` `UInt32` `UInt64` `UInt128` | `UTINYINT` `USMALLINT` `UINTEGER` `UBIGINT` `UHUGEINT` |
+| `Decimal(p, s)`, `p ≤ 38` | `DECIMAL(p,s)` |
+| `Float32` `Float64` | `FLOAT` `DOUBLE` |
+| `String`, `FixedString(n)`, `LowCardinality(String)`, `Enum8`, `Enum16` | `VARCHAR` |
+| `Bool` | `BOOLEAN` |
+| `UUID` | `UUID` |
+| `Date`, `Date32` | `DATE` |
+| `DateTime`, `DateTime('zone')`, `DateTime64(p)` and `DateTime64(p, 'zone')` with `p ≤ 6` | `TIMESTAMPTZ` (the instant; the zone is the column's, or the server's when it declares none) |
+| `Nullable(T)` | `T`, nullable |
+
+Refused, for example: `Int256`, `UInt256`, `Decimal` with `p > 38`, `DateTime64` with `p > 6`, arrays, maps, tuples, JSON, geo types, `Nothing`. The password is read from its `${env:NAME}` variable when validation runs (unset → `PROJECT_SECRET_MISSING`, naming the variable).
 
 ## The automatic filter (`filter: auto`)
 
