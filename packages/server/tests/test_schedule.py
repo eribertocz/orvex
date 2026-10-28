@@ -244,7 +244,8 @@ def test_a_failing_model_does_not_stall_the_others(
             "project.yaml": PROJECT,
             "connections.yaml": CONNECTIONS,
             "models/s/healthy.sql": "SELECT 1 AS n",
-            "models/s/healthy.yaml": "version: 1\nfreshness: 10m\n",
+            # Due every 5 minutes: it would take every slot if retries waited for a free one.
+            "models/s/healthy.yaml": "version: 1\nfreshness: 5m\n",
             "models/s/broken.sql": "SELECT * FROM feed.data",
             "models/s/broken.yaml": (
                 "version: 1\nfreshness: 1h\n"
@@ -319,3 +320,53 @@ def test_unreadable_records_never_crash_or_speed_up_runs(
     out = scheduled(tmp_path, monkeypatch, START + dt.timedelta(minutes=30))
     assert out.count("STORE_EXTENSION_UNAVAILABLE") >= 1
     assert_five_minutes_apart(records(tmp_path))
+
+
+def test_a_run_that_does_not_start_is_not_a_model_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write(
+        tmp_path,
+        {
+            "project.yaml": PROJECT,
+            "models/s/m.sql": "SELECT 1 AS n",
+            "models/s/m.yaml": "version: 1\nfreshness: 5m\n",
+        },
+    )
+    attempts: list[str] = []
+
+    def refused(*_: object, **__: object) -> int:
+        attempts.append(commands._now()[11:16])
+        return 1  # as when a source is down: nothing recorded
+
+    monkeypatch.setattr(commands, "run", refused)
+    out = scheduled(tmp_path, monkeypatch, START + dt.timedelta(minutes=30))
+    assert attempts == ["09:50", "09:55", "10:00", "10:05", "10:10", "10:15"]
+    assert "the run did not start" in out
+    assert "SCHEDULE_GAVE_UP" not in out
+    assert "retry" not in out
+
+
+def test_a_source_that_comes_back_is_noticed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write(
+        tmp_path,
+        {
+            "project.yaml": PROJECT,
+            "connections.yaml": CONNECTIONS,
+            "models/s/m.sql": "SELECT * FROM feed.data",
+            "models/s/m.yaml": (
+                "version: 1\nfreshness: 1h\n"
+                "tests:\n  - accepted_values: {column: status, values: [valid]}\n"
+            ),
+        },
+    )
+
+    def source_back(now: dt.datetime) -> None:
+        if now == START + dt.timedelta(minutes=12):
+            feed(tmp_path, "valid")
+
+    scheduled(tmp_path, monkeypatch, START + dt.timedelta(minutes=30), source_back)
+    (started,) = [started for _, started, _, _ in records(tmp_path)]
+    assert minutes("10:02") <= minutes(started) <= minutes("10:07")

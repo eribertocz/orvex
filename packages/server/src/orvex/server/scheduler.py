@@ -116,6 +116,9 @@ class _State:
     failures: dict[str, int] = field(default_factory=dict)
     held: dict[str, dt.datetime] = field(default_factory=dict)
     reported: tuple[str, ...] = ()
+    checked_at: float = 0.0
+    recheck_at: float | None = None
+    deferred: set[str] = field(default_factory=set)  # retries already deferred once
 
 
 def schedule(
@@ -181,8 +184,17 @@ def _cycle(
     """One decision; returns how long to wait before the next one (seconds)."""
     now = clock()
     fingerprint = _fingerprint(folder)
-    if state.checked is None or fingerprint != state.fingerprint:
+    stale = (
+        state.checked is not None
+        and bool(state.checked.problems)
+        and monotonic() - state.checked_at >= MINIMUM_INTERVAL.total_seconds()
+    )
+    due_again = state.recheck_at is not None and monotonic() >= state.recheck_at
+    if state.checked is None or fingerprint != state.fingerprint or stale or due_again:
+        # Checked again when the files change, or every 5 minutes while the check fails (a
+        # source may be back), never more often: checking binds models against the sources.
         state.checked, state.fingerprint = commands.check_project(folder), fingerprint
+        state.checked_at, state.recheck_at = monotonic(), None
     checked = state.checked
     if checked.problems or checked.project is None or checked.graph is None:
         return _report(out, state, tuple(str(problem) for problem in checked.problems))
@@ -214,10 +226,17 @@ def _cycle(
     decided = decide(state.held)
     due = {reason.split(":")[0] for reason in decided.reasons}
     recovering = due & set(state.failures)
-    if recovering and due - recovering:
+    healthy = due - recovering
+    if recovering and healthy:
         # A model being retried never runs with healthy ones (its failure would roll them back
-        # too): the healthy ones run now, the retry in a later run.
-        decided = decide({**state.held, **dict.fromkeys(recovering, now + LOOK_AGAIN)})
+        # too). Turns alternate: the healthy ones first, then the retries, so neither waits
+        # more than one run.
+        if recovering <= state.deferred:
+            decided = decide({**state.held, **dict.fromkeys(healthy, now + LOOK_AGAIN)})
+            state.deferred -= recovering
+        else:
+            decided = decide({**state.held, **dict.fromkeys(recovering, now + LOOK_AGAIN)})
+            state.deferred |= recovering
     if state.last_run_monotonic is not None:
         # The wall clock may jump; the monotonic clock does not.
         waited = monotonic() - state.last_run_monotonic
@@ -237,6 +256,7 @@ def _cycle(
         _say(out, zone, now, f"due {reason}")
     state.last_run_wall, state.last_run_monotonic = now, monotonic()
     selection = Selection(decided.models, "freshness", decided.full_refresh)
+    previous_start = records.last_run_start
     if commands.run(folder, identity, out, selection=selection) == 0:
         for name in decided.models:
             state.failures.pop(name, None)
@@ -244,11 +264,22 @@ def _cycle(
         return 1.0
     after = clock()
     try:
-        culprits = _records(home).failed or decided.models
+        latest: _Records | None = _records(home)
     except commands.ProjectLocked, StoreError:
-        culprits = decided.models
+        latest = None
+    if latest is None or latest.last_run_start in {None, previous_start}:
+        # No run was recorded: it did not start (a source down while checking, the project
+        # taken by another process…). Not a model's failure: tried again after the minimum
+        # interval, the reason printed above by the run.
+        _say(out, zone, after, "the run did not start; trying again in 5 minutes")
+        # Check again then (not before): the cause may be in the project or a source.
+        state.recheck_at = monotonic() + MINIMUM_INTERVAL.total_seconds()
+        return 1.0
+    culprits = latest.failed or decided.models
     by_name = {model.name: model for model in checked.discovery.models}
     for name in culprits:
+        if name not in by_name:
+            continue  # removed from the project since
         count = state.failures.get(name, 0) + 1
         if count <= len(RETRY_DELAYS):
             state.failures[name] = count
