@@ -23,11 +23,14 @@ def write(folder: Path, files: dict[str, str]) -> None:
 
 
 def feed(folder: Path, rows: str) -> None:
-    """Replace the source rows: id, region, kwh DECIMAL(18,4), big HUGEINT, read_at TIMESTAMPTZ."""
+    """Replace the source rows: id, region, kwh DECIMAL(18,4), big DECIMAL(38,0), read_at TIMESTAMPTZ.
+
+    Parquet has no 128-bit integer (DuckDB would write a HUGEINT as DOUBLE), so the widest exact
+    integer of a Parquet source is DECIMAL(38,0)."""
     (folder / "data").mkdir(parents=True, exist_ok=True)
     duckdb.connect().execute(
         "COPY (SELECT id::BIGINT AS id, region::VARCHAR AS region, kwh::DECIMAL(18,4) AS kwh, "
-        "big::HUGEINT AS big, read_at::TIMESTAMPTZ AS read_at "
+        "big::DECIMAL(38,0) AS big, read_at::TIMESTAMPTZ AS read_at "
         f"FROM (VALUES {rows}) AS t(id, region, kwh, big, read_at)) "
         f"TO '{folder / 'data' / 'feed.parquet'}'"
     )
@@ -95,7 +98,7 @@ def test_append_adds_loaded_rows_and_keeps_them_on_failure(
     assert code == 0, out
     assert "built s.m: 2 rows" in out
     assert [row[0] for row in table(tmp_path)] == [1, 2, 3, 4, 5]
-    # Exact values survive (DECIMAL, HUGEINT, TIMESTAMPTZ as text).
+    # Exact values survive (DECIMAL, a 39-digit DECIMAL(38,0), TIMESTAMPTZ as text).
     assert table(tmp_path)[0][2:] == (
         "1.0001",
         BIG,
