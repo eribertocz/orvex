@@ -75,9 +75,10 @@ BIG = "170141183460469231731687303715884105727"
 
 
 def rows(*items: tuple[int, str, str]) -> str:
-    """Rows whose read_at is day id % 9 + 1 of January 2024, 10:00 UTC."""
+    """Rows whose read_at is day id % 9 + 1 of January 2024, 10:00 UTC. Numbers are given as
+    text so DuckDB converts them exactly (a bare 39-digit literal would be read as DOUBLE)."""
     return ", ".join(
-        f"({i}, '{region}', {kwh}, {BIG}, '2024-01-0{i % 9 + 1} 10:00:00+00')"
+        f"({i}, '{region}', '{kwh}', '{BIG}', '2024-01-0{i % 9 + 1} 10:00:00+00')"
         for i, region, kwh in items
     )
 
