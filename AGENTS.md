@@ -4,6 +4,8 @@ This file is read by the AI coding agent (Claude Code). It is the operational su
 
 **Spirit:** automated gates (conformance suites, types, CI) carry the quality; ceremony is kept to the minimum. Be rigorous where errors are expensive (numbers, security, contracts) and fast everywhere else.
 
+**Charter:** [`docs/process/charter.md`](docs/process/charter.md) is the quality standard behind all work. Its working method (understand, design, implement, verify, deliver), its quality hierarchy (P0 security, privacy, analytical correctness and data integrity first) and its rules for AI-assisted development apply to every issue. **Nothing unverified is presented as verified.**
+
 ## 1. Roles
 
 | Role | Who | Responsibilities |
@@ -29,7 +31,7 @@ The Agent works through the Owner's GitHub account; its commits carry the author
 4. **Verify by risk tier** ([`git-workflow.md`](docs/process/git-workflow.md) §3.5). Tier A (semantic engine, security, contracts, exactness, concurrency, conformance) requires an independent **Reviewer pass**; tier B requires all criteria checked with evidence; tier C (Dependabot patch/minor for Python and npm, typo fixes) auto-merges on green checks.
 5. **Merge.** Squash, with required checks green and the tier's verification done. Pull requests touching **governed paths** are labeled `owner-merge` and merged only by the Owner.
 6. **Refill the window.** After each merge, specify the next issue so three remain ready.
-7. **Explain.** When each pull request is ready, give the Owner a short summary in plain Spanish that covers everything: what was implemented, problems found, what had to change or be corrected (including specification corrections), and what remains or needs the Owner. Brief, never long. When something usable is merged, also say what the Owner can now do, how to try it and what they should see.
+7. **Explain.** When each pull request is ready, give the Owner a short summary in plain Spanish that covers everything: what was implemented, problems found, what had to change or be corrected (including specification corrections), the tests run and their results (and any not run), the risks that remain, and what remains or needs the Owner. Brief, never long. When something usable is merged, also say what the Owner can now do, how to try it and what they should see.
 8. **Phase end.** Release according to [`git-workflow.md`](docs/process/git-workflow.md) §6.
 
 **Done** means the acceptance criteria are met and tests protect them.
