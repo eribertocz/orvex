@@ -9,10 +9,11 @@ fall back to `DOUBLE`.
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, localcontext
 
 from orvex.contracts.model_config.v1 import (
     AcceptedRange,
@@ -41,8 +42,11 @@ INTEGER_RANGES: Mapping[str, tuple[int, int]] = {
 FLOATS = frozenset({"FLOAT", "DOUBLE"})
 TEMPORAL = {"DATE": "DATE", "TIMESTAMP": "TIMESTAMP", "TIMESTAMP WITH TIME ZONE": "TIMESTAMPTZ"}
 _DECIMAL_TYPE = re.compile(r"DECIMAL\((\d+),(\d+)\)")
-_NUMBER = re.compile(r"[+-]?[0-9]+(\.[0-9]+)?")
+# No leading zeros: YAML 1.1 reads an unquoted `017` as the octal 15.
+_NUMBER = re.compile(r"[+-]?(0|[1-9][0-9]*)(\.[0-9]+)?")
 MAX_DIGITS = 38
+# Enough digits for any 38-digit bound against any DECIMAL(38,s) limit: no rounding happens.
+_PRECISION = 80
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +90,22 @@ def _bound_text(model: Model, pointer: str, value: int | float | str) -> str | N
     if len(text.lstrip("+-").replace(".", "").lstrip("0")) > MAX_DIGITS:
         return None
     return text
+
+
+def _moment_problem(text: str, kind: str) -> str | None:
+    """Why a quoted date or time bound cannot be read exactly, or None."""
+    try:
+        if kind == "DATE":
+            dt.date.fromisoformat(text)
+            return None
+        moment = dt.datetime.fromisoformat(text)
+    except ValueError:
+        return f"{text!r} is not an ISO 8601 {kind.lower()}."
+    if kind == "TIMESTAMP WITH TIME ZONE" and moment.tzinfo is None:
+        return "give the offset (for example +00:00): a time without one is ambiguous."
+    if kind == "TIMESTAMP" and moment.tzinfo is not None:
+        return "a TIMESTAMP column has no time zone; leave the offset out."
+    return None
 
 
 def _family(kind: str) -> str:
@@ -149,6 +169,8 @@ def problems(
                 if family == "temporal":
                     if not isinstance(bound.root, str):
                         invalid(f"{base}/{side}", "a date or time bound is written in quotes.")
+                    elif (reason := _moment_problem(bound.root, column_type)) is not None:
+                        invalid(f"{base}/{side}", reason)
                 elif _bound_text(model, f"{base}/{side}", bound.root) is None:
                     invalid(
                         f"{base}/{side}",
@@ -183,6 +205,11 @@ def problems(
 
 def _integer_bound(text: str, side: str, kind: str) -> tuple[str | None, bool]:
     """(the bound in the column's integer type, or None; whether every value is outside)."""
+    with localcontext(prec=_PRECISION):
+        return _integer_bound_exact(text, side, kind)
+
+
+def _integer_bound_exact(text: str, side: str, kind: str) -> tuple[str | None, bool]:
     exact = Decimal(text)
     whole = int(exact.to_integral_value(ROUND_CEILING if side == "min" else ROUND_FLOOR))
     low, high = INTEGER_RANGES[kind]
@@ -194,6 +221,11 @@ def _integer_bound(text: str, side: str, kind: str) -> tuple[str | None, bool]:
 
 
 def _decimal_bound(text: str, side: str, kind: str) -> tuple[str | None, bool]:
+    with localcontext(prec=_PRECISION):
+        return _decimal_bound_exact(text, side, kind)
+
+
+def _decimal_bound_exact(text: str, side: str, kind: str) -> tuple[str | None, bool]:
     match = _DECIMAL_TYPE.fullmatch(kind)
     assert match is not None
     precision, scale = int(match.group(1)), int(match.group(2))

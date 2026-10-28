@@ -298,7 +298,12 @@ def plan_run(
     plan: list[tuple[Model, list[Step | ModelTest]]] = []
     for name in graph.order:
         model = by_name[name]
-        tests = model_tests.steps(model, relations[name], (outputs or {}).get(name, []), relations)
+        # Extraction models have no relation (tests do not read them until they run, P1-17).
+        tests = (
+            model_tests.steps(model, relations[name], (outputs or {}).get(name, []), relations)
+            if name in relations
+            else []
+        )
         if model.config.materialized == "view":
             if tests:
                 plan.append((model, list(tests)))

@@ -15,6 +15,7 @@ READINGS = [
     ("read_at", "TIMESTAMP WITH TIME ZONE"),
     ("status", "VARCHAR"),
     ("small", "TINYINT"),
+    ("wide", "DECIMAL(38,25)"),
 ]
 
 
@@ -42,22 +43,25 @@ def counts(chosen: Model, connection: duckdb.DuckDBPyConnection) -> list[tuple[s
     return found
 
 
+WIDE = "9999999999999.9999999999999999999999999"  # the largest DECIMAL(38,25)
+
+
 def lake() -> duckdb.DuckDBPyConnection:
     connection = duckdb.connect()
     connection.execute("CREATE SCHEMA s")
     connection.execute(
         "CREATE TABLE s.m (reading_id BIGINT, consumer_id VARCHAR, kwh DECIMAL(18,4), "
-        "read_at TIMESTAMP, status VARCHAR, small TINYINT)"
+        "read_at TIMESTAMP, status VARCHAR, small TINYINT, wide DECIMAL(38,25))"
     )
     connection.execute("CREATE TABLE s.c (consumer_id VARCHAR)")
     connection.execute("INSERT INTO s.c VALUES ('C1'), ('C2')")
     connection.execute(
         "INSERT INTO s.m VALUES "
-        "(1, 'C1', -0.0001, '2023-12-31 23:59:59', 'valid', 1), "
-        "(2, NULL, 0, '2024-01-01', 'estimated', 2), "
-        "(2, 'C9', 99999999999999.9999, NULL, 'voided', 3), "
-        "(3, NULL, 0.1, '2024-02-01', NULL, NULL), "
-        "(4, 'C2', NULL, '2024-03-01', 'valid', 127)"
+        f"(1, 'C1', -0.0001, '2023-12-31 23:59:59', 'valid', 1, '{WIDE}'), "
+        "(2, NULL, 0, '2024-01-01', 'estimated', 2, 0), "
+        f"(2, 'C9', 99999999999999.9999, NULL, 'voided', 3, '-{WIDE}'), "
+        "(3, NULL, 0.1, '2024-02-01', NULL, NULL, 1), "
+        "(4, 'C2', NULL, '2024-03-01', 'valid', 127, NULL)"
     )
     return connection
 
@@ -151,4 +155,34 @@ def test_names(tmp_path: Path) -> None:
     assert [name_of(test) for test in chosen.config.tests or []] == [
         "not_null(reading_id, consumer_id)",
         "relationship(consumer_id → staging.consumers.consumer_id)",
+    ]
+
+
+def test_long_bounds_on_wide_decimals_stay_exact(tmp_path: Path) -> None:
+    chosen = model(
+        tmp_path,
+        "  - accepted_range: {column: wide, max: 1000000000000}\n"  # 25-digit scale: exact
+        "  - accepted_range: {column: kwh, max: 1000000000000000000000000}\n"
+        # The column's largest value is still inside; one unit of scale less is not.
+        "  - accepted_range: {column: wide, max: '9999999999999.9999999999999999999999999'}\n"
+        "  - accepted_range: {column: wide, max: '9999999999999.9999999999999999999999998'}\n"
+        "  - accepted_range: {column: wide, min: '-9999999999999.9999999999999999999999998'}\n",
+    )
+    assert problems(chosen, READINGS, {"s.m": READINGS}, {"s.m": chosen}) == []
+    assert [count for _, count in counts(chosen, lake())] == [1, 0, 0, 1, 1]
+
+
+def test_bounds_must_be_unambiguous(tmp_path: Path) -> None:
+    chosen = model(
+        tmp_path,
+        "  - accepted_range: {column: kwh, min: 017}\n"
+        "  - accepted_range: {column: read_at, min: 'not a date'}\n"
+        "  - accepted_range: {column: read_at, min: '2024-01-01 00:00:00'}\n"
+        "  - accepted_range: {column: read_at, min: '2024-01-01T00:00:00+00:00'}\n",
+    )
+    found = problems(chosen, READINGS, {"s.m": READINGS}, {"s.m": chosen})
+    assert [p.details.path for p in found] == [
+        "/tests/0/accepted_range/min",
+        "/tests/1/accepted_range/min",
+        "/tests/2/accepted_range/min",
     ]
