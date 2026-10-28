@@ -118,7 +118,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if command.command == "validate":
             return validate(command.project, sys.stdout)
         if command.command == "runs":
-            return runs(command.project, identity, max(1, command.limit), sys.stdout)
+            if command.limit < 1:
+                print("--limit must be at least 1", file=sys.stderr)
+                return 2
+            return runs(command.project, identity, command.limit, sys.stdout)
         return run(command.project, identity, sys.stdout)
     arguments = parser_for(identity).parse_args(given)
     try:

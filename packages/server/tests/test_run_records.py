@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import json
 import re
 import subprocess
 import zoneinfo
+from collections.abc import Iterator
 from pathlib import Path
 
 import duckdb
 import pytest
 from orvex.contracts.run_record.v1 import RunRecord
+from orvex.server import commands
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
+from orvex.store.errors import StoreError
 from orvex.store.lake import _typed as typed
 from orvex.transform.run_records import history_request, record_statements
 
@@ -234,3 +238,96 @@ def test_password_never_reaches_a_record(
     assert {r["outcome"] for r in rows} == {"failed"}
     assert {r["error_code"] for r in rows} == {"STORE_CONNECTION_FAILED"}
     assert secret not in json.dumps(rows, default=str)
+
+
+# --- failure paths, with a stand-in lake ---------------------------------------------------------
+
+
+class FakeTransaction:
+    def __init__(self, lake: FakeLake) -> None:
+        self.lake = lake
+
+    def execute(self, request: object) -> None:
+        self.lake.executed.append(request)
+
+
+class FakeLake:
+    """Fails where a test asks: when a transaction starts, commits, or when counting."""
+
+    def __init__(self, fail: str) -> None:
+        self.fail = fail
+        self.executed: list[object] = []
+        self.transactions = 0
+
+    @contextlib.contextmanager
+    def transaction(self) -> Iterator[FakeTransaction]:
+        self.transactions += 1
+        first = self.transactions == 1
+        if first and self.fail == "start":
+            raise StoreError("STORE_BUSY", "The lake is busy.", {})
+        yield FakeTransaction(self)
+        if first and self.fail == "commit":
+            raise StoreError("STORE_TRANSACTION_CONFLICT", "Another writer changed it.", {})
+
+    def current_snapshot(self) -> object:
+        if self.fail == "count":
+            raise StoreError("STORE_TIMEOUT", "The statement exceeded its time limit.", {})
+        raise AssertionError("not reached in these tests")
+
+    def read(self, request: object) -> object:
+        raise AssertionError("not reached in these tests")
+
+    def close(self) -> None:
+        pass
+
+
+def recorded(lake: FakeLake) -> list[dict[str, str | None]]:
+    rows = []
+    for request in lake.executed:
+        sql = getattr(request, "sql", "")
+        if sql.startswith("INSERT INTO _meta.run_records"):
+            rows.append({p.name: p.value for p in getattr(request, "parameters", [])})
+    return rows
+
+
+@pytest.mark.parametrize(
+    ("fail", "code"),
+    [("start", "STORE_BUSY"), ("commit", "STORE_TRANSACTION_CONFLICT")],
+)
+def test_run_failures_no_model_caused_are_recorded_with_their_reason(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    fail: str,
+    code: str,
+) -> None:
+    project(tmp_path, MODELS)
+    lake = FakeLake(fail)
+    monkeypatch.setattr(commands, "open_lake", lambda *args, **kwargs: lake)
+    exit_code, out = command(capsys, "run", str(tmp_path))
+    assert exit_code == 1
+    assert code in out
+    rows = recorded(lake)
+    assert [(r["p_model"], r["p_outcome"], r["p_error_code"]) for r in rows] == [
+        ("s.a", "failed", code),
+        ("s.b", "failed", code),
+        ("s.c", "failed", code),
+    ]
+
+
+def test_a_committed_run_is_recorded_even_if_counting_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project(tmp_path, MODELS)
+    lake = FakeLake("count")
+    monkeypatch.setattr(commands, "open_lake", lambda *args, **kwargs: lake)
+    exit_code, out = command(capsys, "run", str(tmp_path))
+    assert exit_code == 0
+    assert "STORE_TIMEOUT" in out
+    rows = recorded(lake)
+    assert [(r["p_outcome"], r["p_rows_written"]) for r in rows] == [("success", None)] * 3
+
+
+def test_runs_limit_must_be_positive(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    project(tmp_path, MODELS)
+    assert main(["runs", str(tmp_path), "--limit", "0"]) == 2

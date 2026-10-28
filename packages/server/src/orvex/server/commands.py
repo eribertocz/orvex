@@ -189,7 +189,17 @@ def _git(folder: Path, *arguments: str) -> str | None:
     """Output of a git command in `folder`, or None when git or the repository is missing."""
     try:
         result = subprocess.run(
-            ["git", "-C", str(folder), *arguments],
+            # No fsmonitor hook and no index rewrite: reading the commit must not run the
+            # project's configured programs or change its files.
+            [
+                "git",
+                "-c",
+                "core.fsmonitor=false",
+                "--no-optional-locks",
+                "-C",
+                str(folder),
+                *arguments,
+            ],
             capture_output=True,
             text=True,
             timeout=GIT_TIMEOUT_S,
@@ -287,18 +297,30 @@ def _run_locked(
             for item in outcomes:
                 if item.outcome == "ran":
                     item.outcome = "failed"  # rolled back with the run
+            reason = RunError(code=error.code, message=_store_message(error))
             if current is not None:
                 current.finished_at = _now()
                 current.outcome = "failed"
-                current.error = RunError(code=error.code, message=_store_message(error))
+                current.error = reason
                 failure = _store_problem(error, current.model.sql_file, current.model.name)
             else:
+                # Not a model's fault (the transaction could not start or commit): every
+                # model failed for the same reason.
+                for item in outcomes:
+                    item.outcome = "failed"
+                    item.error = reason
                 failure = _store_problem(error, ".", "")
+        warning: Problem | None = None
         if failure is None:
-            snapshot = lake.current_snapshot().id
             for item in outcomes:
                 item.outcome = "success"
-                item.rows_written = str(_count(lake, item.model, snapshot))
+            try:
+                snapshot = lake.current_snapshot().id
+                for item in outcomes:
+                    item.rows_written = str(_count(lake, item.model, snapshot))
+            except StoreError as error:
+                # The run is committed: it is recorded as such, without what could not be read.
+                warning = _store_problem(error, ".", "after the commit")
         records = [
             RunRecord(
                 run_id=run_id,
@@ -327,14 +349,18 @@ def _run_locked(
                 for statement in record_statements(records):
                     transaction.execute(statement)
         except StoreError as error:
-            print(failure or _store_problem(error, ".", "run records"), file=out)
+            if failure is not None:
+                print(failure, file=out)
+            print(_store_problem(error, ".", "run records were not written"), file=out)
             return 1
     finally:
         lake.close()
     if failure is not None:
         print(failure, file=out)
         return 1
-    print(f"snapshot {snapshot}", file=out)
+    if warning is not None:
+        print(warning, file=out)
+    print(f"snapshot {snapshot if snapshot is not None else '-'}", file=out)
     for item in outcomes:
         print(f"built {item.model.name}: {item.rows_written} rows", file=out)
     return 0
