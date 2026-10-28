@@ -74,7 +74,8 @@ jobs:
       # ClickHouse source for the extraction-model tests (P1-17, #65, #98); a disposable server,
       # not a secret. The tests create their own read-only user and synthetic tables.
       clickhouse:
-        image: clickhouse/clickhouse-server:26.9.25.15
+        # clickhouse/clickhouse-server:26.9.25.15
+        image: clickhouse/clickhouse-server@sha256:19bfacb135479a892551a8155cfbbc8211aedf2aa888cd91950b9ee7e76cc7e3
         env:
           CLICKHOUSE_USER: ci
           CLICKHOUSE_PASSWORD: ci-disposable-database
@@ -103,8 +104,6 @@ jobs:
           for package in packages/*/; do
             python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
           done
-      - name: Image digests (temporary, to pin the service images)
-        run: echo "::notice::$(docker image inspect --format '{{json .RepoDigests}}' clickhouse/clickhouse-server:26.9.25.15)"
       - run: pytest --junitxml=junit.xml
       - name: Report failures as annotations
         if: failure()
