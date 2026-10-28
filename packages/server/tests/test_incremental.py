@@ -74,7 +74,7 @@ MERGE = (
     "version: 1\nmaterialized: incremental\n"
     "incremental: {strategy: merge, time_column: read_at, unique_key: [id]}\n"
 )
-BIG = "170141183460469231731687303715884105727"
+BIG = "99999999999999999999999999999999999999"
 
 
 def rows(*items: tuple[int, str, str]) -> str:
@@ -98,7 +98,7 @@ def test_append_adds_loaded_rows_and_keeps_them_on_failure(
     assert code == 0, out
     assert "built s.m: 2 rows" in out
     assert [row[0] for row in table(tmp_path)] == [1, 2, 3, 4, 5]
-    # Exact values survive (DECIMAL, a 39-digit DECIMAL(38,0), TIMESTAMPTZ as text).
+    # Exact values survive (DECIMAL, a 38-digit DECIMAL(38,0), TIMESTAMPTZ as text).
     assert table(tmp_path)[0][2:] == (
         "1.0001",
         BIG,
