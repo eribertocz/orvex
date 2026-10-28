@@ -210,7 +210,7 @@ def test_run_builds_models_in_order_all_or_nothing(
     lake.execute(f"ATTACH 'ducklake:{catalog}' AS lake (READ_ONLY)")
     tables = lake.execute(
         "SELECT schema_name || '.' || table_name FROM duckdb_tables() "
-        "WHERE database_name = 'lake' ORDER BY 1"
+        "WHERE database_name = 'lake' AND schema_name <> '_meta' ORDER BY 1"
     ).fetchall()
     assert tables == [("marts.consumption",), ("staging.consumers",), ("staging.readings",)]
     built = lake.execute(
@@ -239,9 +239,15 @@ def test_run_builds_models_in_order_all_or_nothing(
     lake = duckdb.connect()
     lake.execute("LOAD ducklake")
     lake.execute(f"ATTACH 'ducklake:{catalog}' AS lake (READ_ONLY)")
-    assert lake.execute("SELECT count(*) FROM ducklake_snapshots('lake')").fetchall() == (
-        snapshots_before
-    )
+    # The failed run adds no data snapshot; only its run records commit (P1-10).
+    assert lake.execute("SELECT count(*) FROM ducklake_snapshots('lake')").fetchall() == [
+        (snapshots_before[0][0] + 1,)
+    ]
+    changes = lake.execute(
+        "SELECT changes FROM ducklake_snapshots('lake') ORDER BY snapshot_id DESC LIMIT 1"
+    ).fetchall()
+    # Only inserts into the existing run-records table: no table created, replaced or dropped.
+    assert set(changes[0][0]) <= {"inlined_insert", "tables_inserted_into"}
     assert lake.execute("SELECT count(*) FROM lake.staging.readings").fetchall() == [(4,)]
     lake.close()
 

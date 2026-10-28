@@ -8,27 +8,35 @@ it hands the server a list of statements that run in one write transaction.
 from __future__ import annotations
 
 import contextlib
+import datetime as dt
+import importlib.metadata
 import os
+import subprocess
 import sys
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
 from orvex.contracts.model_config.v1 import ModelError
+from orvex.contracts.run_record.v1 import ModuleVersion, RowsWritten, RunError, RunRecord, Versions
 from orvex.contracts.store.v1 import LocalLakeLocation, ReadRequest
 from orvex.server.identity import Identity
 from orvex.server.project import Project, ProjectLoadError, load_project
+from orvex.server.versions import module_versions
 from orvex.store.errors import StoreError
-from orvex.store.lake import Limits, open_lake
+from orvex.store.lake import Lake, Limits, open_lake
 from orvex.transform.graph import Graph, build_graph, plan_run
 from orvex.transform.models import Discovery, Model, discover_models
+from orvex.transform.run_records import history_request, record_statements
 from orvex.transform.sources import source_attachments
 
 LOCK_FILE = "lake.lock"
 LAKE_FOLDER = "lake"
 DEFAULT_MEMORY = "4GB"
 DEFAULT_TIMEOUT_MS = 3_600_000
+GIT_TIMEOUT_S = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +157,7 @@ def run(folder: Path, identity: Identity, out: IO[str]) -> int:
     home = project.folder / f".{identity.slug}"
     try:
         with project_lock(home):
-            return _run_locked(project, graph, checked.discovery, home, out)
+            return _run_locked(project, graph, checked.discovery, home, identity, out)
     except ProjectLocked:
         print(
             Problem(
@@ -163,52 +171,270 @@ def run(folder: Path, identity: Identity, out: IO[str]) -> int:
         return 1
 
 
-def _run_locked(
-    project: Project, graph: Graph, discovery: Discovery, home: Path, out: IO[str]
-) -> int:
-    plan = plan_run(discovery.models, graph)
-    location = LocalLakeLocation(
-        kind="lake_location", catalog="local", path=str(home / LAKE_FOLDER)
-    )
-    limits = Limits(
+def _limits() -> Limits:
+    return Limits(
         memory_limit=_memory_limit(),
         threads=os.cpu_count() or 2,
         max_concurrent=4,
         queue_size=16,
         default_timeout_ms=DEFAULT_TIMEOUT_MS,
     )
-    current = ""
-    committed = False
+
+
+def _location(home: Path) -> LocalLakeLocation:
+    return LocalLakeLocation(kind="lake_location", catalog="local", path=str(home / LAKE_FOLDER))
+
+
+def _git(folder: Path, *arguments: str) -> str | None:
+    """Output of a git command in `folder`, or None when git or the repository is missing."""
     try:
-        lake = open_lake(location, limits, source_attachments(project.connections))
+        result = subprocess.run(
+            # No fsmonitor hook and no index rewrite: reading the commit must not run the
+            # project's configured programs or change its files.
+            [
+                "git",
+                "-c",
+                "core.fsmonitor=false",
+                "--no-optional-locks",
+                "-C",
+                str(folder),
+                *arguments,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT_S,
+            check=False,
+        )
+    except OSError, subprocess.TimeoutExpired:
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def _project_commit(folder: Path) -> tuple[str | None, bool | None]:
+    commit = _git(folder, "rev-parse", "HEAD")
+    if commit is None or not commit.strip():
+        return None, None
+    status = _git(
+        folder, "status", "--porcelain", "--", "models", "project.yaml", "connections.yaml"
+    )
+    return commit.strip(), None if status is None else bool(status.strip())
+
+
+def _versions(identity: Identity) -> Versions:
+    return Versions(
+        duckdb=importlib.metadata.version("duckdb"),
+        modules=[
+            ModuleVersion(name=name, version=number) for name, number in module_versions(identity)
+        ],
+    )
+
+
+def _now() -> str:
+    return dt.datetime.now(dt.UTC).isoformat(timespec="microseconds")
+
+
+@dataclass(slots=True)
+class _Outcome:
+    model: Model
+    started_at: str
+    finished_at: str
+    outcome: str = "not_run"
+    rows_written: str | None = None
+    error: RunError | None = None
+
+
+def _run_locked(
+    project: Project,
+    graph: Graph,
+    discovery: Discovery,
+    home: Path,
+    identity: Identity,
+    out: IO[str],
+) -> int:
+    plan = plan_run(discovery.models, graph)
+    run_id = str(uuid.uuid4())
+    print(f"run {run_id}", file=out)
+    commit, dirty = _project_commit(project.folder)
+    started = _now()
+    outcomes = [_Outcome(model, started, started) for model, _ in plan]
+    snapshot: int | None = None
+    failure: Problem | None = None
+    lake = None
+    try:
+        lake = open_lake(_location(home), _limits(), source_attachments(project.connections))
+    except StoreError as error:
+        failure = _store_problem(error, ".", "")
+        for item in outcomes:
+            item.outcome = "failed"
+            item.error = RunError(code=error.code, message=error.message)
+    if lake is None:
+        # The run could not start (a source is unreachable, say): it is still recorded, in a
+        # lake opened without sources.
+        try:
+            lake = open_lake(_location(home), _limits())
+        except StoreError as error:
+            print(failure or _store_problem(error, ".", ""), file=out)
+            return 1
+    try:
+        current: _Outcome | None = None
         try:
             with lake.transaction() as transaction:
-                for model, statements in plan:
-                    current = model.name
+                for item, (_, statements) in zip(outcomes, plan, strict=True):
+                    if failure is not None:
+                        break
+                    current = item
+                    item.started_at = _now()
                     for statement in statements:
                         transaction.execute(statement)
-            current = ""
-            committed = True
-            snapshot = lake.current_snapshot().id
-            print(f"snapshot {snapshot}", file=out)
-            for model, _ in plan:
-                request = ReadRequest(
-                    kind="read",
-                    sql=f'SELECT count(*) AS n FROM "{model.schema}"."{model.table}"',
-                    parameters=[],
-                    snapshot=snapshot,
-                    batch_size=1,
-                )
-                count = lake.read(request).read_all().column("n")[0].as_py()
-                print(f"built {model.name}: {count} rows", file=out)
-        finally:
-            lake.close()
+                    item.finished_at = _now()
+                    item.outcome = "ran"
+                current = None
+                if failure is not None:
+                    raise _NothingToCommit
+        except _NothingToCommit:
+            pass
+        except StoreError as error:
+            for item in outcomes:
+                if item.outcome == "ran":
+                    item.outcome = "failed"  # rolled back with the run
+            reason = RunError(code=error.code, message=_store_message(error))
+            if current is not None:
+                current.finished_at = _now()
+                current.outcome = "failed"
+                current.error = reason
+                failure = _store_problem(error, current.model.sql_file, current.model.name)
+            else:
+                # Not a model's fault (the transaction could not start or commit): every
+                # model failed for the same reason.
+                for item in outcomes:
+                    item.outcome = "failed"
+                    item.error = reason
+                failure = _store_problem(error, ".", "")
+        warning: Problem | None = None
+        if failure is None:
+            for item in outcomes:
+                item.outcome = "success"
+            try:
+                snapshot = lake.current_snapshot().id
+                for item in outcomes:
+                    item.rows_written = str(_count(lake, item.model, snapshot))
+            except StoreError as error:
+                # The run is committed: it is recorded as such, without what could not be read.
+                warning = _store_problem(error, ".", "after the commit")
+        records = [
+            RunRecord(
+                run_id=run_id,
+                model=item.model.name,
+                trigger="manual",
+                materialized=item.model.config.materialized or "table",
+                project_commit=commit,
+                project_dirty=dirty,
+                versions=_versions(identity),
+                since=None,
+                rows_read=None,
+                rows_written=None if item.rows_written is None else RowsWritten(item.rows_written),
+                watermark=None,
+                tests=[],
+                reconciliation=[],
+                snapshot_id=snapshot if item.outcome == "success" else None,
+                started_at=item.started_at,
+                finished_at=item.finished_at,
+                outcome=item.outcome,  # type: ignore[arg-type]  # success, failed or not_run
+                error=item.error,
+            )
+            for item in outcomes
+        ]
+        try:
+            with lake.transaction() as transaction:
+                for statement in record_statements(records):
+                    transaction.execute(statement)
+        except StoreError as error:
+            if failure is not None:
+                print(failure, file=out)
+            print(_store_problem(error, ".", "run records were not written"), file=out)
+            return 1
+    finally:
+        lake.close()
+    if failure is not None:
+        print(failure, file=out)
+        return 1
+    if warning is not None:
+        print(warning, file=out)
+    print(f"snapshot {snapshot if snapshot is not None else '-'}", file=out)
+    for item in outcomes:
+        print(f"built {item.model.name}: {item.rows_written} rows", file=out)
+    return 0
+
+
+class _NothingToCommit(Exception):
+    """Leaves the run transaction without changing anything (the run could not start)."""
+
+
+def _store_message(error: StoreError) -> str:
+    detail = error.details.get("duckdb", "")
+    return error.message + (f" {detail}" if detail else "")
+
+
+def _store_problem(error: StoreError, file: str, model: str) -> Problem:
+    prefix = f"{model}: " if model else ""
+    return Problem(error.code, file, None, prefix + _store_message(error))
+
+
+def _count(lake: Lake, model: Model, snapshot: int) -> int:
+    request = ReadRequest(
+        kind="read",
+        sql=f'SELECT count(*) AS n FROM "{model.schema}"."{model.table}"',
+        parameters=[],
+        snapshot=snapshot,
+        batch_size=1,
+    )
+    count: int = lake.read(request).read_all().column("n")[0].as_py()
+    return count
+
+
+def runs(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
+    """Recent runs of a project, newest first, with times in the project's time zone."""
+    try:
+        project = load_project(folder)
+    except ProjectLoadError as error:
+        details = error.error.details
+        print(Problem(error.code, details.file or ".", details.line, error.error.message), file=out)
+        return 1
+    home = project.folder / f".{identity.slug}"
+    if not (home / LAKE_FOLDER).exists():
+        print("no runs yet", file=out)
+        return 0
+    try:
+        with project_lock(home):
+            lake = open_lake(_location(home), _limits())
+            try:
+                snapshot = lake.current_snapshot().id
+                request = history_request(snapshot, project.settings.time_zone, limit)
+                try:
+                    rows = lake.read(request).read_all().to_pylist()
+                except StoreError as error:
+                    if error.code != "STORE_STATEMENT_INVALID":
+                        raise
+                    rows = []  # the records table does not exist yet
+            finally:
+                lake.close()
+    except ProjectLocked:
+        print(
+            Problem(
+                "PROJECT_LOCKED", f".{identity.slug}/{LOCK_FILE}", None, "a run is in progress."
+            ),
+            file=out,
+        )
+        return 1
     except StoreError as error:
-        where = next((m.sql_file for m, _ in plan if m.name == current), ".")
-        prefix = f"{current}: " if current else ""
-        detail = error.details.get("duckdb", "")
-        message = f"{prefix}{error.message}" + (f" {detail}" if detail else "")
-        print(Problem(error.code, where, None, message), file=out)
-        # After the commit only the row counts can fail: the run itself is saved.
-        return 0 if committed else 1
+        print(_store_problem(error, ".", ""), file=out)
+        return 1
+    if not rows:
+        print("no runs yet", file=out)
+    for row in rows:
+        print(
+            f"{row['run_id']}  {row['started']}  {row['outcome']:<7}  "
+            f"snapshot {row['snapshot'] if row['snapshot'] is not None else '-'}  {row['models']}",
+            file=out,
+        )
     return 0
