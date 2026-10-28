@@ -7,3 +7,4 @@
 | [`review.md`](review.md) | Instructions for the independent Reviewer pass |
 | [`versioning.md`](versioning.md) | Semantic Versioning, module and product versions, alpha / beta / rc / stable, release criteria and approvals |
 | [`engineering.md`](engineering.md) | Code quality, typing, testing, dependencies, security, performance, required CI checks by phase |
+| [`charter.md`](charter.md) | Engineering charter: mission, catalogue of 150 practices, BI-specific requirements, working method, quality hierarchy, anti-patterns, rules for AI-assisted development |
