@@ -11,7 +11,7 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 | `LakeLocation` | Where the lake is: `LocalLakeLocation` (`catalog: local`, a DuckDB-file catalog at `<path>/catalog.ducklake`, data files under `<path>/data/`, one process) or `PostgresLakeLocation` (`catalog: postgres`, see below) |
 | `StatementRequest` | One SQL statement run inside a write transaction (`CREATE TABLE … AS`, `INSERT … SELECT`, `MERGE`, `UPDATE`, `DELETE`, `DROP`, `ALTER`) |
 | `ReadRequest` | One `SELECT` read **once**, as of `snapshot`, in batches of `batch_size` rows |
-| `Parameter` | A value bound to `$name`; `value` is text (or `null`) converted to the declared DuckDB type, so exact values never travel as JSON numbers. Values are never concatenated into SQL |
+| `Parameter` | A value bound to `$name`; `value` is text (or `null`) converted to the declared DuckDB type, so exact values never travel as JSON numbers. Values are never concatenated into SQL. `DATE`, `TIMESTAMP` and `TIMESTAMPTZ` values are ISO 8601 (`YYYY-MM-DD`, `YYYY-MM-DDTHH:MM:SS[.ffffff]`, the same with `Z` or `±HH:MM`), or `"infinity"` / `"-infinity"` |
 | `Snapshot` | A lake snapshot: `id` and `committed_at` (with offset) |
 | `CommitResult` | The one snapshot a committed transaction created, or `null` when it changed nothing |
 | `StoreError` | `code`, `message`, `details` |

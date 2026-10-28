@@ -14,20 +14,39 @@ Every strategy is "delete the target rows the loaded rows replace, insert the lo
 - `delete_insert` deletes the rows whose key is loaded (a key's rows are replaced as a set);
 - `partition_overwrite` deletes the rows whose partition is loaded (`NULL` is a partition).
 Rows are inserted by column name, so a target whose columns were added at the end still matches.
+
+Which rows are loaded (P1-14): the model's SQL uses `$since`, bound as a typed parameter to the
+previous watermark minus `lookback` (`-infinity` on a first run or a full refresh). The new
+watermark is the largest `time_column` of the loaded rows (never less than the previous one),
+computed from the staging table and stored in `_meta.watermarks` inside the run transaction, so
+it commits or rolls back with the rows — never the clock, and never a separate write.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+import duckdb
 from orvex.contracts.model_config.v1 import ModelError
-from orvex.contracts.store.v1 import StatementRequest
+from orvex.contracts.store.v1 import Parameter, ParameterType, ReadRequest, StatementRequest
 from orvex.transform.models import Model, problem
 
 STAGE_SCHEMA = "_stage"
 TEMPORAL_TYPES = frozenset({"DATE", "TIMESTAMP", "TIMESTAMP WITH TIME ZONE"})
+SINCE = "since"
+WATERMARKS = "_meta.watermarks"
+LOWEST = "-infinity"
+# The store's parameter type for each temporal output type.
+PARAMETER_TYPES = {
+    "DATE": "DATE",
+    "TIMESTAMP": "TIMESTAMP",
+    "TIMESTAMP WITH TIME ZONE": "TIMESTAMPTZ",
+}
+_DURATION = re.compile(r"([0-9]+)([smhd])")
+_UNIT_MICROSECONDS = {"s": 1_000_000, "m": 60_000_000, "h": 3_600_000_000, "d": 86_400_000_000}
 KEYED_STRATEGIES = frozenset({"merge", "delete_insert"})
 
 # Type changes that keep every existing value exactly (sync_all_columns); nothing else is applied.
@@ -62,15 +81,36 @@ class Refuse:
     message: str
 
 
-type Step = StatementRequest | Check | Count | Refuse
+@dataclass(frozen=True, slots=True)
+class Watermark:
+    """The model's new watermark, as exact text: the larger of the previous one and the loaded
+    rows' largest `time_column` (None when there is neither). The runner stores it with
+    `watermark_statements`, in the same transaction."""
+
+    request: StatementRequest
+    model: str
+    reset: bool  # a full refresh: the previous watermark is dropped even if nothing loads
+
+
+type Step = StatementRequest | Check | Count | Refuse | Watermark
 
 
 def _identifier(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def _statement(sql: str) -> StatementRequest:
-    return StatementRequest(kind="statement", sql=sql, parameters=[])
+def _statement(sql: str, parameters: Sequence[Parameter] = ()) -> StatementRequest:
+    return StatementRequest(kind="statement", sql=sql, parameters=list(parameters))
+
+
+def uses_since(sql: str) -> bool:
+    """Whether the SQL references the `$since` parameter (DuckDB's parser; text in strings and
+    comments does not count)."""
+    try:
+        statements = duckdb.extract_statements(sql)
+    except duckdb.Error:
+        return False
+    return any(SINCE in statement.named_parameters for statement in statements)
 
 
 def config_problems(model: Model) -> list[ModelError]:
@@ -102,12 +142,34 @@ def config_problems(model: Model) -> list[ModelError]:
                 path="/incremental",
             )
         )
-    if strategy == "append" and (incremental.lookback or "0s") != "0s":
+    if not uses_since(model.sql):
+        if (incremental.filter or "auto") == "manual":
+            found.append(
+                problem(
+                    "MISSING_SINCE_PARAMETER",
+                    f"{model.sql_file}: filter: manual needs $since in the SQL, where the "
+                    "incremental filter belongs (for example WHERE <time_column> > $since).",
+                    model.sql_file,
+                    model=model.name,
+                )
+            )
+        else:
+            found.append(
+                problem(
+                    "INCREMENTAL_FILTER_NOT_PROVABLE",
+                    f"{file}: the incremental filter cannot be placed automatically yet; set "
+                    "filter: manual and use $since in the SQL.",
+                    file,
+                    model=model.name,
+                    path="/incremental/filter",
+                )
+            )
+    if strategy not in KEYED_STRATEGIES and lookback_microseconds(incremental.lookback) > 0:
         found.append(
             problem(
                 "LOOKBACK_REQUIRES_UNIQUE_KEY",
-                f"{file}: append with lookback would load the re-read rows twice; use merge "
-                "with a unique_key, or lookback: 0s.",
+                f"{file}: {strategy} with lookback would not replace the re-read rows by key; use "
+                "merge or delete_insert with a unique_key, or lookback: 0s.",
                 file,
                 model=model.name,
                 path="/incremental/lookback",
@@ -181,6 +243,116 @@ def schema_change(model: Model, output: Columns, existing: Columns | None) -> st
     return "; ".join(parts) or "the column order changed"
 
 
+def lookback_microseconds(lookback: str | None) -> int:
+    match = _DURATION.fullmatch(lookback or "0s")
+    assert match is not None  # the contract's Duration pattern
+    return int(match.group(1)) * _UNIT_MICROSECONDS[match.group(2)]
+
+
+def since_value(kind: str, watermark: str | None, lookback: str | None) -> str:
+    """`$since` for a time column of DuckDB type `kind`: the previous watermark minus `lookback`
+    (whole days for DATE, rounded down), or `-infinity` when there is no watermark.
+
+    Integer arithmetic on dates and microseconds: exact, and no clock is read. A watermark this
+    code cannot read (a year outside 1-9999) is returned unchanged; the store then refuses it as
+    a parameter, so the run fails instead of loading the wrong rows.
+    """
+    if watermark is None:
+        return LOWEST
+    if watermark in {"infinity", "-infinity"}:
+        return watermark
+    back = lookback_microseconds(lookback)
+    try:
+        if kind == "DATE":
+            day = dt.date.fromisoformat(watermark)
+            return (day - dt.timedelta(days=back // _UNIT_MICROSECONDS["d"])).isoformat()
+        moment = dt.datetime.fromisoformat(watermark) - dt.timedelta(microseconds=back)
+    except OverflowError:
+        return LOWEST  # before year 1: every row is newer
+    except ValueError:
+        return watermark
+    if kind == "TIMESTAMP WITH TIME ZONE":
+        if moment.tzinfo is None:
+            return watermark  # no offset: never read in the machine's zone; the store refuses it
+        moment = moment.astimezone(dt.UTC)
+    return moment.isoformat(timespec="microseconds")
+
+
+def _as_text(value: str, kind: str) -> str:
+    """A temporal value as the store's parameter text (ISO 8601; TIMESTAMPTZ in UTC with
+    `+00:00`; `infinity` and `-infinity` as such)."""
+    if kind == "DATE":
+        text = f"strftime({value}, '%Y-%m-%d')"
+    elif kind == "TIMESTAMP":
+        text = f"strftime({value}, '%Y-%m-%dT%H:%M:%S.%f')"
+    else:
+        text = f"strftime(timezone('UTC', {value}), '%Y-%m-%dT%H:%M:%S.%f') || '+00:00'"
+    return f"CASE WHEN isinf({value}) THEN CAST({value} AS VARCHAR) ELSE {text} END"
+
+
+def _watermark(model: Model, column: str, kind: str, stage: str, previous: str | None) -> Watermark:
+    loaded = f"SELECT max({column}) AS m FROM {stage}"
+    if previous is None:
+        sql, parameters = f"SELECT {_as_text('m', kind)} FROM ({loaded})", []
+    else:
+        # Re-read rows (lookback) may all be older than the previous watermark: never go back.
+        sql = (
+            f"SELECT {_as_text('w', kind)} FROM (SELECT CASE WHEN m IS NULL OR m < $p_previous "
+            f"THEN $p_previous ELSE m END AS w FROM ({loaded}))"
+        )
+        parameters = [
+            Parameter(name="p_previous", type=ParameterType(PARAMETER_TYPES[kind]), value=previous)
+        ]
+    return Watermark(_statement(sql, parameters), model.name, previous is None)
+
+
+def watermark_statements(step: Watermark, value: str | None) -> list[StatementRequest]:
+    """Statements that store a model's new watermark (run in the run transaction)."""
+    if value is None and not step.reset:
+        return []
+    model = Parameter(name="p_model", type=ParameterType("VARCHAR"), value=step.model)
+    statements = [
+        _statement("CREATE SCHEMA IF NOT EXISTS _meta"),
+        _statement(f"CREATE TABLE IF NOT EXISTS {WATERMARKS} (model VARCHAR, watermark VARCHAR)"),
+        _statement(f"DELETE FROM {WATERMARKS} WHERE model = $p_model", [model]),
+    ]
+    if value is not None:
+        text = Parameter(name="p_watermark", type=ParameterType("VARCHAR"), value=value)
+        statements.append(
+            _statement(f"INSERT INTO {WATERMARKS} VALUES ($p_model, $p_watermark)", [model, text])
+        )
+    return statements
+
+
+def watermark_request(snapshot: int, model: Model) -> ReadRequest:
+    """The model's stored watermark (no row: none stored)."""
+    return ReadRequest(
+        kind="read",
+        sql=f"SELECT watermark FROM {WATERMARKS} WHERE model = $p_model",
+        parameters=[Parameter(name="p_model", type=ParameterType("VARCHAR"), value=model.name)],
+        snapshot=snapshot,
+        batch_size=1,
+    )
+
+
+def table_watermark_request(snapshot: int, model: Model, kind: str) -> ReadRequest:
+    """The largest `time_column` already in the model's table: the watermark of a table written
+    before watermarks were stored (so it is never reloaded from `-infinity`)."""
+    incremental = model.config.incremental
+    assert incremental is not None
+    column = _identifier(incremental.time_column.root)
+    return ReadRequest(
+        kind="read",
+        sql=(
+            f"SELECT {_as_text('m', kind)} AS watermark FROM "
+            f"(SELECT max({column}) AS m FROM {_target(model)})"
+        ),
+        parameters=[],
+        snapshot=snapshot,
+        batch_size=1,
+    )
+
+
 def widens(old: str, new: str) -> bool:
     """True when every value of type `old` casts to `new` exactly (and back)."""
     for family in (_SIGNED_INTEGERS, _UNSIGNED_INTEGERS):
@@ -229,12 +401,37 @@ def _target(model: Model) -> str:
     return f"{_identifier(model.schema)}.{_identifier(model.table)}"
 
 
-def steps(model: Model, sql: str, output: Columns, existing: Columns | None) -> list[Step]:
-    """The run steps of one incremental model (`existing`: its table's columns, None if absent)."""
+def steps(
+    model: Model,
+    sql: str,
+    output: Columns,
+    existing: Columns | None,
+    since: str = LOWEST,
+    full_refresh: bool = False,
+    previous: str | None = None,
+) -> list[Step]:
+    """The run steps of one incremental model.
+
+    `existing`: its table's columns (None if absent); `since`: the `$since` value (text of the
+    time column's type); `full_refresh`: replace the table with every loaded row; `previous`:
+    the stored watermark (ignored on a full refresh).
+    """
     incremental = model.config.incremental
     assert incremental is not None  # only incremental models get here
     strategy = incremental.strategy
     policy = model.config.on_schema_change or "fail"
+    time_column = incremental.time_column.root
+    kind = {name.lower(): kind for name, kind in output}.get(time_column.lower(), "")
+    if kind not in PARAMETER_TYPES:
+        return [
+            Refuse(
+                "TIME_COLUMN_NOT_TEMPORAL",
+                f"{model.name}: time_column {time_column} must be DATE, TIMESTAMP or "
+                "TIMESTAMP WITH TIME ZONE.",
+            )
+        ]
+    if full_refresh:
+        existing, previous = None, None
     alterations: list[str] = []
     if existing is not None:
         planned = schema_statements(model, output, existing)
@@ -250,10 +447,16 @@ def steps(model: Model, sql: str, output: Columns, existing: Columns | None) -> 
     target = _target(model)
     stage_table = f"{model.schema}__{model.table}"
     stage = f"{STAGE_SCHEMA}.{_identifier(stage_table)}"
+    parameters = (
+        [Parameter(name=SINCE, type=ParameterType(PARAMETER_TYPES[kind]), value=since)]
+        if uses_since(sql)
+        else []
+    )
     result: list[Step] = [
         _statement(f"CREATE SCHEMA IF NOT EXISTS {STAGE_SCHEMA}"),
-        _statement(f"CREATE OR REPLACE TABLE {stage} AS {sql}"),
+        _statement(f"CREATE OR REPLACE TABLE {stage} AS {sql}", parameters),
         Count(f"SELECT count(*) FROM {stage}"),
+        _watermark(model, _identifier(time_column), kind, stage, previous),
     ]
     keys = [_identifier(key.root) for key in incremental.unique_key or []]
     listed = ", ".join(keys)
@@ -279,7 +482,8 @@ def steps(model: Model, sql: str, output: Columns, existing: Columns | None) -> 
     if existing is None:
         result += [
             _statement(f"CREATE SCHEMA IF NOT EXISTS {_identifier(model.schema)}"),
-            _statement(f"CREATE TABLE {target} AS SELECT * FROM {stage}"),
+            # A full refresh replaces the table; a first run creates it.
+            _statement(f"CREATE OR REPLACE TABLE {target} AS SELECT * FROM {stage}"),
         ]
     else:
         result += [_statement(statement) for statement in alterations]

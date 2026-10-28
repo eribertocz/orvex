@@ -10,10 +10,13 @@ from orvex.transform.incremental import (
     Check,
     Count,
     Refuse,
+    Watermark,
     column_problems,
     config_problems,
     schema_statements,
+    since_value,
     steps,
+    watermark_statements,
     widens,
 )
 from orvex.transform.models import Model, discover_models
@@ -24,7 +27,7 @@ COLUMNS = [("id", "BIGINT"), ("kwh", "DECIMAL(18,4)"), ("read_at", "TIMESTAMP WI
 def model(tmp_path: Path, sidecar: str) -> Model:
     folder = tmp_path / "models" / "s"
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "m.sql").write_text("SELECT 1 AS id", encoding="utf-8")
+    (folder / "m.sql").write_text("SELECT 1 AS id WHERE $since IS NOT NULL", encoding="utf-8")
     (folder / "m.yaml").write_text(sidecar, encoding="utf-8")
     found = discover_models(tmp_path, {})
     assert found.problems == ()
@@ -74,8 +77,10 @@ def execute(
             connection.execute("ROLLBACK")
             return counts, step.code
         if isinstance(step, StatementRequest):
-            connection.execute(step.sql)
+            connection.execute(step.sql, {p.name: p.value for p in step.parameters})
             continue
+        if isinstance(step, Watermark):
+            continue  # tested on its own below
         value = connection.execute(step.sql).fetchall()[0][0]
         counts.append(value)
         if isinstance(step, Check) and value != 0:
@@ -99,6 +104,8 @@ def test_config_rules(tmp_path: Path) -> None:
         tmp_path / "d", MERGE.replace("merge", "delete_insert").replace(", unique_key: [id]", "")
     )
     assert [p.code.root for p in config_problems(keyless)] == ["MISSING_UNIQUE_KEY"]
+    looking_back = model(tmp_path / "f", PARTITION.replace("[month]}", "[month], lookback: 1h}"))
+    assert [p.code.root for p in config_problems(looking_back)] == ["LOOKBACK_REQUIRES_UNIQUE_KEY"]
     unpartitioned = model(tmp_path / "e", APPEND.replace("append", "partition_overwrite"))
     assert [p.code.root for p in config_problems(unpartitioned)] == ["MISSING_PARTITION_BY"]
 
@@ -131,6 +138,8 @@ def test_merge_steps_run_in_duckdb(tmp_path: Path) -> None:
     def run(existing: list[tuple[str, str]] | None) -> list[int]:
         counts = []
         for step in steps(merge, "SELECT * FROM src", COLUMNS, existing):
+            if isinstance(step, Watermark):
+                continue  # TIMESTAMPTZ watermarks need the lake's time zone support
             if isinstance(step, StatementRequest):
                 connection.execute(step.sql)
             elif isinstance(step, Count | Check):
@@ -315,3 +324,140 @@ def test_the_column_check_fails_when_a_table_is_missing(tmp_path: Path) -> None:
     check = [s for s in steps(append, "SELECT 1 AS id", COLUMNS, COLUMNS) if isinstance(s, Check)]
     # Neither the stage nor the target exists: the lookups are both NULL, which must not pass.
     assert connection.execute(check[-1].sql).fetchall() == [(1,)]
+
+
+# --- P1-14: $since, watermark, lookback, full refresh --------------------------------------------
+
+
+def with_sql(tmp_path: Path, sidecar: str, sql: str) -> Model:
+    folder = tmp_path / "models" / "s"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "m.sql").write_text(sql, encoding="utf-8")
+    (folder / "m.yaml").write_text(sidecar, encoding="utf-8")
+    return discover_models(tmp_path, {}).models[0]
+
+
+def test_since_must_be_in_the_sql(tmp_path: Path) -> None:
+    manual = MERGE.replace("unique_key: [id]", "unique_key: [id], filter: manual")
+    # Text in a comment or a string is not the parameter.
+    unused = "SELECT 1 AS id, '$since' AS t -- $since"
+    (item,) = config_problems(with_sql(tmp_path / "a", manual, unused))
+    assert (item.code.root, item.details.file) == ("MISSING_SINCE_PARAMETER", "models/s/m.sql")
+    (item,) = config_problems(with_sql(tmp_path / "b", MERGE, unused))
+    assert (item.code.root, item.details.path) == (
+        "INCREMENTAL_FILTER_NOT_PROVABLE",
+        "/incremental/filter",
+    )
+    used = "SELECT 1 AS id FROM t WHERE read_at > $since"
+    assert config_problems(with_sql(tmp_path / "c", manual, used)) == []
+
+
+def test_since_is_the_watermark_minus_the_lookback() -> None:
+    tz = "TIMESTAMP WITH TIME ZONE"
+    assert since_value("DATE", None, "1h") == "-infinity"
+    assert since_value(tz, None, None) == "-infinity"
+    assert since_value("DATE", "2024-03-01", None) == "2024-03-01"
+    assert since_value("DATE", "2024-03-01", "47h") == "2024-02-29"  # whole days, rounded down
+    assert since_value("DATE", "2024-03-01", "2d") == "2024-02-28"
+    stamp = "2024-01-02T10:00:00.000001"
+    assert since_value("TIMESTAMP", stamp, "1h") == "2024-01-02T09:00:00.000001"
+    assert since_value("TIMESTAMP", stamp, "90s") == "2024-01-02T09:58:30.000001"
+    assert since_value(tz, "2024-01-02T00:10:00.000000+00:00", "30m") == (
+        "2024-01-01T23:40:00.000000+00:00"
+    )
+    assert since_value("TIMESTAMP", "infinity", "1h") == "infinity"
+    assert since_value("TIMESTAMP", "0001-01-01T00:00:00.000000", "1d") == "-infinity"
+
+
+def test_since_reaches_the_store_only_as_a_bound_parameter(tmp_path: Path) -> None:
+    sql = "SELECT * FROM src WHERE read_at > $since"
+    chosen = with_sql(tmp_path, MERGE, sql)
+    value = "2024-01-02T10:00:00.000000+00:00"
+    planned = steps(chosen, sql, COLUMNS, COLUMNS, value)
+    with_since = [s for s in planned if isinstance(s, StatementRequest) and s.parameters]
+    assert len(with_since) == 1
+    (parameter,) = with_since[0].parameters
+    assert (parameter.name, parameter.type.root, parameter.value) == ("since", "TIMESTAMPTZ", value)
+    assert "$since" in with_since[0].sql
+    texts = [
+        s.request.sql if isinstance(s, Watermark) else s.sql
+        for s in planned
+        if not isinstance(s, Refuse)
+    ]
+    assert all("2024" not in text for text in texts)
+
+
+def test_full_refresh_replaces_the_table(tmp_path: Path) -> None:
+    chosen = model(tmp_path, MERGE)
+    planned = steps(chosen, "SELECT 1", COLUMNS, [("other", "VARCHAR")], full_refresh=True)
+    sqls = [s.sql for s in planned if isinstance(s, StatementRequest)]
+    assert 'CREATE OR REPLACE TABLE "s"."m" AS SELECT * FROM _stage."s__m"' in sqls
+    assert not any(sql.startswith(("DELETE", "INSERT", "ALTER")) for sql in sqls)
+    assert not any(isinstance(s, Refuse) for s in planned)  # the old columns do not matter
+
+
+def test_watermark_is_the_largest_loaded_value(tmp_path: Path) -> None:
+    connection = lake()
+    for kind, rows, expected in [
+        ("DATE", "(DATE '2024-01-03'), (DATE '2024-05-01'), (NULL)", "2024-05-01"),
+        (
+            "TIMESTAMP",
+            "(TIMESTAMP '2099-12-31 23:59:59.999999'), (TIMESTAMP '2024-01-01 00:00:00')",
+            "2099-12-31T23:59:59.999999",
+        ),
+        ("TIMESTAMP", "(TIMESTAMP 'infinity')", "infinity"),
+        ("DATE", "(CAST(NULL AS DATE))", None),  # no value loaded: the previous one stays
+    ]:
+        chosen = model(tmp_path / kind, APPEND)
+        sql = f"SELECT * FROM (VALUES {rows}) AS t(read_at)"
+        planned = steps(chosen, sql, [("read_at", kind)], None)
+        (mark,) = [s for s in planned if isinstance(s, Watermark)]
+        for step in planned:
+            if step is mark:
+                assert connection.execute(step.request.sql).fetchall()[0][0] == expected
+                break
+            if isinstance(step, StatementRequest):
+                connection.execute(step.sql)
+
+
+def test_the_watermark_never_goes_back_and_is_stored_with_the_rows(tmp_path: Path) -> None:
+    connection = lake()
+    chosen = model(tmp_path, MERGE)
+    sql = "SELECT * FROM (VALUES (1, DATE '2024-01-03')) AS t(id, read_at)"
+    columns = [("id", "INTEGER"), ("read_at", "DATE")]
+
+    def new_watermark(previous: str | None, full_refresh: bool = False) -> str | None:
+        planned = steps(chosen, sql, columns, None, full_refresh=full_refresh, previous=previous)
+        for step in planned:
+            if isinstance(step, Watermark):
+                parameters = {p.name: p.value for p in step.request.parameters}
+                typed = step.request.sql.replace("$p_previous", "CAST($p_previous AS DATE)")
+                value: str | None = connection.execute(typed, parameters).fetchall()[0][0]
+                for statement in watermark_statements(step, value):
+                    connection.execute(
+                        statement.sql, {p.name: p.value for p in statement.parameters}
+                    )
+                return value
+            if isinstance(step, StatementRequest):
+                connection.execute(step.sql)
+        raise AssertionError("no watermark step")
+
+    stored = "SELECT model, watermark FROM _meta.watermarks"
+    assert new_watermark(None) == "2024-01-03"
+    assert connection.execute(stored).fetchall() == [("s.m", "2024-01-03")]
+    # Re-read rows older than the previous watermark (lookback): it stays where it was.
+    assert new_watermark("2024-02-01") == "2024-02-01"
+    assert new_watermark("2023-12-01") == "2024-01-03"
+    assert connection.execute(stored).fetchall() == [("s.m", "2024-01-03")]
+    # A full refresh starts again from the loaded rows, whatever was stored.
+    assert new_watermark("2099-01-01", full_refresh=True) == "2024-01-03"
+    assert connection.execute(stored).fetchall() == [("s.m", "2024-01-03")]
+
+
+def test_a_full_refresh_loading_nothing_drops_the_watermark() -> None:
+    step = Watermark(StatementRequest(kind="statement", sql="SELECT 1", parameters=[]), "s.m", True)
+    sqls = [s.sql for s in watermark_statements(step, None)]
+    assert any(sql.startswith("DELETE FROM _meta.watermarks") for sql in sqls)
+    assert not any(sql.startswith("INSERT") for sql in sqls)
+    kept = Watermark(step.request, "s.m", False)
+    assert watermark_statements(kept, None) == []

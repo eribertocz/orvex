@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
@@ -30,7 +30,13 @@ from orvex.contracts.run_record.v1 import (
     RunRecord,
     Versions,
 )
-from orvex.contracts.store.v1 import LocalLakeLocation, ReadRequest, StatementRequest
+from orvex.contracts.store.v1 import (
+    LocalLakeLocation,
+    Parameter,
+    ParameterType,
+    ReadRequest,
+    StatementRequest,
+)
 from orvex.server.identity import Identity
 from orvex.server.project import Project, ProjectLoadError, load_project
 from orvex.server.versions import module_versions
@@ -38,7 +44,7 @@ from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, Transaction, open_lake
 from orvex.transform import incremental
 from orvex.transform.graph import Graph, build_graph, compiled_sql, plan_run
-from orvex.transform.incremental import Columns, Count, Refuse, Step
+from orvex.transform.incremental import Columns, Count, Refuse, Step, Watermark
 from orvex.transform.models import Discovery, Model, discover_models
 from orvex.transform.run_records import history_request, record_statements
 from orvex.transform.sources import source_attachments
@@ -133,7 +139,7 @@ def _bind(
                     failed.add(name)
                     continue
                 try:
-                    output = lake.describe(compiled_sql(model, by_name))
+                    output = _describe(lake, model, compiled_sql(model, by_name))
                 except StoreError as error:
                     failed.add(name)
                     problems.append(
@@ -153,6 +159,34 @@ def _bind(
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     return columns, problems
+
+
+def _describe(lake: Lake, model: Model, sql: str) -> Columns:
+    """Output columns of a model's SQL. An incremental model's `$since` is bound as a NULL of
+    each temporal type in turn; the binding whose `time_column` has that type is the one a run
+    will use (any other model has no parameter to bind)."""
+    incremental_config = model.config.incremental
+    if model.config.materialized != "incremental" or incremental_config is None:
+        return lake.describe(sql)
+    if not incremental.uses_since(sql):
+        return lake.describe(sql)
+    time_column = incremental_config.time_column.root.lower()
+    first: Columns | None = None
+    error: StoreError | None = None
+    for output_type, parameter_type in incremental.PARAMETER_TYPES.items():
+        since = Parameter(name=incremental.SINCE, type=ParameterType(parameter_type), value=None)
+        try:
+            output = lake.describe(sql, [since])
+        except StoreError as failed:
+            error = error or failed
+            continue
+        if {name.lower(): kind for name, kind in output}.get(time_column) == output_type:
+            return output
+        first = first or output
+    if first is not None:
+        return first  # the time column is not temporal: the column rules report it
+    assert error is not None
+    raise error
 
 
 def _stand_in(lake: Lake, model: Model, output: Columns) -> None:
@@ -227,13 +261,36 @@ def _not_runnable(model: Model) -> Problem | None:
     return None
 
 
-def run(folder: Path, identity: Identity, out: IO[str]) -> int:
+def run(
+    folder: Path, identity: Identity, out: IO[str], full_refresh: Sequence[str] | None = None
+) -> int:
+    """Build every model. `full_refresh`: incremental models to rebuild from every row (all of
+    them when empty; None: no full refresh)."""
     checked = check_project(folder)
     if checked.problems or checked.project is None or checked.graph is None:
         for problem in checked.problems:
             print(problem, file=out)
         return 1
     project, graph = checked.project, checked.graph
+    incremental_names = {
+        m.name for m in checked.discovery.models if m.config.materialized == "incremental"
+    }
+    refreshed: frozenset[str] = frozenset()
+    if full_refresh is not None:
+        unknown = sorted(set(full_refresh) - incremental_names)
+        if unknown:
+            for name in unknown:
+                print(
+                    Problem(
+                        "MODEL_REFERENCE_UNKNOWN",
+                        ".",
+                        None,
+                        f"--full-refresh {name}: not an incremental model of the project.",
+                    ),
+                    file=out,
+                )
+            return 1
+        refreshed = frozenset(full_refresh or incremental_names)
     refused = [p for p in map(_not_runnable, checked.discovery.models) if p is not None]
     if refused:
         for problem in refused:
@@ -242,7 +299,7 @@ def run(folder: Path, identity: Identity, out: IO[str]) -> int:
     home = project.folder / f".{identity.slug}"
     try:
         with project_lock(home):
-            return _run_locked(project, graph, checked, home, identity, out)
+            return _run_locked(project, graph, checked, home, identity, out, refreshed)
     except ProjectLocked:
         print(
             Problem(
@@ -327,6 +384,8 @@ class _Outcome:
     rows_read: str | None = None
     rows_written: str | None = None
     error: RunError | None = None
+    since: str | None = None
+    watermark: str | None = None
 
 
 def _run_locked(
@@ -336,6 +395,7 @@ def _run_locked(
     home: Path,
     identity: Identity,
     out: IO[str],
+    refreshed: frozenset[str] = frozenset(),
 ) -> int:
     discovery = checked.discovery
     run_id = str(uuid.uuid4())
@@ -351,12 +411,34 @@ def _run_locked(
     except StoreError as error:
         open_error = error
     existing: dict[str, Columns | None] = {}
+    previous: dict[str, str | None] = {}
+    since: dict[str, str] = {}
     if lake is not None:
-        for model in discovery.models:
-            if model.config.materialized == "incremental":
-                existing[model.name] = _table_columns(lake, model)
-    plan = plan_run(discovery.models, graph, checked.columns, existing)
-    outcomes = [_Outcome(model, started, started) for model, _ in plan]
+        try:
+            for model in discovery.models:
+                if model.config.materialized == "incremental":
+                    existing[model.name] = _table_columns(lake, model)
+                    previous[model.name], since[model.name] = _since(
+                        lake,
+                        model,
+                        checked.columns.get(model.name, []),
+                        existing[model.name],
+                        model.name in refreshed,
+                    )
+        except StoreError as error:
+            lake.close()
+            lake, open_error = None, error
+    plan = plan_run(discovery.models, graph, checked.columns, existing, since, refreshed, previous)
+    outcomes = [
+        _Outcome(
+            model,
+            started,
+            started,
+            since=since.get(model.name),
+            watermark=previous.get(model.name),
+        )
+        for model, _ in plan
+    ]
     if open_error is not None:
         failure = _store_problem(open_error, ".", "")
         for item in outcomes:
@@ -431,17 +513,17 @@ def _run_locked(
             RunRecord(
                 run_id=run_id,
                 model=item.model.name,
-                trigger="manual",
+                trigger="full_refresh" if item.model.name in refreshed else "manual",
                 materialized=item.model.config.materialized or "table",
                 project_commit=commit,
                 project_dirty=dirty,
                 versions=_versions(identity),
-                since=None,
+                since=item.since,
                 rows_read=None if item.rows_read is None else RowsRead(item.rows_read),
                 rows_written=None
                 if item.rows_written is None or item.outcome != "success"
                 else RowsWritten(item.rows_written),
-                watermark=None,
+                watermark=item.watermark if item.outcome == "success" else None,
                 tests=[],
                 reconciliation=[],
                 snapshot_id=snapshot if item.outcome == "success" else None,
@@ -488,6 +570,12 @@ def _run_step(transaction: Transaction, step: Step, item: _Outcome) -> None:
         transaction.execute(step)
     elif isinstance(step, Refuse):
         raise _StepFailed(step.code, step.message)
+    elif isinstance(step, Watermark):
+        # Stored with the rows, in this transaction: it moves only if they commit.
+        value = transaction.value(step.request)
+        for statement in incremental.watermark_statements(step, value):
+            transaction.execute(statement)
+        item.watermark = value
     else:
         value = transaction.value(StatementRequest(kind="statement", sql=step.sql, parameters=[]))
         if isinstance(step, Count):
@@ -495,6 +583,39 @@ def _run_step(transaction: Transaction, step: Step, item: _Outcome) -> None:
             item.rows_written = item.rows_read
         elif value not in {None, "0"}:
             raise _StepFailed(step.code, step.message)
+
+
+def _since(
+    lake: Lake, model: Model, output: Columns, table: Columns | None, full_refresh: bool
+) -> tuple[str | None, str]:
+    """The model's previous watermark and its `$since`.
+
+    No table, or a full refresh: no watermark, `$since` is `-infinity` (every row loads). Else
+    the watermark stored with its table; for a table written before watermarks were stored, the
+    largest `time_column` in it.
+    """
+    incremental_config = model.config.incremental
+    assert incremental_config is not None
+    time_column = incremental_config.time_column.root.lower()
+    kind = {name.lower(): typ for name, typ in output}.get(time_column, "")
+    watermark: str | None = None
+    if table is not None and not full_refresh:
+        snapshot = lake.current_snapshot().id
+        try:
+            rows = _column(lake, incremental.watermark_request(snapshot, model))
+        except StoreError as error:
+            if error.code != "STORE_STATEMENT_INVALID":
+                raise
+            rows = []  # no watermarks table yet
+        if not rows and kind in incremental.PARAMETER_TYPES:
+            rows = _column(lake, incremental.table_watermark_request(snapshot, model, kind))
+        watermark = rows[0] if rows else None
+    return watermark, incremental.since_value(kind, watermark, incremental_config.lookback)
+
+
+def _column(lake: Lake, request: ReadRequest) -> list[str | None]:
+    values: list[str | None] = lake.read(request).read_all().column("watermark").to_pylist()
+    return values
 
 
 def _table_columns(lake: Lake, model: Model) -> Columns | None:

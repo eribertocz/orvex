@@ -67,7 +67,9 @@ export type ModelErrorCode =
 	| 'SCHEMA_CHANGED'
 	| 'UNIQUE_KEY_NULL'
 	| 'UNIQUE_KEY_DUPLICATED'
-	| 'MISSING_PARTITION_BY';
+	| 'MISSING_PARTITION_BY'
+	| 'MISSING_SINCE_PARAMETER'
+	| 'INCREMENTAL_FILTER_NOT_PROVABLE';
 
 /**
  * Sidecar of one model. Without a sidecar a model is `materialized: table`, fully rebuilt on each run.

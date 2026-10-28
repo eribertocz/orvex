@@ -424,6 +424,8 @@ def _converted(parameter: Parameter) -> str | None:
         if not math.isfinite(float(value)):
             raise _invalid(parameter, "out of range for DOUBLE")
         return value
+    if kind in {"DATE", "TIMESTAMP", "TIMESTAMPTZ"} and value in {"infinity", "-infinity"}:
+        return value  # DuckDB's own infinite dates and times (the lowest value is `-infinity`)
     try:
         if kind == "DATE":
             if not _DATE.fullmatch(value):
@@ -988,11 +990,12 @@ class Lake:
         rewritten = self._one("SELECT json_deserialize_sql($tree)", {"tree": json.dumps(tree)})
         return str(rewritten[0]) if rewritten else sql
 
-    def describe(self, sql: str) -> list[tuple[str, str]]:
+    def describe(self, sql: str, parameters: Sequence[Parameter] = ()) -> list[tuple[str, str]]:
         """(name, DuckDB type) of each output column of one SELECT, from the binder only.
 
         Nothing is executed. Sources may be named (writes read them); the statement checks of
-        writes apply (no file readers, no quoted file names, no catalog database).
+        writes apply (no file readers, no quoted file names, no catalog database). Parameters
+        are bound as for a write (typically with a `null` value: only their type matters).
         """
         statement = _single_statement(sql, self._table_functions)
         if statement.type != duckdb.StatementType.SELECT:
@@ -1001,11 +1004,13 @@ class Lake:
                 "Only a SELECT can be described.",
                 {"statement": statement.type.name},
             )
+        bound = _bound(statement, list(parameters))
+        typed = _typed(sql, list(parameters))
         self._admission.acquire(time.monotonic() + self._timeout_ms(None) / 1000)
         cursor = None
         try:
             cursor = self._cursor()
-            relation = cursor.sql(sql)
+            relation = cursor.sql(typed, params=bound) if bound else cursor.sql(typed)
             return [
                 (str(name), str(kind))
                 for name, kind in zip(relation.columns, relation.types, strict=True)
