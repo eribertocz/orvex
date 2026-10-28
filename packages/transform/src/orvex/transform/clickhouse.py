@@ -1,4 +1,4 @@
-"""ClickHouse extraction models: validated on ClickHouse itself, without reading a row (P1-17).
+"""ClickHouse extraction models: validated on ClickHouse itself, without running them (P1-17).
 
 An extraction model's SQL is ClickHouse SQL and runs on ClickHouse (ADR-0026); it is never parsed
 here as SQL. Only its text is scanned, for what must be known before asking the server: whether
@@ -7,6 +7,12 @@ identifiers and comments skipped). ClickHouse then parses the SQL (`EXPLAIN AST`
 and describes its output columns (`DESCRIBE`, nothing executed), with `since` bound server-side
 and every query read-only (`readonly = 1`). Every output type maps to an exact DuckDB type, or
 the column is refused (`UNSUPPORTED_SOURCE_TYPE`) with a hint to cast it in the SQL.
+
+Describing a query can still make ClickHouse evaluate parts of it (scalar subqueries, also inside
+views). Every validation query therefore carries a row limit that ClickHouse enforces, and the
+reader must not be able to lift it (decision #114). ClickHouse does not apply that limit to
+`Memory`, `Log` and `TinyLog` tables, nor inside views whose own definition sets it: those reads
+are not limited (documented in `contracts/model-config/v1`).
 
 `clickhouse-connect` is ClickHouse, Inc.'s official client (Apache-2.0, ADR-0002).
 """
@@ -29,8 +35,9 @@ from orvex.transform.models import Model, problem
 SINCE = "since"
 CONNECT_TIMEOUT = 10  # seconds
 QUERY_TIMEOUT = 30  # seconds, for validation queries (EXPLAIN, DESCRIBE)
-# Validation reads no row: ClickHouse evaluates scalar subqueries while it describes a query, so
-# reading is capped and a query that would read rows fails (TOO_MANY_ROWS) instead.
+# ClickHouse evaluates scalar subqueries while it describes a query: reading is capped, and a
+# query that would read rows fails (TOO_MANY_ROWS) after at most one block (not for Memory, Log
+# or TinyLog tables, which ClickHouse does not limit).
 VALIDATION_LIMITS: tuple[tuple[str, object], ...] = (
     ("max_execution_time", QUERY_TIMEOUT),
     ("max_rows_to_read", 1),
@@ -564,6 +571,19 @@ def _function_name(node: _Node) -> str:
     return node.detail.split(" ", 1)[0] if node.kind == "Function" else ""
 
 
+def sets_settings(tree: str) -> bool:
+    """Whether the `EXPLAIN AST` tree has a `SETTINGS` clause (a `Set` node) anywhere, or cannot
+    be read as a tree: a model must not change the limits its queries run with."""
+    root = _ast(tree)
+    if root is None:
+        return True
+
+    def visit(node: _Node) -> bool:
+        return node.kind == "Set" or any(visit(child) for child in node.children)
+
+    return visit(root)
+
+
 def evaluated_while_describing(tree: str) -> bool:
     """Whether describing the query would make ClickHouse read data: a scalar or EXISTS subquery
     (anything but a table in FROM, a named WITH table or the right side of IN). An `EXPLAIN AST`
@@ -666,22 +686,33 @@ class Source:
                 f"{readonly.value}, so its queries cannot be made read-only; use a user whose "
                 "profile allows readonly = 1 (or fixes it to 1).",
             )
-        # Decision #114 (option C): the reader must accept the validation limits, so ClickHouse
-        # itself stops any read (a view, a subquery) after the first block, whatever the SQL is.
-        fixed = sorted(
-            key
-            for key, _ in VALIDATION_LIMITS
-            if (known := self._client.server_settings.get(key)) is not None and known.readonly
+        # Decision #114 (option C): the reader must accept the validation limits, and SQL run
+        # by that reader must not be able to lift them, so ClickHouse itself stops any read (a
+        # view, a subquery) after the first block. Both are asked of the server once: a query
+        # with the limits must run, and one that lifts them must be refused.
+        refusal = SourceError(
+            "SOURCE_LIMITS_REFUSED",
+            f"ClickHouse connection {name}: the user must accept, and must not be able to change, "
+            f"the limits of validation queries ({', '.join(key for key, _ in VALIDATION_LIMITS)}); "
+            "use a user with only SELECT grants, without a settings profile or role that fixes "
+            "readonly or makes these settings changeable in read-only mode.",
         )
-        if fixed:
+        try:
+            self._client.query("SELECT 1", settings=self.settings())
+        except ClickHouseError as error:
             self._client.close()
-            raise SourceError(
-                "SOURCE_LIMITS_REFUSED",
-                f"ClickHouse connection {name}: the user's profile does not let queries set "
-                f"{', '.join(fixed)}, which keep validation from reading the source's rows; give "
-                "the user only SELECT grants, or a profile with readonly = 1 and "
-                f"{', '.join(f'{key} CHANGEABLE_IN_READONLY' for key, _ in VALIDATION_LIMITS)}.",
-            )
+            if isinstance(error, OperationalError):
+                raise self._error(error, "SOURCE_CONNECTION_FAILED") from None
+            raise refusal from None
+        try:
+            self._client.query("SELECT 1 SETTINGS max_rows_to_read = 0", settings=self.settings())
+        except ClickHouseError as error:
+            if isinstance(error, OperationalError):
+                self._client.close()
+                raise self._error(error, "SOURCE_CONNECTION_FAILED") from None
+        else:
+            self._client.close()
+            raise refusal
 
     def _error(self, error: BaseException, code: str) -> SourceError:
         """The failure as the user reads it: network and server-unavailable failures are the
@@ -734,6 +765,12 @@ class Source:
             raise SourceError(
                 "INVALID_MODEL_SQL",
                 f"an extraction model is one SELECT; ClickHouse reads {kind}.",
+            )
+        if sets_settings(tree):
+            raise SourceError(
+                "INVALID_MODEL_SQL",
+                f"ClickHouse connection {self.name}: an extraction model cannot set ClickHouse "
+                "settings (SETTINGS …); the engine sets the limits of its queries itself.",
             )
         if evaluated_while_describing(tree):
             raise SourceError("INVALID_MODEL_SQL", self._rows_read_message())

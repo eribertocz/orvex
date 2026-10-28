@@ -325,18 +325,18 @@ def test_connection_rules(
 def test_reader_profiles(
     tmp_path: Path, source: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Decision #114: the reader must accept the validation limits, so that ClickHouse itself
-    stops any read (a view, a subquery) while it describes a model."""
+    """Decision #114: the reader must accept the validation limits and must not be able to lift
+    them, so that ClickHouse itself stops any read (a view, a subquery) while it describes."""
     client = admin()
     suffix = source["reader"]
     profile = f"{suffix}_profile"
-    accepting, fixed, loose = f"{suffix}_ok", f"{suffix}_ro1", f"{suffix}_ro2"
+    changeable, fixed, loose = f"{suffix}_changeable", f"{suffix}_ro1", f"{suffix}_ro2"
     monkeypatch.setenv(VARIABLE, READER_PASSWORD)
     created = [
         f"CREATE SETTINGS PROFILE {profile} SETTINGS readonly = 1, "
         "max_rows_to_read CHANGEABLE_IN_READONLY, read_overflow_mode CHANGEABLE_IN_READONLY, "
         "max_execution_time CHANGEABLE_IN_READONLY",
-        f"CREATE USER {accepting} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}' "
+        f"CREATE USER {changeable} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}' "
         f"SETTINGS PROFILE {profile}",
         f"CREATE USER {fixed} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}' "
         "SETTINGS readonly = 1",
@@ -346,7 +346,7 @@ def test_reader_profiles(
     try:
         for statement in created:
             client.command(statement)
-        for user in (accepting, fixed, loose):
+        for user in (changeable, fixed, loose):
             client.command(f"GRANT SELECT ON {source['database']}.* TO {user}")
         example = {"models/raw/ch_events.sql": EXAMPLE, "models/raw/ch_events.yaml": EXTRACTION}
 
@@ -354,29 +354,36 @@ def test_reader_profiles(
             found = problems(project(tmp_path / folder, {**source, "reader": user}, models))
             return [item.split(" ", 1)[0] for item in found]
 
-        assert codes("ok", accepting, example) == []
+        # Its queries could lift the limits (SETTINGS in the SQL): refused.
+        assert codes("changeable", changeable, example) == ["SOURCE_LIMITS_REFUSED"]
+        # The limits cannot be sent at all: refused.
         assert codes("fixed", fixed, example) == ["SOURCE_LIMITS_REFUSED"]
         assert codes("loose", loose, example) == ["SOURCE_NOT_READ_ONLY"]
+        reader = source["reader"]  # SELECT grants only: accepted
+        assert codes("ok", reader, example) == []
         stopped = [
             # The view's scalar subquery is invisible in the model: the row limit stops it.
             "SELECT event_id FROM totals",
             "SELECT e.event_id FROM events AS e JOIN totals USING (event_id)",
+            # A model cannot change the limits.
+            "SELECT event_id FROM totals SETTINGS max_rows_to_read = 0",
+            "SELECT event_id FROM (SELECT * FROM totals SETTINGS read_overflow_mode = 'break')",
             # Written in the model: refused before ClickHouse describes it.
             "SELECT event_id, (SELECT sum(value) FROM events) IN (1) AS c FROM events",
             "SELECT event_id FROM events WHERE EXISTS (SELECT 1 FROM events WHERE value > 1)",
         ]
         for position, sql in enumerate(stopped):
             models = {"models/raw/m.sql": sql, "models/raw/m.yaml": TABLE}
-            assert codes(f"stopped{position}", accepting, models) == ["INVALID_MODEL_SQL"], sql
+            assert codes(f"stopped{position}", reader, models) == ["INVALID_MODEL_SQL"], sql
         client.command("SYSTEM FLUSH LOGS")
         heaviest = client.query(
-            "SELECT max(read_rows) FROM system.query_log WHERE user = {user:String} "
+            "SELECT max(read_rows) FROM system.query_log WHERE user IN ({users:Array(String)}) "
             "AND query_kind IN ('Explain', 'Describe')",
-            parameters={"user": accepting},
+            parameters={"users": [reader, changeable]},
         ).result_rows
         assert int(heaviest[0][0]) < 1000  # never all the rows of events
     finally:
-        for user in (accepting, fixed, loose):
+        for user in (changeable, fixed, loose):
             client.command(f"DROP USER IF EXISTS {user}")
         client.command(f"DROP SETTINGS PROFILE IF EXISTS {profile}")
         client.close()

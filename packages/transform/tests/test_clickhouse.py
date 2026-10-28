@@ -12,6 +12,7 @@ from orvex.transform.clickhouse import (
     evaluated_while_describing,
     map_type,
     scan,
+    sets_settings,
     since_problems,
     since_type,
 )
@@ -310,3 +311,24 @@ def test_subqueries_clickhouse_evaluates_while_describing() -> None:
         "     Subquery (children 1)",
     )
     assert evaluated_while_describing(exists)
+
+
+def test_settings_clauses_anywhere() -> None:
+    nested = ast(
+        *SELECT_HEAD,
+        "   TablesInSelectQuery",
+        "    TablesInSelectQueryElement",
+        "     TableExpression",
+        "      Subquery",
+        "       SelectWithUnionQuery",
+        "        ExpressionList",
+        "         SelectQuery",
+        "          ExpressionList",
+        "           Literal UInt64_1 (alias a)",
+        "          Set",
+        "   ExpressionList",
+        "    Identifier a",
+    )
+    assert sets_settings(nested)
+    lines = nested.split("\n")
+    assert not sets_settings(ast(*(line for line in lines if line.strip() != "Set")))
