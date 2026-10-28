@@ -27,7 +27,7 @@ COLUMNS = [("id", "BIGINT"), ("kwh", "DECIMAL(18,4)"), ("read_at", "TIMESTAMP WI
 def model(tmp_path: Path, sidecar: str) -> Model:
     folder = tmp_path / "models" / "s"
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "m.sql").write_text("SELECT 1 AS id WHERE $since IS NOT NULL", encoding="utf-8")
+    (folder / "m.sql").write_text("SELECT 1 AS id", encoding="utf-8")
     (folder / "m.yaml").write_text(sidecar, encoding="utf-8")
     found = discover_models(tmp_path, {})
     assert found.problems == ()
@@ -343,13 +343,12 @@ def test_since_must_be_in_the_sql(tmp_path: Path) -> None:
     unused = "SELECT 1 AS id, '$since' AS t -- $since"
     (item,) = config_problems(with_sql(tmp_path / "a", manual, unused))
     assert (item.code.root, item.details.file) == ("MISSING_SINCE_PARAMETER", "models/s/m.sql")
-    (item,) = config_problems(with_sql(tmp_path / "b", MERGE, unused))
-    assert (item.code.root, item.details.path) == (
-        "INCREMENTAL_FILTER_NOT_PROVABLE",
-        "/incremental/filter",
-    )
+    # filter: auto places the filter itself (proven later, with the binder).
+    assert config_problems(with_sql(tmp_path / "b", MERGE, unused)) == []
     used = "SELECT 1 AS id FROM t WHERE read_at > $since"
     assert config_problems(with_sql(tmp_path / "c", manual, used)) == []
+    (item,) = config_problems(with_sql(tmp_path / "d", MERGE, used))
+    assert (item.code.root, item.details.path) == ("MODEL_CONFIG_INVALID", "/incremental/filter")
 
 
 def test_since_is_the_watermark_minus_the_lookback() -> None:

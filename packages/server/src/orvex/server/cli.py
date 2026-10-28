@@ -101,6 +101,12 @@ def command_parser(identity: Identity) -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate", help="check a project without changing anything")
     validate.add_argument("project", type=Path, help="project folder")
+    validate.add_argument(
+        "--show-sql",
+        metavar="MODEL",
+        default=None,
+        help="print the SQL that runs for MODEL (views inlined, automatic filter placed)",
+    )
     run = commands.add_parser("run", help="build every model of a project into its local lake")
     run.add_argument("project", type=Path, help="project folder")
     run.add_argument(
@@ -128,7 +134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # like a command is opened with `<slug> ./validate`.
         command = command_parser(identity).parse_args(given)
         if command.command == "validate":
-            return validate(command.project, sys.stdout)
+            return validate(command.project, sys.stdout, command.show_sql)
         if command.command == "schedule":
             return schedule(command.project, identity, sys.stdout)
         if command.command == "runs":

@@ -43,7 +43,7 @@ from orvex.server.project import Project, ProjectLoadError, load_project
 from orvex.server.versions import module_versions
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, Transaction, open_lake
-from orvex.transform import incremental, model_tests, reconciliation, schedule
+from orvex.transform import auto_filter, incremental, model_tests, reconciliation, schedule
 from orvex.transform.graph import Graph, build_graph, compiled_sql, plan_run, test_relations
 from orvex.transform.incremental import Columns, Count, Refuse, Step, Watermark
 from orvex.transform.model_tests import ModelTest
@@ -80,6 +80,8 @@ class Checked:
     columns: Mapping[str, Columns] = field(default_factory=dict)
     # Each model's reconciliation checks: the type of their measure difference.
     differences: Mapping[str, list[Comparison]] = field(default_factory=dict)
+    # Incremental models with `filter: auto`: their SQL with the proven filter (P1-13).
+    filtered: Mapping[str, str] = field(default_factory=dict)
 
 
 class ProjectLocked(Exception):
@@ -111,22 +113,23 @@ def check_project(folder: Path) -> Checked:
         problems += [_from_model_error(item) for item in reconciliation.problems(model, kinds)]
     columns: dict[str, Columns] = {}
     differences: dict[str, list[Comparison]] = {}
+    filtered: dict[str, str] = {}
     needs_binding = any(
         m.config.materialized == "incremental" or m.config.tests or m.config.reconciliation
         for m in discovery.models
     )
     if needs_binding and not problems:
-        columns, differences, bind_problems = _bind(project, discovery, graph)
+        columns, differences, filtered, bind_problems = _bind(project, discovery, graph)
         problems += bind_problems
         problems += [
             _from_model_error(item) for item in incremental.problems_for(discovery.models, columns)
         ]
-    return Checked(project, discovery, graph, tuple(problems), columns, differences)
+    return Checked(project, discovery, graph, tuple(problems), columns, differences, filtered)
 
 
 def _bind(
     project: Project, discovery: Discovery, graph: Graph
-) -> tuple[dict[str, Columns], dict[str, list[Comparison]], list[Problem]]:
+) -> tuple[dict[str, Columns], dict[str, list[Comparison]], dict[str, str], list[Problem]]:
     """Output columns of every model, from DuckDB's binder; nothing is executed.
 
     Binding happens in a scratch lake in a temporary folder (never the project's): upstream
@@ -137,6 +140,7 @@ def _bind(
     relations = test_relations(discovery.models)
     columns: dict[str, Columns] = {}
     differences: dict[str, list[Comparison]] = {}
+    filtered: dict[str, str] = {}
     problems: list[Problem] = []
     failed: set[str] = set()
     scratch = Path(tempfile.mkdtemp(prefix="bind-"))
@@ -145,7 +149,7 @@ def _bind(
         try:
             lake = open_lake(location, _limits(), source_attachments(project.connections))
         except StoreError as error:
-            return {}, {}, [_store_problem(error, ".", "")]
+            return {}, {}, {}, [_store_problem(error, ".", "")]
         try:
             for name in graph.order:
                 model = by_name[name]
@@ -166,6 +170,12 @@ def _bind(
                     )
                     continue
                 columns[name] = output
+                if _automatic(model):
+                    proven = _prove_filter(lake, model, output, by_name)
+                    if isinstance(proven, Problem):
+                        problems.append(proven)
+                    else:
+                        filtered[name] = proven
                 if model.config.materialized != "view":
                     _stand_in(lake, model, output)
                 if model.config.tests:
@@ -178,7 +188,66 @@ def _bind(
             lake.close()
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
-    return columns, differences, problems
+    return columns, differences, filtered, problems
+
+
+def _automatic(model: Model) -> bool:
+    incremental_config = model.config.incremental
+    return (
+        model.config.materialized == "incremental"
+        and incremental_config is not None
+        and (incremental_config.filter or "auto") == "auto"
+        and not model.extraction
+    )
+
+
+def _prove_filter(
+    lake: Lake, model: Model, output: Columns, by_name: Mapping[str, Model]
+) -> str | Problem:
+    """The model's SQL with the proven `> $since` filter, bound once to check it; or why the
+    filter cannot be proven (`INCREMENTAL_FILTER_NOT_PROVABLE`, with the time column's line)."""
+    incremental_config = model.config.incremental
+    assert incremental_config is not None
+    described: dict[tuple[str, ...], list[str] | None] = {}
+
+    def columns_of(path: list[str]) -> list[str] | None:
+        parts = tuple(path)
+        if parts not in described:
+            relation = ".".join('"' + part.replace('"', '""') + '"' for part in parts)
+            try:
+                described[parts] = [name for name, _ in lake.describe(f"SELECT * FROM {relation}")]
+            except StoreError:
+                described[parts] = None
+        return described[parts]
+
+    time_column = incremental_config.time_column.root
+    result = auto_filter.filtered_sql(model.sql, time_column, columns_of)
+    if isinstance(result, auto_filter.Refusal):
+        return Problem(
+            "INCREMENTAL_FILTER_NOT_PROVABLE",
+            model.sql_file,
+            auto_filter.line_of(model.sql, result.location),
+            f"{model.name}: a filter on {time_column} cannot be proven safe "
+            f"(reason: {result.reason}); set filter: manual and place $since in the SQL.",
+        )
+    try:
+        rewritten = _describe(lake, model, compiled_sql(model, by_name, result))
+    except StoreError as error:
+        return Problem(
+            "INCREMENTAL_FILTER_NOT_PROVABLE",
+            model.sql_file,
+            None,
+            f"{model.name}: the filtered SQL does not bind ({_store_message(error)}); set "
+            "filter: manual.",
+        )
+    if [name for name, _ in rewritten] != [name for name, _ in output]:
+        return Problem(
+            "INCREMENTAL_FILTER_NOT_PROVABLE",
+            model.sql_file,
+            None,
+            f"{model.name}: the filtered SQL changes the output columns; set filter: manual.",
+        )
+    return result
 
 
 def _bind_reconciliation(
@@ -356,12 +425,25 @@ def project_lock(folder: Path) -> Iterator[None]:
         handle.close()  # closing releases the lock
 
 
-def validate(folder: Path, out: IO[str]) -> int:
+def validate(folder: Path, out: IO[str], show_sql: str | None = None) -> int:
+    """Check a project; `show_sql`: also print the SQL that runs for that model (views inlined,
+    the automatic incremental filter placed)."""
     checked = check_project(folder)
     for problem in checked.problems:
         print(problem, file=out)
     if checked.problems:
         return 1
+    if show_sql is not None:
+        by_name = {model.name: model for model in checked.discovery.models}
+        model = by_name.get(show_sql)
+        if model is None:
+            print(
+                Problem("MODEL_REFERENCE_UNKNOWN", ".", None, f"{show_sql} is not a model."),
+                file=out,
+            )
+            return 1
+        print(compiled_sql(model, by_name, checked.filtered.get(show_sql)), file=out)
+        return 0
     print(f"{len(checked.discovery.models)} models, no problems.", file=out)
     return 0
 
@@ -579,6 +661,7 @@ def _run_locked(
         refreshed,
         previous,
         checked.differences,
+        checked.filtered,
     )
     if selection is not None:
         plan = [(model, steps) for model, steps in plan if model.name in selection.models]

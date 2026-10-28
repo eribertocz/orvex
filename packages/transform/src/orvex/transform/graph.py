@@ -220,11 +220,12 @@ def _cycles(remaining: dict[str, set[str]]) -> list[list[str]]:
             del remaining[member]
 
 
-def compiled_sql(model: Model, models: Mapping[str, Model]) -> str:
-    """The model's SQL with every `view` model it reads inlined as a subquery (recursively)."""
+def compiled_sql(model: Model, models: Mapping[str, Model], sql: str | None = None) -> str:
+    """The model's SQL (or `sql`, its rewritten form) with every `view` model it reads inlined
+    as a subquery (recursively)."""
     connection = _parser()
     try:
-        tree = _inline(connection, model.sql, models, frozenset({model.name}))
+        tree = _inline(connection, sql or model.sql, models, frozenset({model.name}))
         row = connection.execute(
             "SELECT json_deserialize_sql($tree)", {"tree": json.dumps(tree)}
         ).fetchone()
@@ -284,6 +285,7 @@ def plan_run(
     full_refresh: frozenset[str] = frozenset(),
     previous: Mapping[str, str | None] | None = None,
     differences: Mapping[str, Sequence[Comparison]] | None = None,
+    filtered: Mapping[str, str] | None = None,
 ) -> list[tuple[Model, list[Step | ModelTest | Reconcile]]]:
     """Steps that build every stored model, in run order (views are not stored).
 
@@ -294,7 +296,8 @@ def plan_run(
 
     Each model's tests (P1-15), then its reconciliation checks (P1-16), follow its write; a
     view with checks gets an entry with only them, run on its SQL. Tests need `outputs`, and
-    reconciliation how each check compares, from the binder (`differences`).
+    reconciliation how each check compares, from the binder (`differences`). `filtered` holds
+    the SQL of incremental models whose filter was proven and injected (P1-13).
     """
     by_name = {model.name: model for model in models}
     relations = test_relations(models)
@@ -312,7 +315,7 @@ def plan_run(
             if tests:
                 plan.append((model, list(tests)))
             continue
-        sql = compiled_sql(model, by_name)
+        sql = compiled_sql(model, by_name, (filtered or {}).get(name))
         if model.config.materialized == "incremental":
             output = (outputs or {}).get(name, [])
             plan.append(

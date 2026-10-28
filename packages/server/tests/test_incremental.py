@@ -76,11 +76,12 @@ def table(folder: Path) -> list[tuple[object, ...]]:
 
 
 APPEND = (
-    "version: 1\nmaterialized: incremental\nincremental: {strategy: append, time_column: read_at}\n"
+    "version: 1\nmaterialized: incremental\n"
+    "incremental: {strategy: append, time_column: read_at, filter: manual}\n"
 )
 MERGE = (
     "version: 1\nmaterialized: incremental\n"
-    "incremental: {strategy: merge, time_column: read_at, unique_key: [id]}\n"
+    "incremental: {strategy: merge, time_column: read_at, unique_key: [id], filter: manual}\n"
 )
 BIG = "99999999999999999999999999999999999999"
 
@@ -298,7 +299,8 @@ def test_a_later_failure_rolls_back_what_the_incremental_model_wrote(
 DELETE_INSERT = MERGE.replace("merge", "delete_insert")
 PARTITION = (
     "version: 1\nmaterialized: incremental\n"
-    "incremental: {strategy: partition_overwrite, time_column: read_at, partition_by: [month]}\n"
+    "incremental: {strategy: partition_overwrite, time_column: read_at, partition_by: [month], "
+    "filter: manual}\n"
 )
 BY_MONTH = "SELECT id, region, kwh, strftime(read_at, '%Y-%m') AS month, read_at FROM feed.data"
 
