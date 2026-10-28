@@ -71,9 +71,24 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 2s --health-timeout 5s --health-retries 30
+      # ClickHouse source for the extraction-model tests (P1-17, #65, #98); a disposable server,
+      # not a secret. The tests create their own read-only user and synthetic tables.
+      clickhouse:
+        image: clickhouse/clickhouse-server:26.9.25.15
+        env:
+          CLICKHOUSE_USER: ci
+          CLICKHOUSE_PASSWORD: ci-disposable-database
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports: ["8123:8123"]
+        options: >-
+          --health-cmd "clickhouse-client --user ci --password ci-disposable-database --query 'SELECT 1'"
+          --health-interval 2s --health-timeout 5s --health-retries 60
     env:
       STORE_TEST_POSTGRES: host=localhost port=5432 dbname=postgres user=postgres
       STORE_TEST_POSTGRES_PASSWORD: ci-disposable-database
+      TRANSFORM_TEST_CLICKHOUSE: http://localhost:8123
+      TRANSFORM_TEST_CLICKHOUSE_USER: ci
+      TRANSFORM_TEST_CLICKHOUSE_PASSWORD: ci-disposable-database
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -88,6 +103,8 @@ jobs:
           for package in packages/*/; do
             python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
           done
+      - name: Image digests (temporary, to pin the service images)
+        run: docker image inspect --format '{{.RepoTags}} {{.RepoDigests}}' clickhouse/clickhouse-server:26.9.25.15
       - run: pytest --junitxml=junit.xml
       - name: Report failures as annotations
         if: failure()
