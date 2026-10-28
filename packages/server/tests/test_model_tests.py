@@ -145,7 +145,9 @@ def test_failing_tests_roll_the_whole_run_back(
     project(tmp_path, ALL)
     assert command(capsys, "run", str(tmp_path))[0] == 0
     before = snapshots(tmp_path)
-    table = lake_value(tmp_path, "SELECT * FROM lake.a.readings ORDER BY ALL")
+    table = lake_value(
+        tmp_path, "SELECT CAST(COLUMNS(*) AS VARCHAR) FROM lake.a.readings ORDER BY ALL"
+    )
     feed(tmp_path, BAD)
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 1
@@ -164,7 +166,10 @@ def test_failing_tests_roll_the_whole_run_back(
     )
     assert len(lines) == 5
     assert snapshots(tmp_path) == before + 1
-    assert lake_value(tmp_path, "SELECT * FROM lake.a.readings ORDER BY ALL") == table
+    assert (
+        lake_value(tmp_path, "SELECT CAST(COLUMNS(*) AS VARCHAR) FROM lake.a.readings ORDER BY ALL")
+        == table
+    )
 
 
 def test_later_models_do_not_run_after_a_failed_test(
