@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -73,6 +74,8 @@ def test_the_example_model_passes(tmp_path: Path) -> None:
         ("SELECT 1 AS `a\\n   TableExpression x`", "INVALID_MODEL_SQL"),
         ('SELECT 1 AS "a\u2028b"', "INVALID_MODEL_SQL"),
         ("SELECT 1 AS `a\x1cb`", "INVALID_MODEL_SQL"),
+        # `$` inside an unquoted name does not start a heredoc that would hide a quoted name.
+        ("SELECT 1 AS a$1$, 2 AS `x\n   TableExpression y`, 3 AS b$1$", "INVALID_MODEL_SQL"),
         ("SELECT 1 WHERE t > {since:String}", "MODEL_CONFIG_INVALID"),
         ("SELECT 1 WHERE t > {since: Date} AND u > {since:Date32}", "MODEL_CONFIG_INVALID"),
         ("SELECT 1 WHERE t > {since:Date} AND k = {key:String}", "INVALID_MODEL_SQL"),
@@ -207,7 +210,18 @@ def test_unsupported_types(clickhouse: str) -> None:
 
 
 def ast(*lines: str) -> str:
-    return "\n".join(lines)
+    """An `EXPLAIN AST` text from node lines, with each node's `(children N)` filled in."""
+    bare = [re.sub(r" \(children [0-9]+\)$", "", line) for line in lines]
+    depths = [len(line) - len(line.lstrip(" ")) for line in bare]
+    out = []
+    for index, line in enumerate(bare):
+        children = 0
+        for later in depths[index + 1 :]:
+            if later <= depths[index]:
+                break
+            children += later == depths[index] + 1
+        out.append(f"{line} (children {children})" if children else line)
+    return "\n".join(out)
 
 
 SELECT_HEAD = (
@@ -271,6 +285,24 @@ def test_subqueries_clickhouse_evaluates_while_describing() -> None:
     assert not evaluated_while_describing(column_lookup)
     joined = constant_lookup.replace("Function dictGet", "Function joinGetOrNull")
     assert evaluated_while_describing(joined)
+    # A line whose node announces other children than it has, or a second root, fails closed.
+    assert evaluated_while_describing(named.replace("WithElement (children 1)", "WithElement"))
+    assert evaluated_while_describing(
+        named.replace("WithElement (children 1)", "WithElement (children 2)")
+    )
+    assert evaluated_while_describing(named + "\nSelectWithUnionQuery")
+    replace = ast(
+        "SelectWithUnionQuery (children 1)",
+        " ExpressionList (children 1)",
+        "  SelectQuery (children 1)",
+        "   ExpressionList (children 1)",
+        "    Asterisk (children 1)",
+        "     ColumnsTransformerList (children 1)",
+        "      ColumnsReplaceTransformer (children 1)",
+        "       ColumnsReplaceTransformer::Replacement (children 1)",
+        "        Identifier a",
+    )
+    assert not evaluated_while_describing(replace)
     # Text that is not a tree of node lines fails closed.
     assert evaluated_while_describing(named + "\n   x not a node")
     assert evaluated_while_describing(named.replace("    WithElement", "      WithElement"))

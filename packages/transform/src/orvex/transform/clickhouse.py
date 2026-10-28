@@ -100,6 +100,7 @@ def _skip_block_comment(sql: str, start: int) -> int:
 
 # ClickHouse heredoc strings: `$$…$$` and `$tag$…$tag$`, where a tag may start with a digit.
 _HEREDOC = re.compile(r"\$([A-Za-z0-9_]*)\$")
+_NAME_CHARACTER = re.compile(r"[A-Za-z0-9_$]")
 # `{name:Type}`: ClickHouse reads a parameter only without spaces before the `:`.
 _PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*):")
 
@@ -120,7 +121,8 @@ def _tokens(sql: str) -> Iterator[tuple[int, int, str]]:
             end = len(sql) if newline < 0 else newline + 1
         elif sql.startswith("/*", index):
             end = _skip_block_comment(sql, index)
-        elif char == "$":
+        elif char == "$" and not (index and _NAME_CHARACTER.match(sql[index - 1])):
+            # Inside an unquoted name (`a$1$`), `$` is part of the name, not a heredoc.
             heredoc = _HEREDOC.match(sql, index)
             if heredoc is not None:
                 closing = sql.find(heredoc.group(0), heredoc.end())
@@ -516,7 +518,8 @@ _IN_FUNCTIONS = frozenset(
     }
 )
 # A line of `EXPLAIN AST`: indentation, a node kind, then its details.
-_AST_LINE = re.compile(r"( *)([A-Z][A-Za-z]*)(?: (.*))?")
+_AST_LINE = re.compile(r"( *)([A-Z][A-Za-z]*(?:::[A-Z][A-Za-z]*)*)(?: (.*))?")
+_CHILDREN = re.compile(r"\(children ([0-9]+)\)$")
 
 
 @dataclass
@@ -545,7 +548,16 @@ def _ast(tree: str) -> _Node | None:
         node = _Node(match.group(2), match.group(3) or "", [])
         stack[-1][1].children.append(node)
         stack.append((depth, node))
+    # Every node has exactly the children it announces, under one root: a forged line breaks it.
+    if len(root.children) != 1 or not _counts_match(root.children[0]):
+        return None
     return root
+
+
+def _counts_match(node: _Node) -> bool:
+    announced = _CHILDREN.search(node.detail)
+    expected = int(announced.group(1)) if announced else 0
+    return len(node.children) == expected and all(_counts_match(c) for c in node.children)
 
 
 def _function_name(node: _Node) -> str:
