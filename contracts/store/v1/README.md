@@ -135,7 +135,7 @@ Preconditions:
 | Code | Meaning |
 |---|---|
 | `STORE_SNAPSHOT_NOT_FOUND` | The requested snapshot does not exist |
-| `STORE_SNAPSHOT_EXPIRED` | The requested snapshot existed but was expired by maintenance (older than the oldest snapshot kept) |
+| `STORE_SNAPSHOT_EXPIRED` | The requested snapshot existed but was expired by maintenance (a missing id up to the current one) |
 | `STORE_STATEMENT_INVALID` | Not exactly one statement, a non-`SELECT` in a read, a statement kind not allowed in a transaction, or a read naming another catalog |
 | `STORE_QUERY_FAILED` | DuckDB rejected or failed the statement; its message is in `details` |
 | `STORE_PARAMETER_INVALID` | A parameter is missing, extra, or not convertible to its declared type |

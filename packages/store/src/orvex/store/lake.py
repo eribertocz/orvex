@@ -944,8 +944,9 @@ class Lake:
         DuckLake's own `CHECKPOINT` order, step by step so each one is counted: flush inlined
         data, expire, merge, rewrite, expire again (the snapshot merging replaced, when it is
         older than the cutoff), clean up, delete orphans. The current snapshot is never expired.
-        Runs like a write transaction: one at a time, after the writer ahead. Counts are read in
-        SQL; no row reaches Python.
+        Runs alone: one maintenance at a time, after every read and write of this lake ends
+        (every admission slot, then the writer lock). Counts are read in SQL; no row reaches
+        Python.
         """
         for instant in (expire_before, orphans_before):
             if instant.tzinfo is None:
