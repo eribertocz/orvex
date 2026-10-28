@@ -246,8 +246,8 @@ def test_run_builds_models_in_order_all_or_nothing(
     changes = lake.execute(
         "SELECT changes FROM ducklake_snapshots('lake') ORDER BY snapshot_id DESC LIMIT 1"
     ).fetchall()
-    assert "_meta" in str(changes)
-    assert "marts" not in str(changes)
+    # Only inserts into the existing run-records table: no table created, replaced or dropped.
+    assert set(changes[0][0]) <= {"inlined_insert", "tables_inserted_into"}
     assert lake.execute("SELECT count(*) FROM lake.staging.readings").fetchall() == [(4,)]
     lake.close()
 
