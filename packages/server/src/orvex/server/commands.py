@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -838,6 +839,8 @@ def _publish_lineage(
             with opener.open(request, timeout=LINEAGE_TIMEOUT_S) as response:
                 response.read()
         except (OSError, ValueError) as error:
+            if isinstance(error, urllib.error.HTTPError):
+                error.close()  # an HTTP error keeps the response open until closed
             # Never the key: only the kind of failure and the file that keeps the events.
             reason = getattr(error, "code", None) or type(error).__name__
             return Problem(
