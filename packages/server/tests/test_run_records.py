@@ -14,7 +14,8 @@ import pytest
 from orvex.contracts.run_record.v1 import RunRecord
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
-from orvex.transform.run_records import record_statements
+from orvex.store.lake import _typed as typed
+from orvex.transform.run_records import history_request, record_statements
 
 SLUG = load_identity().slug
 PROJECT = "version: 1\nname: Test\ntime_zone: America/La_Paz\n"
@@ -102,10 +103,17 @@ def test_record_statements_bind_every_value() -> None:
     statements = record_statements([record])
     insert = statements[-1]
     assert "Conversion" not in insert.sql  # values never enter the SQL text
+    # Every parameter is found and typed the way the store binds it.
+    assert typed(insert.sql, list(insert.parameters)).count("CAST($p_") == len(insert.parameters)
     values = {parameter.name: parameter.value for parameter in insert.parameters}
-    assert values["error_code"] == "STORE_QUERY_FAILED"
-    assert values["rows_written"] is None
-    assert values["project_dirty"] == "false"
+    assert values["p_error_code"] == "STORE_QUERY_FAILED"
+    assert values["p_rows_written"] is None
+    assert values["p_project_dirty"] == "false"
+
+
+def test_history_parameters_bind() -> None:
+    request = history_request(1, "America/La_Paz", 5)
+    assert typed(request.sql, list(request.parameters)).count("CAST($p_") == 2
 
 
 def test_runs_without_any_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

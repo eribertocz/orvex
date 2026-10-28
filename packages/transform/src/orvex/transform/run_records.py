@@ -56,7 +56,9 @@ def record_statements(records: Sequence[RunRecord]) -> list[StatementRequest]:
         _statement("CREATE SCHEMA IF NOT EXISTS _meta"),
         _statement(f"CREATE TABLE IF NOT EXISTS {TABLE} ({columns})"),
     ]
-    placeholders = ", ".join(f"${name}" for name, _ in _COLUMNS)
+    # Parameters are `$p_<column>`: a bare column name can be a SQL keyword (`trigger`), which
+    # the store does not accept as a parameter name.
+    placeholders = ", ".join(f"$p_{name}" for name, _ in _COLUMNS)
     for record in records:
         values: dict[str, str | None] = {
             "run_id": record.run_id,
@@ -86,7 +88,7 @@ def record_statements(records: Sequence[RunRecord]) -> list[StatementRequest]:
         statements.append(
             _statement(
                 f"INSERT INTO {TABLE} VALUES ({placeholders})",
-                [_parameter(name, kind, values[name]) for name, kind in _COLUMNS],
+                [_parameter(f"p_{name}", kind, values[name]) for name, kind in _COLUMNS],
             )
         )
     return statements
@@ -98,16 +100,16 @@ def history_request(snapshot: int, time_zone: str, limit: int) -> ReadRequest:
         kind="read",
         sql=(
             "SELECT run_id, "
-            "strftime(timezone($tz, min(started_at)), '%Y-%m-%d %H:%M:%S') AS started, "
+            "strftime(timezone($p_tz, min(started_at)), '%Y-%m-%d %H:%M:%S') AS started, "
             "CASE WHEN bool_and(outcome = 'success') THEN 'success' ELSE 'failed' END AS outcome, "
             "max(snapshot_id) AS snapshot, "
             "string_agg(model, ', ' ORDER BY model) AS models "
             f"FROM {TABLE} GROUP BY run_id "
-            "ORDER BY min(started_at) DESC, run_id LIMIT $limit"
+            "ORDER BY min(started_at) DESC, run_id LIMIT $p_limit"
         ),
         parameters=[
-            _parameter("tz", "VARCHAR", time_zone),
-            _parameter("limit", "BIGINT", str(limit)),
+            _parameter("p_tz", "VARCHAR", time_zone),
+            _parameter("p_limit", "BIGINT", str(limit)),
         ],
         snapshot=snapshot,
         batch_size=1000,
