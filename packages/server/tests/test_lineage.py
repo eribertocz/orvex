@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import socket
 import threading
+import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -376,3 +377,22 @@ def test_column_lineage_follows_the_select_after_a_column_is_added(
     fields = facets["columnLineage"]["fields"]
     assert fields["tag"]["inputFields"][0]["field"] == "consumer_id"
     assert fields["kwh"]["inputFields"][0]["field"] == "kwh"
+
+
+def test_a_collector_that_never_answers_times_out(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()  # accepts connections and never answers
+    try:
+        url = f"http://127.0.0.1:{listener.getsockname()[1]}/api"
+        project(tmp_path, settings=f"lineage:\n  url: {url}\n")
+        started = time.monotonic()
+        code, out = command(capsys, "run", str(tmp_path))
+        elapsed = time.monotonic() - started
+    finally:
+        listener.close()
+    assert code == 0, out
+    assert "LINEAGE_NOT_SENT" in out
+    assert elapsed < 25  # one request times out after 10 s; the rest are not attempted

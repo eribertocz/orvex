@@ -721,7 +721,8 @@ def _run_locked(
 
 
 LINEAGE_FOLDER = "lineage"
-LINEAGE_TIMEOUT_S = 30  # for all of a run's events together
+LINEAGE_TIMEOUT_S = 10  # each request
+LINEAGE_DEADLINE_S = 30  # all of a run's events together
 
 
 def _lineage_events(
@@ -837,7 +838,7 @@ def _publish_lineage(
         # A collector on this machine is reached directly: a proxy would see the key in clear.
         handlers.append(urllib.request.ProxyHandler({}))
     opener = urllib.request.build_opener(*handlers)
-    deadline = time.monotonic() + LINEAGE_TIMEOUT_S
+    deadline = time.monotonic() + LINEAGE_DEADLINE_S
     for event in events:
         remaining = deadline - time.monotonic()
         request = urllib.request.Request(
@@ -849,7 +850,7 @@ def _publish_lineage(
         try:
             if remaining <= 0:
                 raise TimeoutError
-            with opener.open(request, timeout=remaining) as response:
+            with opener.open(request, timeout=min(LINEAGE_TIMEOUT_S, remaining)) as response:
                 response.read()
         except Exception as error:  # noqa: BLE001 (any failure is a warning, never the run's)
             if isinstance(error, urllib.error.HTTPError):
