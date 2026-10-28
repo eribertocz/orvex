@@ -60,7 +60,13 @@ export type ModelErrorCode =
 	| 'UNSUPPORTED_MODEL_KIND'
 	| 'MODEL_REFERENCE_UNKNOWN'
 	| 'DEPENDENCY_CYCLE'
-	| 'PROJECT_LOCKED';
+	| 'PROJECT_LOCKED'
+	| 'MISSING_UNIQUE_KEY'
+	| 'LOOKBACK_REQUIRES_UNIQUE_KEY'
+	| 'TIME_COLUMN_NOT_TEMPORAL'
+	| 'SCHEMA_CHANGED'
+	| 'UNIQUE_KEY_NULL'
+	| 'UNIQUE_KEY_DUPLICATED';
 
 /**
  * Sidecar of one model. Without a sidecar a model is `materialized: table`, fully rebuilt on each run.

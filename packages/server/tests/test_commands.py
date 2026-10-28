@@ -128,23 +128,23 @@ def test_validate_reports_project_errors(
     assert out.startswith("PROJECT_NOT_FOUND project.yaml")
 
 
-def test_incremental_model_is_refused_before_opening_the_lake(
+def test_an_invalid_incremental_model_is_refused_before_opening_the_lake(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Rules that need only the sidecar stop the run before anything is opened."""
     full_project(tmp_path)
     write(
         tmp_path,
         {
             "models/staging/readings.yaml": (
                 "version: 1\nmaterialized: incremental\n"
-                "incremental: {strategy: append, time_column: read_at}\n"
+                "incremental: {strategy: merge, time_column: read_at}\n"
             )
         },
     )
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 1
-    assert out.startswith("UNSUPPORTED_MODEL_KIND models/staging/readings.yaml")
-    assert "staging.readings" in out
+    assert out.startswith("MISSING_UNIQUE_KEY models/staging/readings.yaml")
     assert not (tmp_path / f".{SLUG}").exists()
 
 

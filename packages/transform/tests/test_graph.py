@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
+from orvex.contracts.store.v1 import StatementRequest
 from orvex.transform.graph import build_graph, compiled_sql, plan_run
 from orvex.transform.models import Discovery, discover_models
 
@@ -43,8 +44,8 @@ def test_order_is_topological_and_deterministic(tmp_path: Path) -> None:
     )
     assert graph.dependencies["marts.consumption"] == ("staging.active", "staging.consumers")
     assert graph.sources["staging.readings"] == ("archive",)
-    first = [[s.sql for s in statements] for _, statements in plan_run(found.models, graph)]
-    second = [[s.sql for s in statements] for _, statements in plan_run(found.models, graph)]
+    first = [[str(s) for s in statements] for _, statements in plan_run(found.models, graph)]
+    second = [[str(s) for s in statements] for _, statements in plan_run(found.models, graph)]
     assert first == second
 
 
@@ -58,7 +59,9 @@ def test_view_models_are_inlined_not_stored(tmp_path: Path) -> None:
         "marts.consumption",
     ]
     consumption = {model.name: statements for model, statements in plan}["marts.consumption"]
-    sql = consumption[1].sql
+    step = consumption[1]
+    assert isinstance(step, StatementRequest)
+    sql = step.sql
     assert "staging.active" not in sql
     assert "staging.readings" in sql
     # The compiled SQL still parses as one CREATE TABLE … AS SELECT.

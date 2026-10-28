@@ -21,7 +21,7 @@ A model is `models/<folder>/<name>.sql`: one `SELECT` in DuckDB SQL (or, for an 
 
 Durations are `<n>s|m|h|d`. Unknown keys are errors. The sidecar is read like the project files: a regular UTF-8 file under 1 MiB, one document, no duplicate keys, anchors, aliases or merge keys, no null values.
 
-Cross-field rules (`MISSING_UNIQUE_KEY`, `MISSING_PARTITION_BY`, `LOOKBACK_REQUIRES_UNIQUE_KEY`, `TIME_COLUMN_NOT_TEMPORAL`, `FRESHNESS_TOO_SHORT`, filter checks) are added by the issues that implement those behaviors, as compatible extensions of the error list.
+Cross-field rules not listed below (`MISSING_PARTITION_BY`, `FRESHNESS_TOO_SHORT`, filter checks) are added by the issues that implement those behaviors, as compatible extensions of the error list.
 
 ## `ModelError`
 
@@ -36,6 +36,12 @@ Cross-field rules (`MISSING_UNIQUE_KEY`, `MISSING_PARTITION_BY`, `LOOKBACK_REQUI
 | `MODEL_REFERENCE_UNKNOWN` | A model reads a table that is neither a model (`<folder>.<name>`) nor a source (`<connection>.<table>`) |
 | `DEPENDENCY_CYCLE` | Models depend on each other in a cycle (the message lists it in order) |
 | `PROJECT_LOCKED` | Another process holds the project's local lake (`orvex run`) |
+| `MISSING_UNIQUE_KEY` | `merge` (or `delete_insert`) without `unique_key` |
+| `LOOKBACK_REQUIRES_UNIQUE_KEY` | `append` with a `lookback` other than `0s` (re-reading would duplicate rows) |
+| `TIME_COLUMN_NOT_TEMPORAL` | `time_column` missing from the output, or not `DATE`, `TIMESTAMP` or `TIMESTAMP WITH TIME ZONE` |
+| `SCHEMA_CHANGED` | An incremental model's output columns (names, order, types) differ from its existing table |
+| `UNIQUE_KEY_NULL` | Loaded rows of a `merge` with a `NULL` key part (the run rolls back) |
+| `UNIQUE_KEY_DUPLICATED` | Loaded rows of a `merge` with the same key twice (the run rolls back) |
 
 `details` holds `file` (relative to the project folder), and when known `model`, `path` (a JSON pointer into the sidecar) and `line`. Discovery reports every problem of a project at once.
 

@@ -988,6 +988,37 @@ class Lake:
         rewritten = self._one("SELECT json_deserialize_sql($tree)", {"tree": json.dumps(tree)})
         return str(rewritten[0]) if rewritten else sql
 
+    def describe(self, sql: str) -> list[tuple[str, str]]:
+        """(name, DuckDB type) of each output column of one SELECT, from the binder only.
+
+        Nothing is executed. Sources may be named (writes read them); the statement checks of
+        writes apply (no file readers, no quoted file names, no catalog database).
+        """
+        statement = _single_statement(sql, self._table_functions)
+        if statement.type != duckdb.StatementType.SELECT:
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "Only a SELECT can be described.",
+                {"statement": statement.type.name},
+            )
+        self._admission.acquire(time.monotonic() + self._timeout_ms(None) / 1000)
+        cursor = None
+        try:
+            cursor = self._cursor()
+            relation = cursor.sql(sql)
+            return [
+                (str(name), str(kind))
+                for name, kind in zip(relation.columns, relation.types, strict=True)
+            ]
+        except duckdb.Error as error:
+            raise StoreError(
+                "STORE_QUERY_FAILED", "DuckDB could not bind the query.", {"duckdb": str(error)}
+            ) from None
+        finally:
+            if cursor is not None:
+                cursor.close()
+            self._admission.release()
+
     def read(self, request: ReadRequest) -> pa.RecordBatchReader:
         """Run one SELECT as of `request.snapshot` and return it once, as Arrow batches."""
         return self.start_read(request).reader
@@ -1293,6 +1324,49 @@ class Transaction:
             guard = self._guard
         if guard is not None:
             guard.cancel()
+
+    def value(self, request: StatementRequest) -> str | None:
+        """The first column of the first row of one SELECT run inside this transaction, as text.
+
+        For small checks between statements (counts, existence): it sees the transaction's
+        uncommitted changes. `None` when there is no row or the value is NULL.
+        """
+        statement = _single_statement(request.sql, self._table_functions)
+        if statement.type != duckdb.StatementType.SELECT:
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "A transaction value must come from one SELECT.",
+                {"statement": statement.type.name},
+            )
+        parameters = _bound(statement, request.parameters)
+        deadline = time.monotonic() + self._timeout_ms(request.timeout_ms) / 1000
+        guard = Guard(self._cursor, deadline)
+        with self._lock:
+            if self.cancelled:
+                guard.stop()
+                raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
+            self._guard = guard
+        typed = _typed(request.sql, request.parameters)
+        try:
+            inexact = _inexact_column_read(self._cursor, typed, parameters, self._inexact)
+            if inexact is not None:
+                raise StoreError(
+                    "UNSUPPORTED_SOURCE_TYPE",
+                    f"Column {inexact} has no exact type in DuckDB (law 11); cast it at the "
+                    "source or leave it out.",
+                    {"column": inexact},
+                )
+            result = self._cursor.execute(
+                f"SELECT CAST(#1 AS VARCHAR) FROM ({typed}) LIMIT 1", parameters
+            )
+            row = result.fetchone()
+            result.fetchone()  # reaches the end of the result, so the cursor is free again
+        except duckdb.Error as error:
+            raise guard.error(error) from error
+        finally:
+            guard.stop()
+            self._guard = None
+        return None if not row or row[0] is None else str(row[0])
 
     def execute(self, request: StatementRequest) -> None:
         statement = _single_statement(request.sql, self._table_functions)
