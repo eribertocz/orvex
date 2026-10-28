@@ -349,6 +349,9 @@ def test_since_must_be_in_the_sql(tmp_path: Path) -> None:
     assert config_problems(with_sql(tmp_path / "c", manual, used)) == []
     (item,) = config_problems(with_sql(tmp_path / "d", MERGE, used))
     assert (item.code.root, item.details.path) == ("MODEL_CONFIG_INVALID", "/incremental/filter")
+    # DuckDB binds `$SINCE` to the same parameter: it counts as a use.
+    (item,) = config_problems(with_sql(tmp_path / "e", MERGE, used.replace("$since", "$SINCE")))
+    assert (item.code.root, item.details.path) == ("MODEL_CONFIG_INVALID", "/incremental/filter")
 
 
 def test_since_is_the_watermark_minus_the_lookback() -> None:

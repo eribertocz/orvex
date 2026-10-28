@@ -110,7 +110,10 @@ def uses_since(sql: str) -> bool:
         statements = duckdb.extract_statements(sql)
     except duckdb.Error:
         return False
-    return any(SINCE in statement.named_parameters for statement in statements)
+    # DuckDB binds `$SINCE` and `$Since` to the same parameter: the name is matched without case.
+    return any(
+        name.lower() == SINCE for statement in statements for name in statement.named_parameters
+    )
 
 
 def config_problems(model: Model) -> list[ModelError]:

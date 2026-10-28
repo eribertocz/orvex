@@ -197,6 +197,7 @@ def _path(leaf: Tree) -> list[str]:
 _EXPANDING = frozenset({"unnest", "unlist"})
 # DuckDB renames a repeated output name of a subquery or CTE to `<name>_1`, `<name>_2`, …
 _RENAMED = re.compile(r".+?(_[0-9]+)+")
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def _unnamed(node: Tree) -> Tree | None:
@@ -256,17 +257,20 @@ class _Proof:
     def __init__(self, tree: Tree, columns_of: ColumnsOf) -> None:
         statement = tree["statements"][0]
         self.columns_of = columns_of
-        self.ctes: dict[str, Tree] = {}
+        # Only the outermost WITH is followed. A CTE defined in a nested scope (a subquery, another
+        # CTE) is visible only there, so where a one-part name means that CTE and where it means a
+        # table is not proven: such statements are refused (`nested`).
+        top = statement["node"].get("cte_map")
+        entries = top.get("map", []) if isinstance(top, dict) else []
+        self.ctes: dict[str, Tree] = {str(e["key"]).lower(): e["value"] for e in entries}
+        self.order = list(self.ctes)  # a CTE sees only the CTEs written before it
+        self.visible: frozenset[str] = frozenset(self.ctes)  # CTEs in scope where tracing is
+        self.nested = any(
+            isinstance(node.get("cte_map"), dict) and node["cte_map"].get("map")
+            for node in _walk(statement["node"])
+            if node is not statement["node"]
+        )
         self.cte_uses: dict[str, int] = {}
-        self.shadowed: set[str] = set()  # CTE names defined in more than one scope
-        for node in _walk(statement["node"]):
-            cte_map = node.get("cte_map")
-            if isinstance(cte_map, dict):
-                for entry in cte_map.get("map", []):
-                    key = str(entry["key"]).lower()
-                    if key in self.ctes:
-                        self.shadowed.add(key)
-                    self.ctes[key] = entry["value"]
         # `query('…')` and `query_table('…')` read relations by name at run time: their uses of a
         # CTE cannot be counted, so a statement with them is not followed.
         self.dynamic = any(
@@ -281,6 +285,10 @@ class _Proof:
 
     def trace(self, node: Tree, column: str, depth: int = 0) -> _Found | Refusal:
         if depth > 64:
+            return Refusal("expression")
+        if not _IDENTIFIER.fullmatch(column):
+            # DuckDB names an unaliased expression by its text (`COALESCE(ts)`) and renames a
+            # later item with the same name: only plain names are proven to be the item read.
             return Refusal("expression")
         reason = _reason_in_query(node)
         if reason is not None:
@@ -371,7 +379,9 @@ class _Proof:
             outputs = _query_outputs(leaf["subquery"]["node"])
         elif leaf.get("type") != "BASE_TABLE":
             return None
-        elif not leaf.get("schema_name") and str(leaf.get("table_name", "")).lower() in self.ctes:
+        elif (
+            not leaf.get("schema_name") and str(leaf.get("table_name", "")).lower() in self.visible
+        ):
             cte = self.ctes[str(leaf.get("table_name", "")).lower()]
             if cte.get("aliases"):
                 return None  # renamed by position: not followed
@@ -421,15 +431,20 @@ class _Proof:
         if kind != "BASE_TABLE":
             return Refusal("several tables")
         name = str(leaf.get("table_name", "")).lower()
-        if not leaf.get("schema_name") and name in self.ctes:
+        if not leaf.get("schema_name") and name in self.visible:
             cte = self.ctes[name]
-            if self.cte_uses.get(name, 0) != 1 or name in self.shadowed:
+            if self.cte_uses.get(name, 0) != 1:
                 return Refusal("several tables")  # a filter in it would reach every use
             if cte.get("materialized") not in (None, "CTE_MATERIALIZE_DEFAULT"):
                 return Refusal("several tables")
             if cte.get("aliases"):
                 return Refusal("expression")  # `c(a, b)` renames by position
-            return self.trace(cte["query_node"], column, depth + 1)
+            outer = self.visible
+            self.visible = frozenset(self.order[: self.order.index(name)])
+            try:
+                return self.trace(cte["query_node"], column, depth + 1)
+            finally:
+                self.visible = outer
         columns = self.columns_of(_path(leaf))
         if columns is None:
             return Refusal("several tables")  # the table's columns are not known
@@ -456,7 +471,7 @@ def prove(sql: str, time_column: str, columns_of: ColumnsOf) -> Tree | Refusal:
         return Refusal("expression")
     rewritten = copy.deepcopy(tree)
     proof = _Proof(rewritten, columns_of)
-    if proof.dynamic:
+    if proof.dynamic or proof.nested:
         return Refusal("several tables")
     found = proof.trace(rewritten["statements"][0]["node"], time_column)
     if isinstance(found, Refusal):

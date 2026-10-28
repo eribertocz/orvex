@@ -17,6 +17,7 @@ COLUMNS = known(
         "staging.consumers": ["consumer_id", "tariff", "created_at"],
         "staging.other": ["reading_id", "consumer_id", "read_at", "status", "kwh"],
         "staging.u": ["consumer_id", "read_at", "data"],
+        "ev": ["reading_id", "read_at"],
     }
 )
 SINCE = dt.datetime(2024, 1, 2, 12, 0)  # plain TIMESTAMP columns here
@@ -59,6 +60,8 @@ PROVABLE = [
     "SELECT r.read_at, c.tariff FROM staging.readings AS r "
     "LEFT JOIN staging.consumers AS c USING (consumer_id)",
     "SELECT a.read_at FROM staging.readings AS a JOIN staging.readings AS b USING (reading_id)",
+    "WITH a AS (SELECT * FROM staging.readings WHERE status = 'valid'), b AS (SELECT * FROM a) "
+    "SELECT reading_id, read_at FROM b",
 ]
 
 
@@ -193,6 +196,39 @@ def test_proven_filters_keep_exactly_the_newer_rows(sql: str) -> None:
             "WHERE reading_id IN (SELECT reading_id FROM query('SELECT * FROM c'))",
             "several tables",
         ),
+        # A CTE is followed only where DuckDB sees it (third review): a nested WITH, or a CTE
+        # name used before its definition, may mean a table with the same name.
+        (
+            "SELECT read_at FROM ev WHERE EXISTS "
+            "(WITH ev AS (SELECT read_at FROM staging.u) SELECT 1)",
+            "several tables",
+        ),
+        (
+            "SELECT read_at FROM ev, (WITH ev AS (SELECT read_at FROM staging.u) SELECT 1 AS z) s",
+            "several tables",
+        ),
+        (
+            "WITH a AS (WITH ev AS (SELECT read_at FROM staging.u) SELECT 1 AS z) "
+            "SELECT ev.read_at FROM ev, a",
+            "several tables",
+        ),
+        # A generated name (`COALESCE(read_at)`) can rename an alias with the same text.
+        (
+            'SELECT "COALESCE(read_at)" AS read_at FROM (SELECT COALESCE(read_at), '
+            'kwh AS "COALESCE(read_at)" FROM staging.readings) s',
+            "expression",
+        ),
+        (
+            'SELECT "CAST(read_at AS TIMESTAMP)" AS read_at FROM '
+            '(SELECT CAST(read_at AS TIMESTAMP), kwh AS "CAST(read_at AS TIMESTAMP)" '
+            "FROM staging.readings) s",
+            "expression",
+        ),
+        (
+            'WITH c AS (SELECT COALESCE(read_at), kwh AS "COALESCE(read_at)" '
+            'FROM staging.readings) SELECT "COALESCE(read_at)" AS read_at FROM c',
+            "expression",
+        ),
         (
             "SELECT readings.read_at FROM staging.readings "
             "JOIN archive.readings USING (reading_id)",
@@ -212,6 +248,23 @@ def test_the_rewrite_is_deterministic_and_strict() -> None:
     assert first == filtered_sql(sql, "read_at", COLUMNS)
     assert isinstance(first, str)
     assert "(readings.read_at > $since)" in first
+
+
+def test_a_cte_does_not_see_a_later_cte() -> None:
+    # Inside `a`, `ev` is the table `ev`: the later CTE `ev` is not in scope there.
+    sql = (
+        "WITH a AS (SELECT read_at FROM ev), ev AS (SELECT read_at FROM staging.u) "
+        "SELECT read_at FROM a"
+    )
+    result = filtered_sql(sql, "read_at", COLUMNS)
+    assert isinstance(result, str), result
+    assert "FROM ev WHERE (ev.read_at > $since)), ev AS" in result
+    connection = lake()
+    connection.execute("CREATE TABLE ev AS SELECT reading_id, read_at FROM staging.readings")
+    connection.execute("CREATE TABLE staging.u AS SELECT TIMESTAMP '2020-01-01' AS read_at")
+    expected = rows(connection, f"SELECT * FROM ({sql}) AS q WHERE q.read_at > $since", True)
+    assert rows(connection, result, since=True) == expected
+    assert expected
 
 
 def test_the_location_of_the_column_is_reported() -> None:
