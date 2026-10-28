@@ -71,7 +71,8 @@ export type ModelErrorCode =
 	| 'MISSING_SINCE_PARAMETER'
 	| 'INCREMENTAL_FILTER_NOT_PROVABLE'
 	| 'MODEL_TEST_FAILED'
-	| 'RECONCILIATION_FAILED';
+	| 'RECONCILIATION_FAILED'
+	| 'FRESHNESS_TOO_SHORT';
 
 /**
  * Sidecar of one model. Without a sidecar a model is `materialized: table`, fully rebuilt on each run.

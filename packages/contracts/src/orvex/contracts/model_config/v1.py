@@ -153,6 +153,7 @@ class ModelErrorCode(
             "INCREMENTAL_FILTER_NOT_PROVABLE",
             "MODEL_TEST_FAILED",
             "RECONCILIATION_FAILED",
+            "FRESHNESS_TOO_SHORT",
         ]
     ]
 ):
@@ -177,6 +178,7 @@ class ModelErrorCode(
         "INCREMENTAL_FILTER_NOT_PROVABLE",
         "MODEL_TEST_FAILED",
         "RECONCILIATION_FAILED",
+        "FRESHNESS_TOO_SHORT",
     ]
 
 
