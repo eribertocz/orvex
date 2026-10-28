@@ -222,23 +222,45 @@ def lake_value(folder: Path, sql: str) -> list[tuple[object, ...]]:
     return result
 
 
+@pytest.mark.parametrize(
+    ("sidecar", "expected"),
+    [
+        (
+            APPEND,
+            [
+                (1, "n", "1.0000", BIG, "1704189600000000"),
+                (2, "n", "2.0000", BIG, "1704276000000000"),
+                (2, "s", "2.5001", BIG, "1704276000000000"),
+                (3, "s", "3.0000", BIG, "1704362400000000"),
+            ],
+        ),
+        (
+            MERGE,
+            # Every column of a matched key is replaced, not only the ones that changed.
+            [
+                (1, "n", "1.0000", BIG, "1704189600000000"),
+                (2, "s", "2.5001", BIG, "1704276000000000"),
+                (3, "s", "3.0000", BIG, "1704362400000000"),
+            ],
+        ),
+    ],
+)
 def test_hugeint_survives_append_and_merge_exactly(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    sidecar: str,
+    expected: list[tuple[object, ...]],
 ) -> None:
+    """Every value written by the second run goes through INSERT … SELECT from the stage."""
     hugeint = "SELECT id, region, kwh, CAST(big AS HUGEINT) AS big, read_at FROM feed.data"
-    project(tmp_path, MERGE, hugeint)
+    project(tmp_path, sidecar, hugeint)
     feed(tmp_path, rows((1, "n", "1.0000"), (2, "n", "2.0000")))
     assert command(capsys, "run", str(tmp_path))[0] == 0
     feed(tmp_path, rows((2, "s", "2.5001"), (3, "s", "3.0000")))
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 0, out
-    assert lake_value(tmp_path, "SELECT typeof(big) FROM lake.s.m LIMIT 1") == [("HUGEINT",)]
-    # Every column of a matched key is replaced, not only the ones that changed.
-    assert table(tmp_path) == [
-        (1, "n", "1.0000", BIG, "1704189600000000"),
-        (2, "s", "2.5001", BIG, "1704276000000000"),
-        (3, "s", "3.0000", BIG, "1704362400000000"),
-    ]
+    assert lake_value(tmp_path, "SELECT DISTINCT typeof(big) FROM lake.s.m") == [("HUGEINT",)]
+    assert table(tmp_path) == expected
 
 
 @pytest.mark.parametrize("sidecar", [APPEND, MERGE])

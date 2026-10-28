@@ -246,9 +246,10 @@ def _columns_sql(schema: str, table: str) -> str:
 
 
 def _same_columns_sql(stage_schema: str, stage_table: str, model: Model) -> str:
-    """A count that is 0 when the stage and the target have the same columns, in order."""
+    """0 only when the stage and the target both exist with the same columns, in order."""
+    # Both sides must be found: two missing lookups would otherwise compare equal.
     return (
-        f"SELECT CASE WHEN {_columns_sql(stage_schema, stage_table)} IS NOT DISTINCT FROM "
+        f"SELECT CASE WHEN {_columns_sql(stage_schema, stage_table)} = "
         f"{_columns_sql(model.schema, model.table)} THEN 0 ELSE 1 END"
     )
 

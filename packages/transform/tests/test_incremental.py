@@ -120,3 +120,13 @@ def test_columns_changed_after_validation_are_caught(tmp_path: Path) -> None:
         if isinstance(step, StatementRequest):
             connection.execute(step.sql)
     assert checks == [("SCHEMA_CHANGED", 1)]
+
+
+def test_the_column_check_fails_when_a_table_is_missing(tmp_path: Path) -> None:
+    append = model(tmp_path, APPEND)
+    connection = duckdb.connect()
+    connection.execute("ATTACH ':memory:' AS lake")
+    connection.execute("USE lake")
+    check = [s for s in steps(append, "SELECT 1 AS id", COLUMNS, COLUMNS) if isinstance(s, Check)]
+    # Neither the stage nor the target exists: the lookups are both NULL, which must not pass.
+    assert connection.execute(check[-1].sql).fetchall() == [(1,)]
