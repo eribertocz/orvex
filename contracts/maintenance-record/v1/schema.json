@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.invalid/maintenance-record/v1/schema.json",
+  "title": "MaintenanceRecord",
+  "description": "What one lake maintenance did: snapshots expired by the project's retention, files merged and deleted, and how it ended.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "trigger",
+    "retention",
+    "cutoff",
+    "versions",
+    "report",
+    "started_at",
+    "finished_at",
+    "outcome",
+    "error"
+  ],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "trigger": {
+      "enum": [
+        "manual",
+        "schedule"
+      ]
+    },
+    "retention": {
+      "description": "`retention.snapshots` of the project, as written (`<n>d`).",
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,4}d$"
+    },
+    "cutoff": {
+      "description": "Snapshots committed before this instant were expired (start of the maintenance minus the retention).",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "versions": {
+      "$ref": "#/$defs/Versions"
+    },
+    "report": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Report"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "started_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "finished_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "outcome": {
+      "enum": [
+        "succeeded",
+        "failed"
+      ]
+    },
+    "error": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/RunError"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "Report": {
+      "description": "The counts of the store's MaintenanceReport (contracts/store/v1); null when the maintenance failed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "snapshots_expired",
+        "files_merged",
+        "files_created",
+        "files_rewritten",
+        "files_deleted",
+        "orphaned_files_deleted",
+        "oldest_snapshot_id",
+        "oldest_snapshot_at"
+      ],
+      "properties": {
+        "snapshots_expired": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files_merged": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files_created": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files_rewritten": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files_deleted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "orphaned_files_deleted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "oldest_snapshot_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "oldest_snapshot_at": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})$"
+        }
+      }
+    },
+    "Versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "duckdb",
+        "modules"
+      ],
+      "properties": {
+        "duckdb": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ModuleVersion"
+          }
+        }
+      }
+    },
+    "ModuleVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "RunError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

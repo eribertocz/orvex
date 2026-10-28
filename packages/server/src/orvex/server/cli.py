@@ -25,6 +25,7 @@ from orvex.server.instance import (
     open_project,
 )
 from orvex.server.logs import configure_logging
+from orvex.server.maintenance import history, maintain
 from orvex.server.scheduler import schedule
 from orvex.server.versions import (
     ContractVersionIncompatible,
@@ -35,7 +36,7 @@ from orvex.server.versions import (
 )
 
 LOCAL_HOST = "127.0.0.1"
-COMMANDS = frozenset({"validate", "run", "runs", "schedule"})
+COMMANDS = frozenset({"validate", "run", "runs", "schedule", "maintain"})
 DEFAULT_PORT = 7878
 PORT_ATTEMPTS = 100
 
@@ -123,6 +124,14 @@ def command_parser(identity: Identity) -> argparse.ArgumentParser:
     history = commands.add_parser("runs", help="list recent runs of a project")
     history.add_argument("project", type=Path, help="project folder")
     history.add_argument("--limit", type=int, default=20, help="how many runs (default 20)")
+    history.add_argument(
+        "--maintenance", action="store_true", help="list lake maintenance instead of model runs"
+    )
+    maintained = commands.add_parser(
+        "maintain",
+        help="expire snapshots older than the project's retention and compact the lake's files",
+    )
+    maintained.add_argument("project", type=Path, help="project folder")
     return parser
 
 
@@ -141,7 +150,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             if command.limit < 1:
                 print("--limit must be at least 1", file=sys.stderr)
                 return 2
+            if command.maintenance:
+                return history(command.project, identity, command.limit, sys.stdout)
             return runs(command.project, identity, command.limit, sys.stdout)
+        if command.command == "maintain":
+            return maintain(command.project, identity, sys.stdout)
         return run(command.project, identity, sys.stdout, command.full_refresh)
     arguments = parser_for(identity).parse_args(given)
     try:
