@@ -486,3 +486,43 @@ def test_a_later_failure_rolls_back_a_schema_change(
         columns(tmp_path),
         lake_value(tmp_path, ALL_AS_TEXT),
     ) == before
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "value"),
+    [
+        ("INTEGER", "BIGINT", "id"),
+        ("TINYINT", "HUGEINT", "id"),
+        ("UINTEGER", "UHUGEINT", "id"),
+        ("DECIMAL(18,4)", "DECIMAL(38,4)", "kwh"),  # crosses DuckDB's 64-bit decimal storage
+        ("DATE", "TIMESTAMP", "read_at"),
+    ],
+)
+def test_every_allowed_widening_applies_in_the_lake_with_merge(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], before: str, after: str, value: str
+) -> None:
+    """Each type change `sync_all_columns` allows is accepted by the lake and keeps old values."""
+
+    def model_sql(kind: str) -> str:
+        return f"SELECT id, CAST({value} AS {kind}) AS v, read_at FROM feed.data"
+
+    project(tmp_path, MERGE + "on_schema_change: sync_all_columns\n", model_sql(before))
+    feed(tmp_path, rows((1, "n", "1.2345"), (2, "n", "2.0000")))
+    assert command(capsys, "run", str(tmp_path))[0] == 0
+    old = lake_value(tmp_path, "SELECT id, CAST(v AS VARCHAR) FROM lake.s.m WHERE id = 1")
+    write(tmp_path, {"models/s/m.sql": model_sql(after)})
+    feed(tmp_path, rows((2, "s", "7.0000"), (3, "s", "3.0000")))
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    assert columns(tmp_path)[1] == ("v", after)
+    # Key 1 was not loaded again: its value is the old one, unchanged by the widening.
+    new = lake_value(tmp_path, "SELECT id, CAST(v AS VARCHAR) FROM lake.s.m WHERE id = 1")
+    if before == "DATE":
+        assert new == [(1, str(old[0][1]) + " 00:00:00")]
+    else:
+        assert new == old
+    assert [row[0] for row in lake_value(tmp_path, "SELECT id FROM lake.s.m ORDER BY id")] == [
+        1,
+        2,
+        3,
+    ]
