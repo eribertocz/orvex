@@ -16,10 +16,11 @@ from dataclasses import dataclass
 from typing import Any
 
 import duckdb
-from orvex.contracts.model_config.v1 import ModelError
+from orvex.contracts.model_config.v1 import ModelError, Relationship
 from orvex.contracts.store.v1 import StatementRequest
-from orvex.transform import incremental
+from orvex.transform import incremental, model_tests
 from orvex.transform.incremental import Columns, Step
+from orvex.transform.model_tests import ModelTest
 from orvex.transform.models import Model, problem
 
 LAKE_CATALOG = "lake"
@@ -127,6 +128,26 @@ def build_graph(models: Sequence[Model], sources: set[str]) -> Graph:
                         model.sql_file,
                         model=model.name,
                         line=_line(model.sql, node.get("query_location")),
+                    )
+                )
+            # A relationship test reads the model it names: that model runs first. A test naming
+            # its own model (a parent column in the same table) adds no edge.
+            for index, test in enumerate(model.config.tests or []):
+                related = getattr(test.root, "relationship", None)
+                if not isinstance(related, Relationship) or related.to == model.name:
+                    continue
+                if related.to in by_name:
+                    needs.add(related.to)
+                    continue
+                file = model.config_file or model.sql_file
+                problems.append(
+                    problem(
+                        "MODEL_REFERENCE_UNKNOWN",
+                        f"{file}: /tests/{index}/relationship/to: {related.to} is not a model "
+                        "of the project.",
+                        file,
+                        model=model.name,
+                        path=f"/tests/{index}/relationship/to",
                     )
                 )
             # A model reading itself stays an edge: it is a cycle of one, reported below (each
@@ -261,19 +282,31 @@ def plan_run(
     since: Mapping[str, str] | None = None,
     full_refresh: frozenset[str] = frozenset(),
     previous: Mapping[str, str | None] | None = None,
-) -> list[tuple[Model, list[Step]]]:
+) -> list[tuple[Model, list[Step | ModelTest]]]:
     """Steps that build every stored model, in run order (views are not stored).
 
     For incremental models only: `outputs` are the models' output columns, `existing` the
     columns of their tables in the lake (None when absent), `since` the `$since` value of each
     (`-infinity` when missing), `full_refresh` the models whose table is replaced, and
     `previous` their stored watermarks.
+
+    Each model's tests follow its write (P1-15); a view with tests gets an entry with only its
+    tests, run on its SQL. Tests need `outputs`.
     """
     by_name = {model.name: model for model in models}
-    plan: list[tuple[Model, list[Step]]] = []
+    relations = test_relations(models)
+    plan: list[tuple[Model, list[Step | ModelTest]]] = []
     for name in graph.order:
         model = by_name[name]
+        # Extraction models have no relation (tests do not read them until they run, P1-17).
+        tests = (
+            model_tests.steps(model, relations[name], (outputs or {}).get(name, []), relations)
+            if name in relations
+            else []
+        )
         if model.config.materialized == "view":
+            if tests:
+                plan.append((model, list(tests)))
             continue
         sql = compiled_sql(model, by_name)
         if model.config.materialized == "incremental":
@@ -289,7 +322,8 @@ def plan_run(
                         (since or {}).get(name, incremental.LOWEST),
                         name in full_refresh,
                         (previous or {}).get(name),
-                    ),
+                    )
+                    + tests,
                 )
             )
             continue
@@ -306,7 +340,20 @@ def plan_run(
                         sql=f"CREATE OR REPLACE TABLE {schema}.{table} AS {sql}",
                         parameters=[],
                     ),
+                    *tests,
                 ],
             )
         )
     return plan
+
+
+def test_relations(models: Sequence[Model]) -> dict[str, str]:
+    """What a test reads for each model: its table, or a view's SQL in parentheses."""
+    by_name = {model.name: model for model in models}
+    return {
+        model.name: f"({compiled_sql(model, by_name)})"
+        if model.config.materialized == "view"
+        else f"{_identifier(model.schema)}.{_identifier(model.table)}"
+        for model in models
+        if not model.extraction
+    }

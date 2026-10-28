@@ -23,6 +23,7 @@ from typing import IO
 
 from orvex.contracts.model_config.v1 import ModelError
 from orvex.contracts.run_record.v1 import (
+    CheckResult,
     ModuleVersion,
     RowsRead,
     RowsWritten,
@@ -42,9 +43,10 @@ from orvex.server.project import Project, ProjectLoadError, load_project
 from orvex.server.versions import module_versions
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, Transaction, open_lake
-from orvex.transform import incremental
-from orvex.transform.graph import Graph, build_graph, compiled_sql, plan_run
+from orvex.transform import incremental, model_tests
+from orvex.transform.graph import Graph, build_graph, compiled_sql, plan_run, test_relations
 from orvex.transform.incremental import Columns, Count, Refuse, Step, Watermark
+from orvex.transform.model_tests import ModelTest
 from orvex.transform.models import Discovery, Model, discover_models
 from orvex.transform.run_records import history_request, record_statements
 from orvex.transform.sources import source_attachments
@@ -101,7 +103,9 @@ def check_project(folder: Path) -> Checked:
     for model in discovery.models:
         problems += [_from_model_error(item) for item in incremental.config_problems(model)]
     columns: dict[str, Columns] = {}
-    needs_binding = any(m.config.materialized == "incremental" for m in discovery.models)
+    needs_binding = any(
+        m.config.materialized == "incremental" or m.config.tests for m in discovery.models
+    )
     if needs_binding and not problems:
         bound, bind_problems = _bind(project, discovery, graph)
         columns = bound
@@ -122,6 +126,7 @@ def _bind(
     as for a run.
     """
     by_name = {model.name: model for model in discovery.models}
+    relations = test_relations(discovery.models)
     columns: dict[str, Columns] = {}
     problems: list[Problem] = []
     failed: set[str] = set()
@@ -154,11 +159,42 @@ def _bind(
                 columns[name] = output
                 if model.config.materialized != "view":
                     _stand_in(lake, model, output)
+                if model.config.tests:
+                    problems += _bind_tests(lake, model, columns, by_name, relations)
         finally:
             lake.close()
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     return columns, problems
+
+
+def _bind_tests(
+    lake: Lake,
+    model: Model,
+    columns: Mapping[str, Columns],
+    by_name: Mapping[str, Model],
+    relations: Mapping[str, str],
+) -> list[Problem]:
+    """Problems of a model's tests: the rules on its columns, then each test query bound."""
+    found = model_tests.problems(model, columns[model.name], columns, by_name)
+    if found:
+        return [_from_model_error(item) for item in found]
+    problems: list[Problem] = []
+    file = model.config_file or model.sql_file
+    tests = model_tests.steps(model, relations[model.name], columns[model.name], relations)
+    for index, test in enumerate(tests):
+        try:
+            lake.describe(test.request.sql, test.request.parameters)
+        except StoreError as error:
+            problems.append(
+                Problem(
+                    "MODEL_CONFIG_INVALID",
+                    file,
+                    None,
+                    f"{file}: /tests/{index}: {test.name} cannot run: {_store_message(error)}",
+                )
+            )
+    return problems
 
 
 def _describe(lake: Lake, model: Model, sql: str) -> Columns:
@@ -386,6 +422,7 @@ class _Outcome:
     error: RunError | None = None
     since: str | None = None
     watermark: str | None = None
+    tests: list[CheckResult] = field(default_factory=list)
 
 
 def _run_locked(
@@ -403,7 +440,7 @@ def _run_locked(
     commit, dirty = _project_commit(project.folder)
     started = _now()
     snapshot: int | None = None
-    failure: Problem | None = None
+    failures: list[Problem] = []
     lake = None
     open_error: StoreError | None = None
     try:
@@ -440,7 +477,7 @@ def _run_locked(
         for model, _ in plan
     ]
     if open_error is not None:
-        failure = _store_problem(open_error, ".", "")
+        failures = [_store_problem(open_error, ".", "")]
         for item in outcomes:
             item.outcome = "failed"
             item.error = RunError(code=open_error.code, message=open_error.message)
@@ -450,23 +487,25 @@ def _run_locked(
         try:
             lake = open_lake(_location(home), _limits())
         except StoreError as error:
-            print(failure or _store_problem(error, ".", ""), file=out)
+            for problem in failures or [_store_problem(error, ".", "")]:
+                print(problem, file=out)
             return 1
     try:
         current: _Outcome | None = None
         try:
             with lake.transaction() as transaction:
                 for item, (_, steps) in zip(outcomes, plan, strict=True):
-                    if failure is not None:
+                    if failures:
                         break
                     current = item
                     item.started_at = _now()
                     for step in steps:
                         _run_step(transaction, step, item)
+                    _check_tests(item)
                     item.finished_at = _now()
                     item.outcome = "ran"
                 current = None
-                if failure is not None:
+                if failures:
                     raise _NothingToCommit
         except _NothingToCommit:
             pass
@@ -482,29 +521,34 @@ def _run_locked(
                 current.finished_at = _now()
                 current.outcome = "failed"
                 current.error = reason
-                failure = Problem(
-                    reason.code,
-                    current.model.sql_file,
-                    None,
-                    f"{current.model.name}: {reason.message}"
-                    if isinstance(error, StoreError)
-                    else reason.message,
-                )
+                if isinstance(error, _StepFailed) and error.problems:
+                    failures = list(error.problems)
+                else:
+                    failures = [
+                        Problem(
+                            reason.code,
+                            current.model.sql_file,
+                            None,
+                            f"{current.model.name}: {reason.message}"
+                            if isinstance(error, StoreError)
+                            else reason.message,
+                        )
+                    ]
             else:
                 # Not a model's fault (the transaction could not start or commit): every
                 # model failed for the same reason.
                 for item in outcomes:
                     item.outcome = "failed"
                     item.error = reason
-                failure = Problem(reason.code, ".", None, reason.message)
+                failures = [Problem(reason.code, ".", None, reason.message)]
         warning: Problem | None = None
-        if failure is None:
+        if not failures:
             for item in outcomes:
                 item.outcome = "success"
             try:
                 snapshot = lake.current_snapshot().id
                 for item in outcomes:
-                    if item.rows_written is None:
+                    if item.rows_written is None and item.model.config.materialized != "view":
                         item.rows_written = str(_count(lake, item.model, snapshot))
             except StoreError as error:
                 # The run is committed: it is recorded as such, without what could not be read.
@@ -524,7 +568,7 @@ def _run_locked(
                 if item.rows_written is None or item.outcome != "success"
                 else RowsWritten(item.rows_written),
                 watermark=item.watermark if item.outcome == "success" else None,
-                tests=[],
+                tests=item.tests,
                 reconciliation=[],
                 snapshot_id=snapshot if item.outcome == "success" else None,
                 started_at=item.started_at,
@@ -539,34 +583,62 @@ def _run_locked(
                 for statement in record_statements(records):
                     transaction.execute(statement)
         except StoreError as error:
-            if failure is not None:
-                print(failure, file=out)
+            for problem in failures:
+                print(problem, file=out)
             print(_store_problem(error, ".", "run records were not written"), file=out)
             return 1
     finally:
         lake.close()
-    if failure is not None:
-        print(failure, file=out)
+    if failures:
+        for problem in failures:
+            print(problem, file=out)
         return 1
     if warning is not None:
         print(warning, file=out)
     print(f"snapshot {snapshot if snapshot is not None else '-'}", file=out)
     for item in outcomes:
-        print(f"built {item.model.name}: {item.rows_written} rows", file=out)
+        if item.model.config.materialized == "view":
+            print(f"tested {item.model.name}", file=out)  # a view is not stored
+        else:
+            print(f"built {item.model.name}: {item.rows_written} rows", file=out)
     return 0
 
 
 class _StepFailed(Exception):
     """A model's run step refused to go on (a check failed, or the model cannot run)."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, problems: Sequence[Problem] = ()) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.problems = tuple(problems)
 
 
-def _run_step(transaction: Transaction, step: Step, item: _Outcome) -> None:
-    if isinstance(step, StatementRequest):
+def _check_tests(item: _Outcome) -> None:
+    """After every test of a model ran: the run stops if any failed (MODEL_TEST_FAILED)."""
+    failed = [result for result in item.tests if result.outcome == "failed"]
+    if not failed:
+        return
+    file = item.model.config_file or item.model.sql_file
+    lines = [f"{result.name} failed on {result.failing_rows} rows" for result in failed]
+    raise _StepFailed(
+        "MODEL_TEST_FAILED",
+        f"{item.model.name}: " + "; ".join(lines) + ".",
+        [Problem("MODEL_TEST_FAILED", file, None, line) for line in lines],
+    )
+
+
+def _run_step(transaction: Transaction, step: Step | ModelTest, item: _Outcome) -> None:
+    if isinstance(step, ModelTest):
+        failing = transaction.value(step.request) or "0"
+        item.tests.append(
+            CheckResult(
+                name=step.name,
+                outcome="passed" if failing == "0" else "failed",
+                failing_rows=failing,
+            )
+        )
+    elif isinstance(step, StatementRequest):
         transaction.execute(step)
     elif isinstance(step, Refuse):
         raise _StepFailed(step.code, step.message)
