@@ -12,8 +12,8 @@ Describing a query can still make ClickHouse evaluate parts of it (scalar subque
 views). Every validation query therefore carries a row limit that ClickHouse enforces, and the
 reader must not be able to lift it (decision #114). ClickHouse applies that limit to
 MergeTree-family tables; it does not to some other engines (`Memory`, `Log`, `TinyLog`, `File`,
-`URL`, and possibly integration engines such as `S3` or `PostgreSQL`): reads of those are not
-limited (documented in `contracts/model-config/v1`).
+`URL`, and possibly integration engines such as `S3` or `PostgreSQL`): reads of those are bounded
+only by the time limit (documented in `contracts/model-config/v1`).
 
 `clickhouse-connect` is ClickHouse, Inc.'s official client (Apache-2.0, ADR-0002).
 """
@@ -660,10 +660,11 @@ def _clean(text: str, secret: str) -> str:
 
 
 class Source:
-    """A read-only client of a ClickHouse connection: every query the engine sends carries
-    `readonly = 1` (unless the user's profile already enforces it) and a time limit; connect and
-    receive timeouts are explicit, and no session state is kept. On connecting, the client
-    itself reads the server's version, time zone and settings (system tables, no user data)."""
+    """A read-only client of a ClickHouse connection: every query the engine sends carries the
+    validation limits and `readonly = 1`, and the connection is refused unless the user accepts
+    them and cannot lift them; connect and receive timeouts are explicit, and no session state is
+    kept. On connecting, the client itself reads the server's version, time zone and settings
+    (system tables, no user data)."""
 
     def __init__(self, name: str, connection: ClickhouseConnection, password: str) -> None:
         self.name = name
@@ -696,8 +697,9 @@ class Source:
             )
         # Decision #114 (option C): the reader must accept the validation limits, and SQL run
         # by that reader must not be able to lift them, so ClickHouse itself stops any read (a
-        # view, a subquery) after the first block. Both are asked of the server once: a query
-        # with the limits must run, and one that lifts them must be refused.
+        # view, a subquery) after the first block. The server is asked once: a query with the
+        # limits must run, and, for each limit, a query lifting it must fail as a read-only
+        # violation (below).
         refusal = SourceError(
             "SOURCE_LIMITS_REFUSED",
             f"ClickHouse connection {name}: the user must accept, and must not be able to change, "

@@ -335,7 +335,7 @@ def test_reader_profiles(
     suffix = source["reader"]
     profile = f"{suffix}_profile"
     changeable, fixed, loose = f"{suffix}_changeable", f"{suffix}_ro1", f"{suffix}_ro2"
-    bounded, overflow = f"{suffix}_min", f"{suffix}_overflow"
+    bounded, overflow, timed = f"{suffix}_min", f"{suffix}_overflow", f"{suffix}_time"
     monkeypatch.setenv(VARIABLE, READER_PASSWORD)
     created = [
         f"CREATE SETTINGS PROFILE {profile} SETTINGS readonly = 1, "
@@ -352,11 +352,13 @@ def test_reader_profiles(
         "SETTINGS max_rows_to_read MIN 1 CHANGEABLE_IN_READONLY",
         f"CREATE USER {overflow} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}' "
         "SETTINGS read_overflow_mode CHANGEABLE_IN_READONLY",
+        f"CREATE USER {timed} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}' "
+        "SETTINGS max_execution_time CHANGEABLE_IN_READONLY",
     ]
     try:
         for statement in created:
             client.command(statement)
-        for user in (changeable, fixed, loose, bounded, overflow):
+        for user in (changeable, fixed, loose, bounded, overflow, timed):
             client.command(f"GRANT SELECT ON {source['database']}.* TO {user}")
         example = {"models/raw/ch_events.sql": EXAMPLE, "models/raw/ch_events.yaml": EXTRACTION}
 
@@ -369,8 +371,10 @@ def test_reader_profiles(
         # The limits cannot be sent at all: refused.
         assert codes("fixed", fixed, example) == ["SOURCE_LIMITS_REFUSED"]
         assert codes("loose", loose, example) == ["SOURCE_NOT_READ_ONLY"]
+        # The limits can be sent, but one of them could be lifted: refused.
         assert codes("bounded", bounded, example) == ["SOURCE_LIMITS_REFUSED"]
         assert codes("overflow", overflow, example) == ["SOURCE_LIMITS_REFUSED"]
+        assert codes("timed", timed, example) == ["SOURCE_LIMITS_REFUSED"]
         reader = source["reader"]  # SELECT grants only: accepted
         assert codes("ok", reader, example) == []
         stopped = [
@@ -396,7 +400,7 @@ def test_reader_profiles(
         ).result_rows
         assert int(heaviest[0][0]) < 1000  # never all the rows of events
     finally:
-        for user in (changeable, fixed, loose, bounded, overflow):
+        for user in (changeable, fixed, loose, bounded, overflow, timed):
             client.command(f"DROP USER IF EXISTS {user}")
         client.command(f"DROP SETTINGS PROFILE IF EXISTS {profile}")
         client.close()
