@@ -4,6 +4,10 @@
  */
 export type ProjectDocument = ProjectFile | ConnectionsFile | ProjectError;
 /**
+ * A reference to an environment variable: `${env:NAME}`. The value is read when the connection is used and never stored.
+ */
+export type SecretReference = string;
+/**
  * This interface was referenced by `undefined`'s JSON-Schema definition
  * via the `patternProperty` "^[a-z][a-z0-9_]{0,62}$".
  */
@@ -22,10 +26,6 @@ export type Path = string;
  * Required for database connections. `false` is valid here and refused by the loader with `SOURCE_NOT_READ_ONLY`: every database source is read-only in v1.
  */
 export type ReadOnly = boolean;
-/**
- * A reference to an environment variable: `${env:NAME}`. The value is read when the connection is used and never stored.
- */
-export type SecretReference = string;
 export type ProjectErrorCode =
 	| 'PROJECT_NOT_FOUND'
 	| 'PROJECT_YAML_INVALID'
@@ -49,12 +49,23 @@ export interface ProjectFile {
 	time_zone: string;
 	locale?: 'es' | 'en';
 	retention?: Retention;
+	lineage?: Lineage;
 }
 export interface Retention {
 	/**
 	 * How long lake snapshots are kept: `<n>d`, at least `1d`.
 	 */
 	snapshots?: string;
+}
+/**
+ * Where OpenLineage events are also sent (P1-18); they are always written under the project's local folder.
+ */
+export interface Lineage {
+	/**
+	 * An OpenLineage HTTP endpoint: `https://`, or `http://` only on this machine (`localhost`, `127.0.0.1`); events are POSTed to it after each run.
+	 */
+	url: string;
+	api_key?: SecretReference;
 }
 /**
  * `connections.yaml`: data sources by name. A name becomes a SQL schema, so it follows identifier rules and cannot be `lake`.

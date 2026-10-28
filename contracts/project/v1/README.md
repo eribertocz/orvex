@@ -8,7 +8,7 @@ A project folder holds plain YAML files under version control (law 8). This cont
 
 | Message | File | Content |
 |---|---|---|
-| `ProjectFile` | `project.yaml` (required) | `version: 1`; `name` (1–100 characters); `time_zone`, an IANA name, required (no implicit zone); `locale` `es` or `en` (default `es`); `retention.snapshots` `<n>d`, at least `1d` (default `90d`, decision #70) |
+| `ProjectFile` | `project.yaml` (required) | `version: 1`; `name` (1–100 characters); `time_zone`, an IANA name, required (no implicit zone); `locale` `es` or `en` (default `es`); `retention.snapshots` `<n>d`, at least `1d` (default `90d`, decision #70); optional `lineage` (`url`, `https://`, or `http://` only to `localhost`/`127.0.0.1`; optional `api_key`, a `${env:NAME}` reference sent as a bearer token) where OpenLineage events are also sent (P1-18) |
 | `ConnectionsFile` | `connections.yaml` (optional; absent = no connections) | `version: 1`; `connections`, a map from a name (`^[a-z][a-z0-9_]{0,62}$`, not `lake`) to one connection |
 | `ProjectError` | — | `code`, `message`, `details` (`file`, `path` as a JSON pointer into the file, `line`, `connection`, `variable`) |
 
@@ -25,7 +25,7 @@ Relative `path` values are resolved against the project folder by the loader.
 
 ## Secrets
 
-`password` accepts **only** a reference `${env:NAME}` (`NAME` = `^[A-Z_][A-Z0-9_]*$`); a literal value is a schema error. The loader keeps the reference; the value is read from the environment only when a connection is used, and never appears in loaded objects, logs or errors. An unset variable is `PROJECT_SECRET_MISSING`, naming the variable.
+`password` (and `lineage.api_key`) accepts **only** a reference `${env:NAME}` (`NAME` = `^[A-Z_][A-Z0-9_]*$`); a literal value is a schema error. The loader keeps the reference; the value is read from the environment only when a connection is used, and never appears in loaded objects, logs or errors. An unset variable is `PROJECT_SECRET_MISSING`, naming the variable.
 
 ## Read-only sources
 
