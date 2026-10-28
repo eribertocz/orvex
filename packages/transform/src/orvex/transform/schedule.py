@@ -112,6 +112,18 @@ def refresh_due(
     return next_time(parse(refresh.cron), history.last_full_refresh or since, zone)
 
 
+def _closure(name: str, dependencies: Mapping[str, Sequence[str]], known: set[str]) -> set[str]:
+    """A model and every model it reads, transitively."""
+    found = {name}
+    pending = [name]
+    while pending:
+        for upstream in dependencies.get(pending.pop(), ()):
+            if upstream not in found and upstream in known:
+                found.add(upstream)
+                pending.append(upstream)
+    return found
+
+
 def plan(
     models: Sequence[Model],
     order: Sequence[str],
@@ -121,18 +133,20 @@ def plan(
     project_zone: str,
     started: dt.datetime,
     last_run_start: dt.datetime | None,
-    retry_at: dt.datetime | None = None,
+    held: Mapping[str, dt.datetime] | None = None,
 ) -> Plan:
     """What to run at `now`.
 
     `started` is when the scheduler started (the reference for a first full refresh);
-    `last_run_start` the start of the project's last run, of any outcome; `retry_at` when a
-    failed run may be retried (its due models stay due until then).
+    `last_run_start` the start of the project's last run, of any outcome; `held` the models
+    that may not run before a time (a failed model waiting for its retry, or given up): a due
+    model that is held, or that reads a held model, waits; other due models run without it.
     """
-    by_name = {model.name: model for model in models}
+    held = held or {}
+    known = {model.name for model in models}
     due: dict[str, str] = {}
     refreshed: set[str] = set()
-    upcoming: list[dt.datetime] = []
+    upcoming: list[dt.datetime] = [moment for moment in held.values() if moment > now]
     for model in models:
         history = histories.get(model.name, History())
         fresh = freshness_due(model, history, now)
@@ -148,22 +162,37 @@ def plan(
                 refreshed.add(model.name)
             else:
                 upcoming.append(refresh)
+    blocked = {name for name, until in held.items() if until > now}
+    runnable = {
+        name: reason
+        for name, reason in due.items()
+        if not _closure(name, dependencies, known) & blocked
+    }
     earliest = now
     if last_run_start is not None:
         earliest = max(earliest, last_run_start + MINIMUM_INTERVAL)
-    if retry_at is not None:
-        earliest = max(earliest, retry_at)
-    if not due or earliest > now:
+    if not runnable or earliest > now:
         # Nothing to run yet: look again at the next due time, or within a minute.
-        candidates = [earliest] if due else [moment for moment in upcoming if moment > now]
+        candidates = [earliest] if runnable else [moment for moment in upcoming if moment > now]
         return Plan((), frozenset(), (), min([now + LOOK_AGAIN, *candidates]))
-    needed = set(due)
-    pending = list(due)
-    while pending:
-        for upstream in dependencies.get(pending.pop(), ()):
-            if upstream not in needed and upstream in by_name:
-                needed.add(upstream)
-                pending.append(upstream)
+    needed: set[str] = set()
+    for name in runnable:
+        needed |= _closure(name, dependencies, known)
     selected = tuple(name for name in order if name in needed)
-    reasons = tuple(f"{name}: {due[name]}" for name in selected if name in due)
-    return Plan(selected, frozenset(refreshed), reasons, now + LOOK_AGAIN)
+    reasons = tuple(f"{name}: {runnable[name]}" for name in selected if name in runnable)
+    return Plan(selected, frozenset(refreshed & set(runnable)), reasons, now + LOOK_AGAIN)
+
+
+def next_due(model: Model, now: dt.datetime, project_zone: str) -> dt.datetime:
+    """When a model given up at `now` may be tried again: as if it had just succeeded — its
+    next freshness deadline or its next full-refresh time, whichever comes first (at least
+    the minimum interval)."""
+    moments: list[dt.datetime] = []
+    if model.config.freshness is not None:
+        moments.append(now + duration(model.config.freshness.root))
+    refresh = model.config.full_refresh
+    if refresh is not None:
+        zone = _zone(refresh.time_zone or project_zone)
+        assert zone is not None  # checked at validation
+        moments.append(next_time(parse(refresh.cron), now, zone))
+    return max(now + MINIMUM_INTERVAL, min(moments, default=now + dt.timedelta(days=1)))

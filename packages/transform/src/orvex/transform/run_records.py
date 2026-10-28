@@ -123,19 +123,22 @@ def _iso(column: str) -> str:
     return f"strftime(timezone('UTC', {column}), {_ISO})"
 
 
-REFRESHED = "max(started_at) FILTER (WHERE trigger = 'full_refresh')"
-
-
 def model_history_request(snapshot: int) -> ReadRequest:
-    """Per model: start and end of its last successful run, and start of its last successful
-    full refresh (UTC, ISO 8601 text)."""
+    """Per model: the start of the run of its last success (the whole run, upstream models
+    included), the end of that success, and the start of its last successful full refresh
+    (UTC, ISO 8601 text)."""
     return ReadRequest(
         kind="read",
         sql=(
-            f"SELECT model, {_iso('arg_max(started_at, finished_at)')} AS success_start, "
-            f"{_iso('max(finished_at)')} AS success_end, "
-            f"{_iso(REFRESHED)} AS full_refresh "
-            f"FROM {TABLE} WHERE outcome = 'success' GROUP BY model"
+            f"WITH ok AS (SELECT * FROM {TABLE} WHERE outcome = 'success'), "
+            "last AS (SELECT model, arg_max(run_id, finished_at) AS run_id, "
+            "max(finished_at) AS finished, "
+            "max(started_at) FILTER (WHERE trigger = 'full_refresh') AS refreshed "
+            "FROM ok GROUP BY model), "
+            f"runs AS (SELECT run_id, min(started_at) AS run_start FROM {TABLE} GROUP BY run_id) "
+            f"SELECT last.model, {_iso('runs.run_start')} AS success_start, "
+            f"{_iso('last.finished')} AS success_end, {_iso('last.refreshed')} AS full_refresh "
+            "FROM last JOIN runs USING (run_id)"
         ),
         parameters=[],
         snapshot=snapshot,
@@ -144,10 +147,18 @@ def model_history_request(snapshot: int) -> ReadRequest:
 
 
 def last_run_request(snapshot: int) -> ReadRequest:
-    """The start of the project's last run that started a model (UTC, ISO 8601 text)."""
+    """The project's last run: its start (UTC, ISO 8601 text) and the models whose own step
+    failed in it (comma-separated; empty when none did)."""
     return ReadRequest(
         kind="read",
-        sql=f"SELECT {_iso('max(started_at)')} AS started FROM {TABLE} WHERE outcome <> 'not_run'",
+        sql=(
+            f"WITH latest AS (SELECT arg_max(run_id, started_at) AS run_id FROM {TABLE} "
+            "WHERE outcome <> 'not_run') "
+            f"SELECT {_iso('min(started_at)')} AS started, "
+            "string_agg(model, ',' ORDER BY model) FILTER (WHERE error_code IS NOT NULL "
+            "AND outcome = 'failed') AS failed "
+            f"FROM {TABLE} WHERE run_id = (SELECT run_id FROM latest) AND outcome <> 'not_run'"
+        ),
         parameters=[],
         snapshot=snapshot,
         batch_size=1,

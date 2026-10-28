@@ -1,9 +1,13 @@
 """`schedule`: keep a project's models as fresh as they declare (P1-19).
 
-The loop re-reads the project each cycle (edits apply without a restart), reads the history from
-the run records, asks `transform.schedule.plan` what is due, and runs it through the normal
-`run` — one run at a time, under the project lock. A failed run is retried after 5, 10 and 20
-minutes, then given up until the models' next due time. Every decision is printed.
+The loop asks `transform.schedule.plan` what is due and runs it through the normal `run` — one
+run at a time, under the project lock. It checks the project again only when its files change
+(checking binds the models against the sources), and it keeps the start of its last run in
+memory, on a monotonic clock, as well as in the run records: two runs never start less than five
+minutes apart, whatever the records or the system clock say.
+
+A model whose own step failed is held: retried after 5, 10 and 20 minutes, then given up until
+its next due time; due models that do not read it keep running. Every decision is printed.
 """
 
 from __future__ import annotations
@@ -11,30 +15,34 @@ from __future__ import annotations
 import datetime as dt
 import signal
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
 from typing import IO
 from zoneinfo import ZoneInfo
 
 from orvex.server import commands
-from orvex.server.commands import LAKE_FOLDER, Selection, check_project, project_lock
+from orvex.server.commands import LAKE_FOLDER, Checked, Selection, project_lock
 from orvex.server.identity import Identity
 from orvex.store.errors import StoreError
 from orvex.store.lake import open_lake
-from orvex.transform.models import Model
 from orvex.transform.run_records import last_run_request, model_history_request
 from orvex.transform.schedule import (
     LOOK_AGAIN,
     MINIMUM_INTERVAL,
     RETRY_DELAYS,
     History,
-    duration,
+    Plan,
+    next_due,
     plan,
 )
 
 type Clock = Callable[[], dt.datetime]
 type Sleep = Callable[[float], None]
+type Monotonic = Callable[[], float]
+
+PROJECT_FILES = ("project.yaml", "connections.yaml")
 
 
 def _clock() -> dt.datetime:
@@ -46,10 +54,17 @@ def _instant(text: object) -> dt.datetime | None:
     return None if text is None else dt.datetime.fromisoformat(str(text))
 
 
-def _history(home: Path) -> tuple[dict[str, History], dt.datetime | None]:
-    """Each model's history and the project's last run start, from the run records."""
+@dataclass(frozen=True, slots=True)
+class _Records:
+    histories: dict[str, History]
+    last_run_start: dt.datetime | None
+    failed: tuple[str, ...]  # models whose own step failed in the last run
+
+
+def _records(home: Path) -> _Records:
+    """What the run records say (nothing yet when there is no lake or no record)."""
     if not (home / LAKE_FOLDER).exists():
-        return {}, None
+        return _Records({}, None, ())
     with project_lock(home):
         lake = open_lake(commands._location(home), commands._limits())
         try:
@@ -60,7 +75,7 @@ def _history(home: Path) -> tuple[dict[str, History], dt.datetime | None]:
             except StoreError as error:
                 if error.code != "STORE_STATEMENT_INVALID":
                     raise
-                return {}, None  # no run records yet
+                return _Records({}, None, ())  # no run records yet
         finally:
             lake.close()
     histories = {
@@ -71,18 +86,36 @@ def _history(home: Path) -> tuple[dict[str, History], dt.datetime | None]:
         )
         for row in rows
     }
-    return histories, _instant(last["started"])
+    failed = tuple(str(last["failed"]).split(",")) if last["failed"] else ()
+    return _Records(histories, _instant(last["started"]), failed)
 
 
-def _hold(models: Mapping[str, Model], names: tuple[str, ...]) -> dt.timedelta:
-    """How long models whose runs were given up wait: their shortest freshness (at least the
-    minimum interval), or a day for models that only have a full-refresh cron."""
-    found = [
-        duration(model.config.freshness.root)
-        for name in names
-        if (model := models.get(name)) is not None and model.config.freshness is not None
-    ]
-    return max(MINIMUM_INTERVAL, min(found, default=dt.timedelta(days=1)))
+def _fingerprint(folder: Path) -> tuple[tuple[str, int, int], ...]:
+    """Name, size and modification time of every project file a check reads."""
+    paths = [folder / name for name in PROJECT_FILES]
+    models = folder / "models"
+    if models.is_dir():
+        paths += sorted(path for path in models.rglob("*") if path.is_file())
+    found = []
+    for path in paths:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        found.append((str(path.relative_to(folder)), stat.st_size, stat.st_mtime_ns))
+    return tuple(found)
+
+
+@dataclass(slots=True)
+class _State:
+    started: dt.datetime
+    checked: Checked | None = None
+    fingerprint: tuple[tuple[str, int, int], ...] = ()
+    last_run_wall: dt.datetime | None = None
+    last_run_monotonic: float | None = None
+    failures: dict[str, int] = field(default_factory=dict)
+    held: dict[str, dt.datetime] = field(default_factory=dict)
+    reported: tuple[str, ...] = ()
 
 
 def schedule(
@@ -92,6 +125,7 @@ def schedule(
     clock: Clock = _clock,
     sleep: Sleep = time.sleep,
     should_stop: Callable[[], bool] | None = None,
+    monotonic: Monotonic = time.monotonic,
 ) -> int:
     """Run the due models of a project until stopped (Ctrl+C stops after the current run)."""
     stopping = False
@@ -103,9 +137,20 @@ def schedule(
     def stopped() -> bool:
         return stopping or (should_stop is not None and should_stop())
 
+    def pause(seconds: float) -> None:
+        """Sleep in short steps, so Ctrl+C is noticed within a second."""
+        remaining = seconds
+        while remaining > 0 and not stopped():
+            step = min(1.0, remaining)
+            sleep(step)
+            remaining -= step
+
     previous = signal.signal(signal.SIGINT, stop) if should_stop is None else None
     try:
-        return _loop(folder, identity, out, clock, sleep, stopped)
+        state = _State(started=clock())
+        while not stopped():
+            pause(_cycle(folder, identity, out, clock, monotonic, state))
+        return 0
     finally:
         if previous is not None:
             signal.signal(signal.SIGINT, previous)
@@ -116,73 +161,104 @@ def _say(out: IO[str], zone: str, moment: dt.datetime, text: str) -> None:
     print(f"{local} {text}", file=out, flush=True)
 
 
-def _loop(
+def _report(out: IO[str], state: _State, lines: tuple[str, ...]) -> float:
+    """Print problems once until they change; look again in a minute."""
+    if lines != state.reported:
+        for line in lines:
+            print(line, file=out, flush=True)
+        state.reported = lines
+    return LOOK_AGAIN.total_seconds()
+
+
+def _cycle(
     folder: Path,
     identity: Identity,
     out: IO[str],
     clock: Clock,
-    sleep: Sleep,
-    stopped: Callable[[], bool],
-) -> int:
-    started = clock()
-    failures = 0
-    retry_at: dt.datetime | None = None
-    reported: tuple[str, ...] = ()
-    while not stopped():
-        now = clock()
-        checked = check_project(folder)
-        if checked.problems or checked.project is None or checked.graph is None:
-            lines = tuple(str(problem) for problem in checked.problems)
-            if lines != reported:  # printed once until the project changes
-                for line in lines:
-                    print(line, file=out, flush=True)
-                reported = lines
-            sleep(LOOK_AGAIN.total_seconds())
-            continue
-        reported = ()
-        project, graph = checked.project, checked.graph
-        zone = project.settings.time_zone
-        home = project.folder / f".{identity.slug}"
-        try:
-            histories, last_run = _history(home)
-        except commands.ProjectLocked:
-            _say(out, zone, now, "waiting: another process holds the project")
-            sleep(LOOK_AGAIN.total_seconds())
-            continue
-        decided = plan(
+    monotonic: Monotonic,
+    state: _State,
+) -> float:
+    """One decision; returns how long to wait before the next one (seconds)."""
+    now = clock()
+    fingerprint = _fingerprint(folder)
+    if state.checked is None or fingerprint != state.fingerprint:
+        state.checked, state.fingerprint = commands.check_project(folder), fingerprint
+    checked = state.checked
+    if checked.problems or checked.project is None or checked.graph is None:
+        return _report(out, state, tuple(str(problem) for problem in checked.problems))
+    project, graph = checked.project, checked.graph
+    zone = project.settings.time_zone
+    home = project.folder / f".{identity.slug}"
+    try:
+        records = _records(home)
+    except commands.ProjectLocked:
+        return _report(out, state, ("waiting: another process holds the project",))
+    except StoreError as error:
+        return _report(out, state, (str(commands._store_problem(error, ".", "run records")),))
+    state.reported = ()
+    last_runs = [moment for moment in (records.last_run_start, state.last_run_wall) if moment]
+
+    def decide(held: dict[str, dt.datetime]) -> Plan:
+        return plan(
             checked.discovery.models,
             graph.order,
             graph.dependencies,
-            histories,
+            records.histories,
             now,
             zone,
-            started,
-            last_run,
-            retry_at,
+            state.started,
+            max(last_runs, default=None),
+            held,
         )
-        if not decided.models:
-            sleep(max(0.0, (decided.wake_at - now).total_seconds()))
-            continue
-        trigger = "full_refresh" if decided.full_refresh else "freshness"
-        _say(
-            out,
-            zone,
-            now,
-            f"running {', '.join(decided.models)} ({trigger}): {'; '.join(decided.reasons)}",
-        )
-        selection = Selection(decided.models, "freshness", decided.full_refresh)
-        if commands.run(folder, identity, out, selection=selection) == 0:
-            failures, retry_at = 0, None
-            continue
-        failures += 1
-        now = clock()
-        if failures <= len(RETRY_DELAYS):
-            retry_at = now + RETRY_DELAYS[failures - 1]
-            _say(out, zone, now, f"run failed; retry {failures} at {retry_at.isoformat()}")
-            continue
-        due = tuple(reason.split(":")[0] for reason in decided.reasons)
-        for name in due:
+
+    decided = decide(state.held)
+    due = {reason.split(":")[0] for reason in decided.reasons}
+    recovering = due & set(state.failures)
+    if recovering and due - recovering:
+        # A model being retried never runs with healthy ones (its failure would roll them back
+        # too): the healthy ones run now, the retry in a later run.
+        decided = decide({**state.held, **dict.fromkeys(recovering, now + LOOK_AGAIN)})
+    if state.last_run_monotonic is not None:
+        # The wall clock may jump; the monotonic clock does not.
+        waited = monotonic() - state.last_run_monotonic
+        if waited < MINIMUM_INTERVAL.total_seconds():
+            return min(LOOK_AGAIN.total_seconds(), MINIMUM_INTERVAL.total_seconds() - waited)
+    if not decided.models:
+        return max(1.0, (decided.wake_at - now).total_seconds())
+    try:
+        with project_lock(home):
+            pass  # free now; a process taking it in between makes the run fail as locked
+    except commands.ProjectLocked:
+        return _report(out, state, ("waiting: another process holds the project",))
+    for name in decided.models:
+        trigger = "full refresh" if name in decided.full_refresh else "freshness"
+        _say(out, zone, now, f"running {name} ({trigger})")
+    for reason in decided.reasons:
+        _say(out, zone, now, f"due {reason}")
+    state.last_run_wall, state.last_run_monotonic = now, monotonic()
+    selection = Selection(decided.models, "freshness", decided.full_refresh)
+    if commands.run(folder, identity, out, selection=selection) == 0:
+        for name in decided.models:
+            state.failures.pop(name, None)
+            state.held.pop(name, None)
+        return 1.0
+    after = clock()
+    try:
+        culprits = _records(home).failed or decided.models
+    except commands.ProjectLocked, StoreError:
+        culprits = decided.models
+    by_name = {model.name: model for model in checked.discovery.models}
+    for name in culprits:
+        count = state.failures.get(name, 0) + 1
+        if count <= len(RETRY_DELAYS):
+            state.failures[name] = count
+            state.held[name] = after + RETRY_DELAYS[count - 1]
+            retry = state.held[name].astimezone(ZoneInfo(zone))
+            _say(out, zone, after, f"{name} failed; retry {count} at {retry:%H:%M}")
+        else:
+            state.failures.pop(name, None)
+            state.held[name] = next_due(by_name[name], after, zone)
             print(f"SCHEDULE_GAVE_UP {name}", file=out, flush=True)
-        by_name = {model.name: model for model in checked.discovery.models}
-        failures, retry_at = 0, now + _hold(by_name, due)
-    return 0
+            until = state.held[name].astimezone(ZoneInfo(zone))
+            _say(out, zone, after, f"{name} waits until {until:%Y-%m-%d %H:%M}")
+    return 1.0

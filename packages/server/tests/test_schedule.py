@@ -14,10 +14,11 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from orvex.server import commands
+from orvex.server import commands, scheduler
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.scheduler import schedule
+from orvex.store.errors import StoreError
 
 SLUG = load_identity().slug
 PROJECT = "version: 1\nname: Test\ntime_zone: UTC\n"
@@ -58,6 +59,9 @@ class FakeTime:
     def done(self) -> bool:
         return self.now >= self.until
 
+    def monotonic(self) -> float:
+        return (self.now - START).total_seconds()
+
 
 def scheduled(
     folder: Path,
@@ -69,7 +73,17 @@ def scheduled(
     fake.hooks += hooks
     monkeypatch.setattr(commands, "_now", fake.text)
     out = io.StringIO()
-    assert schedule(folder, load_identity(), out, sleep=fake.sleep, should_stop=fake.done) == 0
+    assert (
+        schedule(
+            folder,
+            load_identity(),
+            out,
+            sleep=fake.sleep,
+            should_stop=fake.done,
+            monotonic=fake.monotonic,
+        )
+        == 0
+    )
     return out.getvalue()
 
 
@@ -137,7 +151,8 @@ def test_models_are_kept_fresh_without_overlap(
     assert {trigger for *_, trigger in found} == {"freshness"}
     assert {"marts.a", "marts.b", "raw.f"} <= {model for model, *_ in found}
     assert_five_minutes_apart(found)
-    assert "running raw.f, marts.a, marts.b (freshness)" in out
+    assert "running raw.f (freshness)" in out
+    assert "due marts.b: freshness 7m" in out
 
 
 def test_failed_runs_are_retried_with_backoff(
@@ -200,7 +215,8 @@ def test_full_refresh_on_its_cron(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         {
             "project.yaml": PROJECT,
             "connections.yaml": CONNECTIONS,
-            "models/s/m.sql": "SELECT * FROM feed.data WHERE read_at > $since",
+            "models/raw/f.sql": "SELECT * FROM feed.data",
+            "models/s/m.sql": "SELECT * FROM raw.f WHERE read_at > $since",
             "models/s/m.yaml": (
                 "version: 1\nmaterialized: incremental\nfreshness: 1h\n"
                 "incremental: {strategy: append, time_column: read_at, filter: manual}\n"
@@ -209,7 +225,97 @@ def test_full_refresh_on_its_cron(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         },
     )
     scheduled(tmp_path, monkeypatch, START + dt.timedelta(minutes=20))
-    assert [(started, trigger) for _, started, _, trigger in records(tmp_path)] == [
-        ("09:50", "freshness"),
-        ("10:00", "full_refresh"),
+    # The trigger is per model: the upstream model is rebuilt as usual, not "full refresh".
+    assert [(model, started, trigger) for model, started, _, trigger in records(tmp_path)] == [
+        ("raw.f", "09:50", "freshness"),
+        ("s.m", "09:50", "freshness"),
+        ("raw.f", "10:00", "freshness"),
+        ("s.m", "10:00", "full_refresh"),
     ]
+
+
+def test_a_failing_model_does_not_stall_the_others(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    feed(tmp_path, "voided")
+    write(
+        tmp_path,
+        {
+            "project.yaml": PROJECT,
+            "connections.yaml": CONNECTIONS,
+            "models/s/healthy.sql": "SELECT 1 AS n",
+            "models/s/healthy.yaml": "version: 1\nfreshness: 10m\n",
+            "models/s/broken.sql": "SELECT * FROM feed.data",
+            "models/s/broken.yaml": (
+                "version: 1\nfreshness: 1h\n"
+                "tests:\n  - accepted_values: {column: status, values: [valid]}\n"
+            ),
+        },
+    )
+    out = scheduled(tmp_path, monkeypatch, START + dt.timedelta(minutes=60))
+    found = records(tmp_path)
+    healthy = [(started, outcome) for model, started, outcome, _ in found if model == "s.healthy"]
+    # The first run fails with the broken model; then the healthy one runs on its own.
+    assert healthy[0] == ("09:50", "failed")
+    assert ("09:55", "success") in healthy
+    assert sum(1 for _, outcome in healthy if outcome == "success") >= 4
+    assert "SCHEDULE_GAVE_UP s.broken" in out
+    assert "SCHEDULE_GAVE_UP s.healthy" not in out
+    assert_five_minutes_apart(found)
+
+
+def test_idle_scheduling_does_not_touch_the_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    feed(tmp_path, "valid")
+    write(
+        tmp_path,
+        {
+            "project.yaml": PROJECT,
+            "connections.yaml": CONNECTIONS,
+            "models/s/m.sql": "SELECT * FROM feed.data",
+            "models/s/m.yaml": (
+                "version: 1\nfreshness: 1d\n"
+                "tests:\n  - accepted_values: {column: status, values: [valid]}\n"
+            ),
+        },
+    )
+    checks: list[int] = []
+    original = commands.check_project
+
+    def counted(folder: Path) -> commands.Checked:
+        checks.append(1)
+        return original(folder)
+
+    monkeypatch.setattr(commands, "check_project", counted)
+    scheduled(tmp_path, monkeypatch, START + dt.timedelta(hours=3))
+    # Once by the scheduler (the files never changed) and once by the only run: three idle
+    # hours never bind the models against the sources again.
+    assert len(checks) == 2
+
+
+def test_unreadable_records_never_crash_or_speed_up_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    feed(tmp_path, "valid")
+    write(
+        tmp_path,
+        {
+            "project.yaml": PROJECT,
+            "connections.yaml": CONNECTIONS,
+            "models/s/m.sql": "SELECT * FROM feed.data",
+            "models/s/m.yaml": "version: 1\nfreshness: 5m\n",
+        },
+    )
+    calls: list[int] = []
+
+    def unreadable(_home: Path) -> object:
+        calls.append(1)
+        if len(calls) % 2:
+            raise StoreError("STORE_EXTENSION_UNAVAILABLE", "unavailable", {})
+        return scheduler._Records({}, None, ())  # records say nothing: never ran
+
+    monkeypatch.setattr(scheduler, "_records", unreadable)
+    out = scheduled(tmp_path, monkeypatch, START + dt.timedelta(minutes=30))
+    assert out.count("STORE_EXTENSION_UNAVAILABLE") >= 1
+    assert_five_minutes_apart(records(tmp_path))

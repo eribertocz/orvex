@@ -20,7 +20,10 @@ from zoneinfo import ZoneInfo
 
 _FIELDS = (("minute", 0, 59), ("hour", 0, 23), ("day of month", 1, 31), ("month", 1, 12))
 _WEEKDAY = ("day of week", 0, 7)
-_SEARCH_DAYS = 366 * 8 + 2  # two leap-year cycles: every valid expression fires within them
+# The Gregorian calendar repeats every 400 years (146,097 days): an expression that fires at
+# all fires within any window of that length.
+_SEARCH_DAYS = 146_097
+_REFERENCE = dt.datetime(2000, 1, 1, tzinfo=dt.UTC)
 
 
 class CronError(ValueError):
@@ -88,7 +91,24 @@ def parse(text: str) -> Cron:
         day <= calendar.monthrange(2024, month)[1] for month in months for day in days
     ):
         raise CronError("the day of month never occurs in the listed months.")
+    if _first_day(cron, _REFERENCE.date()) is None:
+        raise CronError("the expression never fires.")
     return cron
+
+
+def _first_day(cron: Cron, day: dt.date) -> dt.date | None:
+    """The first day on or after `day` that matches, within one 400-year cycle."""
+    for _ in range(_SEARCH_DAYS + 1):
+        if cron.matches_day(day):
+            return day
+        if day.month not in cron.months:
+            # Skip to the first day of the next month.
+            day = (day.replace(day=1) + dt.timedelta(days=32)).replace(day=1)
+        else:
+            day += dt.timedelta(days=1)
+        if day.year > 9998:
+            return None
+    return None
 
 
 def _exists(local: dt.datetime, zone: ZoneInfo) -> bool:
@@ -100,18 +120,17 @@ def next_time(cron: Cron, after: dt.datetime, zone: ZoneInfo) -> dt.datetime:
     """The first firing strictly after the aware instant `after`, as an aware UTC instant."""
     local = after.astimezone(zone).replace(tzinfo=None, second=0, microsecond=0)
     start = local + dt.timedelta(minutes=1)
-    day = start.date()
-    for _ in range(_SEARCH_DAYS):
-        if cron.matches_day(day):
-            for hour in sorted(cron.hours):
-                for minute in sorted(cron.minutes):
-                    candidate = dt.datetime.combine(day, dt.time(hour, minute))
-                    if candidate < start:
-                        continue
-                    while not _exists(candidate, zone):  # skipped by a DST change
-                        candidate += dt.timedelta(minutes=1)
-                    instant = candidate.replace(tzinfo=zone, fold=0).astimezone(dt.UTC)
-                    if instant > after:  # a repeated local time fires at its first occurrence
-                        return instant
-        day += dt.timedelta(days=1)
-    raise CronError("the expression never fires.")  # unreachable for a parsed expression
+    day = _first_day(cron, start.date())
+    while day is not None:
+        for hour in sorted(cron.hours):
+            for minute in sorted(cron.minutes):
+                candidate = dt.datetime.combine(day, dt.time(hour, minute))
+                if candidate < start:
+                    continue
+                while not _exists(candidate, zone):  # skipped by a DST change
+                    candidate += dt.timedelta(minutes=1)
+                instant = candidate.replace(tzinfo=zone, fold=0).astimezone(dt.UTC)
+                if instant > after:  # a repeated local time fires at its first occurrence
+                    return instant
+        day = _first_day(cron, day + dt.timedelta(days=1))
+    raise CronError("the expression never fires again before year 9999.")

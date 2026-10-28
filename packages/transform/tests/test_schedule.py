@@ -127,7 +127,7 @@ def planned(
     now: dt.datetime,
     histories: dict[str, History] | None = None,
     last_run_start: dt.datetime | None = None,
-    retry_at: dt.datetime | None = None,
+    held: dict[str, dt.datetime] | None = None,
 ) -> Plan:
     return plan(
         found,
@@ -138,7 +138,7 @@ def planned(
         "America/La_Paz",
         at("2026-10-26T00:00", UTC),
         last_run_start,
-        retry_at,
+        held,
     )
 
 
@@ -183,10 +183,34 @@ def test_runs_start_at_least_five_minutes_apart(tmp_path: Path) -> None:
     assert held.models == ()
     assert held.wake_at == at("2026-10-28T10:04", UTC)
     assert planned(found, last + MINIMUM_INTERVAL, last_run_start=last).models
-    retried = planned(
+    held = planned(
         found,
         at("2026-10-28T10:06", UTC),
         last_run_start=last,
-        retry_at=at("2026-10-28T10:10", UTC),
+        held={"marts.fresh": at("2026-10-28T10:10", UTC)},
     )
-    assert retried.models == ()
+    assert held.models == ()
+    assert held.wake_at == at("2026-10-28T10:07", UTC)
+
+
+def test_a_held_model_blocks_only_what_reads_it(tmp_path: Path) -> None:
+    found = project(tmp_path)
+    now = at("2026-11-01T08:00", UTC)  # marts.weekly's full refresh and marts.fresh are due
+    histories = {"marts.weekly": History(last_full_refresh=at("2026-10-25T07:00", UTC))}
+    # The weekly refresh failed and waits: marts.fresh still runs.
+    weekly = planned(found, now, histories, held={"marts.weekly": now + dt.timedelta(minutes=5)})
+    assert weekly.models == ("raw.readings", "marts.fresh")
+    # A held upstream model holds every model reading it.
+    upstream = planned(found, now, histories, held={"raw.readings": now + dt.timedelta(minutes=5)})
+    assert upstream.models == ()
+
+
+def test_rare_expressions_are_found() -> None:
+    utc = ZoneInfo("UTC")
+    leap_sunday = parse("0 0 29 2 */7")  # 29 February falling on a Sunday
+    after = next_time(leap_sunday, at("2026-10-28T00:00", UTC), utc)
+    assert after == at("2032-02-29T00:00", UTC)
+    assert next_time(leap_sunday, after, utc) == at("2060-02-29T00:00", UTC)
+    assert next_time(parse("0 0 1 3 */7"), at("2026-10-28T00:00", UTC), utc) == at(
+        "2037-03-01T00:00", UTC
+    )
