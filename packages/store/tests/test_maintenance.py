@@ -150,7 +150,9 @@ def test_a_read_waiting_behind_maintenance_sees_its_snapshot_expired(lake: Lake)
     first = build(lake)
     current = lake.current_snapshot().id
     held = lake.start_read(
-        ReadRequest(kind="read", sql="SELECT id FROM t", parameters=[], snapshot=current)
+        ReadRequest(
+            kind="read", sql="SELECT id FROM t", parameters=[], snapshot=current, batch_size=65536
+        )
     )  # holds an admission slot until its stream is read
     results: dict[str, object] = {}
 
