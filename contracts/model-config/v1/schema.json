@@ -1,0 +1,389 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.invalid/model-config/v1/schema.json",
+  "title": "ModelConfigDocument",
+  "description": "The optional YAML sidecar of a model (`models/<folder>/<name>.yaml`), parsed from YAML, and the errors of discovering and validating models.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ModelConfig"
+    },
+    {
+      "$ref": "#/$defs/ModelError"
+    }
+  ],
+  "$defs": {
+    "Column": {
+      "description": "A column name of the model's output.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "PositiveDuration": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,8}(s|m|h|d)$"
+    },
+    "ModelConfig": {
+      "description": "Sidecar of one model. Without a sidecar a model is `materialized: table`, fully rebuilt on each run.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "connection": {
+          "description": "Only for extraction models: a `clickhouse` connection of the project; the SQL is then ClickHouse SQL run on that connection.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,62}$"
+        },
+        "materialized": {
+          "enum": [
+            "view",
+            "table",
+            "incremental"
+          ],
+          "default": "table"
+        },
+        "incremental": {
+          "$ref": "#/$defs/Incremental"
+        },
+        "freshness": {
+          "$ref": "#/$defs/PositiveDuration"
+        },
+        "full_refresh": {
+          "$ref": "#/$defs/FullRefresh"
+        },
+        "on_schema_change": {
+          "enum": [
+            "fail",
+            "append_new_columns",
+            "sync_all_columns"
+          ],
+          "default": "fail"
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Test"
+          }
+        },
+        "reconciliation": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Reconciliation"
+          }
+        }
+      }
+    },
+    "Incremental": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy",
+        "time_column"
+      ],
+      "properties": {
+        "strategy": {
+          "enum": [
+            "append",
+            "merge",
+            "delete_insert",
+            "partition_overwrite"
+          ]
+        },
+        "unique_key": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
+        },
+        "time_column": {
+          "$ref": "#/$defs/Column"
+        },
+        "lookback": {
+          "description": "Re-read window for late rows: `0s` or `<n>s|m|h|d`.",
+          "type": "string",
+          "pattern": "^(0s|[1-9][0-9]{0,8}(s|m|h|d))$",
+          "default": "0s"
+        },
+        "partition_by": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
+        },
+        "filter": {
+          "enum": [
+            "auto",
+            "manual"
+          ],
+          "default": "auto"
+        }
+      }
+    },
+    "FullRefresh": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cron"
+      ],
+      "properties": {
+        "cron": {
+          "description": "Standard five-field cron expression.",
+          "type": "string",
+          "pattern": "^\\S+( \\S+){4}$"
+        },
+        "time_zone": {
+          "description": "IANA name; default: the project's time zone.",
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$"
+        }
+      }
+    },
+    "Test": {
+      "description": "One test, keyed by its kind.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "unique"
+          ],
+          "properties": {
+            "unique": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/Column"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "not_null"
+          ],
+          "properties": {
+            "not_null": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/Column"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "accepted_range"
+          ],
+          "properties": {
+            "accepted_range": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "column"
+              ],
+              "properties": {
+                "column": {
+                  "$ref": "#/$defs/Column"
+                },
+                "min": {
+                  "$ref": "#/$defs/Bound"
+                },
+                "max": {
+                  "$ref": "#/$defs/Bound"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "accepted_values"
+          ],
+          "properties": {
+            "accepted_values": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "column",
+                "values"
+              ],
+              "properties": {
+                "column": {
+                  "$ref": "#/$defs/Column"
+                },
+                "values": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": [
+                      "string",
+                      "integer",
+                      "boolean"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "relationship"
+          ],
+          "properties": {
+            "relationship": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "column",
+                "to",
+                "field"
+              ],
+              "properties": {
+                "column": {
+                  "$ref": "#/$defs/Column"
+                },
+                "to": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]{0,62}\\.[a-z][a-z0-9_]{0,62}$"
+                },
+                "field": {
+                  "$ref": "#/$defs/Column"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Bound": {
+      "description": "A number, written as in YAML; compared exactly in DuckDB.",
+      "type": [
+        "integer",
+        "number",
+        "string"
+      ]
+    },
+    "Reconciliation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "measure",
+        "source"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,62}$"
+        },
+        "measure": {
+          "type": "string",
+          "minLength": 1
+        },
+        "group_by": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "source": {
+          "type": "string",
+          "minLength": 3
+        },
+        "tolerance": {
+          "type": [
+            "integer",
+            "number",
+            "string"
+          ],
+          "default": 0
+        }
+      }
+    },
+    "ModelErrorCode": {
+      "enum": [
+        "MODEL_CONFIG_INVALID",
+        "MODEL_PATH_INVALID",
+        "MODEL_SCHEMA_CONFLICT",
+        "ORPHAN_MODEL_CONFIG",
+        "INVALID_MODEL_SQL",
+        "UNSUPPORTED_MODEL_KIND"
+      ]
+    },
+    "ModelError": {
+      "description": "A problem found while discovering models; `details` names the file (relative to the project folder), a JSON pointer into a sidecar and its line when known.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "details"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ModelErrorCode"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "details": {
+          "$ref": "#/$defs/ModelErrorDetails"
+        }
+      }
+    },
+    "ModelErrorDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file"
+      ],
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}
