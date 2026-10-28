@@ -149,6 +149,8 @@ class ModelErrorCode(
             "UNIQUE_KEY_NULL",
             "UNIQUE_KEY_DUPLICATED",
             "MISSING_PARTITION_BY",
+            "MISSING_SINCE_PARAMETER",
+            "INCREMENTAL_FILTER_NOT_PROVABLE",
         ]
     ]
 ):
@@ -169,6 +171,8 @@ class ModelErrorCode(
         "UNIQUE_KEY_NULL",
         "UNIQUE_KEY_DUPLICATED",
         "MISSING_PARTITION_BY",
+        "MISSING_SINCE_PARAMETER",
+        "INCREMENTAL_FILTER_NOT_PROVABLE",
     ]
 
 

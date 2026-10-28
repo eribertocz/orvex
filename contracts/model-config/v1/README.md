@@ -21,7 +21,7 @@ A model is `models/<folder>/<name>.sql`: one `SELECT` in DuckDB SQL (or, for an 
 
 Durations are `<n>s|m|h|d`. Unknown keys are errors. The sidecar is read like the project files: a regular UTF-8 file under 1 MiB, one document, no duplicate keys, anchors, aliases or merge keys, no null values.
 
-Cross-field rules not listed below (`FRESHNESS_TOO_SHORT`, filter checks) are added by the issues that implement those behaviors, as compatible extensions of the error list.
+Cross-field rules not listed below (`FRESHNESS_TOO_SHORT`) are added by the issues that implement those behaviors, as compatible extensions of the error list.
 
 ## `ModelError`
 
@@ -43,6 +43,8 @@ Cross-field rules not listed below (`FRESHNESS_TOO_SHORT`, filter checks) are ad
 | `UNIQUE_KEY_NULL` | Loaded rows of a `merge` or `delete_insert` with a `NULL` key part (the run rolls back) |
 | `UNIQUE_KEY_DUPLICATED` | Loaded rows of a `merge` with the same key twice (the run rolls back; `delete_insert` allows it) |
 | `MISSING_PARTITION_BY` | `partition_overwrite` without `partition_by` |
+| `MISSING_SINCE_PARAMETER` | An incremental model with `filter: manual` whose SQL does not use `$since` |
+| `INCREMENTAL_FILTER_NOT_PROVABLE` | An incremental model with `filter: auto` whose filter cannot be proven; until the automatic filter exists, any `filter: auto` model whose SQL does not use `$since` (use `filter: manual` and place `$since`) |
 
 `details` holds `file` (relative to the project folder), and when known `model`, `path` (a JSON pointer into the sidecar) and `line`. Discovery reports every problem of a project at once.
 

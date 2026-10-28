@@ -102,6 +102,13 @@ def command_parser(identity: Identity) -> argparse.ArgumentParser:
     validate.add_argument("project", type=Path, help="project folder")
     run = commands.add_parser("run", help="build every model of a project into its local lake")
     run.add_argument("project", type=Path, help="project folder")
+    run.add_argument(
+        "--full-refresh",
+        nargs="*",
+        metavar="MODEL",
+        default=None,
+        help="rebuild incremental models from every row (the named ones, or all of them)",
+    )
     history = commands.add_parser("runs", help="list recent runs of a project")
     history.add_argument("project", type=Path, help="project folder")
     history.add_argument("--limit", type=int, default=20, help="how many runs (default 20)")
@@ -122,7 +129,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("--limit must be at least 1", file=sys.stderr)
                 return 2
             return runs(command.project, identity, command.limit, sys.stdout)
-        return run(command.project, identity, sys.stdout)
+        return run(command.project, identity, sys.stdout, command.full_refresh)
     arguments = parser_for(identity).parse_args(given)
     try:
         declarations = installed_declarations(identity)

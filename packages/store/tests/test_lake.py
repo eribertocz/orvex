@@ -538,3 +538,19 @@ def test_lake_results_encode_exactly_to_json(lake: Lake) -> None:
             "12.50",
         ]
     ]
+
+
+@pytest.mark.parametrize("kind", ["DATE", "TIMESTAMP", "TIMESTAMPTZ"])
+@pytest.mark.parametrize("value", ["infinity", "-infinity"])
+def test_infinite_dates_and_times_are_parameters(lake: Lake, kind: str, value: str) -> None:
+    table = read(lake, "SELECT CAST($a AS VARCHAR) AS v, isinf($a) AS i", None, ("a", kind, value))
+    assert table.column("v").to_pylist() == [value]
+    assert table.column("i").to_pylist() == [True]
+
+
+def test_describe_binds_parameters_without_running(lake: Lake) -> None:
+    write(lake, statement("CREATE TABLE a AS SELECT DATE '2024-01-01' AS d"))
+    since = Parameter(name="since", type="DATE", value=None)  # type: ignore[arg-type]
+    sql = "SELECT d, d + 1 AS next FROM a WHERE d > $since"
+    assert lake.describe(sql, [since]) == [("d", "DATE"), ("next", "DATE")]
+    assert code_of(lambda: lake.describe(sql)) == "STORE_PARAMETER_INVALID"

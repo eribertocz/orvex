@@ -1,4 +1,4 @@
-"""P1-11: incremental models with the append and merge strategies."""
+"""P1-11, P1-12, P1-14: incremental models — strategies, schema changes, `$since` and watermarks."""
 
 from __future__ import annotations
 
@@ -15,8 +15,16 @@ CONNECTIONS = "version: 1\nconnections:\n  feed:\n    type: parquet\n    path: d
 MODEL = "SELECT * FROM feed.data"
 
 
+def every_row(sql: str) -> str:
+    """The model `s.m` reading every row on each run: these tests are about how loaded rows are
+    written, not which rows are loaded (`$since` is required in an incremental model's SQL)."""
+    return f"SELECT * FROM ({sql}) WHERE $since IS NOT NULL"
+
+
 def write(folder: Path, files: dict[str, str]) -> None:
     for relative, text in files.items():
+        if relative == "models/s/m.sql" and "$since" not in text:
+            text = every_row(text)
         path = folder / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")

@@ -114,3 +114,17 @@ def history_request(snapshot: int, time_zone: str, limit: int) -> ReadRequest:
         snapshot=snapshot,
         batch_size=1000,
     )
+
+
+def watermark_request(snapshot: int, model: str) -> ReadRequest:
+    """The watermark of the model's last successful run (no row: it never ran successfully)."""
+    return ReadRequest(
+        kind="read",
+        sql=(
+            f"SELECT watermark FROM {TABLE} WHERE model = $p_model AND outcome = 'success' "
+            "ORDER BY finished_at DESC, run_id DESC LIMIT 1"
+        ),
+        parameters=[_parameter("p_model", "VARCHAR", model)],
+        snapshot=snapshot,
+        batch_size=1,
+    )

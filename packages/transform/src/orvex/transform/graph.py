@@ -258,11 +258,14 @@ def plan_run(
     graph: Graph,
     outputs: Mapping[str, Columns] | None = None,
     existing: Mapping[str, Columns | None] | None = None,
+    since: Mapping[str, str] | None = None,
+    full_refresh: frozenset[str] = frozenset(),
 ) -> list[tuple[Model, list[Step]]]:
     """Steps that build every stored model, in run order (views are not stored).
 
-    `outputs` are the models' output columns and `existing` the columns of their tables in the
-    lake (None when absent); both are needed for incremental models only.
+    For incremental models only: `outputs` are the models' output columns, `existing` the
+    columns of their tables in the lake (None when absent), `since` the `$since` value of each
+    (`-infinity` when missing), and `full_refresh` the models whose table is replaced.
     """
     by_name = {model.name: model for model in models}
     plan: list[tuple[Model, list[Step]]] = []
@@ -273,7 +276,19 @@ def plan_run(
         sql = compiled_sql(model, by_name)
         if model.config.materialized == "incremental":
             output = (outputs or {}).get(name, [])
-            plan.append((model, incremental.steps(model, sql, output, (existing or {}).get(name))))
+            plan.append(
+                (
+                    model,
+                    incremental.steps(
+                        model,
+                        sql,
+                        output,
+                        (existing or {}).get(name),
+                        (since or {}).get(name, incremental.LOWEST),
+                        name in full_refresh,
+                    ),
+                )
+            )
             continue
         schema, table = _identifier(model.schema), _identifier(model.table)
         plan.append(
