@@ -110,7 +110,10 @@ def uses_since(sql: str) -> bool:
         statements = duckdb.extract_statements(sql)
     except duckdb.Error:
         return False
-    return any(SINCE in statement.named_parameters for statement in statements)
+    # DuckDB binds `$SINCE` and `$Since` to the same parameter: the name is matched without case.
+    return any(
+        name.lower() == SINCE for statement in statements for name in statement.named_parameters
+    )
 
 
 def config_problems(model: Model) -> list[ModelError]:
@@ -142,28 +145,39 @@ def config_problems(model: Model) -> list[ModelError]:
                 path="/incremental",
             )
         )
-    if not uses_since(model.sql):
-        if (incremental.filter or "auto") == "manual":
-            found.append(
-                problem(
-                    "MISSING_SINCE_PARAMETER",
-                    f"{model.sql_file}: filter: manual needs $since in the SQL, where the "
-                    "incremental filter belongs (for example WHERE <time_column> > $since).",
-                    model.sql_file,
-                    model=model.name,
-                )
+    automatic = (incremental.filter or "auto") == "auto"
+    if not automatic and not uses_since(model.sql):
+        found.append(
+            problem(
+                "MISSING_SINCE_PARAMETER",
+                f"{model.sql_file}: filter: manual needs $since in the SQL, where the "
+                "incremental filter belongs (for example WHERE <time_column> > $since).",
+                model.sql_file,
+                model=model.name,
             )
-        else:
-            found.append(
-                problem(
-                    "INCREMENTAL_FILTER_NOT_PROVABLE",
-                    f"{file}: the incremental filter cannot be placed automatically yet; set "
-                    "filter: manual and use $since in the SQL.",
-                    file,
-                    model=model.name,
-                    path="/incremental/filter",
-                )
+        )
+    elif automatic and model.extraction:
+        found.append(
+            problem(
+                "INCREMENTAL_FILTER_NOT_PROVABLE",
+                f"{file}: the engine does not read ClickHouse SQL, so it cannot place the "
+                "filter (reason: extraction); set filter: manual and use {since:Type}.",
+                file,
+                model=model.name,
+                path="/incremental/filter",
             )
+        )
+    elif automatic and uses_since(model.sql):
+        found.append(
+            problem(
+                "MODEL_CONFIG_INVALID",
+                f"{file}: the SQL already uses $since: with filter: auto the engine places the "
+                "filter itself; set filter: manual to keep yours.",
+                file,
+                model=model.name,
+                path="/incremental/filter",
+            )
+        )
     if strategy not in KEYED_STRATEGIES and lookback_microseconds(incremental.lookback) > 0:
         found.append(
             problem(

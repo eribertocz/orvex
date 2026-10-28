@@ -233,13 +233,10 @@ def test_since_rules_are_checked_before_anything_runs(
     project(tmp_path, APPEND, "SELECT id, kwh, read_at FROM feed.data")
     code, out = command(capsys, "validate", str(tmp_path))
     assert (code, out.split(" ")[:2]) == (1, ["MISSING_SINCE_PARAMETER", "models/s/m.sql"])
-    project(
-        tmp_path,
-        APPEND.replace(", filter: manual", ""),
-        "SELECT id, kwh, read_at FROM feed.data",
-    )
+    # With filter: auto the engine places the filter itself: $since in the SQL is refused.
+    project(tmp_path, APPEND.replace(", filter: manual", ""), MODEL)
     code, out = command(capsys, "validate", str(tmp_path))
-    assert (code, out.split(" ")[:2]) == (1, ["INCREMENTAL_FILTER_NOT_PROVABLE", "models/s/m.yaml"])
+    assert (code, out.split(" ")[:2]) == (1, ["MODEL_CONFIG_INVALID", "models/s/m.yaml"])
     assert not (tmp_path / f".{SLUG}").exists()
 
 

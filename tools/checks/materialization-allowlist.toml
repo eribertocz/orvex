@@ -33,3 +33,13 @@ reason = "Expression parsing on a data-less connection: one serialized or render
 file = "packages/transform/src/orvex/transform/lineage.py"
 call = "fetchall"
 reason = "The catalog of aggregate function names on a data-less connection, never data rows"
+
+[[allow]]
+file = "packages/transform/src/orvex/transform/auto_filter.py"
+call = "fetchone"
+reason = "SQL parsing and rendering on a data-less connection: one serialized or rendered statement, never data rows"
+
+[[allow]]
+file = "packages/transform/src/orvex/transform/auto_filter.py"
+call = "fetchall"
+reason = "The catalog of aggregate function names on a data-less connection, never data rows"
