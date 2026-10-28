@@ -12,6 +12,7 @@ that quoted the file is not kept as their context.
 from __future__ import annotations
 
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -21,6 +22,8 @@ from pydantic import BaseModel, ValidationError
 MAX_FILE_BYTES = 1024 * 1024
 MAX_DEPTH = 32
 MERGE_TAG = "tag:yaml.org,2002:merge"
+_FIELD = re.compile(r"[a-z_][a-z0-9_]*")
+_TYPE_NAMES = frozenset({"int", "str", "float", "bool", "list", "dict", "root"})
 
 
 class ConfigProblem(Exception):
@@ -73,6 +76,35 @@ def _first_null(value: object, pointer: str) -> str | None:
         if found is not None:
             return found
     return None
+
+
+def _data_path(data: object, location: tuple[object, ...]) -> list[object]:
+    """The part of a validation location that names keys and indexes of the data itself.
+
+    Pydantic also names the union member or type it tried (`Test1`, `int`, `root`); those are
+    left out so the pointer leads to the value in the file. A missing or unknown key is named.
+    """
+    path: list[object] = []
+    node = data
+    skipped = False  # a union member was named: a key it misses is not the file's fault
+    for part in location:
+        in_dict = isinstance(node, dict) and part in node
+        in_list = isinstance(node, list) and isinstance(part, int) and 0 <= part < len(node)
+        if in_dict or in_list:
+            node = node[part]  # type: ignore[index]
+            path.append(part)
+        elif (
+            not skipped
+            and isinstance(node, dict)
+            and isinstance(part, str)
+            and _FIELD.fullmatch(part)
+            and part not in _TYPE_NAMES
+        ):
+            path.append(part)
+            break
+        else:
+            skipped = True
+    return path
 
 
 class ConfigFile:
@@ -275,7 +307,7 @@ class ConfigFile:
             first = error.errors(include_input=False, include_url=False)[0]
         # Raised outside the handler: the validation error quotes the input (a literal password,
         # for example), and it must not stay attached to ours as its context.
-        location = "/".join(token(part) for part in first["loc"] if part != "root")
+        location = "/".join(token(part) for part in _data_path(data, first["loc"]))
         where = f"{pointer}/{location}" if location else pointer
         if first["type"] == "extra_forbidden":
             message = f"Unknown key '{first['loc'][-1]}'."

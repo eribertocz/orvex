@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,15 +81,47 @@ def discover_models(folder: Path, connections: Mapping[str, Connection]) -> Disc
     if not root.is_dir():
         return Discovery((), ())
     files: list[Path] = []
-    for directory, folders, names in os.walk(root):
-        folders[:] = sorted(name for name in folders if not name.startswith("."))
-        files += [Path(directory) / name for name in sorted(names) if not name.startswith(".")]
+
+    def unreadable(error: OSError) -> None:
+        where = Path(error.filename or root).relative_to(folder).as_posix()
+        problems.append(
+            problem("MODEL_PATH_INVALID", f"{where} cannot be read ({error.strerror}).", where)
+        )
+
+    for directory, folders, names in os.walk(root, onerror=unreadable):
+        here = Path(directory)
+        visible = sorted(name for name in folders if not name.startswith("."))
+        # Links are not followed: a model is a file of the project, never one elsewhere.
+        links = [name for name in visible if (here / name).is_symlink()]
+        folders[:] = [name for name in visible if name not in links]
+        for name in links + sorted(n for n in names if not n.startswith(".")):
+            path = here / name
+            if path.is_symlink():
+                where = path.relative_to(folder).as_posix()
+                problems.append(
+                    problem(
+                        "MODEL_PATH_INVALID",
+                        f"{where} is a symbolic link; models must be files of the project.",
+                        where,
+                    )
+                )
+            else:
+                files.append(path)
     sql_files = {path for path in files if path.suffix == ".sql"}
     conflicts_reported: set[str] = set()
     for path in files:
         relative = path.relative_to(folder).as_posix()
         parts = path.relative_to(root).parts
         suffix = path.suffix
+        if suffix.lower() in {".sql", ".yaml", ".yml", ".py"} and suffix != suffix.lower():
+            problems.append(
+                problem(
+                    "MODEL_PATH_INVALID",
+                    f"{relative}: model extensions are lowercase ({suffix.lower()}).",
+                    relative,
+                )
+            )
+            continue
         if suffix not in {".sql", ".yaml", ".yml", ".py"}:
             continue  # README.md and other files are not models
         if len(parts) != 2:
@@ -212,6 +245,16 @@ def _config(
             path=issue.path,
             line=issue.line,
         )
+    repeated = _repeated_item(document.data)
+    if repeated is not None:
+        return problem(
+            "MODEL_CONFIG_INVALID",
+            f"{relative}: {repeated}: a column is listed more than once.",
+            relative,
+            model=name,
+            path=repeated,
+            line=document.line(repeated),
+        )
     if config.connection is not None:
         connection = connections.get(config.connection)
         if not isinstance(connection, ClickhouseConnection):
@@ -228,13 +271,47 @@ def _config(
     return config
 
 
+def _repeated_item(data: object) -> str | None:
+    """JSON pointer of the first column list with a repeated entry (the schema's uniqueItems)."""
+    if not isinstance(data, dict):
+        return None
+    lists: list[tuple[str, object]] = []
+    incremental = data.get("incremental")
+    if isinstance(incremental, dict):
+        lists += [
+            (f"/incremental/{key}", incremental.get(key)) for key in ("unique_key", "partition_by")
+        ]
+    tests = data.get("tests")
+    if isinstance(tests, list):
+        for index, test in enumerate(tests):
+            if isinstance(test, dict):
+                lists += [
+                    (f"/tests/{index}/{key}", test.get(key)) for key in ("unique", "not_null")
+                ]
+    for pointer, items in lists:
+        if isinstance(items, list) and len(items) != len({str(item) for item in items}):
+            return pointer
+    return None
+
+
 def _read_sql(path: Path, relative: str, name: str) -> str | ModelError:
     failure: ModelError | None = None
     text = ""
+    data = b""
     try:
-        with path.open("rb") as handle:
-            data = handle.read(MAX_SQL_BYTES + 1)
-        if len(data) > MAX_SQL_BYTES:
+        # Opened without blocking and checked on the descriptor: a pipe named .sql must not
+        # hang discovery.
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(descriptor, "rb") as handle:
+            if stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                data = handle.read(MAX_SQL_BYTES + 1)
+            else:
+                failure = problem(
+                    "INVALID_MODEL_SQL", f"{relative} is not a regular file.", relative, model=name
+                )
+        if failure is not None:
+            pass
+        elif len(data) > MAX_SQL_BYTES:
             failure = problem(
                 "INVALID_MODEL_SQL", f"{relative}: larger than 1024 KiB.", relative, model=name
             )

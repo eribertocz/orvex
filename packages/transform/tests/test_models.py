@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -141,8 +142,29 @@ def test_sidecar_with_every_field_validates(tmp_path: Path) -> None:
         (("freshness: 10m", "freshness: 10 minutes"), "/freshness"),
         (("strategy: merge", "strategy: upsert"), "/incremental/strategy"),
         (("  - unique: [reading_id]", "  - unique_together: [reading_id]"), "/tests/0"),
+        (("    tolerance: 0", "    tolerance: [1]"), "/reconciliation/0/tolerance"),
+        (
+            ("unique_key: [reading_id]", "unique_key: [reading_id, reading_id]"),
+            "/incremental/unique_key",
+        ),
+        (("partition_by: [reading_month]", "partition_by: [m, m]"), "/incremental/partition_by"),
+        (("  - unique: [reading_id]", "  - unique: [a, a]"), "/tests/0/unique"),
+        (
+            ("not_null: [reading_id, consumer_id", "not_null: [reading_id, reading_id"),
+            "/tests/1/not_null",
+        ),
     ],
-    ids=["unknown-key", "bad-duration", "unknown-strategy", "unknown-test"],
+    ids=[
+        "unknown-key",
+        "bad-duration",
+        "unknown-strategy",
+        "unknown-test",
+        "bad-tolerance",
+        "repeated-unique-key",
+        "repeated-partition",
+        "repeated-unique-test",
+        "repeated-not-null",
+    ],
 )
 def test_sidecar_violations_report_pointer_and_line(
     tmp_path: Path, change: tuple[str, str], pointer: str
@@ -161,7 +183,7 @@ def test_sidecar_violations_report_pointer_and_line(
     (item,) = found.problems
     assert item.code.root == "MODEL_CONFIG_INVALID"
     assert item.details.file == "models/staging/readings.yaml"
-    assert (item.details.path or "").startswith(pointer)
+    assert item.details.path == pointer
     assert item.details.line is not None
 
 
@@ -319,3 +341,42 @@ def test_discovery_never_writes(tmp_path: Path) -> None:
 
 def test_no_models_folder_means_no_models(tmp_path: Path) -> None:
     assert discover(tmp_path) == Discovery((), ())
+
+
+def test_links_are_reported_not_followed(tmp_path: Path) -> None:
+    outside = write(tmp_path / "elsewhere", {"secret.sql": "SELECT 'outside' AS x"})
+    write(tmp_path / "project", {"models/staging/a.sql": "SELECT 1"})
+    project = tmp_path / "project"
+    (project / "models" / "linked").symlink_to(outside, target_is_directory=True)
+    (project / "models" / "staging" / "b.sql").symlink_to(outside / "secret.sql")
+    found = discover(project)
+    assert codes(found) == [
+        ("MODEL_PATH_INVALID", "models/linked"),
+        ("MODEL_PATH_INVALID", "models/staging/b.sql"),
+    ]
+    assert [model.name for model in found.models] == ["staging.a"]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads any folder")
+def test_unreadable_folder_is_reported(tmp_path: Path) -> None:
+    write(tmp_path, {"models/staging/a.sql": "SELECT 1"})
+    locked = tmp_path / "models" / "staging"
+    locked.chmod(0)
+    try:
+        found = discover(tmp_path)
+    finally:
+        locked.chmod(0o755)
+    assert codes(found) == [("MODEL_PATH_INVALID", "models/staging")]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")
+def test_a_pipe_named_sql_does_not_hang(tmp_path: Path) -> None:
+    write(tmp_path, {"models/staging/a.sql": "SELECT 1"})
+    os.mkfifo(tmp_path / "models" / "staging" / "b.sql")
+    found = discover(tmp_path)
+    assert codes(found) == [("INVALID_MODEL_SQL", "models/staging/b.sql")]
+
+
+def test_uppercase_extensions_are_reported(tmp_path: Path) -> None:
+    found = discover(write(tmp_path, {"models/staging/a.SQL": "SELECT 1"}))
+    assert codes(found) == [("MODEL_PATH_INVALID", "models/staging/a.SQL")]
