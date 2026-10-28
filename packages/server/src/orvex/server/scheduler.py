@@ -8,6 +8,9 @@ minutes apart, whatever the records or the system clock say.
 
 A model whose own step failed is held: retried after 5, 10 and 20 minutes, then given up until
 its next due time; due models that do not read it keep running. Every decision is printed.
+
+Lake maintenance (P1-20) runs when no model is due: once a day after a success, an hour after a
+failure. Model runs keep priority: maintenance only starts between runs.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ from types import FrameType
 from typing import IO
 from zoneinfo import ZoneInfo
 
-from orvex.server import commands
+from orvex.server import commands, maintenance
 from orvex.server.commands import LAKE_FOLDER, Checked, Selection, project_lock
 from orvex.server.identity import Identity
 from orvex.store.errors import StoreError
@@ -60,6 +63,7 @@ class _Records:
     histories: dict[str, History]
     last_run_start: dt.datetime | None
     failed: tuple[str, ...]  # models whose own step failed in the last run
+    maintained: maintenance.Last = field(default_factory=maintenance.Last)
 
 
 def _records(home: Path) -> _Records:
@@ -69,6 +73,7 @@ def _records(home: Path) -> _Records:
     with project_lock(home):
         lake = open_lake(commands._location(home), commands._limits())
         try:
+            maintained = maintenance.last_maintenance(lake)
             snapshot = lake.current_snapshot().id
             try:
                 rows = lake.read(model_history_request(snapshot)).read_all().to_pylist()
@@ -76,7 +81,7 @@ def _records(home: Path) -> _Records:
             except StoreError as error:
                 if error.code != "STORE_STATEMENT_INVALID":
                     raise
-                return _Records({}, None, ())  # no run records yet
+                return _Records({}, None, (), maintained)  # no run records yet
         finally:
             lake.close()
     histories = {
@@ -88,7 +93,7 @@ def _records(home: Path) -> _Records:
         for row in rows
     }
     failed = tuple(str(last["failed"]).split(",")) if last["failed"] else ()
-    return _Records(histories, _instant(last["started"]), failed)
+    return _Records(histories, _instant(last["started"]), failed, maintained)
 
 
 def _fingerprint(folder: Path) -> tuple[tuple[str, int, int], ...]:
@@ -120,6 +125,7 @@ class _State:
     checked_at: float = 0.0
     recheck_at: float | None = None
     deferred: set[str] = field(default_factory=set)  # retries already deferred once
+    maintenance_after: float | None = None  # monotonic: maintenance did not start, wait
 
 
 def schedule(
@@ -248,7 +254,9 @@ def _cycle(
         if waited < MINIMUM_INTERVAL.total_seconds():
             return min(LOOK_AGAIN.total_seconds(), MINIMUM_INTERVAL.total_seconds() - waited)
     if not decided.models:
-        return max(1.0, (decided.wake_at - now).total_seconds())
+        return _maybe_maintain(
+            folder, identity, out, clock, monotonic, state, records, decided, zone
+        )
     try:
         with project_lock(home):
             pass  # free now; a process taking it in between makes the run fail as locked
@@ -298,3 +306,42 @@ def _cycle(
             until = state.held[name].astimezone(ZoneInfo(zone))
             _say(out, zone, after, f"{name} waits until {until:%Y-%m-%d %H:%M}")
     return 1.0
+
+
+def _maybe_maintain(
+    folder: Path,
+    identity: Identity,
+    out: IO[str],
+    clock: Clock,
+    monotonic: Monotonic,
+    state: _State,
+    records: _Records,
+    decided: Plan,
+    zone: str,
+) -> float:
+    """No model is due: run lake maintenance when it is due, else wait for whichever comes
+    first."""
+    now = clock()
+    checked = state.checked
+    lake_exists = (
+        checked is not None
+        and checked.project is not None
+        and (checked.project.folder / f".{identity.slug}" / LAKE_FOLDER).exists()
+    )
+    if not lake_exists:  # nothing to maintain before the first run
+        return max(1.0, (decided.wake_at - now).total_seconds())
+    due = records.maintained.due_at()
+    waiting = state.maintenance_after is not None and monotonic() < state.maintenance_after
+    if (due is None or due <= now) and not waiting:
+        _say(out, zone, now, "running lake maintenance")
+        if maintenance.maintain(folder, identity, out, "schedule", clock) != 0:
+            # Recorded failures wait an hour (the records say so); one that did not start (the
+            # project locked by another process…) is tried again after the minimum interval.
+            state.maintenance_after = monotonic() + MINIMUM_INTERVAL.total_seconds()
+        else:
+            state.maintenance_after = None
+        return 1.0
+    wake = decided.wake_at if due is None or waiting else min(decided.wake_at, due)
+    if waiting and state.maintenance_after is not None:
+        wake = min(wake, now + dt.timedelta(seconds=state.maintenance_after - monotonic()))
+    return max(1.0, (wake - now).total_seconds())

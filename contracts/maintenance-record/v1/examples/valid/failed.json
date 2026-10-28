@@ -1,0 +1,27 @@
+{
+  "run_id": "0f5e2c1a-8b7d-4c3e-9a1f-2b3c4d5e6f70",
+  "trigger": "manual",
+  "retention": "90d",
+  "cutoff": "2026-07-30T07:00:00.000000+00:00",
+  "versions": {
+    "duckdb": "2.0.0",
+    "modules": [
+      {
+        "name": "store",
+        "version": "0.1.0"
+      },
+      {
+        "name": "server",
+        "version": "0.1.0"
+      }
+    ]
+  },
+  "report": null,
+  "started_at": "2026-10-28T07:00:00.000000+00:00",
+  "finished_at": "2026-10-28T07:00:04.512000+00:00",
+  "outcome": "failed",
+  "error": {
+    "code": "STORE_QUERY_FAILED",
+    "message": "Lake maintenance failed."
+  }
+}

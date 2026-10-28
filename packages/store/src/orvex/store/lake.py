@@ -34,6 +34,7 @@ from orvex.contracts.store.v1 import (
     FileSourceAttachment,
     LakeLocation,
     LocalLakeLocation,
+    MaintenanceReport,
     Parameter,
     PostgresLakeLocation,
     PostgresSourceAttachment,
@@ -574,6 +575,7 @@ class Lake:
                 {"duckdb": str(error)},
             ) from error
         self._write_lock = threading.Lock()
+        self._maintenance_lock = threading.Lock()
         # DuckDB spills to this folder when a query exceeds the memory limit.
         self._spill = tempfile.mkdtemp(prefix="lake-spill-")
         self._local = threading.local()
@@ -902,13 +904,141 @@ class Lake:
             f"{where} ORDER BY snapshot_id DESC LIMIT 1",
             {"lake": LAKE, **parameters},
         )
-        if row is None:
-            return None
-        # Microseconds since the epoch, so no time-zone library is needed to read the instant.
-        committed = dt.datetime(1970, 1, 1, tzinfo=dt.UTC) + dt.timedelta(
-            microseconds=int(str(row[1]))
+        return None if row is None else _snapshot_of(row)
+
+    def _oldest_snapshot(self) -> Snapshot | None:
+        row = self._one(
+            "SELECT snapshot_id, epoch_us(snapshot_time) FROM ducklake_snapshots($lake) "
+            "ORDER BY snapshot_id LIMIT 1",
+            {"lake": LAKE},
         )
-        return Snapshot(kind="snapshot", id=int(str(row[0])), committed_at=committed)
+        return None if row is None else _snapshot_of(row)
+
+    def _missing_snapshot(self, snapshot_id: int) -> StoreError:
+        """Why a snapshot cannot be read: expired by maintenance (ids are never reused and every
+        id up to the current one was committed, so a missing one among them expired), or never
+        existed."""
+        oldest = self._oldest_snapshot()
+        current = self._snapshot(None)
+        if oldest is not None and current is not None and 0 <= snapshot_id <= current.id:
+            return StoreError(
+                "STORE_SNAPSHOT_EXPIRED",
+                f"Snapshot {snapshot_id} has expired: the oldest snapshot kept is {oldest.id} "
+                f"({oldest.committed_at.isoformat()}); the lake's snapshot retention decides how "
+                "long snapshots stay readable.",
+                {"snapshot": str(snapshot_id), "oldest": str(oldest.id)},
+            )
+        return StoreError(
+            "STORE_SNAPSHOT_NOT_FOUND",
+            f"Snapshot {snapshot_id} does not exist in the lake.",
+            {"snapshot": str(snapshot_id)},
+        )
+
+    def maintain(
+        self, expire_before: dt.datetime, orphans_before: dt.datetime
+    ) -> MaintenanceReport:
+        """Expire the snapshots committed before `expire_before`, merge small files, rewrite
+        files with many deletes, and delete the files no remaining snapshot uses, and orphaned
+        files older than `orphans_before` (a writer may still be creating a newer one).
+
+        DuckLake's own `CHECKPOINT` order, step by step so each one is counted: flush inlined
+        data, expire, merge, rewrite, expire again (the snapshot merging replaced, when it is
+        older than the cutoff), clean up, delete orphans. The current snapshot is never expired.
+        Runs alone: one maintenance at a time, after every read and write of this lake ends
+        (every admission slot, then the writer lock). Counts are read in SQL; no row reaches
+        Python.
+        """
+        for instant in (expire_before, orphans_before):
+            if instant.tzinfo is None:
+                raise StoreError(
+                    "STORE_PARAMETER_INVALID", "Maintenance cutoffs must be aware instants.", {}
+                )
+        cutoff = expire_before.astimezone(dt.UTC).isoformat()
+        orphans = orphans_before.astimezone(dt.UTC).isoformat()
+        deadline = time.monotonic() + self._timeout_ms(None) / 1000
+        # One maintenance at a time (two taking part of the slots each would wait for each
+        # other), then every admission slot, then the writer lock: no read or write of this lake
+        # runs during maintenance (a read pinned to a snapshot being expired would lose its files).
+        if not self._maintenance_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise StoreError("STORE_TIMEOUT", "Another maintenance of this lake is running.", {})
+        taken = 0
+        try:
+            for _ in range(int(self._limits.max_concurrent or 1)):
+                self._admission.acquire(deadline)
+                taken += 1
+            if not self._write_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+                raise StoreError(
+                    "STORE_TIMEOUT", "Maintenance waited too long for the writer ahead.", {}
+                )
+            try:
+                cursor = self._cursor()
+                try:
+                    report = self._maintain(cursor, cutoff, orphans)
+                finally:
+                    cursor.close()
+            finally:
+                self._write_lock.release()
+        finally:
+            for _ in range(taken):
+                self._admission.release()
+            self._maintenance_lock.release()
+        return report
+
+    def _maintain(
+        self, cursor: duckdb.DuckDBPyConnection, cutoff: str, orphans: str
+    ) -> MaintenanceReport:
+        lake: dict[str, object] = {"lake": LAKE}
+        expire = (
+            "SELECT count(*) FROM ducklake_expire_snapshots("
+            "$lake, older_than => CAST($cutoff AS TIMESTAMPTZ))"
+        )
+        compact = (
+            "SELECT coalesce(sum(files_processed), 0) || ',' || coalesce(sum(files_created), 0) "
+            "FROM {function}($lake)"
+        )
+        try:
+            _single_value(cursor, "SELECT count(*) FROM ducklake_flush_inlined_data($lake)", lake)
+            expired = int(_single_value(cursor, expire, {**lake, "cutoff": cutoff}))
+            merged, created = _single_value(
+                cursor, compact.format(function="ducklake_merge_adjacent_files"), lake
+            ).split(",")
+            rewritten, rewritten_into = _single_value(
+                cursor, compact.format(function="ducklake_rewrite_data_files"), lake
+            ).split(",")
+            expired += int(_single_value(cursor, expire, {**lake, "cutoff": cutoff}))
+            deleted = _single_value(
+                cursor,
+                "SELECT count(*) FROM ducklake_cleanup_old_files($lake, cleanup_all => true)",
+                lake,
+            )
+            orphaned = _single_value(
+                cursor,
+                "SELECT count(*) FROM ducklake_delete_orphaned_files("
+                "$lake, older_than => CAST($orphans AS TIMESTAMPTZ))",
+                {**lake, "orphans": orphans},
+            )
+            oldest = _snapshot_of(
+                _single_value(
+                    cursor,
+                    "SELECT snapshot_id || ',' || epoch_us(snapshot_time) "
+                    "FROM ducklake_snapshots($lake) ORDER BY snapshot_id LIMIT 1",
+                    lake,
+                ).split(",")
+            )
+        except duckdb.Error as error:
+            raise StoreError(
+                "STORE_QUERY_FAILED", "Lake maintenance failed.", {"duckdb": str(error)}
+            ) from error
+        return MaintenanceReport(
+            kind="maintenance_report",
+            snapshots_expired=expired,
+            files_merged=int(merged),
+            files_created=int(created) + int(rewritten_into),
+            files_rewritten=int(rewritten),
+            files_deleted=int(deleted),
+            orphaned_files_deleted=int(orphaned),
+            oldest_snapshot=oldest,
+        )
 
     def current_snapshot(self) -> Snapshot:
         snapshot = self._snapshot(None)
@@ -1047,15 +1177,15 @@ class Lake:
             )
         parameters = _bound(statement, request.parameters)
         if self._snapshot(request.snapshot) is None:
-            raise StoreError(
-                "STORE_SNAPSHOT_NOT_FOUND",
-                f"Snapshot {request.snapshot} does not exist in the lake.",
-                {"snapshot": str(request.snapshot)},
-            )
+            raise self._missing_snapshot(request.snapshot)
         sql = self._pinned(_typed(request.sql, request.parameters), request.snapshot)
         deadline = time.monotonic() + self._timeout_ms(request.timeout_ms) / 1000
         self._admission.acquire(deadline)
         try:
+            # Checked again once admitted: maintenance may have expired the snapshot while this
+            # read waited behind it (maintenance runs alone, so it cannot expire it from now on).
+            if self._snapshot(request.snapshot) is None:
+                raise self._missing_snapshot(request.snapshot)
             cursor = self._cursor()
         except BaseException:
             self._admission.release()
@@ -1233,6 +1363,12 @@ class Lake:
             handle.result = CommitResult(kind="commit_result", snapshot=after if changed else None)
         finally:
             self._write_lock.release()
+
+
+def _snapshot_of(row: Sequence[object]) -> Snapshot:
+    """A snapshot from (id, microseconds since the epoch): no time-zone library is needed."""
+    committed = dt.datetime(1970, 1, 1, tzinfo=dt.UTC) + dt.timedelta(microseconds=int(str(row[1])))
+    return Snapshot(kind="snapshot", id=int(str(row[0])), committed_at=committed)
 
 
 def _unpinnable_objects(cursor: duckdb.DuckDBPyConnection) -> int:
