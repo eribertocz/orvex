@@ -15,8 +15,10 @@ import json
 import math
 import os
 import re
+import select
 import shutil
 import signal
+import socket
 import sqlite3
 import tempfile
 import threading
@@ -1678,36 +1680,74 @@ class Transaction:
             restore()
             guard.stop()
             self._guard = None
+        if pressed:  # pressed while the load was finishing: never lost
+            raise KeyboardInterrupt
         return int(counted[0]) if counted else 0
 
 
 def _on_ctrl_c(on_interrupt: Callable[[], None] | None, pressed: list[bool]) -> Callable[[], None]:
-    """While a load runs in the main thread, Ctrl-C first calls `on_interrupt`, then does what
-    it did before (normally `KeyboardInterrupt`). DuckDB runs Python's signal handlers while it
-    waits, but stops only when the stream returns: a stream blocked on a quiet network read
-    would otherwise hold the interrupt until its next rows. Returns the restoring function."""
+    """While a load runs in the main thread, Ctrl-C calls `on_interrupt` at once and is noted in
+    `pressed`; the load then raises `KeyboardInterrupt` itself. Returns the restoring function.
+
+    Python runs signal handlers only in the main thread, and only when it gets control: DuckDB,
+    waiting for a stream blocked on a quiet network read, may not give it back until the next
+    rows arrive (7.9 s measured on CI). So the signal is also watched from another thread through
+    Python's wakeup file descriptor, which the C-level handler writes to as the signal arrives.
+    """
     if on_interrupt is None or threading.current_thread() is not threading.main_thread():
         return lambda: None
     previous = signal.getsignal(signal.SIGINT)
     if previous is signal.SIG_IGN or previous is None:  # Ctrl-C is ignored, or not Python's
         return lambda: None
 
-    def handler(number: int, frame: FrameType | None) -> None:
-        pressed.append(True)
-        with contextlib.suppress(Exception):
-            on_interrupt()
-        if callable(previous):
-            previous(number, frame)
-        else:
-            raise KeyboardInterrupt
+    once = threading.Lock()
 
+    def interrupt() -> None:
+        # Both the handler and the watcher see the signal; the source is closed once.
+        with once:
+            first = not pressed
+            pressed.append(True)
+        if first:
+            with contextlib.suppress(Exception):
+                on_interrupt()
+
+    def handler(number: int, frame: FrameType | None) -> None:
+        interrupt()
+
+    receiver, sender = socket.socketpair()
+    sender.setblocking(False)
+    stop = threading.Event()
     try:
         signal.signal(signal.SIGINT, handler)
+        earlier = signal.set_wakeup_fd(sender.fileno(), warn_on_full_buffer=False)
     except ValueError:  # not the main interpreter
+        signal.signal(signal.SIGINT, previous)
+        receiver.close()
+        sender.close()
         return lambda: None
 
+    def watch() -> None:
+        while not stop.is_set():
+            ready, _, _ = select.select([receiver], [], [], 0.2)
+            if not ready:
+                continue
+            with contextlib.suppress(OSError):
+                received = receiver.recv(256)
+                if earlier != -1:
+                    os.write(earlier, received)  # whoever watched signals before still sees them
+                if signal.SIGINT in received:
+                    interrupt()
+
+    watcher = threading.Thread(target=watch, name="load-ctrl-c", daemon=True)
+    watcher.start()
+
     def restore() -> None:
+        stop.set()
+        signal.set_wakeup_fd(earlier)
         signal.signal(signal.SIGINT, previous)
+        watcher.join()
+        receiver.close()
+        sender.close()
 
     return restore
 
