@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import signal
 import socket
 import sys
 import threading
 import webbrowser
-from collections.abc import Sequence
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from importlib.resources import files
 from pathlib import Path
+from types import FrameType
 
 import uvicorn
 from orvex.server.app import create_app
@@ -188,12 +190,43 @@ def main(argv: Sequence[str] | None = None) -> int:
     with project_context as project:
         port = free_port(arguments.port)
         url = f"http://{LOCAL_HOST}:{port}/"
-        print(f"{identity.name}: {project.path} -> {url}", flush=True)
         server = uvicorn.Server(server_config(port, versions, web_build_directory()))
-        if not arguments.no_browser:
-            threading.Timer(1.0, webbrowser.open, args=(url,)).start()
-        server.run()
+        with stopping(server) as received:
+            print(f"{identity.name}: {project.path} -> {url}", flush=True)
+            if not arguments.no_browser:
+                threading.Timer(1.0, webbrowser.open, args=(url,)).start()
+            server.run()
+    # The in-memory project folder is gone; now end as the signal asked, as uvicorn would.
+    if received:
+        signal.signal(received[0], signal.SIG_DFL)
+        signal.raise_signal(received[0])
     return 0
+
+
+@contextmanager
+def stopping(server: uvicorn.Server) -> Iterator[list[int]]:
+    """While the server runs, `SIGTERM` (kill, process managers) and `SIGHUP` (the terminal
+    closed) shut it down gracefully, as Ctrl-C does; yields the signals received.
+
+    uvicorn raises a signal it handled again once shut down, which by default would end the
+    process before the caller's cleanup runs (the in-memory project folder, #43): these handlers
+    take that signal instead, and the caller ends the process after cleaning up. They are in
+    place before the server's address is announced, so a signal sent once it is printed is
+    handled too.
+    """
+    received: list[int] = []
+
+    def stop(signum: int, frame: FrameType | None) -> None:
+        received.append(signum)
+        server.handle_exit(signum, frame)
+
+    numbers = [signal.SIGTERM, *([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])]
+    previous = {number: signal.signal(number, stop) for number in numbers}
+    try:
+        yield received
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
 
 
 if __name__ == "__main__":

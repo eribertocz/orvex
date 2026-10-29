@@ -1,5 +1,6 @@
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -73,3 +74,70 @@ def test_server_starts_and_answers(tmp_path: Path) -> None:
         _, stderr = process.communicate(timeout=10)
     log_lines = [json.loads(line) for line in stderr.splitlines() if line.startswith("{")]
     assert any(line.get("request_id") == request_id for line in log_lines)
+
+
+def started(arguments: list[str], tmp_path: Path) -> subprocess.Popen[str]:
+    """The server started as a subprocess with its own temporary folder; returns once it has
+    printed its address."""
+    temporary = tmp_path / "temporary"
+    temporary.mkdir()
+    port = free_port(21000)
+    environment = os.environ | {
+        home_variable(IDENTITY): str(tmp_path / "instance"),
+        "TMPDIR": str(temporary),
+    }
+    process = subprocess.Popen(
+        [sys.executable, "-m", "orvex.server", *arguments, "--no-browser", "--port", str(port)],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    assert process.stdout is not None
+    line = process.stdout.readline()  # the address line, printed once the project is open
+    assert "-> http://" in line, line
+    process.stdout.close()
+    return process
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+@pytest.mark.parametrize(
+    ("number", "returncode"),
+    [(signal.SIGTERM, -signal.SIGTERM), (signal.SIGINT, -signal.SIGINT)]
+    + ([(signal.SIGHUP, -signal.SIGHUP)] if hasattr(signal, "SIGHUP") else []),
+)
+def test_the_in_memory_project_is_deleted_however_the_server_stops(
+    tmp_path: Path, number: int, returncode: int
+) -> None:
+    # #43: Ctrl-C deleted the temporary project folder, but SIGTERM (kill, process managers)
+    # and SIGHUP (the terminal closed) left it behind.
+    process = started([], tmp_path)
+    try:
+        assert len(list((tmp_path / "temporary").iterdir())) == 1  # the project folder
+        process.send_signal(number)
+        # It still ends as the signal asked; Ctrl-C ends as before (KeyboardInterrupt).
+        assert process.wait(timeout=10) == returncode
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+    assert list((tmp_path / "temporary").iterdir()) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+@pytest.mark.parametrize(
+    "number", [signal.SIGTERM, *([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])]
+)
+def test_a_project_folder_is_never_deleted(tmp_path: Path, number: int) -> None:
+    project = tmp_path / "billing"
+    project.mkdir()
+    (project / "notes.txt").write_text("kept", encoding="utf-8")
+    process = started([str(project)], tmp_path)
+    try:
+        process.send_signal(number)
+        assert process.wait(timeout=10) == -number
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+    assert (project / "notes.txt").read_text(encoding="utf-8") == "kept"
