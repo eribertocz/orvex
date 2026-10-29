@@ -16,6 +16,7 @@ import math
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import tempfile
 import threading
@@ -26,6 +27,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType
 from typing import NamedTuple
 
 import duckdb
@@ -1592,8 +1594,10 @@ class Transaction:
         and the number of rows is returned.
 
         `on_interrupt` is called from another thread when the statement times out or is
-        cancelled (to close the stream's source, so a remote query stops). An exception raised by
-        the stream itself propagates unchanged; the caller decides what it means.
+        cancelled, and on Ctrl-C when the load runs in the main thread (to close the stream's
+        source, so a remote query stops at once even while it sends nothing). Ctrl-C then raises
+        `KeyboardInterrupt`. An exception raised by the stream itself propagates unchanged; the
+        caller decides what it means.
         """
         names = [name for name, _ in columns]
         if len({name.lower() for name in names}) != len(names):
@@ -1637,6 +1641,8 @@ class Transaction:
                 guard.stop()
                 raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
             self._guard = guard
+        pressed: list[bool] = []
+        restore = _on_ctrl_c(on_interrupt, pressed)
         try:
             self._cursor.sql(f"CREATE SCHEMA IF NOT EXISTS {_identifier(schema)}")
             self._cursor.register(view, stream)
@@ -1648,7 +1654,11 @@ class Transaction:
                 # Interrupted, even if the statement ended: what it read is not the whole stream.
                 raise guard.error()
             counted = self._cursor.execute(f"SELECT count(*) FROM {target}").fetchone()
+            if pressed:
+                raise KeyboardInterrupt
         except duckdb.Error as error:
+            if pressed:
+                raise KeyboardInterrupt from None
             if failure and guard.reason is None:
                 raise failure[0] from None
             raise guard.error(error) from error
@@ -1657,15 +1667,49 @@ class Transaction:
         except Exception as error:
             # The stream's own error: unchanged, unless the statement was interrupted, which is
             # then the reason (closing the source on interrupt makes the stream fail).
+            if pressed:
+                raise KeyboardInterrupt from None
             if guard.reason is not None:
                 raise guard.error() from None
             if isinstance(error, RuntimeError) and _user_interrupt(error):
                 raise KeyboardInterrupt from error
             raise
         finally:
+            restore()
             guard.stop()
             self._guard = None
         return int(counted[0]) if counted else 0
+
+
+def _on_ctrl_c(on_interrupt: Callable[[], None] | None, pressed: list[bool]) -> Callable[[], None]:
+    """While a load runs in the main thread, Ctrl-C first calls `on_interrupt`, then does what
+    it did before (normally `KeyboardInterrupt`). DuckDB runs Python's signal handlers while it
+    waits, but stops only when the stream returns: a stream blocked on a quiet network read
+    would otherwise hold the interrupt until its next rows. Returns the restoring function."""
+    if on_interrupt is None or threading.current_thread() is not threading.main_thread():
+        return lambda: None
+    previous = signal.getsignal(signal.SIGINT)
+    if previous is signal.SIG_IGN or previous is None:  # Ctrl-C is ignored, or not Python's
+        return lambda: None
+
+    def handler(number: int, frame: FrameType | None) -> None:
+        pressed.append(True)
+        with contextlib.suppress(Exception):
+            on_interrupt()
+        if callable(previous):
+            previous(number, frame)
+        else:
+            raise KeyboardInterrupt
+
+    try:
+        signal.signal(signal.SIGINT, handler)
+    except ValueError:  # not the main interpreter
+        return lambda: None
+
+    def restore() -> None:
+        signal.signal(signal.SIGINT, previous)
+
+    return restore
 
 
 def _user_interrupt(error: RuntimeError) -> bool:

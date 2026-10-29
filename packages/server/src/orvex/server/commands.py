@@ -1151,6 +1151,7 @@ def _extract(
     except clickhouse.SourceError as error:
         raise _StepFailed(error.code, f"{step.model}: {error.message}") from None
     stream: clickhouse.Stream | None = None
+    sent = False
     try:
         since = (
             clickhouse.since_value(step.since, step.watermark, step.lookback, source.server_zone)
@@ -1159,6 +1160,7 @@ def _extract(
         )
         item.since = since
         source.check_columns(step.text, step.since, step.columns)
+        sent = True
         stream = source.stream(step.text, step.columns, since, DEFAULT_TIMEOUT_MS // 1000)
         rows = transaction.load_arrow(
             step.schema,
@@ -1176,6 +1178,8 @@ def _extract(
             if item.rows_read is None:
                 item.rows_read = str(stream.rows)
             stream.close()
+        elif sent:
+            item.rows_read = "0"  # the query ran and failed before its first rows
         source.close()
 
 

@@ -136,7 +136,7 @@ def test_ctrl_c_during_a_load_is_a_keyboard_interrupt() -> None:
             COLUMNS,
             on_interrupt=lambda: called.append("x"),
         )
-    assert called == []  # not a time limit: the caller closes its own source
+    assert called == ["x"]  # the source is closed at once, as on a time limit
     cursor.rollback()
     assert cursor.execute(
         "SELECT count(*) FROM duckdb_tables() WHERE table_name = 't'"

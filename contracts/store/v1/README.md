@@ -104,7 +104,7 @@ Other types (lists, structs, maps, unions, `TIME`, geometry, …) are refused wi
 - Each column is cast to its type (`CREATE TABLE … AS SELECT CAST(…) …`). The stream is read once, batch by batch, by DuckDB, and no row passes through Python.
 - It returns the number of rows.
 - A type name must be a DuckDB type name with optional numeric arguments (`DECIMAL(18,4)`); anything else is refused before the SQL is built.
-- Time limits and cancellation apply as for statements. `on_interrupt` is called from another thread when the statement times out or is cancelled, so the caller can close the stream's source (a remote query then stops).
+- Time limits and cancellation apply as for statements. `on_interrupt` is called from another thread when the statement times out or is cancelled, and on Ctrl-C when the load runs in the main thread, so the caller can close the stream's source (a remote query then stops, even while it sends nothing). Ctrl-C then raises `KeyboardInterrupt`.
 - An exception raised by the stream itself propagates unchanged; after a time limit or a cancellation, the store's error is raised instead, even if the statement ended.
 - The transaction rolls back on any failure.
 
