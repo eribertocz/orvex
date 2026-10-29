@@ -274,6 +274,24 @@ def _postgres_password(location: PostgresLakeLocation) -> str:
     return password
 
 
+def _tokens(sql: str) -> list[tuple[int, duckdb.token_type]]:
+    """DuckDB's tokens of `sql`, positioned by character.
+
+    `duckdb.tokenize` gives byte offsets into the UTF-8 text; a non-ASCII character before a
+    token would shift every later slice of the Python string (#130).
+    """
+    tokens = duckdb.tokenize(sql)
+    if sql.isascii():
+        return tokens
+    characters: dict[int, int] = {}
+    offset = 0
+    for index, character in enumerate(sql):
+        characters[offset] = index
+        offset += len(character.encode("utf-8"))
+    characters[offset] = len(sql)
+    return [(characters[position], kind) for position, kind in tokens]
+
+
 def _guarded(sql: str, table_functions: frozenset[str]) -> None:
     """Refuse SQL that names the catalog database or calls a table function other than generators.
 
@@ -289,8 +307,9 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
             "Statements may not reference the lake's catalog database.",
             {},
         )
-    tokens = [token for token in duckdb.tokenize(sql) if token[1] != duckdb.token_type.comment]
-    positions = [position for position, _ in duckdb.tokenize(sql)] + [len(sql)]
+    every = _tokens(sql)
+    tokens = [token for token in every if token[1] != duckdb.token_type.comment]
+    positions = [position for position, _ in every] + [len(sql)]
     _refuse_file_names(sql, tokens, positions)
     for index, (position, kind) in enumerate(tokens):
         if kind not in {duckdb.token_type.identifier, duckdb.token_type.keyword}:
@@ -470,7 +489,7 @@ def _typed(sql: str, parameters: list[Parameter]) -> str:
     The declared type is validated by the contract pattern before it reaches the SQL.
     """
     types = {parameter.name: parameter.type.root for parameter in parameters}
-    tokens = duckdb.tokenize(sql)
+    tokens = _tokens(sql)
     edits: list[tuple[int, int, str]] = []
     for index, (position, kind) in enumerate(tokens[:-1]):
         following, following_kind = tokens[index + 1]
@@ -1427,7 +1446,7 @@ def _created_kind_allowed(sql: str, statement: duckdb.Statement) -> bool:
         duckdb.StatementType.ALTER,
     }:
         return True
-    tokens = duckdb.tokenize(sql)
+    tokens = _tokens(sql)
     ends = [position for position, _ in tokens[1:]] + [len(sql)]
     words = [
         sql[position:end].strip().upper()
