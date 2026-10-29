@@ -406,13 +406,13 @@ def _storage_credentials(storage: S3Storage | None, data_path: str) -> _Storage 
     remote = "://" in data_path
     if remote and not data_path.startswith("s3://"):
         raise StoreError(
-            "STORE_STATEMENT_INVALID",
+            "STORE_LOCATION_INVALID",
             "Data files can be on a local path or in S3-compatible storage (s3://) only.",
             {"data_path": data_path},
         )
     if remote != (storage is not None):
         raise StoreError(
-            "STORE_STATEMENT_INVALID",
+            "STORE_LOCATION_INVALID",
             "An s3:// data path needs its storage settings, and storage settings need an "
             "s3:// data path.",
             {"data_path": data_path},

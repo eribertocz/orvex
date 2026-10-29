@@ -309,7 +309,7 @@ def test_storage_and_path_must_match(
     )
     with pytest.raises(StoreError) as refused:
         open_lake(location, LIMITS)
-    assert refused.value.code == "STORE_STATEMENT_INVALID"
+    assert refused.value.code == "STORE_LOCATION_INVALID"
 
 
 def test_the_sandbox_lists_the_data_folder_or_prefix_exactly(tmp_path: Path) -> None:

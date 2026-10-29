@@ -30,7 +30,7 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 
 - Only **write transactions** read sources; a read (`ReadRequest`) still sees only the lake (`STORE_STATEMENT_INVALID`).
 - The file sandbox gains exactly the declared files: for a glob, the files it matches when the lake opens (a file added later, or any other file in the same folder, stays unreadable).
-- Statements still cannot call file readers (`read_parquet`, `read_csv`, …), and a quoted string or name that names an existing file, or that is an object-storage address (`s3://`, `s3a://`, `s3n://`, `gs://`, `gcs://`, `r2://`, `az://`, `azure://`, `abfs://`, `abfss://`, `hf://`, any case), is refused wherever it appears (`FROM '…'`, `MERGE … USING '…'`, `PIVOT '…'`, …), in every quoting form (`'…'`, `E'…'`, `$$…$$`, `$tag$…$tag$` with any tag, `"…"`): a model reaches a file only through its connection (`STORE_STATEMENT_INVALID`). A text value starting with one of those addresses therefore cannot be written in a statement; web addresses (`https://…`) can.
+- Statements still cannot call file readers (`read_parquet`, `read_csv`, …), and a quoted string or name that names an existing file, or that is an object-storage address (`s3://`, `s3a://`, `s3n://`, `gs://`, `gcs://`, `r2://`, `az://`, `azure://`, `abfs://`, `abfss://`, `hf://`, any case), is refused wherever it appears (`FROM '…'`, `MERGE … USING '…'`, `PIVOT '…'`, …), in every quoting form (`'…'`, `E'…'`, `$$…$$`, `$tag$…$tag$` with any tag, `"…"`): a model reaches a file only through its connection (`STORE_STATEMENT_INVALID`). A single string constant starting with one of those addresses is therefore refused; web addresses (`https://…`) are not. (Text built from several constants is not checked; no place where DuckDB opens a file accepts such an expression.)
 - `SUMMARIZE`, `DESCRIBE` (`DESC`) and `SHOW` are refused wherever DuckDB could read them as a statement: at the start, in a subquery, after a set operator, as an `INSERT` source or after `CREATE … AS` (`STORE_STATEMENT_INVALID`). DuckDB reads a quoted `SUMMARIZE` target as a file, and these reads would not be pinned to their snapshot. The words remain allowed as a column label after `AS` (`SELECT a AS desc`), as part of a qualified name (`t.desc`), and `DESC` as an ordering in `ORDER BY`. Quoted names (`"describe"`) are ordinary names. A read is also refused when DuckDB's parse tree contains such a statement.
 - A DuckDB source that defines views or macros is refused (`STORE_SOURCE_INVALID`): they would run with the lake's connection.
 - Nothing can be written to a source; a DuckDB source file is never modified.
@@ -176,14 +176,15 @@ Preconditions:
 | `STORE_LIMITS_REQUIRED` | The lake was opened without an explicit memory limit and thread count |
 | `STORE_EXTENSION_UNAVAILABLE` | A DuckDB extension the lake needs could not be installed or loaded |
 | `STORE_TRANSACTION_CONFLICT` | Another writer committed a conflicting change first; nothing of this transaction was written |
-| `STORE_SECRET_MISSING` | The environment variable named in `password_env` is not set (the variable is named, never a value) |
+| `STORE_SECRET_MISSING` | An environment variable the location names is not set: `password_env`, or the object storage's `key_id_env` or `secret_env` (the variable is named, never a value) |
 | `STORE_SECRET_INLINE` | The PostgreSQL `connection` contains a password or is a URI |
 | `STORE_TIMEOUT` | The statement exceeded its time limit (waiting included); a transaction rolled back |
 | `STORE_CANCELLED` | The read or transaction was cancelled; a transaction rolled back |
-| `STORE_TLS_REQUIRED` | A PostgreSQL catalog or source on another machine without `sslmode=verify-full`; `details` names the host and the mode found (and the source) |
+| `STORE_TLS_REQUIRED` | A PostgreSQL catalog or source on another machine without `sslmode=verify-full`, or object storage on another machine without HTTPS (`use_ssl: false`); `details` names the host or endpoint and the mode found (and the source) |
 | `STORE_BUSY` | The lake is running its maximum number of statements and its queue is full |
 | `STORE_TYPE_UNSUPPORTED` | A result column has a type with no JSON encoding yet |
-| `STORE_CATALOG_UNAVAILABLE` | The PostgreSQL catalog cannot be reached or refused the credentials |
+| `STORE_CATALOG_UNAVAILABLE` | The lake cannot be opened: its catalog (a DuckDB or SQLite file, or PostgreSQL) cannot be reached or refused the credentials, its data files cannot be reached, or DuckDB refused the object storage settings; DuckDB's message is in `details`, never a credential |
+| `STORE_LOCATION_INVALID` | The data location is not a local path or an `s3://` prefix, or an `s3://` path and the storage settings do not come together (new in #126, compatible) |
 
 ## Compatibility
 
