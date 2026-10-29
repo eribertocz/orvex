@@ -266,6 +266,32 @@ class PostgresLakeCatalog(BaseModel):
     """
 
 
+class S3Storage(BaseModel):
+    """
+    S3 or an S3-compatible service. Credentials only as `${env:NAME}`; they become a temporary DuckDB secret. `use_ssl: false` is accepted only for an endpoint on the local machine.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    region: Annotated[str, Field(max_length=64, min_length=1, pattern="^[a-z0-9-]+$")]
+    endpoint: Annotated[
+        str | None,
+        Field(
+            max_length=260,
+            min_length=1,
+            pattern="^[A-Za-z0-9.\\-]+(:[0-9]{1,5})?$|^\\[[0-9A-Fa-f:]+\\](:[0-9]{1,5})?$",
+        ),
+    ] = None
+    """
+    Host and optional port of an S3-compatible service (no scheme); default AWS S3.
+    """
+    url_style: Literal["path", "vhost"] | None = None
+    use_ssl: bool | None = True
+    key_id: SecretReference
+    secret: SecretReference
+
+
 class Connection(
     RootModel[
         ParquetConnection
@@ -306,6 +332,18 @@ class LakeCatalog(RootModel[DuckdbLakeCatalog | SqliteLakeCatalog | PostgresLake
     """
 
 
+class LakeData(BaseModel):
+    """
+    Where the lake's data files live: a local folder (relative to the project folder; a network file system mounted at the same path counts) or S3-compatible object storage (`s3://bucket/prefix/`, with `s3`). Default: `.<slug>/lake/data/`. It must hold only the lake's files: maintenance deletes Parquet files there that the lake does not list.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    path: Annotated[str, Field(max_length=4096, min_length=1)]
+    s3: S3Storage | None = None
+
+
 class ConnectionsFile(BaseModel):
     """
     `connections.yaml`: data sources by name. A name becomes a SQL schema, so it follows identifier rules and cannot be `lake`.
@@ -325,13 +363,18 @@ class ConnectionsFile(BaseModel):
 
 class Lake(BaseModel):
     """
-    Where the project's managed lake lives (ADR-0027 §2). Absent: a DuckDB-file catalog and data files in the project's own folder, as before. A lake's catalog is fixed when the lake is created.
+    Where the project's managed lake lives (ADR-0027 §2). Absent: a DuckDB-file catalog and data files in the project's own folder, as before. A lake's catalog, data location and encryption are fixed when the lake is created.
     """
 
     model_config = ConfigDict(
         extra="forbid",
     )
     catalog: LakeCatalog | None = None
+    data: LakeData | None = None
+    encrypted: bool | None = False
+    """
+    DuckLake data-file encryption, fixed when the lake is created. The keys are stored in the catalog: encryption protects the files only from someone without catalog access.
+    """
 
 
 class ProjectFile(BaseModel):

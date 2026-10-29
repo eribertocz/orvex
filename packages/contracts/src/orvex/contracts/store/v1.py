@@ -70,6 +70,7 @@ class ErrorCode(
             "STORE_SECRET_MISSING",
             "STORE_SECRET_INLINE",
             "STORE_CATALOG_UNAVAILABLE",
+            "STORE_LOCATION_INVALID",
             "STORE_TLS_REQUIRED",
             "STORE_TYPE_UNSUPPORTED",
             "STORE_TIMEOUT",
@@ -94,6 +95,7 @@ class ErrorCode(
         "STORE_SECRET_MISSING",
         "STORE_SECRET_INLINE",
         "STORE_CATALOG_UNAVAILABLE",
+        "STORE_LOCATION_INVALID",
         "STORE_TLS_REQUIRED",
         "STORE_TYPE_UNSUPPORTED",
         "STORE_TIMEOUT",
@@ -122,66 +124,6 @@ class StoreError(BaseModel):
     code: ErrorCode
     message: Annotated[str, Field(min_length=1)]
     details: list[ErrorDetail]
-
-
-class LocalLakeLocation(BaseModel):
-    """
-    A DuckLake lake with a DuckDB-file catalog (one process): the catalog at <catalog_path>, by default <path>/catalog.ducklake, and data files under <path>/data/.
-    """
-
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    kind: Literal["lake_location"]
-    catalog: Literal["local"]
-    path: Annotated[str, Field(min_length=1)]
-    catalog_path: Annotated[str | None, Field(min_length=1)] = None
-    """
-    Absolute path of the catalog file, when it is not <path>/catalog.ducklake. The file sandbox gains exactly that file and its write-ahead log.
-    """
-
-
-class SqliteLakeLocation(BaseModel):
-    """
-    A DuckLake lake with a SQLite-file catalog (several processes on one machine): the catalog at <path>, data files under <data_path>. The file sandbox gains exactly the catalog file and its -wal, -shm and -journal files.
-    """
-
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    kind: Literal["lake_location"]
-    catalog: Literal["sqlite"]
-    path: Annotated[str, Field(min_length=1)]
-    data_path: Annotated[str, Field(min_length=1)]
-
-
-class PostgresLakeLocation(BaseModel):
-    """
-    A DuckLake lake whose catalog lives in PostgreSQL, so several processes can read and write it. The password is never part of the location: it is read from the environment variable named by password_env. A host other than the local machine (localhost, 127.0.0.1, ::1, a Unix-socket directory) needs sslmode=verify-full (STORE_TLS_REQUIRED otherwise).
-    """
-
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    kind: Literal["lake_location"]
-    catalog: Literal["postgres"]
-    connection: Annotated[str, Field(min_length=1)]
-    """
-    libpq key=value connection string without a password, e.g. host=db port=5432 dbname=lake user=analytics sslmode=verify-full
-    """
-    password_env: Annotated[str, Field(pattern="^[A-Z_][A-Z0-9_]*$")]
-    metadata_schema: Annotated[str | None, Field(pattern="^[a-z_][a-z0-9_]*$")] = None
-    """
-    PostgreSQL schema holding the catalog tables (default: public)
-    """
-    data_path: Annotated[str, Field(min_length=1)]
-
-
-class LakeLocation(RootModel[LocalLakeLocation | SqliteLakeLocation | PostgresLakeLocation]):
-    root: LocalLakeLocation | SqliteLakeLocation | PostgresLakeLocation
-    """
-    Where the lake is.
-    """
 
 
 class ResultColumn(BaseModel):
@@ -291,6 +233,30 @@ class SourceAttachment(
     """
 
 
+class S3Storage(BaseModel):
+    """
+    Object storage for data files, reached through DuckDB's official httpfs extension with a temporary secret scoped to data_path. The credentials are read from the environment variables named here. use_ssl false is refused unless the endpoint is the local machine (STORE_TLS_REQUIRED).
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    type: Literal["s3"]
+    region: Annotated[str, Field(max_length=64, min_length=1, pattern="^[a-z0-9-]+$")]
+    endpoint: Annotated[
+        str | None,
+        Field(
+            max_length=260,
+            min_length=1,
+            pattern="^[A-Za-z0-9.\\-]+(:[0-9]{1,5})?$|^\\[[0-9A-Fa-f:]+\\](:[0-9]{1,5})?$",
+        ),
+    ] = None
+    url_style: Literal["path", "vhost"] | None = None
+    use_ssl: bool
+    key_id_env: Annotated[str, Field(pattern="^[A-Z_][A-Z0-9_]*$")]
+    secret_env: Annotated[str, Field(pattern="^[A-Z_][A-Z0-9_]*$")]
+
+
 class Parameter(BaseModel):
     """
     A named parameter bound to `$name` in the SQL. The value is text converted to the declared DuckDB type; exact values are never JSON numbers.
@@ -337,6 +303,85 @@ class ReadRequest(BaseModel):
     timeout_ms: Annotated[int | None, Field(ge=1, le=3600000)] = None
     """
     Time limit in milliseconds, waiting for a slot included (default: the lake's default_timeout_ms).
+    """
+
+
+class LocalLakeLocation(BaseModel):
+    """
+    A DuckLake lake with a DuckDB-file catalog (one process): the catalog at <catalog_path>, by default <path>/catalog.ducklake, and data files under <data_path>, by default <path>/data/.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["lake_location"]
+    catalog: Literal["local"]
+    path: Annotated[str, Field(min_length=1)]
+    catalog_path: Annotated[str | None, Field(min_length=1)] = None
+    """
+    Absolute path of the catalog file, when it is not <path>/catalog.ducklake. The file sandbox gains exactly that file and its write-ahead log.
+    """
+    data_path: Annotated[str | None, Field(min_length=1)] = None
+    """
+    Where data files are written, when not <path>/data/: an absolute local folder, or s3://bucket/prefix/ with storage.
+    """
+    storage: S3Storage | None = None
+    encrypted: bool | None = None
+    """
+    DuckLake data-file encryption (ENCRYPTED), used when the lake is created.
+    """
+
+
+class SqliteLakeLocation(BaseModel):
+    """
+    A DuckLake lake with a SQLite-file catalog (several processes on one machine): the catalog at <path>, data files under <data_path>. The file sandbox gains exactly the catalog file and its -wal, -shm and -journal files.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["lake_location"]
+    catalog: Literal["sqlite"]
+    path: Annotated[str, Field(min_length=1)]
+    data_path: Annotated[str, Field(min_length=1)]
+    storage: S3Storage | None = None
+    encrypted: bool | None = None
+    """
+    DuckLake data-file encryption (ENCRYPTED), used when the lake is created.
+    """
+
+
+class PostgresLakeLocation(BaseModel):
+    """
+    A DuckLake lake whose catalog lives in PostgreSQL, so several processes can read and write it. The password is never part of the location: it is read from the environment variable named by password_env. A host other than the local machine (localhost, 127.0.0.1, ::1, a Unix-socket directory) needs sslmode=verify-full (STORE_TLS_REQUIRED otherwise).
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["lake_location"]
+    catalog: Literal["postgres"]
+    connection: Annotated[str, Field(min_length=1)]
+    """
+    libpq key=value connection string without a password, e.g. host=db port=5432 dbname=lake user=analytics sslmode=verify-full
+    """
+    password_env: Annotated[str, Field(pattern="^[A-Z_][A-Z0-9_]*$")]
+    metadata_schema: Annotated[str | None, Field(pattern="^[a-z_][a-z0-9_]*$")] = None
+    """
+    PostgreSQL schema holding the catalog tables (default: public)
+    """
+    data_path: Annotated[str, Field(min_length=1)]
+    storage: S3Storage | None = None
+    encrypted: bool | None = None
+    """
+    DuckLake data-file encryption (ENCRYPTED), used when the lake is created.
+    """
+
+
+class LakeLocation(RootModel[LocalLakeLocation | SqliteLakeLocation | PostgresLakeLocation]):
+    root: LocalLakeLocation | SqliteLakeLocation | PostgresLakeLocation
+    """
+    Where the lake is.
     """
 
 

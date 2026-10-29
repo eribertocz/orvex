@@ -32,6 +32,7 @@ export type ErrorCode =
 	| 'STORE_SECRET_MISSING'
 	| 'STORE_SECRET_INLINE'
 	| 'STORE_CATALOG_UNAVAILABLE'
+	| 'STORE_LOCATION_INVALID'
 	| 'STORE_TLS_REQUIRED'
 	| 'STORE_TYPE_UNSUPPORTED'
 	| 'STORE_TIMEOUT'
@@ -48,7 +49,7 @@ export type SourceAttachment =
 	FileSourceAttachment | SqliteSourceAttachment | PostgresSourceAttachment;
 
 /**
- * A DuckLake lake with a DuckDB-file catalog (one process): the catalog at <catalog_path>, by default <path>/catalog.ducklake, and data files under <path>/data/.
+ * A DuckLake lake with a DuckDB-file catalog (one process): the catalog at <catalog_path>, by default <path>/catalog.ducklake, and data files under <data_path>, by default <path>/data/.
  */
 export interface LocalLakeLocation {
 	kind: 'lake_location';
@@ -58,6 +59,27 @@ export interface LocalLakeLocation {
 	 * Absolute path of the catalog file, when it is not <path>/catalog.ducklake. The file sandbox gains exactly that file and its write-ahead log.
 	 */
 	catalog_path?: string;
+	/**
+	 * Where data files are written, when not <path>/data/: an absolute local folder, or s3://bucket/prefix/ with storage.
+	 */
+	data_path?: string;
+	storage?: S3Storage;
+	/**
+	 * DuckLake data-file encryption (ENCRYPTED), used when the lake is created.
+	 */
+	encrypted?: boolean;
+}
+/**
+ * Object storage for data files, reached through DuckDB's official httpfs extension with a temporary secret scoped to data_path. The credentials are read from the environment variables named here. use_ssl false is refused unless the endpoint is the local machine (STORE_TLS_REQUIRED).
+ */
+export interface S3Storage {
+	type: 's3';
+	region: string;
+	endpoint?: string;
+	url_style?: 'path' | 'vhost';
+	use_ssl: boolean;
+	key_id_env: string;
+	secret_env: string;
 }
 /**
  * A DuckLake lake with a SQLite-file catalog (several processes on one machine): the catalog at <path>, data files under <data_path>. The file sandbox gains exactly the catalog file and its -wal, -shm and -journal files.
@@ -67,6 +89,11 @@ export interface SqliteLakeLocation {
 	catalog: 'sqlite';
 	path: string;
 	data_path: string;
+	storage?: S3Storage;
+	/**
+	 * DuckLake data-file encryption (ENCRYPTED), used when the lake is created.
+	 */
+	encrypted?: boolean;
 }
 /**
  * A DuckLake lake whose catalog lives in PostgreSQL, so several processes can read and write it. The password is never part of the location: it is read from the environment variable named by password_env. A host other than the local machine (localhost, 127.0.0.1, ::1, a Unix-socket directory) needs sslmode=verify-full (STORE_TLS_REQUIRED otherwise).
@@ -84,6 +111,11 @@ export interface PostgresLakeLocation {
 	 */
 	metadata_schema?: string;
 	data_path: string;
+	storage?: S3Storage;
+	/**
+	 * DuckLake data-file encryption (ENCRYPTED), used when the lake is created.
+	 */
+	encrypted?: boolean;
 }
 /**
  * One SQL statement executed in a write transaction.

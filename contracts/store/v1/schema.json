@@ -243,6 +243,7 @@
         "STORE_SECRET_MISSING",
         "STORE_SECRET_INLINE",
         "STORE_CATALOG_UNAVAILABLE",
+        "STORE_LOCATION_INVALID",
         "STORE_TLS_REQUIRED",
         "STORE_TYPE_UNSUPPORTED",
         "STORE_TIMEOUT",
@@ -300,7 +301,7 @@
       }
     },
     "LocalLakeLocation": {
-      "description": "A DuckLake lake with a DuckDB-file catalog (one process): the catalog at <catalog_path>, by default <path>/catalog.ducklake, and data files under <path>/data/.",
+      "description": "A DuckLake lake with a DuckDB-file catalog (one process): the catalog at <catalog_path>, by default <path>/catalog.ducklake, and data files under <data_path>, by default <path>/data/.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -323,6 +324,18 @@
           "type": "string",
           "minLength": 1,
           "description": "Absolute path of the catalog file, when it is not <path>/catalog.ducklake. The file sandbox gains exactly that file and its write-ahead log."
+        },
+        "data_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where data files are written, when not <path>/data/: an absolute local folder, or s3://bucket/prefix/ with storage."
+        },
+        "storage": {
+          "$ref": "#/$defs/S3Storage"
+        },
+        "encrypted": {
+          "type": "boolean",
+          "description": "DuckLake data-file encryption (ENCRYPTED), used when the lake is created."
         }
       }
     },
@@ -350,6 +363,13 @@
         "data_path": {
           "type": "string",
           "minLength": 1
+        },
+        "storage": {
+          "$ref": "#/$defs/S3Storage"
+        },
+        "encrypted": {
+          "type": "boolean",
+          "description": "DuckLake data-file encryption (ENCRYPTED), used when the lake is created."
         }
       }
     },
@@ -388,6 +408,13 @@
         "data_path": {
           "type": "string",
           "minLength": 1
+        },
+        "storage": {
+          "$ref": "#/$defs/S3Storage"
+        },
+        "encrypted": {
+          "type": "boolean",
+          "description": "DuckLake data-file encryption (ENCRYPTED), used when the lake is created."
         }
       }
     },
@@ -635,6 +662,52 @@
           "$ref": "#/$defs/PostgresSourceAttachment"
         }
       ]
+    },
+    "S3Storage": {
+      "description": "Object storage for data files, reached through DuckDB's official httpfs extension with a temporary secret scoped to data_path. The credentials are read from the environment variables named here. use_ssl false is refused unless the endpoint is the local machine (STORE_TLS_REQUIRED).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "region",
+        "key_id_env",
+        "secret_env",
+        "use_ssl"
+      ],
+      "properties": {
+        "type": {
+          "const": "s3"
+        },
+        "region": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 260,
+          "pattern": "^[A-Za-z0-9.\\-]+(:[0-9]{1,5})?$|^\\[[0-9A-Fa-f:]+\\](:[0-9]{1,5})?$"
+        },
+        "url_style": {
+          "enum": [
+            "path",
+            "vhost"
+          ]
+        },
+        "use_ssl": {
+          "type": "boolean"
+        },
+        "key_id_env": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$"
+        },
+        "secret_env": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$"
+        }
+      }
     }
   }
 }

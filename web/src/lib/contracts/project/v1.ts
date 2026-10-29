@@ -81,10 +81,15 @@ export interface Lineage {
 	api_key?: SecretReference;
 }
 /**
- * Where the project's managed lake lives (ADR-0027 §2). Absent: a DuckDB-file catalog and data files in the project's own folder, as before. A lake's catalog is fixed when the lake is created.
+ * Where the project's managed lake lives (ADR-0027 §2). Absent: a DuckDB-file catalog and data files in the project's own folder, as before. A lake's catalog, data location and encryption are fixed when the lake is created.
  */
 export interface Lake {
 	catalog?: LakeCatalog;
+	data?: LakeData;
+	/**
+	 * DuckLake data-file encryption, fixed when the lake is created. The keys are stored in the catalog: encryption protects the files only from someone without catalog access.
+	 */
+	encrypted?: boolean;
 }
 /**
  * A DuckDB-file catalog (one process). Default path: `.<slug>/lake/catalog.ducklake`.
@@ -122,6 +127,27 @@ export interface PostgresLakeCatalog {
 	 * Certificate authorities that verify the server: `system` (the operating system's store, the default) or `${env:NAME}`, a variable holding the path of a CA file.
 	 */
 	ssl_root_cert?: string;
+}
+/**
+ * Where the lake's data files live: a local folder (relative to the project folder; a network file system mounted at the same path counts) or S3-compatible object storage (`s3://bucket/prefix/`, with `s3`). Default: `.<slug>/lake/data/`. It must hold only the lake's files: maintenance deletes Parquet files there that the lake does not list.
+ */
+export interface LakeData {
+	path: string;
+	s3?: S3Storage;
+}
+/**
+ * S3 or an S3-compatible service. Credentials only as `${env:NAME}`; they become a temporary DuckDB secret. `use_ssl: false` is accepted only for an endpoint on the local machine.
+ */
+export interface S3Storage {
+	region: string;
+	/**
+	 * Host and optional port of an S3-compatible service (no scheme); default AWS S3.
+	 */
+	endpoint?: string;
+	url_style?: 'path' | 'vhost';
+	use_ssl?: boolean;
+	key_id: SecretReference;
+	secret: SecretReference;
 }
 /**
  * `connections.yaml`: data sources by name. A name becomes a SQL schema, so it follows identifier rules and cannot be `lake`.

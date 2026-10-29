@@ -44,6 +44,7 @@ from orvex.contracts.store.v1 import (
     PostgresLakeLocation,
     PostgresSourceAttachment,
     ReadRequest,
+    S3Storage,
     Snapshot,
     SourceAttachment,
     SqliteLakeLocation,
@@ -79,12 +80,20 @@ _EXTERNAL_SQL_FUNCTIONS = frozenset(
         "sqlite_scan",
         "query",
         "query_table",
+        # Bind or run SQL given as text, on the lake's own connection: the text can name a file
+        # no check of the statement sees (#136, Reviewer pass 9).
+        "json_serialize_plan",
+        "json_execute_serialized_sql",
     }
 )
 _SUSPICIOUS = re.compile(r"[./\\*?:]")
 POSTGRES_CONNECT_TIMEOUT_S = 10
 RESERVED_SOURCE_NAMES = frozenset({LAKE, "main", "memory", "system", "temp"})
 _GLOB = re.compile(r"[*?\[]")
+# Object-storage addresses DuckDB opens as files (httpfs, azure, Hugging Face). A statement never
+# names one: only DuckLake reaches the lake's objects, and the sandbox checks these paths as text
+# only (`..` is resolved after the check, #140).
+_OBJECT_ADDRESS = re.compile(r"^\s*(s3|s3a|s3n|gs|gcs|r2|az|azure|abfs|abfss|hf)://", re.IGNORECASE)
 EXTENSIONS = ("icu", "ducklake")
 WRITE_STATEMENTS = frozenset(
     {
@@ -373,6 +382,77 @@ def _with_root_cert(connection: str) -> str:
     return connection
 
 
+@dataclass(frozen=True, slots=True)
+class _Storage:
+    """Object storage settings with their credentials, read from the environment."""
+
+    settings: S3Storage
+    key_id: str
+    secret: str
+
+
+def _data_path(location: AnyLakeLocation) -> str:
+    """Where the lake's data files go: `data_path`, or `<path>/data/` for a local lake."""
+    if isinstance(location, LocalLakeLocation):
+        if location.data_path is None:
+            return (Path(location.path) / "data").as_posix() + "/"
+        return location.data_path
+    return location.data_path
+
+
+def _storage_credentials(storage: S3Storage | None, data_path: str) -> _Storage | None:
+    """Check the data location and read its credentials, before anything is opened.
+
+    An `s3://` data path needs `storage`, and `storage` needs an `s3://` data path; any other
+    URL is refused. Unencrypted HTTP is refused unless the endpoint is the local machine
+    (`STORE_TLS_REQUIRED`). The credentials are registered so no error can show them.
+    """
+    remote = "://" in data_path
+    if remote and not data_path.startswith("s3://"):
+        raise StoreError(
+            "STORE_LOCATION_INVALID",
+            "Data files can be on a local path or in S3-compatible storage (s3://) only.",
+            {"data_path": data_path},
+        )
+    if remote and any(part in {".", ".."} for part in data_path[len("s3://") :].split("/")):
+        raise StoreError(
+            "STORE_LOCATION_INVALID",
+            "An s3:// data path cannot contain . or .. segments.",
+            {"data_path": data_path},
+        )
+    if remote != (storage is not None):
+        raise StoreError(
+            "STORE_LOCATION_INVALID",
+            "An s3:// data path needs its storage settings, and storage settings need an "
+            "s3:// data path.",
+            {"data_path": data_path},
+        )
+    if storage is None:
+        return None
+    if not storage.use_ssl:
+        endpoint = storage.endpoint or ""
+        host = endpoint[1 : endpoint.find("]")] if endpoint.startswith("[") else endpoint
+        host = host if endpoint.startswith("[") else endpoint.split(":", 1)[0]
+        if not host or host.lower() not in _LOCAL_HOSTS:
+            raise StoreError(
+                "STORE_TLS_REQUIRED",
+                "Object storage on another machine must be reached over HTTPS (use_ssl).",
+                {"endpoint": storage.endpoint or "(AWS S3)"},
+            )
+    values: list[str] = []
+    for variable in (storage.key_id_env, storage.secret_env):
+        value = os.environ.get(variable, "")
+        if not value:
+            raise StoreError(
+                "STORE_SECRET_MISSING",
+                f"The environment variable {variable} is not set.",
+                {"variable": variable},
+            )
+        register_secret(value)
+        values.append(value)
+    return _Storage(storage, values[0], values[1])
+
+
 def _postgres_password(location: PostgresLakeLocation) -> str:
     """Refuse an unsafe PostgreSQL location, then read and register its password."""
     if _inline_secret(location.connection):
@@ -423,11 +503,20 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
     """Refuse SQL that names the catalog database or calls a table function other than generators.
 
     Table functions read files, run SQL or open connections (`read_text`, `query`,
-    `postgres_execute`, …); only `range`, `generate_series` and `unnest` are allowed. Comments
-    between a name and its `(` are skipped. The catalog database (in PostgreSQL the whole
-    database, other lakes included) is only ever touched by DuckLake itself. The connection is
-    also sandboxed to the lake's folders (`Lake._sandbox`), so these checks are a first layer.
+    `postgres_execute`, …); only `range`, `generate_series` and `unnest` are allowed. DuckLake's
+    table macros (`set_option`, `table_changes`, …) and table options (`CREATE TABLE … WITH
+    (…)`, `ALTER TABLE … SET (…)`/`RESET (…)`) are refused too: the lake's options are the
+    store's. Comments between a name and its `(` are skipped. The catalog database (in
+    PostgreSQL the whole database, other lakes included) is only ever touched by DuckLake itself.
+    The connection is also sandboxed to the lake's folders (`Lake._sandbox`), so these checks are
+    a first layer.
     """
+    if "\x00" in sql:
+        # DuckDB picks a reader from a whole string but opens the path only up to a NUL, which
+        # Python's file checks refuse to look at (#136, Reviewer pass 8).
+        raise StoreError(
+            "STORE_STATEMENT_INVALID", "A statement cannot contain a NUL character.", {}
+        )
     if METADATA_PREFIX in sql.lower():
         raise StoreError(
             "STORE_STATEMENT_INVALID",
@@ -439,12 +528,36 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
     positions = [position for position, _ in every] + [len(sql)]
     _refuse_file_names(sql, tokens, positions)
     _refuse_show_statements(sql, tokens, positions)
+    first = ""
     for index, (position, kind) in enumerate(tokens):
         if kind not in {duckdb.token_type.identifier, duckdb.token_type.keyword}:
             continue
         end = next(later for later in positions if later > position)
         name = sql[position:end].strip().strip('"').lower()
         following = tokens[index + 1][0] if index + 1 < len(tokens) else len(sql)
+        first = first or name
+        # A CTE always names itself before its `(`: `WITH (` is a table's options.
+        if (
+            sql[following : following + 1] == "("
+            and kind == duckdb.token_type.keyword
+            and (name == "with" or (first == "alter" and name in {"set", "reset"}))
+        ):
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "Table options are not allowed: the lake's options are set by the store.",
+                {"clause": name.upper()},
+            )
+        if (
+            sql[following : following + 1] == "("
+            and name in DUCKLAKE_TABLE_MACROS
+            and not _names_a_table(sql, tokens, positions, index)
+        ):
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "DuckLake's own functions are not allowed: the store runs maintenance and sets "
+                "the lake's options.",
+                {"function": name},
+            )
         if (
             sql[following : following + 1] == "("
             and (name in table_functions or name in _EXTERNAL_SQL_FUNCTIONS)
@@ -452,31 +565,69 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
         ):
             raise StoreError(
                 "STORE_STATEMENT_INVALID",
-                "Only the table functions range, generate_series and unnest are allowed.",
+                "Only the table functions range, generate_series and unnest are allowed; a "
+                "function that shares its name with another table function (histogram) is "
+                "refused in every form.",
                 {"function": name},
             )
+
+
+def _names_a_table(
+    sql: str, tokens: list[tuple[int, duckdb.token_type]], positions: list[int], index: int
+) -> bool:
+    """Whether the (possibly qualified) name at `index` follows `INTO`, `TABLE` or
+    `REFERENCES`: a table with a column list (`INSERT INTO settings (a)`), not a call."""
+    before = index - 1
+    while before >= 1 and sql[tokens[before][0] : tokens[before][0] + 1] == ".":
+        before -= 2  # `lake.main.settings`: skip each `name .`
+    if before < 0:
+        return False
+    position, kind = tokens[before]
+    end = next(later for later in positions if later > position)
+    word = sql[position:end].strip().lower()
+    return kind == duckdb.token_type.keyword and word in {"into", "table", "references"}
 
 
 def _refuse_file_names(
     sql: str, tokens: list[tuple[int, duckdb.token_type]], positions: list[int]
 ) -> None:
-    """Refuse a quoted string or quoted name that names an existing file or matches files.
+    """Refuse a quoted string or quoted name that names an existing file, matches files, or is an
+    object-storage address (`s3://…`, `gs://…`, `az://…`, …).
 
     DuckDB reads such a string as a file in many places (`FROM '…'`, `MERGE … USING '…'`,
     `PIVOT '…'`, `SUMMARIZE '…'`, …); a model reaches a file only through its source name. Every
     quoting form counts (`'…'`, `E'…'`, `$$…$$`, `$tag$…$tag$`, `"…"`). The file sandbox, which
     allows exactly the declared files, is the boundary behind this check.
     """
+    refused = StoreError(
+        "STORE_STATEMENT_INVALID",
+        "A file cannot be named in a statement; declare it as a source and use its name.",
+        {},
+    )
+    texts: list[tuple[str, duckdb.token_type]] = []
     for position, kind in tokens:
         end = next(later for later in positions if later > position)
         text = sql[position:end].strip()
+        texts.append((text, kind))
         quoted = kind == duckdb.token_type.string_const or text.startswith('"')
         if quoted and _names_a_file(text):
-            raise StoreError(
-                "STORE_STATEMENT_INVALID",
-                "A file cannot be named in a statement; declare it as a source and use its name.",
-                {},
-            )
+            raise refused
+    # A dotted name: DuckDB joins its parts with `.` and reads the result as a file when no
+    # table has that name (`"<dir>/x".parquet`, `x.parquet`, `"<dir>/*".csv`; measured on
+    # 2.0.0), so every chain of name parts is checked as one path too (#136, Reviewer pass 6).
+    names = (duckdb.token_type.identifier, duckdb.token_type.keyword)
+    index = 0
+    while index < len(texts):
+        if texts[index][1] not in names:
+            index += 1
+            continue
+        parts = [_string_content(texts[index][0])]
+        index += 1
+        while index + 1 < len(texts) and texts[index][0] == "." and texts[index + 1][1] in names:
+            parts.append(_string_content(texts[index + 1][0]))
+            index += 2
+        if len(parts) > 1 and _names_a_file(".".join(parts)):
+            raise refused
 
 
 # A dollar-quoted constant; DuckDB, like PostgreSQL, accepts any tag without `$` or white space
@@ -601,7 +752,13 @@ def _refuse_show_statements(
 
 def _names_a_file(token: str) -> bool:
     content = _string_content(token)
-    candidates = {content, content.removeprefix("file://")}
+    if _OBJECT_ADDRESS.match(content):
+        return True
+    if content.startswith("file:/"):
+        # DuckDB opens `file:/p`, `file:///p` and `file://localhost/p` as the local file `/p`
+        # (measured on 2.0.0), whether or not it exists yet (#136, Reviewer pass 5).
+        return True
+    candidates = {content}
     for candidate in candidates:
         if not candidate:
             continue
@@ -612,7 +769,12 @@ def _names_a_file(token: str) -> bool:
         if (
             looks_like_path
             and _GLOB.search(candidate)
-            and any(os.path.isfile(match) for match in globlib.iglob(path))
+            and any(
+                os.path.isfile(match)
+                # As DuckDB expands it: `**` at any depth, hidden names included (#136, Reviewer
+                # pass 7).
+                for match in globlib.iglob(path, recursive=True, include_hidden=True)
+            )
         ):
             return True
     return False
@@ -764,6 +926,41 @@ def _typed(sql: str, parameters: list[Parameter]) -> str:
 
 
 READ_TABLE_FUNCTIONS = frozenset({"range", "generate_series", "unnest"})
+# Table functions whose name is also a scalar function, known to read nothing in either form:
+# `repeat` generates rows, `version` reports DuckDB's version. Any other name that is a table
+# function (`histogram`, whose table form reads a table or file named by any expression, and
+# whatever an extension adds) is refused in every form, its scalar or aggregate form included.
+SHARED_HARMLESS_FUNCTIONS = frozenset({"repeat", "version"})
+# DuckLake's table macros, created in each lake schema on first use (so `duckdb_functions()`
+# never lists them): they change the lake's options (`set_option` could turn on deletion
+# vectors, which DuckLake writes unencrypted), set commit messages, merge files, or read deleted
+# rows and old snapshots. Only the store calls DuckLake's maintenance and options.
+DUCKLAKE_TABLE_MACROS = frozenset(
+    {
+        "set_option",
+        "set_commit_message",
+        "merge_adjacent_files",
+        "options",
+        "settings",
+        "current_snapshot",
+        "last_committed_snapshot",
+        "snapshots",
+        "table_info",
+        "table_changes",
+        "table_deletions",
+        "table_insertions",
+    }
+)
+TABLE_FUNCTIONS_SQL = (
+    "SELECT string_agg(DISTINCT lower(function_name), '|') FROM duckdb_functions() "
+    "WHERE function_type IN ('table', 'table_macro', 'pragma')"
+)
+
+
+def _sandbox_folder(data_path: str) -> str:
+    """A data path as the sandbox lists it: an object-storage prefix as written (DuckDB checks
+    remote paths against it too), a local folder resolved."""
+    return data_path if "://" in data_path else Path(data_path).resolve().as_posix()
 
 
 def _sandbox_entries(
@@ -780,8 +977,10 @@ def _sandbox_entries(
         if location.catalog_path is not None:
             catalog = Path(location.catalog_path).resolve().as_posix()
             files += [catalog, f"{catalog}.wal"]
-    elif "://" not in location.data_path:
-        folders.append(Path(location.data_path).resolve().as_posix())
+        if location.data_path is not None:  # data files outside the lake's folder (#126)
+            folders.append(_sandbox_folder(location.data_path))
+    else:
+        folders.append(_sandbox_folder(location.data_path))
     if isinstance(location, SqliteLakeLocation):
         catalog = Path(location.path).resolve().as_posix()
         files += [catalog, *(f"{catalog}-{suffix}" for suffix in ("wal", "shm", "journal"))]
@@ -803,6 +1002,8 @@ class Lake:
         password = (
             _postgres_password(location) if isinstance(location, PostgresLakeLocation) else ""
         )
+        data_path = _data_path(location)
+        storage = _storage_credentials(location.storage, data_path)
         if (
             not limits.memory_limit
             or not limits.threads
@@ -874,12 +1075,20 @@ class Lake:
             self._metadata = METADATA
             if isinstance(location, PostgresLakeLocation) and location.metadata_schema:
                 self._metadata = f"{METADATA}.{location.metadata_schema}"
-            if isinstance(location, LocalLakeLocation):
-                self._attach_local(Path(location.path), location.catalog_path)
-            elif isinstance(location, SqliteLakeLocation):
-                self._attach_sqlite_catalog(location)
+            if storage is not None:
+                self._storage_secret(storage, data_path)
             else:
-                self._attach_postgres(location, password)
+                Path(data_path).mkdir(parents=True, exist_ok=True)
+            options = [f"DATA_PATH {_quote(data_path)}"]
+            if location.encrypted:
+                # Fixed when the lake is created; deletion vectors stay off (written unencrypted).
+                options.append("ENCRYPTED")
+            if isinstance(location, LocalLakeLocation):
+                self._attach_local(Path(location.path), location.catalog_path, options)
+            elif isinstance(location, SqliteLakeLocation):
+                self._attach_sqlite_catalog(location, options)
+            else:
+                self._attach_postgres(location, password, options)
             # Nothing may load code or reach data the lake did not ask for after this point.
             self._connection.sql("SET autoinstall_known_extensions = false")
             self._connection.sql("SET autoload_known_extensions = false")
@@ -903,17 +1112,9 @@ class Lake:
             raise
 
     def _names_of_table_functions(self) -> frozenset[str]:
-        row = self._one(
-            # Names that are also scalar or aggregate functions (repeat, version, histogram, …)
-            # are generators or harmless in their table form, and their scalar form is common.
-            "SELECT string_agg(DISTINCT lower(function_name), '|') FROM duckdb_functions() "
-            "WHERE function_type IN ('table', 'table_macro', 'pragma') "
-            "AND lower(function_name) NOT IN (SELECT lower(function_name) FROM duckdb_functions() "
-            "WHERE function_type IN ('scalar', 'aggregate', 'macro'))",
-            {},
-        )
+        row = self._one(TABLE_FUNCTIONS_SQL, {})
         text = str(row[0]) if row and row[0] is not None else ""
-        return frozenset(text.split("|")) - {""}
+        return frozenset(text.split("|")) - {""} - SHARED_HARMLESS_FUNCTIONS
 
     def _attach_sqlite(self, source: SqliteSourceAttachment) -> list[str]:
         """Attach a private copy of a SQLite file, read-only.
@@ -1111,42 +1312,71 @@ class Lake:
         for extension in EXTENSIONS:
             self._load_extension(extension)
 
-    def _attach_local(self, folder: Path, catalog_path: str | None = None) -> None:
-        (folder / "data").mkdir(parents=True, exist_ok=True)
+    def _attach_local(self, folder: Path, catalog_path: str | None, options: Sequence[str]) -> None:
+        folder.mkdir(parents=True, exist_ok=True)
         if catalog_path is None:
             catalog = (folder / "catalog.ducklake").as_posix()
         else:
             Path(catalog_path).parent.mkdir(parents=True, exist_ok=True)
             catalog = Path(catalog_path).as_posix()
-        data = (folder / "data").as_posix() + "/"
         # Paths come from the project configuration, not from query input; quoted as literals.
-        self._connection.sql(
-            f"ATTACH {_quote('ducklake:' + catalog)} AS {LAKE} (DATA_PATH {_quote(data)})"
-        )
+        self._attach(f"ATTACH {_quote('ducklake:' + catalog)} AS {LAKE} ({', '.join(options)})")
 
-    def _attach_sqlite_catalog(self, location: SqliteLakeLocation) -> None:
-        """Attach a lake whose catalog is a SQLite file (several processes on one machine)."""
-        Path(location.path).parent.mkdir(parents=True, exist_ok=True)
-        if "://" not in location.data_path:
-            Path(location.data_path).mkdir(parents=True, exist_ok=True)
-        self._load_extension("sqlite")
-        data = location.data_path if location.data_path.endswith("/") else location.data_path + "/"
+    def _attach(self, sql: str) -> None:
+        """Attach the lake; object storage that refuses the credentials or cannot be reached is
+        reported without them."""
         try:
-            self._connection.sql(
-                f"ATTACH {_quote('ducklake:sqlite:' + Path(location.path).as_posix())} AS {LAKE} "
-                f"(DATA_PATH {_quote(data)})"
-            )
+            self._connection.sql(sql)
         except duckdb.Error as error:
             raise StoreError(
                 "STORE_CATALOG_UNAVAILABLE",
-                "The SQLite catalog could not be opened.",
+                "The lake could not be opened (its catalog or its data files).",
                 {"duckdb": str(error)},
             ) from None
 
-    def _attach_postgres(self, location: PostgresLakeLocation, password: str) -> None:
+    def _storage_secret(self, storage: _Storage, data_path: str) -> None:
+        """A temporary S3 secret for the lake's prefix only; never persisted."""
+        self._load_extension("httpfs")
+        # httpfs also opens http:// and https:// addresses (and hf://) as files, and the
+        # statement check lets web addresses through as ordinary text. The lake needs only
+        # s3://, so those file systems are turned off on its connection (#136, Reviewer passes
+        # 4 and 5).
+        self._connection.sql("SET disabled_filesystems = 'HTTPFileSystem,HuggingFaceFileSystem'")
+        settings = storage.settings
+        options = [
+            "TYPE s3",
+            f"KEY_ID {_quote(storage.key_id)}",
+            f"SECRET {_quote(storage.secret)}",
+            f"REGION {_quote(settings.region)}",
+            f"USE_SSL {'true' if settings.use_ssl else 'false'}",
+            f"SCOPE {_quote(data_path)}",
+        ]
+        if settings.endpoint is not None:
+            options.append(f"ENDPOINT {_quote(settings.endpoint)}")
+        if settings.url_style is not None:
+            options.append(f"URL_STYLE {_quote(settings.url_style)}")
+        try:
+            self._connection.sql(f"CREATE TEMPORARY SECRET lake_storage ({', '.join(options)})")
+        except duckdb.Error as error:
+            raise StoreError(
+                "STORE_CATALOG_UNAVAILABLE",
+                "The lake's object storage settings were refused.",
+                {"duckdb": str(error)},
+            ) from None
+
+    def _attach_sqlite_catalog(self, location: SqliteLakeLocation, options: Sequence[str]) -> None:
+        """Attach a lake whose catalog is a SQLite file (several processes on one machine)."""
+        Path(location.path).parent.mkdir(parents=True, exist_ok=True)
+        self._load_extension("sqlite")
+        self._attach(
+            f"ATTACH {_quote('ducklake:sqlite:' + Path(location.path).as_posix())} AS {LAKE} "
+            f"({', '.join(options)})"
+        )
+
+    def _attach_postgres(
+        self, location: PostgresLakeLocation, password: str, attach_options: Sequence[str]
+    ) -> None:
         """Attach a lake whose catalog is in PostgreSQL; the password comes from the environment."""
-        if "://" not in location.data_path:
-            Path(location.data_path).mkdir(parents=True, exist_ok=True)
         self._load_extension("postgres")
         try:
             # A temporary default secret supplies the password to every PostgreSQL connection of
@@ -1154,7 +1384,7 @@ class Lake:
             self._connection.sql(
                 f"CREATE TEMPORARY SECRET (TYPE postgres, PASSWORD {_quote(password)})"
             )
-            options = [f"DATA_PATH {_quote(location.data_path)}"]
+            options = list(attach_options)
             if location.metadata_schema:
                 options.append(f"METADATA_SCHEMA {_quote(location.metadata_schema)}")
             connection = _with_root_cert(location.connection)
@@ -1394,6 +1624,15 @@ class Lake:
         schemas = {schema for schema, _ in tables}
         ctes = _cte_names(tree)
         for node in _walk(tree):
+            if (
+                node.get("class") == "FUNCTION"
+                and str(node.get("function_name", "")).lower() in _EXTERNAL_SQL_FUNCTIONS
+            ):
+                raise StoreError(
+                    "STORE_STATEMENT_INVALID",
+                    "This function is not allowed in a read.",
+                    {"function": str(node.get("function_name"))},
+                )
             if node.get("type") == "SHOW_REF":
                 # SUMMARIZE / DESCRIBE / SHOW: unpinned, and a quoted target is read as a file.
                 raise StoreError(

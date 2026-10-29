@@ -6,7 +6,8 @@ ADR-0027 does not allow before anything is opened or created, and fixes the choi
 lake is created: `.<slug>/lake.location` records the catalog's identity, and a project whose
 configuration no longer matches it is refused instead of silently getting a second, empty lake.
 
-Data files stay in `.<slug>/lake/data/` (#126 adds their location).
+`lake.data` places the data files (#126): the default `.<slug>/lake/data/`, another local folder
+of their own, or S3-compatible storage; `lake.encrypted` encrypts them.
 """
 
 from __future__ import annotations
@@ -19,12 +20,23 @@ from pathlib import Path
 
 from orvex.contracts.project.v1 import (
     DuckdbLakeCatalog,
+    Lake,
+    LakeData,
     PostgresLakeCatalog,
+    S3Storage,
     SecretReference,
     SqliteLakeCatalog,
 )
 from orvex.contracts.store.v1 import LocalLakeLocation, PostgresLakeLocation, SqliteLakeLocation
-from orvex.server.project import PROJECT_FILE, Project, ProjectLoadError, is_local_host
+from orvex.contracts.store.v1 import S3Storage as StoreS3Storage
+from orvex.server.project import (
+    FILE_TYPES,
+    LOCAL_HOSTS,
+    PROJECT_FILE,
+    Project,
+    ProjectLoadError,
+    is_local_host,
+)
 
 LAKE_FOLDER = "lake"
 RECORD_FILE = "lake.location"
@@ -54,6 +66,7 @@ NETWORK_FILE_SYSTEMS = frozenset(
     }
 )
 _URL = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+_GLOB_MARK = re.compile(r"[*?\[{]")
 _VARIABLE = re.compile(r"\$\{env:([A-Z_][A-Z0-9_]*)\}")
 
 type Location = LocalLakeLocation | SqliteLakeLocation | PostgresLakeLocation
@@ -76,13 +89,19 @@ def place(project: Project, home: Path) -> Place:
     """The lake's location from `project.yaml`; `LAKE_LOCATION_INVALID`, `LAKE_TLS_REQUIRED`
     or `PROJECT_SECRET_MISSING` for one that must be refused. Nothing is opened or created."""
     lake = project.settings.lake
-    catalog = lake.catalog.root if lake is not None and lake.catalog is not None else None
-    if catalog is None:
+    if lake is None:
         # No `lake` section: exactly as before #120.
         return Place(
             LocalLakeLocation(kind="lake_location", catalog="local", path=str(lake_folder(home))),
             _default_identity(home),
         )
+    chosen = _catalog_place(lake, project, home)
+    return _with_data(chosen, lake, project, home.resolve())
+
+
+def _catalog_place(lake: Lake, project: Project, home: Path) -> Place:
+    """The catalog's place, its data files in the default folder."""
+    catalog = lake.catalog.root if lake.catalog is not None else DuckdbLakeCatalog(type="duckdb")
     # Paths are compared and recorded resolved (symlinks and `..` followed), so the same file
     # has one identity however the project folder was named.
     folder = lake_folder(home).resolve()
@@ -109,6 +128,132 @@ def place(project: Project, home: Path) -> Place:
         ),
         identity,
     )
+
+
+def _with_data(chosen: Place, lake: Lake, project: Project, home: Path) -> Place:
+    """The place with `lake.data` and `lake.encrypted` applied (#126). Defaults change neither
+    the location nor the identity, so a lake recorded before #126 keeps its identity."""
+    data_path, storage = _data(lake.data, project, home)
+    updates: dict[str, object] = {}
+    identity = dict(chosen.identity)
+    if data_path is not None:
+        updates["data_path"] = data_path
+        identity["data"] = data_path
+    if storage is not None:
+        updates["storage"] = storage
+    if lake.encrypted:
+        updates["encrypted"] = True
+        identity["encrypted"] = "yes"
+    if not updates:
+        return chosen
+    return Place(chosen.location.model_copy(update=updates), identity)
+
+
+def _data(
+    data: LakeData | None, project: Project, home: Path
+) -> tuple[str | None, StoreS3Storage | None]:
+    """The data files' location (None: the default `.<slug>/lake/data/`) and its object
+    storage, refused unless it is a local folder or S3-compatible storage over HTTPS."""
+    pointer = "/lake/data/path"
+    if data is None:
+        return None, None
+    text = data.path
+    if text.startswith("s3://"):
+        if data.s3 is None:
+            raise _invalid(
+                f"lake.data.path {text}: s3:// needs the lake.data.s3 settings.", pointer
+            )
+        bucket = text[len("s3://") :].split("/", 1)[0]
+        if not bucket:
+            raise _invalid(f"lake.data.path {text}: name a bucket (s3://bucket/prefix/).", pointer)
+        if any(part in {".", ".."} for part in text[len("s3://") :].split("/")):
+            # `s3://bucket/prefix/../` would make the whole bucket the lake's prefix, and
+            # orphan cleanup would then delete files across it.
+            raise _invalid(
+                f"lake.data.path {text}: an s3:// path cannot contain . or .. segments.", pointer
+            )
+        return (text if text.endswith("/") else text + "/"), _s3(data.s3)
+    if _URL.match(text):
+        raise _invalid(
+            f"lake.data.path {text}: data files can be in a local folder (or a network file "
+            "system mounted there) or in S3-compatible storage (s3://); Google Cloud Storage "
+            "and Azure come later (#127).",
+            pointer,
+        )
+    if data.s3 is not None:
+        raise _invalid(
+            f"lake.data.path {text}: lake.data.s3 applies to an s3:// path only.", "/lake/data/s3"
+        )
+    expanded = Path(os.path.expanduser(text))
+    path = (expanded if expanded.is_absolute() else project.folder / expanded).resolve()
+    if path == lake_folder(home) / "data":
+        return None, None  # the default, named explicitly
+    overlap = _overlap(path, project, home)
+    if overlap is not None:
+        raise _invalid(
+            f"lake.data.path {text}: the lake's data folder must hold only the lake's files, "
+            f"but it {overlap}. Maintenance deletes Parquet files there that the lake does not "
+            "know. Choose a folder of its own.",
+            pointer,
+        )
+    return path.as_posix() + "/", None
+
+
+def _overlap(path: Path, project: Project, home: Path) -> str | None:
+    """How a local data folder overlaps other files, or None. DuckLake's orphan cleanup deletes
+    every untracked `.parquet` file under the data folder, so it must not hold anything else."""
+    folder = project.folder.resolve()
+    if folder.is_relative_to(path):
+        return f"contains the project folder {folder}"
+    if path.is_relative_to(home):
+        return f"is inside {home}, which holds the lake's own files"
+    for name, connection in project.connections.items():
+        if not isinstance(connection, FILE_TYPES):
+            continue  # a database server, not a file
+        source = connection.path.root  # absolute: the loader resolves it
+        named = Path(source).as_posix()
+        glob = _GLOB_MARK.search(named)
+        if glob is None:
+            if Path(named).resolve().is_relative_to(path):
+                return f"contains the file of connection {name}"
+            continue
+        base = Path(named[: glob.start()].rsplit("/", 1)[0] or "/").resolve()
+        if base.is_relative_to(path) or path.is_relative_to(base):
+            return f"overlaps the files connection {name} reads ({source})"
+    return None
+
+
+def _s3(settings: S3Storage) -> StoreS3Storage:
+    pointer = "/lake/data/s3"
+    use_ssl = settings.use_ssl is not False
+    if not use_ssl:
+        endpoint = settings.endpoint or ""
+        if not endpoint or endpoint_host(endpoint).lower() not in LOCAL_HOSTS:
+            raise ProjectLoadError(
+                "LAKE_TLS_REQUIRED",
+                f"lake.data.s3: use_ssl: false is accepted only for an endpoint on the local "
+                f"machine (found: {endpoint or 'AWS S3'}); object storage is reached over HTTPS.",
+                file=PROJECT_FILE,
+                path=f"{pointer}/use_ssl",
+            )
+    key_id = _variable(settings.key_id, f"{pointer}/key_id")
+    secret = _variable(settings.secret, f"{pointer}/secret")
+    return StoreS3Storage(
+        type="s3",
+        region=settings.region,
+        endpoint=settings.endpoint,
+        url_style=settings.url_style,
+        use_ssl=use_ssl,
+        key_id_env=key_id,
+        secret_env=secret,
+    )
+
+
+def endpoint_host(endpoint: str) -> str:
+    """The host of `host[:port]` or `[ipv6][:port]`."""
+    if endpoint.startswith("["):
+        return endpoint[1 : endpoint.find("]")]
+    return endpoint.split(":", 1)[0]
 
 
 def _invalid(message: str, pointer: str) -> ProjectLoadError:
@@ -255,7 +400,7 @@ def _variable(reference: SecretReference, pointer: str) -> str:
     if os.environ.get(variable) is None:
         raise ProjectLoadError(
             "PROJECT_SECRET_MISSING",
-            f"Environment variable {variable} is not set (lake.catalog).",
+            f"Environment variable {variable} is not set ({pointer.strip('/').replace('/', '.')}).",
             file=PROJECT_FILE,
             path=pointer,
             variable=variable,
@@ -300,18 +445,38 @@ def exists(home: Path) -> bool:
 
 
 def check_unchanged(home: Path, chosen: Place) -> None:
-    """Refuse a configuration whose catalog is not the one the existing lake was created with."""
+    """Refuse a configuration whose catalog, data folder or encryption is not the one the
+    existing lake was created with, naming each setting that changed."""
     existing = recorded(home)
-    if existing is None or existing == chosen.identity:
+    current = chosen.identity
+    if existing is None or existing == current:
         return
+    changes = []
+    if _catalog_identity(existing) != _catalog_identity(current):
+        changes.append(f"lake.catalog was {_describe(existing)}, now {_describe(current)}")
+    if existing.get("data") != current.get("data"):
+        changes.append(f"lake.data.path was {_data_text(existing)}, now {_data_text(current)}")
+    if existing.get("encrypted") != current.get("encrypted"):
+        changes.append(
+            f"lake.encrypted was {'true' if existing.get('encrypted') else 'false'}, "
+            f"now {'true' if current.get('encrypted') else 'false'}"
+        )
     raise ProjectLoadError(
         "LAKE_LOCATION_CHANGED",
-        f"lake.catalog: this project's lake was created with {_describe(existing)}, but "
-        f"project.yaml now names {_describe(chosen.identity)}. A lake is not moved; restore "
-        "the previous lake.catalog to use it (nothing was opened or created).",
+        f"this project's lake was created with other settings: {'; '.join(changes)}. A lake is "
+        "not moved or re-encrypted; restore the previous settings to use it (nothing was "
+        "opened or created).",
         file=PROJECT_FILE,
         path="/lake",
     )
+
+
+def _catalog_identity(identity: dict[str, str | int]) -> dict[str, str | int]:
+    return {key: value for key, value in identity.items() if key not in {"data", "encrypted"}}
+
+
+def _data_text(identity: dict[str, str | int]) -> str:
+    return str(identity.get("data", "the default folder"))
 
 
 def _describe(identity: dict[str, str | int]) -> str:

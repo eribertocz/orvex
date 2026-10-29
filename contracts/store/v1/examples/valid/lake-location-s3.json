@@ -1,0 +1,1 @@
+{"kind": "lake_location", "catalog": "sqlite", "path": "/var/lib/bi/catalog.sqlite", "data_path": "s3://bi-lake/billing/", "storage": {"type": "s3", "region": "us-east-1", "endpoint": "storage.example.com", "url_style": "path", "use_ssl": true, "key_id_env": "LAKE_S3_KEY_ID", "secret_env": "LAKE_S3_SECRET"}, "encrypted": true}
