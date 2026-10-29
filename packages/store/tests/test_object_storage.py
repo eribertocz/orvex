@@ -357,6 +357,11 @@ def test_the_sandbox_lists_the_data_folder_or_prefix_exactly(tmp_path: Path) -> 
         "SUMMARIZE 'r2://lake/x.parquet'",
         "SELECT * FROM t WHERE id IN (SELECT id FROM 'abfss://c@a.dfs.core.windows.net/x')",
         "SELECT * FROM 'hf://datasets/x/y.parquet'",
+        # Every quoting form (#153): dollar quotes with any tag, and E'' escapes.
+        "SELECT * FROM (SELECT $$s3://lake/billing/../x.parquet$$ AS p)",
+        "SELECT $q$gs://lake/x.csv$q$ AS p",
+        "SELECT $ñ$az://c/p.parquet$ñ$ AS p",
+        "SELECT E's3\\x3a//lake/x.parquet' AS p",
     ],
 )
 def test_a_statement_naming_an_object_is_refused(sql: str) -> None:
