@@ -202,3 +202,22 @@ def test_the_message_names_five_partitions_and_the_total(
     code, out = run(capsys, tmp_path)
     assert code == 1
     assert ": 'a', 'b', 'c', 'd', 'e' (7 in total)." in out
+
+
+def test_a_source_that_dropped_old_rows_fails_until_a_full_refresh(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The known limit (decision #95): the check cannot tell a cut from a source that no
+    longer has a partition's older rows; the run fails, and a full refresh rebuilds it."""
+    project(tmp_path, WHOLE)
+    feed(tmp_path, october(1, 20))
+    assert run(capsys, tmp_path)[0] == 0
+    feed(tmp_path, october(21, 25))  # the source dropped October 1 to 20
+    code, out = run(capsys, tmp_path)
+    assert code == 1
+    assert "PARTITION_INCOMPLETE" in out
+    assert "--full-refresh" in out
+    assert days_by_month(tmp_path) == [("2026-10", 20, 1, 20)]
+    code, out = run(capsys, tmp_path, "--full-refresh")
+    assert code == 0, out
+    assert days_by_month(tmp_path) == [("2026-10", 5, 21, 25)]
