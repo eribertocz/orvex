@@ -1,0 +1,78 @@
+# Load-performance baseline (#69, P1-21). Started by hand: generates the synthetic `large`
+# dataset (seed 42) and measures the full first load, one incremental cycle and one maintenance
+# run, each over several rounds, on a GitHub-hosted runner (4 CPUs, 16 GB for a public
+# repository). The numbers are uploaded as an artifact and recorded in
+# `benchmarks/p1-load-baseline.md`.
+name: load-baseline
+
+on:
+  workflow_dispatch:
+    inputs:
+      size:
+        description: Synthetic dataset size
+        type: choice
+        options: [large, small]
+        default: large
+      runs:
+        description: Rounds (each a full first load, an incremental cycle and maintenance)
+        type: number
+        default: 3
+  # A change to this workflow or its script is tried on the `small` dataset, once.
+  pull_request:
+    paths:
+      - .github/workflows/load-baseline.yml
+      - tools/benchmarks/**
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    # Three full loads of the large dataset; a hung step must fail the job.
+    timeout-minutes: 360
+    env:
+      SIZE: ${{ inputs.size || 'small' }}
+      RUNS: ${{ inputs.runs || 1 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Install from the lock file and the workspace packages
+        run: |
+          python -m pip install --quiet pip==26.2.2
+          python -m pip install --quiet -r pylock.toml
+          for package in packages/*/; do
+            python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
+          done
+      - name: The machine
+        run: |
+          nproc
+          free -h
+          df -h "$RUNNER_TEMP"
+      - name: Generate the dataset
+        run: python -m tools.synthetic.generate --size "$SIZE" --seed 42 --out "$RUNNER_TEMP/data"
+      - name: Measure
+        run: >-
+          python -m tools.benchmarks.load_baseline --data "$RUNNER_TEMP/data"
+          --work "$RUNNER_TEMP/work" --out baseline --runs "$RUNS"
+      - name: Disk left
+        if: always()
+        run: df -h "$RUNNER_TEMP"
+      # The results as an annotation too: readable through the check-runs API, where artifacts
+      # and logs may not be.
+      - name: Results as an annotation
+        if: always()
+        run: |
+          if [ -f baseline/results.json ]; then
+            python -c "import json, sys; text = json.dumps(json.load(open('baseline/results.json')), separators=(',', ':')); print('::notice title=load-baseline results::' + text.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A'))"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: load-baseline-${{ env.SIZE }}
+          path: baseline/
+          if-no-files-found: warn
