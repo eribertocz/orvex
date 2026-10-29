@@ -7,8 +7,8 @@
 | Phase | Name | Main modules | Issues | Ends with version | Stage |
 |---|---|---|---|---|---|
 | P0 | Foundation | repo, web, contracts, server, conformance | 11 | `v0.1.0-alpha.1` | Alpha |
-| P1 | Storage and transformation | store, server, transform | 21 | `v0.2.0-alpha.1` | Alpha |
-| P2 | Semantic engine — parity with SEF | semantic, access, server | 28 | `v0.3.0-alpha.1` | Alpha |
+| P1 | Storage and transformation | store, server, transform | 22 | `v0.2.0-alpha.1` | Alpha |
+| P2 | Semantic engine — parity with SEF | semantic, store, access, server | 30 | `v0.3.0-alpha.1` | Alpha |
 | P3 | Access and security | conformance, access, semantic, server | 14 | `v0.4.0-alpha.1` | Alpha |
 | P4 | Semantic engine — S1, S3, S6 | conformance, semantic | 12 | `v0.5.0-alpha.1` | Alpha |
 | P5 | Semantic engine — S2, S4, S5 | conformance, semantic, server, transform | 12 | `v0.6.0-alpha.1` | Alpha |
@@ -20,7 +20,7 @@
 | RC | Release candidates | all | defects only | `v1.0.0-rc.1` … `rc.K` | Release candidate |
 | **GA** | **MVP** | all | — | **`v1.0.0`** | **Stable** |
 
-**Total: 158 medium issues**, plus defects found along the way.
+**Total: 161 medium issues**, plus defects found along the way.
 
 **What version is the finished MVP?** When all MVP scope is implemented (end of P9) the product enters **beta** (`v0.11.0-beta.1`) with pilot users. The MVP is ready when the beta has no open `p0`/`p1` defects and the ten release criteria of [`process/versioning.md`](process/versioning.md) §4 are evidenced and approved by the Owner. That release is **`v1.0.0` (stable)**.
 
@@ -89,7 +89,7 @@
 | P1-19 | Scheduler: freshness-driven planning (minimum 5 minutes, `FRESHNESS_TOO_SHORT`), `full_refresh` cron with time zone, no overlapping runs, retries with backoff | transform |
 | P1-20 | Snapshot retention (from `project.yaml`) and compaction as maintenance runs | store |
 | P1-21 | Transformation worker process for server mode; load-performance baseline on the 100 M-row reference dataset | server |
-| P1-22 | Lake location in `project.yaml` (ADR-0027 §2): catalog (DuckDB file, SQLite, or PostgreSQL local, networked or cloud with TLS) and data files (project folder, local path, network file system, object storage), optional data-file encryption, credentials by `${env:NAME}` as temporary DuckDB secrets; every supported combination tested, invalid ones rejected | store, server |
+| P1-22 | Lake location in `project.yaml` (ADR-0027 §2): catalog (DuckDB file or SQLite on a local disk, or PostgreSQL local, networked or cloud with TLS `verify-full`) and data files (project folder, local path, network file system, object storage), optional data-file encryption (mode fixed at creation, deletion vectors off), credentials by `${env:NAME}` as temporary DuckDB secrets; every supported combination tested, invalid ones rejected | store, server |
 
 **Exit criteria:** every strategy and every error code introduced in this phase tested; write–audit–publish proven with failing tests; incremental loads from PostgreSQL every 5 minutes on synthetic data without duplicates or gaps; valid lineage events; Owner demo.
 
@@ -130,9 +130,8 @@
 | P2-26 | Evidence verification after runs (`declared` / `verified` / `violated`; `EVIDENCE_VIOLATED`) | semantic |
 | P2-27 | HTTP endpoints `query`, `explain`, `catalog`; corpus **21/21** becomes a required check; query performance baseline recorded | server |
 | P2-28 | Property-based tests for binder, correctness engine and planner | semantic |
-| P2-29 | Direct Query foundation (ADR-0027): engine per dataset, `CROSS_ENGINE_QUERY`, live receipts (`explainable`, read instant), cache only with `cache.ttl`, scheduled evidence verification, policy values from the managed lake bound as parameters (`POLICY_NOT_SUPPORTED_ON_ENGINE`) | semantic, store |
-| P2-30 | Direct Query on an existing DuckLake attached read-only: pinned snapshots, corpus green on it | store, semantic |
-| P2-31 | Direct Query on a remote DuckDB through Quack (read-only, token by `${env:NAME}`): corpus green on it | store |
+| P2-29 | Direct Query foundation (ADR-0027): engine per dataset, `CROSS_ENGINE_QUERY`, receipts naming every snapshot read, policy values from the managed lake bound as parameters with exact `NULL` semantics and a cap (`POLICY_NOT_SUPPORTED_ON_ENGINE`) | semantic, store |
+| P2-30 | Direct Query on an existing DuckLake: PostgreSQL or SQLite catalog attached `READ_ONLY` in a DuckDB instance of its own, tables only, catalog version checked (`ENGINE_VERSION_UNTESTED`), served at its latest verified snapshot (evidence verified on each new snapshot); corpus green on it (development only until P3-13) | store, semantic |
 
 **Exit criteria:** corpus **21/21** (including CASE-008, which SEF does not execute) on the managed lake and on every enabled Direct Query engine; every error code introduced in this phase tested; receipts on every result; evidence verification proven by tests that corrupt data; performance baseline recorded; Owner demo.
 
@@ -154,7 +153,7 @@
 | P3-07 | Row policies: evaluation and placement before aggregation on every path | semantic |
 | P3-08 | Column policies: visible, masked, hidden, with the masking rules of `security.md` §3.3 | semantic |
 | P3-09 | Fail-closed on missing attributes: zero rows, `POLICY_ATTRIBUTE_MISSING` notice, audit event | semantic |
-| P3-10 | Result cache keyed by permission fingerprint; invalidation by run records across workers (PostgreSQL `LISTEN`/`NOTIFY` in server mode); per-dataset settings | semantic |
+| P3-10 | Result cache keyed by permission fingerprint; invalidation by run records across workers (PostgreSQL `LISTEN`/`NOTIFY` in server mode); per-dataset settings; for datasets outside the managed lake, the key of ADR-0027 §7 with mapping-table snapshots checked on every lookup | semantic |
 | P3-11 | Role enforcement on every HTTP route; per-role query limits and asynchronous queries | server |
 | P3-12 | Administration API and CLI: users (instance administrator), memberships and groups (project Builder) | server |
 | P3-13 | Security conformance runner over the scenarios, as a required check, on the managed lake and on every enabled Direct Query engine (ADR-0027 §6) | conformance |
@@ -331,5 +330,6 @@
 
 | Item | Module | Decision |
 |---|---|---|
-| Direct Query on ClickHouse: ClickHouse dialect adapter (plan → ClickHouse SQL with bound parameters), execution with server-side limits, exact types, `EXPLAIN ESTIMATE`; corpus and security suite green with results identical to the DuckDB reference | semantic, store | ADR-0027 |
+| Direct Query on a remote DuckDB through Quack: server-side read-only access and limits, verified HTTPS, version check; corpus and security suite green | store | ADR-0027 §10 (#107) |
+| Direct Query on ClickHouse: ClickHouse dialect adapter (plan → ClickHouse SQL with bound parameters), execution with server-side limits, exact types, `EXPLAIN ESTIMATE`; corpus and security suite green with results identical to the reference | semantic, store | ADR-0027 §10 |
 | Python models, ML predictions and Python visuals | transform, semantic, web | ADR-0023 |

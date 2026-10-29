@@ -1,6 +1,6 @@
 # 0026 — One SQL dialect per engine; no transpilation
 
-**Status:** Accepted (2026-10-26); rules 1 and 3 to be superseded in part by [ADR-0027](0027-two-data-routes.md) when the ClickHouse Direct Query adapter is built, after v1.0.0
+**Status:** Accepted (2026-10-26); rules 1, 3 and 4 (second sentence) to be superseded in part by [ADR-0027](0027-two-data-routes.md) when the ClickHouse Direct Query adapter is built, after v1.0.0
 
 ## Context
 Orvex parses SQL to detect model dependencies, prove incremental filters and validate models. SQLGlot (used by SQLMesh) parses and transpiles between dialects. Transpilation is attractive for multi-source tools, but it is lossy: functions with the same name differ in semantics (rounding, `NULL` handling, time zones, integer division), which can silently change numbers — law 2. Orvex supports one non-attachable source with its own dialect: ClickHouse.

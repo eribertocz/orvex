@@ -6,7 +6,7 @@ Este documento resume, en lenguaje llano, lo que dicen los documentos en inglés
 
 Una herramienta BI propia, de código abierto (Apache-2.0), que:
 
-- trabaja con **dos rutas de datos** (ADR-0027): fuentes en bruto (Parquet, CSV, DuckDB, SQLite, PostgreSQL y ClickHouse por extracción) que transforma con **SQL puro** y guarda en **DuckLake**, o motores analíticos existentes que consulta en su lugar, sin copiar: un DuckLake existente (en su última versión verificada), DuckDB remoto con Quack (en vivo) y, después de la versión 1.0, ClickHouse en vivo;
+- trabaja con **dos rutas de datos** (ADR-0027): fuentes en bruto (Parquet, CSV, DuckDB, SQLite, PostgreSQL y ClickHouse por extracción) que transforma con **SQL puro** y guarda en **DuckLake**, o un DuckLake existente que consulta en su lugar, sin copiar, en su última versión verificada. DuckDB remoto con Quack y ClickHouse en vivo llegan después de la versión 1.0;
 - define el significado del negocio en **Apache Ossie**;
 - tiene un **motor semántico** que garantiza números correctos o rechaza la pregunta con un error claro;
 - muestra dashboards con páginas, gráficos, KPIs, filtros y la **matriz**;
@@ -32,7 +32,7 @@ Módulos independientes que se comunican solo por **contratos** (formatos están
 
 | Módulo | Hace |
 |---|---|
-| `store` | Guarda y lee datos (DuckLake) y ejecuta las consultas en vivo |
+| `store` | Guarda y lee datos (DuckLake), incluidas las consultas a un DuckLake existente |
 | `transform` | ETL: fuentes, modelos SQL, cargas incrementales, pruebas |
 | `semantic` | **El núcleo:** Ossie → consultas correctas, seguras y explicadas |
 | `access` | Usuarios, login, grupos, auditoría |
@@ -43,7 +43,7 @@ Módulos independientes que se comunican solo por **contratos** (formatos están
 
 Cualquier módulo se puede reescribir (por ejemplo, en Rust) o usar por separado sin afectar a los demás.
 
-**Dos modos:** local (un comando, sin configurar nada) y servidor (`--server` o Docker, con PostgreSQL para el catálogo de DuckLake y el estado).
+**Dos modos:** local (un comando, sin configurar nada) y servidor (`--server` o Docker, con PostgreSQL para el estado y, por defecto, para el catálogo de DuckLake). La ubicación del lago se puede cambiar de forma opcional (ADR-0027).
 
 **Siempre las últimas versiones estables** de todas las librerías, fijadas exactamente y actualizadas cada semana con pruebas automáticas.
 
@@ -64,8 +64,8 @@ Iguala todo lo que hace SEF (los 21 casos del corpus, incluido el conteo distint
 Cada modelo es un `.sql` puro más un `.yaml` opcional con la configuración (incremental, pruebas, frescura). El motor agrega solo el filtro incremental cuando puede probar que es seguro; si no, se usa `$since` (DuckDB 2.0). Cada carga se escribe, se prueba y solo se publica si pasa; si falla, los dashboards siguen mostrando los últimos datos buenos con un aviso. La frescura mínima es de 5 minutos.
 
 - **Un dialecto por motor, sin traducir SQL (ADR-0026):** los modelos se escriben en SQL de DuckDB. ClickHouse se puede copiar con *modelos de extracción* escritos en SQL de ClickHouse que se ejecutan en ClickHouse (solo lectura) y llegan a DuckDB como Arrow.
-- **Dos rutas, un solo motor semántico (ADR-0027):** el motor genera el SQL del motor de cada dataset a partir del mismo plan, sin traducir SQL (en la versión 1.0 todos hablan SQL de DuckDB; ClickHouse en vivo llega después). Las consultas en vivo dan recibos *explicables* (qué se leyó y a qué hora). Una consulta no puede mezclar dos motores. Cada motor se habilita solo cuando toda la batería de pruebas de números y de seguridad da resultados idénticos.
-- **Dónde vive el lago:** catálogo en archivo DuckDB o SQLite (disco local) o en PostgreSQL (local, en la red o en la nube); archivos de datos en una carpeta local, en una carpeta de red o en la nube (S3 y compatibles, Google Cloud Storage, Azure). MySQL y Quack como catálogo no se ofrecen hasta que DuckLake los declare estables.
+- **Dos rutas, un solo motor semántico (ADR-0027):** el motor genera el SQL del motor de cada dataset a partir del mismo plan, sin traducir SQL (en la versión 1.0 todo es SQL de DuckDB). Un DuckLake existente se conecta en solo lectura y aislado, y da recibos exactos mientras se conserven sus versiones. Después de la versión 1.0, las consultas en vivo (Quack, ClickHouse) darán recibos *explicables* (qué se leyó y a qué hora). Una consulta no puede mezclar dos motores. Cada motor se habilita solo cuando toda la batería de pruebas de números y de seguridad da resultados idénticos.
+- **Dónde vive el lago:** catálogo en archivo DuckDB o SQLite (disco local) o en PostgreSQL (local, en la red o en la nube); archivos de datos en una carpeta local, en una carpeta de red o en la nube (S3 y compatibles, Google Cloud Storage, Azure). La conexión a un catálogo que no esté en la propia máquina va cifrada y verifica el servidor (TLS `verify-full`). MySQL y Quack como catálogo no se ofrecen hasta que DuckLake los declare estables.
 - **Los datos se quedan en DuckDB (ADR-0025):** relaciones perezosas, nada se materializa en Python, cada resultado se lee una sola vez; en DuckLake, en un snapshot fijo.
 
 ## 7. Quién hace qué
@@ -97,8 +97,8 @@ Un solo agente, **Claude Code**, especifica **e** implementa. Trabaja con tu cue
 | Fase | Qué se construye | Issues | Versión al cerrar |
 |---|---|---|---|
 | P0 | Base del repositorio, CI, contratos, datos sintéticos, corpus | 11 | `v0.1.0-alpha.1` |
-| P1 | Almacenamiento y ETL | 21 | `v0.2.0-alpha.1` |
-| P2 | Motor semántico: paridad con SEF (21/21) | 28 | `v0.3.0-alpha.1` |
+| P1 | Almacenamiento y ETL | 22 | `v0.2.0-alpha.1` |
+| P2 | Motor semántico: paridad con SEF (21/21) y DuckLake existente | 30 | `v0.3.0-alpha.1` |
 | P3 | Usuarios, login, seguridad, auditoría, caché | 14 | `v0.4.0-alpha.1` |
 | P4 | Motor semántico: S1, S3, S6 | 12 | `v0.5.0-alpha.1` |
 | P5 | Motor semántico: S2, S4, S5 y el escritor de archivos del proyecto | 12 | `v0.6.0-alpha.1` |
@@ -110,7 +110,7 @@ Un solo agente, **Claude Code**, especifica **e** implementa. Trabaja con tu cue
 | RC | Solo correcciones | — | `v1.0.0-rc.N` |
 | **MVP** | **Versión estable** | — | **`v1.0.0`** |
 
-En total son **158 issues medianos**.
+En total son **161 issues medianos**.
 
 - **Alpha:** solo tú; los formatos aún pueden cambiar.
 - **Beta:** todo el MVP programado; piloto con tu gerente y una o dos jefaturas.
