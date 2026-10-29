@@ -28,7 +28,7 @@ from orvex.server.instance import (
 )
 from orvex.server.logs import configure_logging
 from orvex.server.maintenance import history, maintain
-from orvex.server.scheduler import schedule
+from orvex.server.scheduler import STOP_GRACE_SECONDS, schedule
 from orvex.server.versions import (
     ContractVersionIncompatible,
     Versions,
@@ -120,9 +120,18 @@ def command_parser(identity: Identity) -> argparse.ArgumentParser:
         help="rebuild incremental models from every row (the named ones, or all of them)",
     )
     scheduled = commands.add_parser(
-        "schedule", help="keep a project's models as fresh as they declare (Ctrl+C stops)"
+        "schedule",
+        help="keep a project's models as fresh as they declare (SIGTERM or Ctrl+C stops)",
     )
     scheduled.add_argument("project", type=Path, help="project folder")
+    scheduled.add_argument(
+        "--stop-grace",
+        type=float,
+        default=STOP_GRACE_SECONDS,
+        metavar="SECONDS",
+        help="after a stop, how long a run in progress may finish before it is cancelled "
+        f"(default {STOP_GRACE_SECONDS:g}); give the service manager a longer stop timeout",
+    )
     history = commands.add_parser("runs", help="list recent runs of a project")
     history.add_argument("project", type=Path, help="project folder")
     history.add_argument("--limit", type=int, default=20, help="how many runs (default 20)")
@@ -147,7 +156,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if command.command == "validate":
             return validate(command.project, sys.stdout, command.show_sql)
         if command.command == "schedule":
-            return schedule(command.project, identity, sys.stdout)
+            if command.stop_grace < 0:
+                print("--stop-grace must be at least 0", file=sys.stderr)
+                return 2
+            return schedule(command.project, identity, sys.stdout, stop_grace=command.stop_grace)
         if command.command == "runs":
             if command.limit < 1:
                 print("--limit must be at least 1", file=sys.stderr)

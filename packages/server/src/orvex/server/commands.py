@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -44,7 +45,7 @@ from orvex.contracts.store.v1 import (
     ReadRequest,
     StatementRequest,
 )
-from orvex.server import lake_place
+from orvex.server import heartbeat, lake_place
 from orvex.server.identity import Identity, load_identity
 from orvex.server.lake_place import Place
 from orvex.server.project import (
@@ -518,10 +519,11 @@ def _memory_limit() -> str:
 
 
 @contextlib.contextmanager
-def project_lock(folder: Path) -> Iterator[None]:
-    """An exclusive OS lock on `<folder>/lake.lock`, released on exit and when the process dies."""
+def project_lock(folder: Path, name: str = LOCK_FILE) -> Iterator[None]:
+    """An exclusive OS lock on `<folder>/<name>` (`lake.lock` by default), released on exit and
+    when the process dies."""
     folder.mkdir(parents=True, exist_ok=True)
-    handle = (folder / LOCK_FILE).open("a+b")
+    handle = (folder / name).open("a+b")
     try:
         try:
             if sys.platform == "win32":
@@ -562,6 +564,35 @@ def validate(folder: Path, out: IO[str], show_sql: str | None = None) -> int:
     return 0
 
 
+class RunControl:
+    """Cancels a run from another thread (the scheduler's stop, #69): the run's transaction is
+    cancelled, its running statement interrupted, and nothing of it is committed. A cancel that
+    comes before the transaction opens cancels it as soon as it does."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._transaction: Transaction | None = None
+        self._cancelled = False
+
+    def attach(self, transaction: Transaction) -> None:
+        with self._lock:
+            self._transaction = transaction
+            cancelled = self._cancelled
+        if cancelled:
+            transaction.cancel()
+
+    def detach(self) -> None:
+        with self._lock:
+            self._transaction = None
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._cancelled = True
+            transaction = self._transaction
+        if transaction is not None:
+            transaction.cancel()
+
+
 @dataclass(frozen=True, slots=True)
 class Selection:
     """A scheduled run: the models to build (dependencies first) and how to record it."""
@@ -569,6 +600,7 @@ class Selection:
     models: tuple[str, ...]
     trigger: Literal["freshness", "schedule"]
     full_refresh: frozenset[str] = frozenset()  # recorded as full_refresh (incremental: rebuilt)
+    control: RunControl | None = None  # lets the scheduler cancel the run when it stops
 
 
 def run(
@@ -622,6 +654,19 @@ def run(
             file=out,
         )
         return 1
+
+
+@contextlib.contextmanager
+def _controlled(control: RunControl | None, transaction: Transaction) -> Iterator[None]:
+    """While the block runs, `control` can cancel `transaction`."""
+    if control is None:
+        yield
+        return
+    control.attach(transaction)
+    try:
+        yield
+    finally:
+        control.detach()
 
 
 def _trigger(
@@ -796,7 +841,8 @@ def _run_locked(
     try:
         current: _Outcome | None = None
         try:
-            with lake.transaction() as transaction:
+            control = selection.control if selection is not None else None
+            with lake.transaction() as transaction, _controlled(control, transaction):
                 for item, (_, steps) in zip(outcomes, plan, strict=True):
                     if failures:
                         break
@@ -1320,6 +1366,8 @@ def runs(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
     except ProjectLoadError as error:
         print(_load_problem(error), file=out)
         return 1
+    zone = project.settings.time_zone
+    print(heartbeat.describe(home, zone, dt.datetime.fromisoformat(_now())), file=out)
     if not lake_place.exists(home):
         print("no runs yet", file=out)
         return 0
@@ -1328,7 +1376,7 @@ def runs(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
             lake = open_lake(place.location, _limits())
             try:
                 snapshot = lake.current_snapshot().id
-                request = history_request(snapshot, project.settings.time_zone, limit)
+                request = history_request(snapshot, zone, limit)
                 try:
                     rows = lake.read(request).read_all().to_pylist()
                 except StoreError as error:

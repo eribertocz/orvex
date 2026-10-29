@@ -11,12 +11,23 @@ its next due time; due models that do not read it keep running. Every decision i
 
 Lake maintenance (P1-20) runs when no model is due: once a day after a success, an hour after a
 failure. Model runs keep priority: maintenance only starts between runs.
+
+Unattended (P1-21, #69): one scheduler per project (an OS lock held for its lifetime);
+`SIGTERM` or Ctrl+C stops it at once between runs, and a run in progress may finish within the
+stop grace period, then is cancelled and rolls back (maintenance in progress finishes); a
+heartbeat in the project's folder says what it is doing.
 """
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
 import datetime as dt
+import os
+import select
 import signal
+import socket
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -25,7 +36,7 @@ from types import FrameType
 from typing import IO
 from zoneinfo import ZoneInfo
 
-from orvex.server import commands, lake_place, maintenance
+from orvex.server import commands, heartbeat, lake_place, maintenance
 from orvex.server.commands import Checked, Selection, project_lock
 from orvex.server.identity import Identity
 from orvex.store.errors import StoreError
@@ -47,6 +58,9 @@ type Sleep = Callable[[float], None]
 type Monotonic = Callable[[], float]
 
 PROJECT_FILES = ("project.yaml", "connections.yaml")
+SCHEDULER_LOCK = "scheduler.lock"  # held for the scheduler's lifetime: one per project (#69)
+STOP_GRACE_SECONDS = 60.0  # how long a run may finish after a stop before it is cancelled
+HEARTBEAT_EVERY = dt.timedelta(minutes=1)
 
 
 def _clock() -> dt.datetime:
@@ -126,6 +140,8 @@ class _State:
     recheck_at: float | None = None
     deferred: set[str] = field(default_factory=set)  # retries already deferred once
     maintenance_after: float | None = None  # monotonic: maintenance did not start, wait
+    decision: tuple[dt.datetime, str] | None = None  # the last one printed (for the heartbeat)
+    zone: str | None = None  # the project's, once it has been loaded
 
 
 def schedule(
@@ -136,39 +152,185 @@ def schedule(
     sleep: Sleep = time.sleep,
     should_stop: Callable[[], bool] | None = None,
     monotonic: Monotonic = time.monotonic,
+    stop_grace: float = STOP_GRACE_SECONDS,
 ) -> int:
-    """Run the due models of a project until stopped (Ctrl+C stops after the current run)."""
-    stopping = False
+    """Run the due models of a project until stopped (#69 for running unattended).
 
-    def stop(_signal: int, _frame: FrameType | None) -> None:
-        nonlocal stopping
-        stopping = True
+    `SIGTERM` or Ctrl+C (`SIGINT`) stops it: at once between runs; during a run, the run may
+    finish for `stop_grace` seconds, then it is cancelled and rolls back. One scheduler per
+    project: a second one exits with `SCHEDULER_ALREADY_RUNNING`. While it runs, it keeps a
+    heartbeat (`heartbeat.py`) that the `runs` command shows.
+    """
+    home = Path(folder).expanduser().absolute() / f".{identity.slug}"
+    try:
+        with commands.project_lock(home, SCHEDULER_LOCK):
+            return _schedule(
+                folder, home, identity, out, clock, sleep, should_stop, monotonic, stop_grace
+            )
+    except commands.ProjectLocked:
+        beat = heartbeat.read(home)
+        pid = str(beat.pid) if beat is not None else "unknown"
+        print(
+            commands.Problem(
+                "SCHEDULER_ALREADY_RUNNING",
+                f".{identity.slug}/{SCHEDULER_LOCK}",
+                None,
+                f"another scheduler (process {pid}) keeps this project; one per project.",
+            ),
+            file=out,
+            flush=True,
+        )
+        return 1
+
+
+def _schedule(
+    folder: Path,
+    home: Path,
+    identity: Identity,
+    out: IO[str],
+    clock: Clock,
+    sleep: Sleep,
+    should_stop: Callable[[], bool] | None,
+    monotonic: Monotonic,
+    stop_grace: float,
+) -> int:
+    control = commands.RunControl()
+    stop_reason: list[str] = []  # set once, by the first stop signal
+    grace: list[threading.Timer] = []
+
+    once = threading.Lock()
+
+    def stop(number: int, _frame: FrameType | None) -> None:
+        # Called by the handler and by the watcher thread: the first call counts.
+        with once:
+            if stop_reason:
+                return
+            stop_reason.append(signal.Signals(number).name)
+        # A run in progress may finish within the grace period; then it is cancelled. Between
+        # runs, the loop sees the stop within a second and nothing is cancelled.
+        timer = threading.Timer(stop_grace, control.cancel)
+        timer.daemon = True
+        grace.append(timer)
+        timer.start()
 
     def stopped() -> bool:
-        return stopping or (should_stop is not None and should_stop())
+        return bool(stop_reason) or (should_stop is not None and should_stop())
+
+    state = _State(started=clock())
+    beat = heartbeat.Heartbeat(
+        pid=os.getpid(),
+        started_at=state.started.isoformat(),
+        updated_at=state.started.isoformat(),
+        state="running",
+    )
+
+    def report(next_at: dt.datetime | None = None) -> None:
+        nonlocal beat
+        decision = state.decision
+        beat = dataclasses.replace(
+            beat,
+            updated_at=clock().isoformat(),
+            last_decision_at=decision[0].isoformat() if decision else None,
+            last_decision=decision[1] if decision else None,
+            next_at=next_at.isoformat() if next_at is not None else beat.next_at,
+        )
+        heartbeat.write(home, beat)
 
     def pause(seconds: float) -> None:
-        """Sleep in short steps, so Ctrl+C is noticed within a second."""
+        """Sleep in short steps, so a stop is noticed within a second; the heartbeat is renewed
+        at least once a minute."""
         remaining = seconds
+        renewed = monotonic()
         while remaining > 0 and not stopped():
             step = min(1.0, remaining)
             sleep(step)
             remaining -= step
+            if monotonic() - renewed >= HEARTBEAT_EVERY.total_seconds():
+                report()
+                renewed = monotonic()
 
-    previous = signal.signal(signal.SIGINT, stop) if should_stop is None else None
+    restore = _watch_signals(stop) if should_stop is None else (lambda: None)
     try:
-        state = _State(started=clock())
+        report()
         while not stopped():
-            pause(_cycle(folder, identity, out, clock, monotonic, state))
+            try:
+                wait = _cycle(folder, identity, out, clock, monotonic, state, control)
+            except KeyboardInterrupt:
+                # Ctrl+C during an extraction load: the run recorded it and rolled back.
+                if not stop_reason:
+                    stop_reason.append(signal.SIGINT.name)
+                break
+            report(clock() + dt.timedelta(seconds=wait))
+            pause(wait)
+        reason = stop_reason[0] if stop_reason else "stopped"
+        moment = clock()
+        _say(state, out, "UTC" if state.zone is None else state.zone, moment, f"stopped ({reason})")
+        beat = dataclasses.replace(
+            beat,
+            updated_at=moment.isoformat(),
+            state="stopped",
+            stopped_at=moment.isoformat(),
+            stop_reason=reason,
+            next_at=None,
+        )
+        heartbeat.write(home, beat)
         return 0
     finally:
-        if previous is not None:
-            signal.signal(signal.SIGINT, previous)
+        for timer in grace:
+            timer.cancel()
+        restore()
 
 
-def _say(out: IO[str], zone: str, moment: dt.datetime, text: str) -> None:
+def _watch_signals(stop: Callable[[int, FrameType | None], None]) -> Callable[[], None]:
+    """`SIGTERM` and `SIGINT` call `stop` at once, even while DuckDB holds the main thread.
+
+    Python runs signal handlers only in the main thread, when it gets control back: a long
+    statement would delay the stop, and with it the grace period. So the signals are also
+    watched from another thread through Python's wakeup file descriptor, which the C-level
+    handler writes to as a signal arrives (the same way as `store.lake._on_ctrl_c`, which
+    forwards to this one while a load runs). Returns the restoring function.
+    """
+    numbers = (signal.SIGINT, signal.SIGTERM)
+    previous = {number: signal.getsignal(number) for number in numbers}
+    receiver, sender = socket.socketpair()
+    sender.setblocking(False)
+    finished = threading.Event()
+    for number in numbers:
+        signal.signal(number, stop)
+    earlier = signal.set_wakeup_fd(sender.fileno(), warn_on_full_buffer=False)
+
+    def watch() -> None:
+        while not finished.is_set():
+            ready, _, _ = select.select([receiver], [], [], 0.2)
+            if not ready:
+                continue
+            with contextlib.suppress(OSError):
+                received = receiver.recv(256)
+                if earlier != -1:
+                    os.write(earlier, received)
+                for number in numbers:
+                    if number in received:
+                        stop(number, None)
+
+    watcher = threading.Thread(target=watch, name="schedule-stop", daemon=True)
+    watcher.start()
+
+    def restore() -> None:
+        finished.set()
+        watcher.join()
+        signal.set_wakeup_fd(earlier)
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+        receiver.close()
+        sender.close()
+
+    return restore
+
+
+def _say(state: _State, out: IO[str], zone: str, moment: dt.datetime, text: str) -> None:
     local = moment.astimezone(ZoneInfo(zone)).strftime("%Y-%m-%d %H:%M:%S")
     print(f"{local} {text}", file=out, flush=True)
+    state.decision = (moment, text)
 
 
 def _report(out: IO[str], state: _State, lines: tuple[str, ...]) -> float:
@@ -187,6 +349,7 @@ def _cycle(
     clock: Clock,
     monotonic: Monotonic,
     state: _State,
+    control: commands.RunControl | None = None,
 ) -> float:
     """One decision; returns how long to wait before the next one (seconds)."""
     now = clock()
@@ -207,6 +370,7 @@ def _cycle(
         return _report(out, state, tuple(str(problem) for problem in checked.problems))
     project, graph = checked.project, checked.graph
     zone = project.settings.time_zone
+    state.zone = zone
     home = project.folder / f".{identity.slug}"
     assert checked.place is not None  # a refused lake location is a problem
     place = checked.place
@@ -266,11 +430,11 @@ def _cycle(
         return _report(out, state, ("waiting: another process holds the project",))
     for name in decided.models:
         trigger = "full refresh" if name in decided.full_refresh else "freshness"
-        _say(out, zone, now, f"running {name} ({trigger})")
+        _say(state, out, zone, now, f"running {name} ({trigger})")
     for reason in decided.reasons:
-        _say(out, zone, now, f"due {reason}")
+        _say(state, out, zone, now, f"due {reason}")
     state.last_run_wall, state.last_run_monotonic = now, monotonic()
-    selection = Selection(decided.models, "freshness", decided.full_refresh)
+    selection = Selection(decided.models, "freshness", decided.full_refresh, control)
     previous_start = records.last_run_start
     if commands.run(folder, identity, out, selection=selection) == 0:
         for name in decided.models:
@@ -286,7 +450,7 @@ def _cycle(
         # No run was recorded: it did not start (a source down while checking, the project
         # taken by another process…). Not a model's failure: tried again after the minimum
         # interval, the reason printed above by the run.
-        _say(out, zone, after, "the run did not start; trying again in 5 minutes")
+        _say(state, out, zone, after, "the run did not start; trying again in 5 minutes")
         # Check again then (not before): the cause may be in the project or a source.
         state.recheck_at = monotonic() + MINIMUM_INTERVAL.total_seconds()
         return 1.0
@@ -300,13 +464,13 @@ def _cycle(
             state.failures[name] = count
             state.held[name] = after + RETRY_DELAYS[count - 1]
             retry = state.held[name].astimezone(ZoneInfo(zone))
-            _say(out, zone, after, f"{name} failed; retry {count} at {retry:%H:%M}")
+            _say(state, out, zone, after, f"{name} failed; retry {count} at {retry:%H:%M}")
         else:
             state.failures.pop(name, None)
             state.held[name] = next_due(by_name[name], after, zone)
             print(f"SCHEDULE_GAVE_UP {name}", file=out, flush=True)
             until = state.held[name].astimezone(ZoneInfo(zone))
-            _say(out, zone, after, f"{name} waits until {until:%Y-%m-%d %H:%M}")
+            _say(state, out, zone, after, f"{name} waits until {until:%Y-%m-%d %H:%M}")
     return 1.0
 
 
@@ -335,7 +499,7 @@ def _maybe_maintain(
     due = records.maintained.due_at()
     waiting = state.maintenance_after is not None and monotonic() < state.maintenance_after
     if (due is None or due <= now) and not waiting:
-        _say(out, zone, now, "running lake maintenance")
+        _say(state, out, zone, now, "running lake maintenance")
         if maintenance.maintain(folder, identity, out, "schedule", clock) != 0:
             # Recorded failures wait an hour (the records say so); one that did not start (the
             # project locked by another process…) is tried again after the minimum interval.
