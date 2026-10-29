@@ -1,0 +1,1 @@
+{"version": 1, "name": "Facturación", "time_zone": "America/La_Paz", "lake": {"data": {"path": "az://bi-lake/billing/", "azure": {"connection_string": "${env:LAKE_AZURE_CONNECTION_STRING}"}}}}

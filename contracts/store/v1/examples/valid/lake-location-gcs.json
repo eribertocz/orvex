@@ -1,0 +1,1 @@
+{"kind": "lake_location", "catalog": "local", "path": "/var/lib/bi/lake", "data_path": "gs://bi-lake/billing/", "storage": {"type": "gcs", "endpoint": "storage.googleapis.com", "use_ssl": true, "key_id_env": "LAKE_GCS_KEY_ID", "secret_env": "LAKE_GCS_SECRET"}}

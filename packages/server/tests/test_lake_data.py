@@ -24,6 +24,8 @@ from orvex.server.identity import load_identity
 from orvex.server.project import load_project
 from orvex.store.lake import Limits, open_lake
 
+from tests.support import azurite
+
 SLUG = load_identity().slug
 PROJECT = "version: 1\nname: Test\ntime_zone: UTC\n"
 CONNECTIONS = "version: 1\nconnections:\n  feed:\n    type: parquet\n    path: data/feed.parquet\n"
@@ -366,3 +368,140 @@ def test_a_lake_on_object_storage(
         found = problems(tmp_path)
         assert found[0].startswith("LAKE_LOCATION_CHANGED project.yaml"), found
         assert "lake.encrypted was true, now false" in found[0]
+
+
+# --- #127: Google Cloud Storage and Azure Blob Storage --------------------------------------------
+
+AZURE_ENV = "LAKE_TEST_AZURE_CONNECTION_STRING"
+ACCOUNT_KEY = f"azure-key-{uuid.uuid4().hex}"
+GCS = (
+    "lake:\n  data:\n    path: gs://bi-lake/billing/\n    gcs:\n"
+    "      key_id: ${env:" + KEY_ENV + "}\n      secret: ${env:" + SECRET_ENV + "}\n"
+)
+AZURE = (
+    "lake:\n  data:\n    path: az://bi-lake/billing/\n    azure:\n"
+    "      connection_string: {connection}\n"
+)
+
+
+def azure_lake(connection: str = "${env:" + AZURE_ENV + "}") -> str:
+    return AZURE.replace("{connection}", connection)
+
+
+@pytest.mark.usefixtures("credentials")
+def test_google_cloud_storage_is_reached_at_its_own_endpoint_over_https(tmp_path: Path) -> None:
+    folder = bare(tmp_path, GCS)
+    assert problems(folder) == []
+    chosen = commands.lake_location(load_project(folder), home(folder))
+    assert chosen.location.data_path == "gs://bi-lake/billing/"
+    assert chosen.location.storage is not None
+    storage = chosen.location.storage.root
+    assert storage.model_dump(exclude_none=True) == {
+        "type": "gcs",
+        "endpoint": "storage.googleapis.com",
+        "use_ssl": True,
+        "key_id_env": KEY_ENV,
+        "secret_env": SECRET_ENV,
+    }
+
+
+@pytest.mark.usefixtures("credentials")
+@pytest.mark.parametrize(
+    "data",
+    [
+        "    path: gcs://b/p/\n",
+        "    path: azure://c/p/\n",
+        "    path: abfss://c@a.dfs.core.windows.net/p/\n",
+        "    path: r2://b/p/\n",
+        "    path: gs://b/p/\n",  # without its gcs settings
+        "    path: az://c/p/\n    gcs:\n      key_id: ${env:A}\n      secret: ${env:B}\n",
+        "    path: gs://b/p/\n    azure:\n      connection_string: ${env:A}\n",
+        "    path: gs:///p/\n    gcs:\n      key_id: ${env:A}\n      secret: ${env:B}\n",
+        "    path: az://c/../p/\n    azure:\n      connection_string: ${env:A}\n",
+        "    path: data/elsewhere/\n    azure:\n      connection_string: ${env:A}\n",
+    ],
+)
+def test_unsupported_object_storage_locations_are_refused(tmp_path: Path, data: str) -> None:
+    found = problems(bare(tmp_path, f"lake:\n  data:\n{data}"))
+    assert len(found) == 1
+    assert found[0].startswith("LAKE_LOCATION_INVALID project.yaml"), found
+
+
+def test_a_literal_connection_string_is_a_schema_error(tmp_path: Path) -> None:
+    literal = f"DefaultEndpointsProtocol=https;AccountName=a;AccountKey={ACCOUNT_KEY}"
+    found = problems(bare(tmp_path, azure_lake(f"'{literal}'")))
+    assert found[0].startswith("PROJECT_SCHEMA_INVALID project.yaml")
+    assert ACCOUNT_KEY not in found[0]
+
+
+def test_an_unset_connection_string_variable_is_named(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(AZURE_ENV, raising=False)
+    found = problems(bare(tmp_path, azure_lake()))
+    assert found[0].startswith("PROJECT_SECRET_MISSING project.yaml")
+    assert AZURE_ENV in found[0]
+
+
+@pytest.mark.parametrize(
+    ("connection", "refused"),
+    [
+        (f"DefaultEndpointsProtocol=http;AccountName=a;AccountKey={ACCOUNT_KEY}", True),
+        (f"AccountName=a;AccountKey={ACCOUNT_KEY};BlobEndpoint=http://blob.example.com/a", True),
+        (f"DefaultEndpointsProtocol=https;AccountName=a;AccountKey={ACCOUNT_KEY}", False),
+        (
+            f"DefaultEndpointsProtocol=http;AccountName=a;AccountKey={ACCOUNT_KEY};"
+            "BlobEndpoint=http://127.0.0.1:10000/a",
+            False,
+        ),
+    ],
+)
+def test_azure_over_plain_http_to_another_machine_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, connection: str, refused: bool
+) -> None:
+    monkeypatch.setenv(AZURE_ENV, connection)
+    found = problems(bare(tmp_path, azure_lake()))
+    if not refused:
+        assert found == []
+        return
+    assert len(found) == 1
+    assert found[0].startswith("LAKE_TLS_REQUIRED project.yaml"), found
+    assert ACCOUNT_KEY not in found[0]
+    assert "http" in found[0]
+
+
+@pytest.mark.usefixtures("credentials")
+def test_moving_an_existing_lake_to_another_provider_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = bare(tmp_path / "proj", s3_lake("127.0.0.1:9000"))
+    lake_place.record(home(folder), commands.lake_location(load_project(folder), home(folder)))
+    bare(folder, GCS)
+    found = problems(folder)
+    assert found[0].startswith("LAKE_LOCATION_CHANGED project.yaml"), found
+    assert "s3://bi-lake/billing/" in found[0]
+    assert "gs://bi-lake/billing/" in found[0]
+    monkeypatch.setenv(AZURE_ENV, "AccountName=a;AccountKey=k")
+    bare(folder, azure_lake())
+    assert problems(folder)[0].startswith("LAKE_LOCATION_CHANGED project.yaml")
+
+
+def test_a_lake_in_azure_blob_storage(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connection = azurite.connection_string()
+    monkeypatch.setenv(AZURE_ENV, connection)
+    container = f"lake{uuid.uuid4().hex[:12]}"
+    azurite.create_container(connection, container)
+    project(tmp_path, azure_lake().replace("az://bi-lake/", f"az://{container}/"))
+    full_flow(tmp_path, capsys)
+    found = azurite.blobs(connection, container)
+    assert found
+    assert all(name.startswith("billing/") for name in found)  # the declared prefix only
+    account_key = connection.split("AccountKey=", 1)[1].split(";", 1)[0]
+    record = (home(tmp_path) / lake_place.RECORD_FILE).read_text(encoding="utf-8")
+    assert account_key not in record
+    assert f"az://{container}/billing/" in record
+    code, out = run(capsys, "runs", str(tmp_path))
+    assert code == 0, out
+    assert account_key not in out

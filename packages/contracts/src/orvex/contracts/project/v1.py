@@ -292,6 +292,29 @@ class S3Storage(BaseModel):
     secret: SecretReference
 
 
+class GcsStorage(BaseModel):
+    """
+    Google Cloud Storage, reached with HMAC keys (Cloud Storage interoperability) at `storage.googleapis.com` over HTTPS. Credentials only as `${env:NAME}`; they become a temporary DuckDB secret.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    key_id: SecretReference
+    secret: SecretReference
+
+
+class AzureStorage(BaseModel):
+    """
+    Azure Blob Storage, reached with a connection string, only as `${env:NAME}`; it becomes a temporary DuckDB secret. Its protocol must be https (`DefaultEndpointsProtocol`, and a `BlobEndpoint` if it has one) unless the endpoint is the local machine.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    connection_string: SecretReference
+
+
 class Connection(
     RootModel[
         ParquetConnection
@@ -334,7 +357,7 @@ class LakeCatalog(RootModel[DuckdbLakeCatalog | SqliteLakeCatalog | PostgresLake
 
 class LakeData(BaseModel):
     """
-    Where the lake's data files live: a local folder (relative to the project folder; a network file system mounted at the same path counts) or S3-compatible object storage (`s3://bucket/prefix/`, with `s3`). Default: `.<slug>/lake/data/`. It must hold only the lake's files: maintenance deletes Parquet files there that the lake does not list.
+    Where the lake's data files live: a local folder (relative to the project folder; a network file system mounted at the same path counts) or object storage: S3-compatible (`s3://bucket/prefix/`, with `s3`), Google Cloud Storage (`gs://bucket/prefix/`, with `gcs`) or Azure Blob Storage (`az://container/prefix/`, with `azure`). Default: `.<slug>/lake/data/`. It must hold only the lake's files: maintenance deletes Parquet files there that the lake does not list.
     """
 
     model_config = ConfigDict(
@@ -342,6 +365,8 @@ class LakeData(BaseModel):
     )
     path: Annotated[str, Field(max_length=4096, min_length=1)]
     s3: S3Storage | None = None
+    gcs: GcsStorage | None = None
+    azure: AzureStorage | None = None
 
 
 class ConnectionsFile(BaseModel):

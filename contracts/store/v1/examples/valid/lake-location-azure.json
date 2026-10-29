@@ -1,0 +1,1 @@
+{"kind": "lake_location", "catalog": "local", "path": "/var/lib/bi/lake", "data_path": "az://bi-lake/billing/", "storage": {"type": "azure", "connection_string_env": "LAKE_AZURE_CONNECTION_STRING"}, "encrypted": true}

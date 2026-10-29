@@ -257,6 +257,47 @@ class S3Storage(BaseModel):
     secret_env: Annotated[str, Field(pattern="^[A-Z_][A-Z0-9_]*$")]
 
 
+class GcsStorage(BaseModel):
+    """
+    Google Cloud Storage for data files (gs://bucket/prefix/), reached through DuckDB's official httpfs extension with HMAC keys (Cloud Storage interoperability) as a temporary secret scoped to data_path. The keys are read from the environment variables named here. use_ssl false is refused unless the endpoint is the local machine (STORE_TLS_REQUIRED).
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    type: Literal["gcs"]
+    endpoint: Annotated[
+        str | None,
+        Field(
+            max_length=260,
+            min_length=1,
+            pattern="^[A-Za-z0-9.\\-]+(:[0-9]{1,5})?$|^\\[[0-9A-Fa-f:]+\\](:[0-9]{1,5})?$",
+        ),
+    ] = "storage.googleapis.com"
+    use_ssl: bool | None = True
+    key_id_env: Annotated[str, Field(pattern="^[A-Z_][A-Z0-9_]*$")]
+    secret_env: Annotated[str, Field(pattern="^[A-Z_][A-Z0-9_]*$")]
+
+
+class AzureStorage(BaseModel):
+    """
+    Azure Blob Storage for data files (az://container/prefix/), reached through DuckDB's official azure extension with a connection string as a temporary secret scoped to data_path. The connection string is read from the environment variable named here; its protocol must be https (DefaultEndpointsProtocol, and a BlobEndpoint if it has one) unless the endpoint is the local machine (STORE_TLS_REQUIRED). A connection string that is not key=value pairs or names no AccountName is refused (STORE_STATEMENT_INVALID), without showing it.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    type: Literal["azure"]
+    connection_string_env: Annotated[str, Field(pattern="^[A-Z_][A-Z0-9_]*$")]
+
+
+class ObjectStorage(RootModel[S3Storage | GcsStorage | AzureStorage]):
+    root: S3Storage | GcsStorage | AzureStorage
+    """
+    Object storage for the lake's data files: S3-compatible, Google Cloud Storage or Azure Blob Storage.
+    """
+
+
 class Parameter(BaseModel):
     """
     A named parameter bound to `$name` in the SQL. The value is text converted to the declared DuckDB type; exact values are never JSON numbers.
@@ -323,9 +364,9 @@ class LocalLakeLocation(BaseModel):
     """
     data_path: Annotated[str | None, Field(min_length=1)] = None
     """
-    Where data files are written, when not <path>/data/: an absolute local folder, or s3://bucket/prefix/ with storage.
+    Where data files are written, when not <path>/data/: an absolute local folder, or object storage with storage: s3://bucket/prefix/, gs://bucket/prefix/ or az://container/prefix/.
     """
-    storage: S3Storage | None = None
+    storage: ObjectStorage | None = None
     encrypted: bool | None = None
     """
     DuckLake data-file encryption (ENCRYPTED), used when the lake is created.
@@ -344,7 +385,7 @@ class SqliteLakeLocation(BaseModel):
     catalog: Literal["sqlite"]
     path: Annotated[str, Field(min_length=1)]
     data_path: Annotated[str, Field(min_length=1)]
-    storage: S3Storage | None = None
+    storage: ObjectStorage | None = None
     encrypted: bool | None = None
     """
     DuckLake data-file encryption (ENCRYPTED), used when the lake is created.
@@ -371,7 +412,7 @@ class PostgresLakeLocation(BaseModel):
     PostgreSQL schema holding the catalog tables (default: public)
     """
     data_path: Annotated[str, Field(min_length=1)]
-    storage: S3Storage | None = None
+    storage: ObjectStorage | None = None
     encrypted: bool | None = None
     """
     DuckLake data-file encryption (ENCRYPTED), used when the lake is created.

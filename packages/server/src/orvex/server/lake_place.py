@@ -7,7 +7,8 @@ lake is created: `.<slug>/lake.location` records the catalog's identity, and a p
 configuration no longer matches it is refused instead of silently getting a second, empty lake.
 
 `lake.data` places the data files (#126): the default `.<slug>/lake/data/`, another local folder
-of their own, or S3-compatible storage; `lake.encrypted` encrypts them.
+of their own, or object storage (S3-compatible, Google Cloud Storage #127, Azure Blob Storage
+#127); `lake.encrypted` encrypts them.
 """
 
 from __future__ import annotations
@@ -19,7 +20,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orvex.contracts.project.v1 import (
+    AzureStorage,
     DuckdbLakeCatalog,
+    GcsStorage,
     Lake,
     LakeData,
     PostgresLakeCatalog,
@@ -27,7 +30,14 @@ from orvex.contracts.project.v1 import (
     SecretReference,
     SqliteLakeCatalog,
 )
-from orvex.contracts.store.v1 import LocalLakeLocation, PostgresLakeLocation, SqliteLakeLocation
+from orvex.contracts.store.v1 import AzureStorage as StoreAzureStorage
+from orvex.contracts.store.v1 import GcsStorage as StoreGcsStorage
+from orvex.contracts.store.v1 import (
+    LocalLakeLocation,
+    ObjectStorage,
+    PostgresLakeLocation,
+    SqliteLakeLocation,
+)
 from orvex.contracts.store.v1 import S3Storage as StoreS3Storage
 from orvex.server.project import (
     FILE_TYPES,
@@ -149,40 +159,63 @@ def _with_data(chosen: Place, lake: Lake, project: Project, home: Path) -> Place
     return Place(chosen.location.model_copy(update=updates), identity)
 
 
+# The URL scheme of each kind of object storage, and its `lake.data` block: the one spelling
+# accepted for each (#127: `gcs://`, `azure://`, `abfss://`, `r2://` are refused).
+_OBJECT_STORAGE = {"s3://": "s3", "gs://": "gcs", "az://": "azure"}
+GCS_ENDPOINT = "storage.googleapis.com"
+
+
 def _data(
     data: LakeData | None, project: Project, home: Path
-) -> tuple[str | None, StoreS3Storage | None]:
+) -> tuple[str | None, ObjectStorage | None]:
     """The data files' location (None: the default `.<slug>/lake/data/`) and its object
-    storage, refused unless it is a local folder or S3-compatible storage over HTTPS."""
+    storage, refused unless it is a local folder or object storage over HTTPS."""
     pointer = "/lake/data/path"
     if data is None:
         return None, None
     text = data.path
-    if text.startswith("s3://"):
-        if data.s3 is None:
+    blocks = {"s3": data.s3, "gcs": data.gcs, "azure": data.azure}
+    given = [name for name, block in blocks.items() if block is not None]
+    scheme = next((prefix for prefix in _OBJECT_STORAGE if text.startswith(prefix)), None)
+    if scheme is not None:
+        kind = _OBJECT_STORAGE[scheme]
+        if given != [kind]:
             raise _invalid(
-                f"lake.data.path {text}: s3:// needs the lake.data.s3 settings.", pointer
+                f"lake.data.path {text}: {scheme} needs the lake.data.{kind} settings, and no "
+                "other storage settings.",
+                pointer,
             )
-        bucket = text[len("s3://") :].split("/", 1)[0]
+        bucket = text[len(scheme) :].split("/", 1)[0]
         if not bucket:
-            raise _invalid(f"lake.data.path {text}: name a bucket (s3://bucket/prefix/).", pointer)
-        if any(part in {".", ".."} for part in text[len("s3://") :].split("/")):
+            noun = "container" if kind == "azure" else "bucket"
+            raise _invalid(
+                f"lake.data.path {text}: name a {noun} ({scheme}{noun}/prefix/).", pointer
+            )
+        if any(part in {".", ".."} for part in text[len(scheme) :].split("/")):
             # `s3://bucket/prefix/../` would make the whole bucket the lake's prefix, and
             # orphan cleanup would then delete files across it.
             raise _invalid(
-                f"lake.data.path {text}: an s3:// path cannot contain . or .. segments.", pointer
+                f"lake.data.path {text}: an object-storage path cannot contain . or .. segments.",
+                pointer,
             )
-        return (text if text.endswith("/") else text + "/"), _s3(data.s3)
+        prefix = text if text.endswith("/") else text + "/"
+        if data.s3 is not None:
+            return prefix, ObjectStorage(_s3(data.s3))
+        if data.gcs is not None:
+            return prefix, ObjectStorage(_gcs(data.gcs))
+        assert data.azure is not None
+        return prefix, ObjectStorage(_azure(data.azure))
     if _URL.match(text):
         raise _invalid(
             f"lake.data.path {text}: data files can be in a local folder (or a network file "
-            "system mounted there) or in S3-compatible storage (s3://); Google Cloud Storage "
-            "and Azure come later (#127).",
+            "system mounted there), in S3-compatible storage (s3://), Google Cloud Storage "
+            "(gs://) or Azure Blob Storage (az://).",
             pointer,
         )
-    if data.s3 is not None:
+    if given:
         raise _invalid(
-            f"lake.data.path {text}: lake.data.s3 applies to an s3:// path only.", "/lake/data/s3"
+            f"lake.data.path {text}: lake.data.{given[0]} applies to object storage only.",
+            f"/lake/data/{given[0]}",
         )
     expanded = Path(os.path.expanduser(text))
     path = (expanded if expanded.is_absolute() else project.folder / expanded).resolve()
@@ -247,6 +280,60 @@ def _s3(settings: S3Storage) -> StoreS3Storage:
         key_id_env=key_id,
         secret_env=secret,
     )
+
+
+def _gcs(settings: GcsStorage) -> StoreGcsStorage:
+    """Google Cloud Storage through its S3-compatible API, always at its own endpoint over
+    HTTPS: a project cannot point it elsewhere."""
+    pointer = "/lake/data/gcs"
+    return StoreGcsStorage(
+        type="gcs",
+        endpoint=GCS_ENDPOINT,
+        use_ssl=True,
+        key_id_env=_variable(settings.key_id, f"{pointer}/key_id"),
+        secret_env=_variable(settings.secret, f"{pointer}/secret"),
+    )
+
+
+def _azure(settings: AzureStorage) -> StoreAzureStorage:
+    """Azure Blob Storage with a connection string, which must use HTTPS unless its blob
+    endpoint is the local machine. The connection string is read here only to check that; it
+    is never shown."""
+    pointer = "/lake/data/azure/connection_string"
+    variable = _variable(settings.connection_string, pointer)
+    if not _azure_over_https(os.environ[variable]):
+        raise ProjectLoadError(
+            "LAKE_TLS_REQUIRED",
+            f"lake.data.azure: the connection string in {variable} reaches Azure Blob Storage "
+            "over plain HTTP; use DefaultEndpointsProtocol=https (and an https:// "
+            "BlobEndpoint). Plain HTTP is accepted only for an endpoint on the local machine.",
+            file=PROJECT_FILE,
+            path=pointer,
+        )
+    return StoreAzureStorage(type="azure", connection_string_env=variable)
+
+
+def _azure_over_https(connection_string: str) -> bool:
+    """Whether a connection string reaches Blob Storage over HTTPS, or an endpoint on the local
+    machine. A string that cannot be read passes here: the store refuses it, without showing it."""
+    pairs: dict[str, str] = {}
+    for part in connection_string.strip().strip(";").split(";"):
+        key, _, value = part.partition("=")
+        pairs[key.strip().lower()] = value.strip()
+    blob = pairs.get("blobendpoint", "")
+    if blob:
+        scheme, _, rest = blob.partition("://")
+        host_port = rest.split("/", 1)[0]
+        host = (
+            host_port[1 : host_port.find("]")]
+            if host_port.startswith("[")
+            else host_port.split(":", 1)[0]
+        )
+        if host.lower() in LOCAL_HOSTS:
+            return True
+        if scheme.lower() != "https":
+            return False
+    return pairs.get("defaultendpointsprotocol", "https").lower() == "https"
 
 
 def endpoint_host(endpoint: str) -> str:
