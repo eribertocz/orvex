@@ -416,7 +416,11 @@ def test_materialized_view_sum_is_refused(location: Location, schema: str) -> No
 
 def test_unreachable_host_fails_within_the_connect_timeout(location: Location) -> None:
     postgres_settings()
-    unreachable = postgres_source(None).model_copy(update={"host": "192.0.2.1"})  # TEST-NET-1
+    # TEST-NET-1, another machine: verified TLS is required (#122), and the connection times out
+    # before any TLS is negotiated.
+    unreachable = postgres_source(None).model_copy(
+        update={"host": "192.0.2.1", "sslmode": "verify-full"}
+    )
     started = time.monotonic()
     with pytest.raises(StoreError) as raised:
         open_lake(location, LIMITS, [unreachable])

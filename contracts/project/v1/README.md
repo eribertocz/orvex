@@ -18,7 +18,7 @@ Connection types (`type`):
 |---|---|
 | `parquet`, `csv` | `path` (glob allowed) |
 | `duckdb`, `sqlite` | `path`, `read_only` |
-| `postgres` | `host`, `port`, `database`, `user`, `password`, `read_only`, optional `schema` |
+| `postgres` | `host`, `port`, `database`, `user`, `password`, `read_only`, optional `schema`, `ssl_mode` (`verify-full`, or `disable` on the local machine), `ssl_root_cert` (`system`, the default, or `${env:NAME}` holding a CA file's path) |
 | `clickhouse` | `host`, `port`, `database`, `user`, `password`, `read_only`, optional `secure` (default `true`) |
 
 Relative `path` values are resolved against the project folder by the loader.
@@ -59,6 +59,10 @@ The connection's values are always quoted for libpq, so no value can add a conne
 
 `password` (and `lineage.api_key`) accepts **only** a reference `${env:NAME}` (`NAME` = `^[A-Z_][A-Z0-9_]*$`); a literal value is a schema error. The loader keeps the reference; the value is read from the environment only when a connection is used, and never appears in loaded objects, logs or errors. An unset variable is `PROJECT_SECRET_MISSING`, naming the variable.
 
+## Verified TLS for PostgreSQL sources (#122)
+
+A `postgres` connection on a host other than the local machine (`localhost`, `127.0.0.1`, `::1`, or a Unix-socket directory starting with `/`) must declare `ssl_mode: verify-full`: TLS that checks the server's certificate and that it belongs to the named host, so the password and the production rows never travel over a connection an impostor could answer. Without it the loader refuses the connection with `SOURCE_TLS_REQUIRED`, naming it, before anything connects. Only `verify-full` and `disable` (local machine only) are accepted; `require`, `verify-ca`, `prefer` and `allow` are schema errors. The store enforces the same rule again (`contracts/store/v1`).
+
 ## Read-only sources
 
 `read_only` is required for database connections. `false` validates against the schema but the loader refuses it with `SOURCE_NOT_READ_ONLY`: every database source is read-only in v1.
@@ -72,6 +76,7 @@ The connection's values are always quoted for libpq, so no value can add a conne
 | `PROJECT_VERSION_UNSUPPORTED` | `version` is an integer other than 1 |
 | `PROJECT_SCHEMA_INVALID` | the file does not match its message, `time_zone` is not a zone of the bundled IANA database (system-only names such as `localtime` and the placeholder `Factory` are refused), or a connection name appears twice |
 | `SOURCE_NOT_READ_ONLY` | a database connection declares `read_only: false` |
+| `SOURCE_TLS_REQUIRED` | a `postgres` connection on another machine without `ssl_mode: verify-full` |
 | `PROJECT_SECRET_MISSING` | a referenced environment variable is not set when the secret is resolved (for `lake.catalog`, when the project is validated) |
 | `LAKE_LOCATION_INVALID` | a `duckdb` or `sqlite` catalog `path` that is a URL, on a network or remote file system, or not the default where the file system cannot be read; an `ssl_root_cert` variable that does not name a file |
 | `LAKE_TLS_REQUIRED` | a `postgres` catalog on a host other than the local machine without `ssl_mode: verify-full` |

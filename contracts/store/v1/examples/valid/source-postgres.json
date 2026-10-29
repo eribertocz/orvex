@@ -1,1 +1,13 @@
-{"kind": "source_attachment", "name": "production", "type": "postgres", "host": "db.example.invalid", "port": 5432, "database": "billing", "user": "readonly_bi", "password_env": "PRODUCTION_PASSWORD", "schema": "public"}
+{
+  "kind": "source_attachment",
+  "name": "production",
+  "type": "postgres",
+  "host": "db.example.invalid",
+  "port": 5432,
+  "database": "billing",
+  "user": "readonly_bi",
+  "password_env": "PRODUCTION_PASSWORD",
+  "schema": "public",
+  "sslmode": "verify-full",
+  "sslrootcert": "${env:BILLING_CA}"
+}

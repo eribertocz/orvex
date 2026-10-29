@@ -41,6 +41,7 @@ export type ProjectErrorCode =
 	| 'PROJECT_VERSION_UNSUPPORTED'
 	| 'PROJECT_SECRET_MISSING'
 	| 'SOURCE_NOT_READ_ONLY'
+	| 'SOURCE_TLS_REQUIRED'
 	| 'LAKE_LOCATION_INVALID'
 	| 'LAKE_TLS_REQUIRED'
 	| 'LAKE_LOCATION_CHANGED';
@@ -165,7 +166,7 @@ export interface SqliteConnection {
 	read_only: ReadOnly;
 }
 /**
- * A PostgreSQL database. `schema`, when given, limits the connection to that schema.
+ * A PostgreSQL database. `schema`, when given, limits the connection to that schema. A host other than the local machine (`localhost`, `127.0.0.1`, `::1`, a Unix-socket directory) needs `ssl_mode: verify-full`; the loader refuses it otherwise with `SOURCE_TLS_REQUIRED`.
  */
 export interface PostgresConnection {
 	type: 'postgres';
@@ -176,6 +177,14 @@ export interface PostgresConnection {
 	password: SecretReference;
 	read_only: ReadOnly;
 	schema?: string;
+	/**
+	 * libpq `sslmode`: `verify-full` (TLS that checks the server's certificate and name), or `disable` for the local machine only. Absent: libpq's default, accepted on the local machine only.
+	 */
+	ssl_mode?: 'verify-full' | 'disable';
+	/**
+	 * Certificate authorities that verify the server with `verify-full`: `system` (the operating system's store, the default) or `${env:NAME}`, a variable holding the path of a CA file.
+	 */
+	ssl_root_cert?: string;
 }
 /**
  * A ClickHouse database.

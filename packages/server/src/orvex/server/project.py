@@ -34,6 +34,18 @@ PROJECT_FILE = "project.yaml"
 CONNECTIONS_FILE = "connections.yaml"
 SUPPORTED_VERSION = 1
 RESERVED_CONNECTION = "lake"
+LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})  # the local machine (#120, #122)
+
+
+def is_local_host(host: str) -> bool:
+    """Whether `host` is the local machine: `localhost`, `127.0.0.1`, `::1` or a Unix-socket
+    directory (a path starting with `/`). libpq reads `host` as a comma-separated list and tries
+    each entry, so every entry must be local."""
+    return all(
+        entry.strip().startswith("/") or entry.strip().lower() in LOCAL_HOSTS
+        for entry in host.split(",")
+    )
+
 
 type Connection = (
     ParquetConnection
@@ -221,6 +233,21 @@ def _load_connections(document: ConfigFile, folder: Path) -> dict[str, Connectio
                 file=document.file,
                 path=f"{pointer}/read_only",
                 line=document.line(f"{pointer}/read_only"),
+                connection=name,
+            )
+        if (
+            isinstance(connection, PostgresConnection)
+            and not is_local_host(connection.host)
+            and connection.ssl_mode != "verify-full"
+        ):
+            raise ProjectLoadError(
+                "SOURCE_TLS_REQUIRED",
+                f"Connection '{name}' is on another machine ({connection.host}) and must "
+                "declare ssl_mode: verify-full, so its password and rows travel only over TLS "
+                "that checks the server's certificate and name.",
+                file=document.file,
+                path=f"{pointer}/ssl_mode",
+                line=document.line(f"{pointer}/ssl_mode"),
                 connection=name,
             )
         if isinstance(connection, FILE_TYPES):

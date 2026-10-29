@@ -49,6 +49,7 @@ connections:
     password: ${env:TEST_SECRET_PASSWORD}
     read_only: true
     schema: public
+    ssl_mode: verify-full
   events:
     type: clickhouse
     host: ch.example.invalid

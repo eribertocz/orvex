@@ -46,7 +46,8 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 - A SQLite source is copied when the lake opens (SQLite's backup, WAL included) and the copy is attached: later changes to the file do not reach the lake until it is opened again. A SQLite file that defines views is refused (`STORE_SOURCE_INVALID`): DuckDB would run a view's SQL with the lake's connection.
 - Functions that run SQL on a source (`postgres_query`, `postgres_execute`, `sqlite_query`, …) and `ATTACH`/`DETACH` are refused in statements (`STORE_STATEMENT_INVALID`).
 - **Exact types (law 11):** a column DuckDB cannot carry exactly — PostgreSQL `numeric` without precision, with more than 38 digits or with a negative scale or one above its precision, `money` and arrays of either, in tables, views and materialized views; SQLite columns whose declared type contains `DEC` or `NUM` (`DECIMAL`, `NUMERIC`, `NUMBER`; DuckDB reads them as floating point, and SQLite stores them so) — is refused when a write reads it: `UNSUPPORTED_SOURCE_TYPE` naming `<source>.<table>.<column>`. Columns a write does not read do not matter.
-- A connection or credential failure is `STORE_CONNECTION_FAILED` naming the source, with the password redacted; an unset variable is `STORE_SECRET_MISSING`.
+- **TLS (#122).** A PostgreSQL source on a host other than the local machine must have `sslmode: verify-full`. The local machine is decided as for a catalog: the host is `localhost`, `127.0.0.1` or `::1`, `PGHOSTADDR` (when set) is local too, and no `PGSERVICE` is set, since libpq reads both from the environment; otherwise it is refused before anything is opened (`STORE_TLS_REQUIRED`). `sslrootcert` is `system` (the default) or `${env:NAME}`, a variable holding a CA file's path, read by the store. `sslmode: disable` is for the local machine only.
+- A connection or credential failure is `STORE_CONNECTION_FAILED` naming the source, with the password redacted; an unset variable (password or CA) is `STORE_SECRET_MISSING`.
 
 ## File catalogs (`LocalLakeLocation.catalog_path`, `SqliteLakeLocation`)
 
@@ -167,7 +168,7 @@ Preconditions:
 | `STORE_SECRET_INLINE` | The PostgreSQL `connection` contains a password or is a URI |
 | `STORE_TIMEOUT` | The statement exceeded its time limit (waiting included); a transaction rolled back |
 | `STORE_CANCELLED` | The read or transaction was cancelled; a transaction rolled back |
-| `STORE_TLS_REQUIRED` | A PostgreSQL catalog on another machine without `sslmode=verify-full`; `details` names the host and the mode found |
+| `STORE_TLS_REQUIRED` | A PostgreSQL catalog or source on another machine without `sslmode=verify-full`; `details` names the host and the mode found (and the source) |
 | `STORE_BUSY` | The lake is running its maximum number of statements and its queue is full |
 | `STORE_TYPE_UNSUPPORTED` | A result column has a type with no JSON encoding yet |
 | `STORE_CATALOG_UNAVAILABLE` | The PostgreSQL catalog cannot be reached or refused the credentials |

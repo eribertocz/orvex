@@ -88,7 +88,7 @@ class SqliteConnection(BaseModel):
 
 class PostgresConnection(BaseModel):
     """
-    A PostgreSQL database. `schema`, when given, limits the connection to that schema.
+    A PostgreSQL database. `schema`, when given, limits the connection to that schema. A host other than the local machine (`localhost`, `127.0.0.1`, `::1`, a Unix-socket directory) needs `ssl_mode: verify-full`; the loader refuses it otherwise with `SOURCE_TLS_REQUIRED`.
     """
 
     model_config = ConfigDict(
@@ -102,6 +102,16 @@ class PostgresConnection(BaseModel):
     password: SecretReference
     read_only: ReadOnly
     schema_: Annotated[str | None, Field(alias="schema", max_length=128, min_length=1)] = None
+    ssl_mode: Literal["verify-full", "disable"] | None = None
+    """
+    libpq `sslmode`: `verify-full` (TLS that checks the server's certificate and name), or `disable` for the local machine only. Absent: libpq's default, accepted on the local machine only.
+    """
+    ssl_root_cert: Annotated[
+        str | None, Field(pattern="^(system|\\$\\{env:[A-Z_][A-Z0-9_]*\\})$")
+    ] = "system"
+    """
+    Certificate authorities that verify the server with `verify-full`: `system` (the operating system's store, the default) or `${env:NAME}`, a variable holding the path of a CA file.
+    """
 
 
 class ClickhouseConnection(BaseModel):
@@ -134,6 +144,7 @@ class ProjectErrorCode(
             "PROJECT_VERSION_UNSUPPORTED",
             "PROJECT_SECRET_MISSING",
             "SOURCE_NOT_READ_ONLY",
+            "SOURCE_TLS_REQUIRED",
             "LAKE_LOCATION_INVALID",
             "LAKE_TLS_REQUIRED",
             "LAKE_LOCATION_CHANGED",
@@ -147,6 +158,7 @@ class ProjectErrorCode(
         "PROJECT_VERSION_UNSUPPORTED",
         "PROJECT_SECRET_MISSING",
         "SOURCE_NOT_READ_ONLY",
+        "SOURCE_TLS_REQUIRED",
         "LAKE_LOCATION_INVALID",
         "LAKE_TLS_REQUIRED",
         "LAKE_LOCATION_CHANGED",
