@@ -295,7 +295,13 @@ def test_unset_credentials_are_refused_before_opening(
 
 @pytest.mark.parametrize(
     ("data_path", "with_storage"),
-    [("s3://lake/billing/", False), ("/srv/lake/data/", True), ("gs://lake/billing/", True)],
+    [
+        ("s3://lake/billing/", False),
+        ("/srv/lake/data/", True),
+        ("gs://lake/billing/", True),
+        ("s3://lake/billing/../", True),
+        ("s3://lake/./billing/", True),
+    ],
 )
 def test_storage_and_path_must_match(
     tmp_path: Path, endpoint: str, bucket: str, data_path: str, with_storage: bool
@@ -401,6 +407,42 @@ def test_a_statement_cannot_name_an_object(
         with pytest.raises(StoreError) as refused:
             write(lake, f"CREATE TABLE leak AS {named}")
         assert refused.value.code == "STORE_STATEMENT_INVALID"
+    finally:
+        lake.close()
+
+
+@pytest.mark.parametrize("where", ["bucket root", "lake object", "elsewhere"])
+def test_a_statement_cannot_name_a_web_address(
+    tmp_path: Path, endpoint: str, bucket: str, where: str
+) -> None:
+    # Reviewer pass 4: httpfs opens http(s):// addresses too, including the storage server's own
+    # address for an object. The statement check lets web addresses through as text, so the
+    # lake's connection has the web file system turned off.
+    lake = s3_lake(tmp_path, endpoint, bucket)
+    try:
+        write(lake, READINGS)
+        root = tmp_path / "root.parquet"
+        writer = duckdb.connect()
+        writer.execute(f"COPY (SELECT 7 AS v) TO '{root}' (FORMAT parquet)")
+        writer.close()
+        put(endpoint, bucket, "x.parquet", root.read_bytes())
+        lake_objects = [key for key in keys(endpoint, bucket) if key.endswith(".parquet")]
+        lake_object = next(key for key in lake_objects if key.startswith("billing/"))
+        address = {
+            "bucket root": f"http://{endpoint}/{bucket}/x.parquet",
+            "lake object": f"http://{endpoint}/{bucket}/{lake_object}",
+            "elsewhere": "https://example.com/x.csv",
+        }[where]
+        before = lake.current_snapshot().id
+        named = f"SELECT * FROM '{address}'"
+        with pytest.raises(StoreError):
+            read(lake, named)
+        with pytest.raises(StoreError):
+            write(lake, f"CREATE TABLE leak AS {named}")
+        with pytest.raises(StoreError):
+            write(lake, f"INSERT INTO readings SELECT * FROM '{address}'")
+        assert lake.current_snapshot().id == before  # nothing was written
+        assert read(lake, TOTAL) == EXPECTED
     finally:
         lake.close()
 

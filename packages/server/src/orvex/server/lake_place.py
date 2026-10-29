@@ -166,6 +166,12 @@ def _data(
         bucket = text[len("s3://") :].split("/", 1)[0]
         if not bucket:
             raise _invalid(f"lake.data.path {text}: name a bucket (s3://bucket/prefix/).", pointer)
+        if any(part in {".", ".."} for part in text[len("s3://") :].split("/")):
+            # `s3://bucket/prefix/../` would make the whole bucket the lake's prefix, and
+            # orphan cleanup would then delete files across it.
+            raise _invalid(
+                f"lake.data.path {text}: an s3:// path cannot contain . or .. segments.", pointer
+            )
         return (text if text.endswith("/") else text + "/"), _s3(data.s3)
     if _URL.match(text):
         raise _invalid(

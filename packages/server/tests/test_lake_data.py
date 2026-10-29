@@ -188,6 +188,18 @@ def test_an_unset_key_variable_is_named(tmp_path: Path, monkeypatch: pytest.Monk
         ("lake:\n  data:\n    path: gs://b/p/\n", "LAKE_LOCATION_INVALID"),
         ("lake:\n  data:\n    path: https://h/p/\n", "LAKE_LOCATION_INVALID"),
         ("lake:\n  data:\n    path: s3://b/p/\n", "LAKE_LOCATION_INVALID"),
+        (
+            S3.replace("s3://bi-lake/billing/", "s3://bi-lake/billing/../").format(
+                endpoint="127.0.0.1:9000", use_ssl="false", secret="${env:" + SECRET_ENV + "}"
+            ),
+            "LAKE_LOCATION_INVALID",
+        ),
+        (
+            S3.replace("s3://bi-lake/billing/", "s3://bi-lake/./billing/").format(
+                endpoint="127.0.0.1:9000", use_ssl="false", secret="${env:" + SECRET_ENV + "}"
+            ),
+            "LAKE_LOCATION_INVALID",
+        ),
         (s3_lake("127.0.0.1:9000", secret="literal-secret"), "PROJECT_SCHEMA_INVALID"),
     ],
 )

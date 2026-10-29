@@ -410,6 +410,12 @@ def _storage_credentials(storage: S3Storage | None, data_path: str) -> _Storage 
             "Data files can be on a local path or in S3-compatible storage (s3://) only.",
             {"data_path": data_path},
         )
+    if remote and any(part in {".", ".."} for part in data_path[len("s3://") :].split("/")):
+        raise StoreError(
+            "STORE_LOCATION_INVALID",
+            "An s3:// data path cannot contain . or .. segments.",
+            {"data_path": data_path},
+        )
     if remote != (storage is not None):
         raise StoreError(
             "STORE_LOCATION_INVALID",
@@ -1227,6 +1233,10 @@ class Lake:
     def _storage_secret(self, storage: _Storage, data_path: str) -> None:
         """A temporary S3 secret for the lake's prefix only; never persisted."""
         self._load_extension("httpfs")
+        # httpfs also opens http:// and https:// addresses as files, which the statement check
+        # lets through as ordinary text. The lake needs only s3://, so the web file system is
+        # turned off on its connection (#136, Reviewer pass 4).
+        self._connection.sql("SET disabled_filesystems = 'HTTPFileSystem'")
         settings = storage.settings
         options = [
             "TYPE s3",
