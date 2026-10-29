@@ -1299,7 +1299,29 @@ _LOWEST = {
 }
 
 
-def since_bound(since: SinceType, text: str, server: str) -> tuple[str, str]:
+def date_zone(columns: tuple[Column, ...], time_column: str | None) -> str | None:
+    """The zone ClickHouse uses to compare a `{since:Date}` or `{since:Date32}` value with the
+    time column: a `DateTime` column's own zone (midnight there, measured on 26.9); None (the
+    server's) for a column without one or a `Date` column."""
+    if time_column is None:
+        return None
+    for column in columns:
+        if column.name.lower() == time_column.lower():
+            return column.mapped.zone
+    return None
+
+
+def _since_zone(since: SinceType, server: str, dates: str | None) -> ZoneInfo:
+    """The zone of a `{since:…}` value: a date is midnight in `dates` (the time column's zone,
+    see `date_zone`), a time is in the zone the type declares, else the server's."""
+    if since.family in {"Date", "Date32"}:
+        return ZoneInfo(dates or server)
+    return ZoneInfo(since.zone or server)
+
+
+def since_bound(
+    since: SinceType, text: str, server: str, dates: str | None = None
+) -> tuple[str, str]:
     """The boundary that `{since:…}` = `text` puts on the rows, for DuckDB: the instant (ISO 8601,
     in UTC) and the date, `text` being in the parameter's zone (the server's when it declares
     none). A date is midnight. ClickHouse reads an ambiguous local time as the earlier instant
@@ -1308,17 +1330,24 @@ def since_bound(since: SinceType, text: str, server: str) -> tuple[str, str]:
     A run's own checks compare with this value, not with the stored watermark: `since_value`
     truncates to the declared type, so rows between the two are read again (#98)."""
     local = dt.datetime.fromisoformat(text)
-    instant = local.replace(tzinfo=ZoneInfo(since.zone or server)).astimezone(dt.UTC)
+    instant = local.replace(tzinfo=_since_zone(since, server, dates)).astimezone(dt.UTC)
     return instant.isoformat(), local.date().isoformat()
 
 
-def since_value(since: SinceType, watermark: str | None, lookback: str | None, server: str) -> str:
+def since_value(
+    since: SinceType,
+    watermark: str | None,
+    lookback: str | None,
+    server: str,
+    dates: str | None = None,
+) -> str:
     """`{since:…}` for an incremental run, as ClickHouse reads a parameter of type `since`.
 
     `watermark` is the model's previous watermark as stored (DuckDB text: `YYYY-MM-DD` for a
     `Date` time column, an ISO instant with offset for a `DateTime` one; None on a first run or
     a full refresh, which bind the lowest value of the type). `lookback` is subtracted from the
-    instant; the result is written in the parameter's zone (the server's when it declares none):
+    instant; the result is written in the parameter's zone (the server's when it declares none)
+    or, for `Date`/`Date32`, in `dates`, the zone ClickHouse compares a date in (`date_zone`):
     a date for `Date`/`Date32`, seconds for `DateTime`, `p` fraction digits for
     `DateTime64(p)`. Every step truncates, never rounds up, so no row newer than the watermark
     minus lookback is skipped. A value below the type's range is its lowest value.
@@ -1330,7 +1359,7 @@ def since_value(since: SinceType, watermark: str | None, lookback: str | None, s
             "UNSUPPORTED_SOURCE_VALUE",
             "the stored watermark is infinity; run with --full-refresh to reload the model.",
         )
-    zone = ZoneInfo(since.zone or server)
+    zone = _since_zone(since, server, dates)
     back = dt.timedelta(microseconds=lookback_microseconds(lookback))
     if "T" not in watermark and " " not in watermark:
         # A date: midnight of that day in the parameter's zone.

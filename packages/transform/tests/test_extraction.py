@@ -193,3 +193,30 @@ def test_the_bound_is_the_value_clickhouse_filters_by() -> None:
     assert bound("DateTime", "2024-11-03 01:30:00", "America/New_York")[0] == (
         "2024-11-03T05:30:00+00:00"
     )
+
+
+def test_a_date_since_is_midnight_in_the_time_columns_zone() -> None:
+    from orvex.transform.clickhouse import date_zone, map_type, since_bound
+
+    day = since_type("Date")
+    assert day is not None
+    # Server in La Paz (UTC-4), column in UTC: the date is taken, and compared, in UTC.
+    assert since_value(day, "2024-02-27T02:00:00+00:00", None, "America/La_Paz", "UTC") == (
+        "2024-02-27"
+    )
+    assert since_bound(day, "2024-02-27", "America/La_Paz", "UTC")[0] == (
+        "2024-02-27T00:00:00+00:00"
+    )
+    # Column in Los Angeles (UTC-8): 06:00 UTC is still 1 March there, so no later row is
+    # skipped (the server's zone would give 2 March, read as 08:00 UTC).
+    assert since_value(
+        day, "2024-03-02T06:00:00+00:00", None, "America/La_Paz", "America/Los_Angeles"
+    ) == ("2024-03-01")
+    mapped = map_type("DateTime64(3, 'Asia/Tokyo')")
+    assert mapped is not None
+    columns = (Column("event_time", "DateTime64(3, 'Asia/Tokyo')", mapped),)
+    assert date_zone(columns, "EVENT_TIME") == "Asia/Tokyo"
+    assert date_zone(columns, None) is None
+    plain = map_type("DateTime")
+    assert plain is not None
+    assert date_zone((Column("t", "DateTime", plain),), "t") is None  # the server's

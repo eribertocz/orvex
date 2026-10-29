@@ -421,3 +421,31 @@ def test_a_partition_overwrite_model_is_checked_against_the_since_clickhouse_use
     assert (outcome, error_code, rows_read) == ("failed", "PARTITION_INCOMPLETE", "1")
     assert since == "2024-01-01 00:16:39"
     assert lake_value(folder, count) == [(1000,)]  # nothing deleted
+
+
+def test_a_whole_partition_filter_passes_the_check(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The same model reloading whole months: the check passes and nothing is lost.
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "SELECT event_id, month, read_at FROM (SELECT event_id, "
+                "toString(toStartOfMonth(event_time)) AS month, "
+                "addMilliseconds(event_time, 500) AS read_at FROM events) "
+                "WHERE toStartOfMonth(read_at) >= toStartOfMonth({since:DateTime64(0, 'UTC')})"
+            ),
+            "models/raw/ch_events.yaml": (
+                "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
+                "incremental:\n  strategy: partition_overwrite\n  time_column: read_at\n"
+                "  partition_by: [month]\n  filter: manual\n"
+            ),
+        },
+    )
+    assert run(capsys, folder)[0] == 0
+    code, out = run(capsys, folder)
+    assert code == 0, out
+    assert record(folder)[0:4] == ("success", None, None, "1000")
+    assert lake_value(folder, "SELECT count(*) FROM lake.raw.ch_events") == [(1000,)]
