@@ -178,9 +178,25 @@ def test_the_sandbox_allows_the_prefix_and_nothing_beside_it(
             f"SELECT count(*) FROM read_parquet('s3://{bucket}/{inside}')"
         ).fetchone()
         assert allowed is not None
-        for outside in [f"s3://{bucket}/other/x.parquet", f"s3://{bucket}/billing/../x.parquet"]:
-            with pytest.raises(duckdb.PermissionException):
-                lake._connection.execute(f"SELECT * FROM read_parquet('{outside}')").fetchall()
+        # Real Parquet files beside the prefix and at the bucket's root.
+        local = tmp_path / "outside.parquet"
+        plain = duckdb.connect()
+        plain.execute(f"COPY (SELECT 42 AS secret_value) TO '{local}' (FORMAT parquet)")
+        plain.close()
+        for key in ["other/x.parquet", "x.parquet"]:
+            put(endpoint, bucket, key, local.read_bytes())
+        with pytest.raises(duckdb.PermissionException):
+            lake._connection.execute(
+                f"SELECT * FROM read_parquet('s3://{bucket}/other/x.parquet')"
+            ).fetchall()
+        # DuckDB checks an `s3://` path as text: `billing/../x.parquet` starts with the prefix.
+        # S3 keys are literal (`..` is not resolved), so that key is a different, missing object
+        # under the prefix. What matters is that the file at the root is not read.
+        with pytest.raises(duckdb.Error) as escaped:
+            lake._connection.execute(
+                f"SELECT * FROM read_parquet('s3://{bucket}/billing/../x.parquet')"
+            ).fetchall()
+        assert "404" in str(escaped.value) or isinstance(escaped.value, duckdb.PermissionException)
         # A statement still cannot name a file at all.
         with pytest.raises(StoreError) as refused:
             write(lake, f"CREATE TABLE x AS SELECT * FROM read_parquet('s3://{bucket}/{inside}')")
