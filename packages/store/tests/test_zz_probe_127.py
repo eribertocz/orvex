@@ -60,7 +60,11 @@ def test_probe_gcs(endpoint: str, tmp_path: Path) -> None:
     attempt(results, "secret_row", lambda: c.execute("SELECT type, provider, scope FROM duckdb_secrets()").fetchall())
     attempt(results, "copy", lambda: c.execute(f"COPY (SELECT 42 AS a) TO 'gs://{bucket}/billing/x.parquet'"))
     attempt(results, "read", lambda: c.execute(f"SELECT * FROM 'gs://{bucket}/billing/x.parquet'").fetchall())
-    attempt(results, "copy_root", lambda: c.execute(f"COPY (SELECT 7 AS a) TO 'gs://{bucket}/root.parquet'"))
+    plain = duckdb.connect()
+    plain.execute(f"COPY (SELECT 7 AS a) TO '{tmp_path}/root.parquet'")
+    plain.close()
+    body = (tmp_path / "root.parquet").read_bytes()
+    attempt(results, "copy_root", lambda: _HTTP.open(urllib.request.Request(f"http://{endpoint}/{bucket}/root.parquet", data=body, method="PUT", headers={"Content-Type": "application/octet-stream"}), timeout=30).status)
     attempt(
         results,
         "listing",
@@ -98,7 +102,9 @@ def azure_put_container(connection_string: str, container: str) -> str:
     version = "2021-08-06"
     canonical_headers = f"x-ms-date:{date}\nx-ms-version:{version}\n"
     resource = f"/{ACCOUNT}/{ACCOUNT}/{container}\nrestype:container"
-    to_sign = "PUT\n" + "\n" * 11 + canonical_headers + resource
+    # VERB, then Content-Encoding, -Language, -Length (empty for 0), -MD5, -Type, Date,
+    # If-Modified-Since, If-Match, If-None-Match, If-Unmodified-Since, Range.
+    to_sign = "PUT\n\n\n\n\napplication/octet-stream\n\n\n\n\n\n\n" + canonical_headers + resource
     signature = base64.b64encode(hmac.new(key, to_sign.encode(), hashlib.sha256).digest()).decode()
     request = urllib.request.Request(
         f"{endpoint}/{container}?restype=container",
@@ -108,6 +114,7 @@ def azure_put_container(connection_string: str, container: str) -> str:
             "x-ms-version": version,
             "Authorization": f"SharedKey {ACCOUNT}:{signature}",
             "Content-Length": "0",
+            "Content-Type": "application/octet-stream",
         },
         data=b"",
     )
