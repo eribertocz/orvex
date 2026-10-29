@@ -352,9 +352,11 @@ def test_partition_overwrite_replaces_only_loaded_partitions(
     )
     feed(tmp_path, first)
     assert command(capsys, "run", str(tmp_path))[0] == 0
+    # The new rows of 2024-02 include one at or before $since, so the partition is reloaded
+    # whole (a run that only had newer rows of it would fail with PARTITION_INCOMPLETE, #109).
     feed(
         tmp_path,
-        "(5, 'n', '5.0000', 1, '2024-02-20 10:00:00+00'), (6, 'n', '6.0000', 1, NULL)",
+        "(5, 'n', '5.0000', 1, '2024-02-05 10:00:00+00'), (6, 'n', '6.0000', 1, NULL)",
     )
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 0, out

@@ -80,6 +80,9 @@ def lake_value(folder: Path, sql: str) -> list[tuple[object, ...]]:
     return result
 
 
+ROWS = "SELECT id, region, CAST(read_at AS VARCHAR), month FROM lake.s.m ORDER BY id"
+
+
 def days_by_month(folder: Path) -> list[tuple[object, ...]]:
     return lake_value(
         folder,
@@ -103,7 +106,7 @@ def test_a_cut_partition_fails_and_keeps_the_table(
     feed(tmp_path, october(1, 20))
     code, out = run(capsys, tmp_path)
     assert code == 0, out
-    before = lake_value(tmp_path, "SELECT * FROM lake.s.m ORDER BY id")
+    before = lake_value(tmp_path, ROWS)
     assert days_by_month(tmp_path) == [("2026-10", 20, 1, 20)]
     feed(tmp_path, october(1, 25))
     code, out = run(capsys, tmp_path)
@@ -114,7 +117,7 @@ def test_a_cut_partition_fails_and_keeps_the_table(
     assert (outcome, error_code) == ("failed", "PARTITION_INCOMPLETE")
     assert "2026-10 (1 in total)" in str(message)
     # Nothing written: the table is exactly what the first run wrote.
-    assert lake_value(tmp_path, "SELECT * FROM lake.s.m ORDER BY id") == before
+    assert lake_value(tmp_path, ROWS) == before
 
 
 def test_a_whole_partition_filter_loses_nothing(

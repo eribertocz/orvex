@@ -122,7 +122,7 @@ A `partition_overwrite` run deletes every table row of each partition it loads, 
 - the table has rows of it at or before `$since`, and the loaded rows of it have none; or
 - the table has rows of it with a `NULL` time column, and the loaded rows of it have none (a `$since` filter never reloads those).
 
-Either fails the run with `PARTITION_INCOMPLETE` and nothing is written. `$since` is bound with the time column's type. Load whole partitions instead, for example `WHERE read_at >= date_trunc('month', $since)` for monthly partitions. A model whose SQL does not use `$since` reloads everything it selects and is not checked.
+Either fails the run with `PARTITION_INCOMPLETE` and nothing is written. `$since` is bound with the time column's type. Load whole partitions instead, for example `WHERE read_at >= date_trunc('month', $since)` for monthly partitions. A model whose SQL does not use `$since` reloads everything it selects and is not checked. The check looks only at what the table and the loaded rows contain, so a source that deleted every older row of a partition fails it too; reload such a partition with `--full-refresh`.
 
 ## Compatibility
 
