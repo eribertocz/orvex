@@ -519,8 +519,22 @@ def _string_content(token: str) -> str:
     quote = token[-1:]
     if quote not in {"'", '"'}:
         return token
-    start = token.find(quote)  # after an `E` prefix, if any
+    if token[:1] in {"e", "E"} and token[1:2] == "'":
+        return _escape_string_value(token)
+    start = token.find(quote)  # after a prefix, if any
     return token[start + 1 : -1].replace(quote * 2, quote)
+
+
+def _escape_string_value(token: str) -> str:
+    """The value of an `E'…'` constant, read by DuckDB itself so that every escape it accepts
+    (`\\x2e`, octal, `\\.` for `.`, …) is decoded exactly as it would be. The token must be
+    one string constant on its own; the connection has no external access."""
+    tokens = duckdb.tokenize(token)
+    if len(tokens) != 1 or tokens[0][1] != duckdb.token_type.string_const:
+        return token[2:-1]
+    with duckdb.connect(config={"enable_external_access": False}) as connection:
+        row = connection.execute(f"SELECT {token}").fetchone()
+    return str(row[0]) if row is not None and row[0] is not None else ""
 
 
 def _refuse_show_statements(
@@ -535,14 +549,21 @@ def _refuse_show_statements(
     for position, kind in tokens:
         end = next(later for later in positions if later > position)
         words.append((sql[position:end].strip().lower(), kind))
-    # `CREATE TABLE x AS <query>`: that `AS` starts a query, it does not introduce a label.
-    query_as = -1
-    if words and words[0][0] == "create":
+    # `CREATE TABLE x AS <query>`: that `AS` starts a query, it does not introduce a label. It is
+    # found in every statement, so empty statements before it (`;CREATE …`) do not hide it.
+    query_as: set[int] = set()
+    starts = [0] + [index + 1 for index, (word, _) in enumerate(words) if word == ";"]
+    for start in starts:
+        if start >= len(words) or words[start][0] != "create":
+            continue
         depth = 0
-        for index, (word, _) in enumerate(words):
+        for index in range(start, len(words)):
+            word = words[index][0]
+            if word == ";":
+                break
             depth += (word == "(") - (word == ")")
             if word == "as" and depth == 0:
-                query_as = index
+                query_as.add(index)
                 break
     clauses = [""]  # the current clause at each parenthesis depth
     for index, (word, kind) in enumerate(words):
@@ -559,7 +580,7 @@ def _refuse_show_statements(
             clauses[-1] = word
         if word not in _SHOW_STATEMENTS:
             continue
-        label = index > 0 and words[index - 1][0] == "as" and index - 1 != query_as
+        label = index > 0 and words[index - 1][0] == "as" and index - 1 not in query_as
         ordering = word == "desc" and clauses[-1] == "order"
         if not (label or ordering):
             raise StoreError(

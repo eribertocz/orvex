@@ -140,6 +140,10 @@ def test_a_file_named_in_any_quoting_form_is_refused(a_file: str, template: str)
         "INSERT INTO x (a, b) DESCRIBE t",
         "WITH w AS (SELECT 1) SUMMARIZE w",
         "CREATE OR REPLACE TABLE x AS SHOW TABLES",
+        # Reviewer pass 2: empty statements before CREATE do not hide its query AS.
+        ";CREATE TABLE x AS SUMMARIZE t",
+        "; CREATE TABLE x AS DESCRIBE t",
+        ";;CREATE OR REPLACE TABLE x AS SHOW TABLES",
     ],
 )
 def test_summarize_describe_and_show_are_refused(sql: str) -> None:
@@ -166,7 +170,18 @@ def test_summarize_describe_and_show_are_refused(sql: str) -> None:
         "SELECT a FROM t ORDER BY (a) DESC NULLS LAST, b DESC",
         "SELECT string_agg(a, ',' ORDER BY b DESC) AS s FROM t",
         "SELECT * FROM t UNION ALL SELECT * FROM u ORDER BY 1 DESC",
+        # Reviewer pass 2: a label is still a label after empty statements.
+        ";CREATE TABLE x AS SELECT a AS desc FROM t",
     ],
 )
 def test_ordinary_statements_are_accepted(sql: str) -> None:
     _guarded(sql, table_functions())
+
+
+@pytest.mark.parametrize("escape", ["\\x2e", "\\056", "\\."])
+def test_a_file_named_with_e_string_escapes_is_refused(a_file: str, escape: str) -> None:
+    # Reviewer pass 2: `E'…'` is read with DuckDB's own escapes, so `\x2e` for `.` still names it.
+    escaped = a_file.replace(".", escape)
+    with pytest.raises(StoreError) as refused:
+        _guarded(f"SELECT E'{escaped}' AS name FROM t", table_functions())
+    assert refused.value.code == "STORE_STATEMENT_INVALID"
