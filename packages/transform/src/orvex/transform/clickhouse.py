@@ -736,9 +736,10 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
     - the column matched by name (any letter case); a qualifier, if any, names that query's
       table (its alias or name);
     - one exception to "as itself": in the query whose `WHERE` holds the bound, the time column
-      may be computed (`toDate(event_time) AS day`) when the bound names it without a
-      qualifier. ClickHouse then reads the name as that alias (`prefer_column_name_to_alias =
-      0`, which every validation and run query sets), so the bound bounds the output column.
+      may be renamed or computed (`event_time AS read_at`, `toDate(event_time) AS day`) when the
+      bound names it without a qualifier. ClickHouse then reads the name as that alias
+      (`prefer_column_name_to_alias = 0`, which every validation and run query sets), so the
+      bound bounds the output column.
 
     A tree that cannot be read counts as no."""
     root = _ast(tree)
@@ -796,9 +797,7 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
                 return False  # COLUMNS('regexp'), COLUMNS(list)
             elif named(item) == wanted:
                 if not is_time_column(item, names):
-                    if item.kind == "Identifier":
-                        return False  # another column under the time column's name
-                    computed.add(id(node))
+                    computed.add(id(node))  # renamed or computed: bound only by its alias
                 kept += 1
         return kept == 1
 

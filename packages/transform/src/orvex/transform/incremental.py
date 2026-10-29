@@ -33,7 +33,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 import duckdb
@@ -147,7 +147,12 @@ _FROM_BELOW = {
 _PER_ROW_FUNCTIONS = frozenset({"random", "gen_random_uuid", "uuid", "uuidv4", "uuidv7"})
 
 
-def since_is_a_lower_bound(sql: str, time_column: str) -> bool:
+# The lowercase column names of a table, from its parts as written (`feed.data` → ("feed",
+# "data")); None when unknown.
+type ColumnsOf = Callable[[tuple[str, ...]], frozenset[str] | None]
+
+
+def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | None = None) -> bool:
     """Whether every `$since` of a DuckDB-SQL model is in a lower bound of the time column of
     the rows the model returns (#155):
 
@@ -164,7 +169,13 @@ def since_is_a_lower_bound(sql: str, time_column: str) -> bool:
       `GROUP BY`/`GROUP BY ALL`, `HAVING`, window function, `QUALIFY`, `LIMIT`/`OFFSET`,
       `DISTINCT ON` or sample (plain `DISTINCT` and `ORDER BY` are allowed);
     - the column is matched by name (any letter case); a qualifier, if any, must name that
-      query's table (its alias or name).
+      query's table (its alias or name);
+    - one exception to "as itself": the query that holds the bound may compute the time column
+      (`CAST(read_at AS DATE) AS day`) when the bound names it without a qualifier and the table
+      it reads has no column of that name. DuckDB then reads the name as that alias, so the
+      bound bounds the output column. That needs the table's columns: `columns_of` gives them
+      (the server, from the bound tables); without it (`config_problems`, the sidecar rules) the
+      exception is assumed, and the server checks it again with the columns.
 
     Such a filter loads every row of a partition from some time on, and the output's time
     column is that same column, so the oldest-row check sees any partition it loads in part.
@@ -218,9 +229,19 @@ def since_is_a_lower_bound(sql: str, time_column: str) -> bool:
                 found[str(entry.get("key", "")).lower()] = value["query_node"]
         return found
 
+    def column_parts(node: Node) -> list[str]:
+        """A column reference's name parts in lowercase; [] for anything else."""
+        parts = node.get("column_names")
+        if node.get("class") != "COLUMN_REF" or not isinstance(parts, list):
+            return []
+        return [str(part).lower() for part in parts]
+
     # The queries whose rows are the model's rows, each with the names of its one table.
     row_queries: dict[int, set[str]] = {}
+    # Row queries whose time column is an alias of an expression, with that expression.
+    computed: dict[int, Node] = {}
     everything = nodes(statements)
+    every_cte = {name for n in everything for name in ctes(n)}
     reads = [
         str(n.get("table_name", "")).lower()
         for n in everything
@@ -284,9 +305,33 @@ def since_is_a_lower_bound(sql: str, time_column: str) -> bool:
                 kept += 1
             elif named(item) == wanted:
                 if not is_time_column(item, names):
-                    return False  # computed (a cast, an aggregate…) or another column
+                    computed[id(node)] = item  # an alias: the bound must name it (see check)
                 kept += 1
-        return kept == 1
+        stars = sum(1 for item in items if isinstance(item, dict) and item.get("class") == "STAR")
+        # `*, CAST(read_at AS DATE) AS day`: one column only if the table has no `day`, which
+        # the check of a computed time column requires.
+        return kept == 1 or (kept == 2 and stars == 1 and id(node) in computed)
+
+    def reads_no_such_column(node: Node) -> bool:
+        """The query's one table has no column named like the time column, so DuckDB reads an
+        unqualified name in its WHERE as the select list's alias."""
+        source = node.get("from_table")
+        if not isinstance(source, dict) or source.get("type") != "BASE_TABLE":
+            return False  # a subquery's columns are not looked at: refused
+        expression = computed.get(id(node))
+        if any(column_parts(n)[-1:] == [wanted] for n in nodes(expression)):
+            return False  # it reads a column of that name: the table has one
+        parts = tuple(
+            str(source.get(key) or "")
+            for key in ("catalog_name", "schema_name", "table_name")
+            if source.get(key)
+        )
+        if len(parts) == 1 and parts[0].lower() in every_cte:
+            return False  # a CTE's columns are not looked at: refused
+        if columns_of is None:
+            return True  # checked again with the columns (the server)
+        found = columns_of(parts)
+        return found is not None and wanted not in found
 
     def is_time_column(node: object, names: set[str]) -> bool:
         if not isinstance(node, dict) or node.get("class") != "COLUMN_REF":
@@ -318,6 +363,9 @@ def since_is_a_lower_bound(sql: str, time_column: str) -> bool:
         if not passes_through(node, names):
             return
         row_queries[id(node)] = names
+        if id(node) in computed:
+            # Its time column is computed: a bound below it would bound another column.
+            return
         if source.get("type") == "SUBQUERY":
             subquery = source.get("subquery")
             follow(subquery.get("node") if isinstance(subquery, dict) else None, inner)
@@ -356,32 +404,70 @@ def since_is_a_lower_bound(sql: str, time_column: str) -> bool:
             isinstance(children, list) and len(children) == 1 and is_time_column(children[0], names)
         )
 
-    def check(node: object, names: set[str] | None) -> bool:
+    def unqualified(node: object) -> bool:
+        return any(column_parts(n) == [wanted] for n in nodes(node))
+
+    def check(node: object, names: set[str] | None, alias: bool = False) -> bool:
         """`names`: the node is a condition of the WHERE clause of a row query, joined to it by
-        AND only, and these are the names of that query's table; None otherwise."""
+        AND only, and these are the names of that query's table; None otherwise. `alias`: that
+        query computes its time column (a bound must then name it without a qualifier)."""
         if isinstance(node, list):
-            return all(check(item, names) for item in node)
+            return all(check(item, names, alias) for item in node)
         if not isinstance(node, dict):
             return True
         if is_since(node):
             return False  # reached outside an accepted lower bound
         if names is not None and lower_bound(node, names):
-            return True
+            return not alias or unqualified(node)
         if names is not None and node.get("class") == "CONJUNCTION":
             children = node.get("children")
             if node.get("type") == "CONJUNCTION_OR":
                 # `time_column > $since OR time_column IS NULL`: the undated rows too.
                 return isinstance(children, list) and all(
-                    lower_bound(child, names) or is_time_null(child, names) for child in children
+                    (lower_bound(child, names) or is_time_null(child, names))
+                    and (not alias or unqualified(child))
+                    for child in children
                 )
             if node.get("type") == "CONJUNCTION_AND":
-                return check(children, names)
+                return check(children, names, alias)
         where = row_queries.get(id(node))
+        aliased = id(node) in computed
+        if aliased and where is not None and not reads_no_such_column(node):
+            where = None  # the name in WHERE is the table's column, not the computed one
         return all(
-            check(value, where if key == "where_clause" else None) for key, value in node.items()
+            check(value, where if key == "where_clause" else None, aliased)
+            for key, value in node.items()
         )
 
     return check(statements, None)
+
+
+def since_bound_problem(model: Model, columns_of: ColumnsOf | None = None) -> ModelError | None:
+    """`INVALID_MODEL_SQL` when a manual `partition_overwrite` DuckDB-SQL model's `$since` is
+    not a lower bound of its time column (`since_is_a_lower_bound`); None otherwise, and for any
+    other model. `columns_of`: the tables' columns, when known (the server)."""
+    config = model.config
+    incremental = config.incremental
+    if (
+        config.materialized != "incremental"
+        or incremental is None
+        or incremental.strategy != "partition_overwrite"
+        or (incremental.filter or "auto") == "auto"
+        or model.extraction
+        or not uses_since(model.sql)
+        or since_is_a_lower_bound(model.sql, incremental.time_column.root, columns_of)
+    ):
+        return None
+    column = incremental.time_column.root
+    return problem(
+        "INVALID_MODEL_SQL",
+        f"{model.sql_file}: in a partition_overwrite model, $since may only set a lower bound of "
+        f"the time_column {column}, as a WHERE condition joined by AND, in queries that return "
+        f"{column} unchanged and keep their rows (for example WHERE {column} >= "
+        "date_trunc('month', $since)), so the run can see any partition it loads in part.",
+        model.sql_file,
+        model=model.name,
+    )
 
 
 def config_problems(model: Model) -> list[ModelError]:
@@ -426,24 +512,8 @@ def config_problems(model: Model) -> list[ModelError]:
                 model=model.name,
             )
         )
-    elif (
-        not automatic
-        and not model.extraction
-        and strategy == "partition_overwrite"
-        and not since_is_a_lower_bound(model.sql, incremental.time_column.root)
-    ):
-        column = incremental.time_column.root
-        found.append(
-            problem(
-                "INVALID_MODEL_SQL",
-                f"{model.sql_file}: in a partition_overwrite model, $since may only set a "
-                f"lower bound of the time_column {column}, as a WHERE condition joined by AND "
-                f"(for example WHERE {column} >= date_trunc('month', $since)), so the run can "
-                "see any partition it loads in part.",
-                model.sql_file,
-                model=model.name,
-            )
-        )
+    elif (bounded := since_bound_problem(model)) is not None:
+        found.append(bounded)
     elif automatic and model.extraction:
         found.append(
             problem(

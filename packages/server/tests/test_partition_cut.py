@@ -319,3 +319,22 @@ def test_the_same_model_filtering_its_time_column_runs(
     feed(tmp_path, october(1, 20))
     code, out = run(capsys, tmp_path)
     assert code == 0, out
+
+
+def test_a_computed_time_column_over_a_table_with_that_column_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #162 Reviewer pass 3: the source has its own `day`, so DuckDB reads `day` in WHERE as the
+    # source's column, not the computed one the run checks. Only the bound tables tell (the
+    # sidecar rules accept it; validation looks the source's columns up).
+    sql = (
+        "SELECT id, region, read_at, CAST(read_at AS DATE) AS day, "
+        "strftime(read_at, '%Y-%m') AS month FROM feed.data WHERE day >= $since"
+    )
+    project(tmp_path, sql, BY_DAY)
+    feed(tmp_path, f"SELECT *, DATE '2026-10-01' AS day FROM ({october(1, 20)})")
+    code, out = run(capsys, tmp_path)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert "time_column day" in out
+    assert not (tmp_path / f".{SLUG}" / "lake").exists()

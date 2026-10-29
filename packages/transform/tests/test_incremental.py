@@ -17,6 +17,7 @@ from orvex.transform.incremental import (
     column_problems,
     config_problems,
     schema_statements,
+    since_is_a_lower_bound,
     since_value,
     steps,
     watermark_statements,
@@ -988,7 +989,6 @@ def test_a_bound_outside_the_row_queries_is_refused(tmp_path: Path, sql: str) ->
         "SELECT * REPLACE (CAST(day AS DATE) AS day) FROM src WHERE day >= $since",
         "SELECT * RENAME (other AS day) FROM src WHERE day >= $since",
         "SELECT COLUMNS(*) FROM src WHERE day >= $since",
-        "SELECT id, other AS day FROM src WHERE day >= $since",
         "SELECT *, day FROM src WHERE day >= $since",
         "SELECT id, day FROM (SELECT id, max(day) AS day FROM src WHERE day >= $since "
         "GROUP BY id) AS s",
@@ -1010,7 +1010,6 @@ def test_a_bound_outside_the_row_queries_is_refused(tmp_path: Path, sql: str) ->
         "star-replace",
         "star-rename",
         "columns",
-        "another-column-named-like-it",
         "twice",
         "aggregate-below",
         "cte-read-twice",
@@ -1042,3 +1041,49 @@ def test_a_bound_whose_query_passes_the_time_column_through_is_accepted(
     tmp_path: Path, sql: str
 ) -> None:
     assert config_problems(sql_model(tmp_path, BY_DAY, sql)) == []
+
+
+FINER_DAY = (
+    "SELECT *, CAST(read_at AS DATE) AS day, strftime(read_at, '%Y-%m') AS month "
+    "FROM feed.data WHERE day >= $since"
+)
+
+
+@pytest.mark.parametrize(
+    ("sql", "columns", "accepted"),
+    [
+        # DuckDB reads `day` in WHERE as the alias only when the table has no `day` column.
+        (FINER_DAY, frozenset({"read_at", "kwh"}), True),
+        (FINER_DAY, frozenset({"read_at", "day"}), False),
+        (FINER_DAY, None, False),  # columns unknown
+        ("SELECT id, other AS day FROM src WHERE day >= $since", frozenset({"other"}), True),
+        (
+            "SELECT id, other AS day FROM src WHERE day >= $since",
+            frozenset({"other", "day"}),
+            False,
+        ),
+        # A qualified name is the table's column; a CTE's or subquery's columns are not looked at.
+        ("SELECT CAST(ts AS DATE) AS day FROM src AS s WHERE s.day > $since", frozenset(), False),
+        (
+            "WITH c AS (SELECT 1 AS ts) SELECT CAST(ts AS DATE) AS day FROM c WHERE day > $since",
+            frozenset(),
+            False,
+        ),
+        (
+            "SELECT CAST(ts AS DATE) AS day FROM (SELECT * FROM src WHERE ts > $since) AS s",
+            frozenset(),
+            False,
+        ),
+        # The expression reads a column of that name: the table has one, whatever is known.
+        ("SELECT id, CAST(day AS DATE) AS day FROM src WHERE day > $since", frozenset(), False),
+    ],
+)
+def test_a_computed_time_column_counts_only_when_where_reads_it_as_the_alias(
+    sql: str, columns: frozenset[str] | None, accepted: bool
+) -> None:
+    assert since_is_a_lower_bound(sql, "day", lambda _parts: columns) is accepted
+
+
+def test_without_the_columns_a_computed_time_column_is_left_to_the_server(tmp_path: Path) -> None:
+    # The sidecar rules cannot see the tables: the server checks again with them.
+    assert config_problems(sql_model(tmp_path, BY_DAY, FINER_DAY)) == []
