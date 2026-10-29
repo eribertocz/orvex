@@ -557,3 +557,30 @@ def test_describe_binds_parameters_without_running(lake: Lake) -> None:
     sql = "SELECT d, d + 1 AS next FROM a WHERE d > $since"
     assert lake.describe(sql, [since]) == [("d", "DATE"), ("next", "DATE")]
     assert code_of(lambda: lake.describe(sql)) == "STORE_PARAMETER_INVALID"
+
+
+def test_summarize_and_dollar_quoted_files_are_refused_through_the_lake(
+    lake: Lake, tmp_path: Path
+) -> None:
+    # #153: a read of SUMMARIZE would be unpinned, and a dollar-quoted file name was read as a file.
+    write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(3)"))
+    before = lake.current_snapshot().id
+    target = tmp_path / "x.csv"
+    target.write_text("a\n1\n", encoding="utf-8")
+    assert code_of(lambda: read(lake, "SELECT * FROM (SUMMARIZE m)")) == "STORE_STATEMENT_INVALID"
+    created = statement(f"CREATE TABLE x AS SUMMARIZE $${target.as_posix()}$$")
+    assert code_of(lambda: write(lake, created)) == "STORE_STATEMENT_INVALID"
+    assert lake.current_snapshot().id == before  # nothing was created
+
+
+def test_a_read_with_summarize_is_refused_by_the_tree_too(
+    lake: Lake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #153, second layer of the read path: with the token rule switched off, the serialized
+    # tree's SHOW_REF still refuses the read (it would be unpinned).
+    import orvex.store.lake as store_lake
+
+    write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(3)"))
+    monkeypatch.setattr(store_lake, "_refuse_show_statements", lambda *arguments: None)
+    sql = "SELECT * FROM m UNION ALL BY NAME SUMMARIZE m"
+    assert code_of(lambda: read(lake, sql)) == "STORE_STATEMENT_INVALID"

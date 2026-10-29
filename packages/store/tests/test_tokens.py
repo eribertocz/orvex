@@ -12,7 +12,13 @@ import duckdb
 import pytest
 from orvex.contracts.store.v1 import Parameter, ParameterType
 from orvex.store.errors import StoreError
-from orvex.store.lake import _created_kind_allowed, _guarded, _tokens, _typed
+from orvex.store.lake import (
+    _created_kind_allowed,
+    _guarded,
+    _single_statement,
+    _tokens,
+    _typed,
+)
 
 
 def table_functions() -> frozenset[str]:
@@ -83,3 +89,120 @@ def test_created_kinds_are_read_after_non_ascii_text() -> None:
     assert _created_kind_allowed(view, statement(view)) is False
     table = 'CREATE /* año */ TABLE "tabla_año" AS SELECT 1'
     assert _created_kind_allowed(table, statement(table)) is True
+
+
+# --- #153: every quoting form, and no SUMMARIZE / DESCRIBE / SHOW ---------------------------
+
+
+@pytest.fixture
+def a_file(tmp_path: Path) -> str:
+    target = tmp_path / "t.csv"
+    target.write_text("a,b\n1,2\n", encoding="utf-8")
+    return target.as_posix()
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "SUMMARIZE $${f}$$",
+        "SUMMARIZE $q${f}$q$",
+        "SELECT * FROM (SUMMARIZE $${f}$$)",
+        "CREATE TABLE x AS SUMMARIZE $${f}$$",
+        "SELECT * FROM t WHERE a IN (SELECT a FROM (SUMMARIZE $${f}$$))",
+        "SELECT $${f}$$ AS name FROM t",
+        "SELECT E'{f}' AS name FROM t",
+        "SELECT * FROM '{f}'",
+        # Reviewer pass 1: a non-ASCII dollar-quote tag, and the positions of problem 1.
+        "SELECT $ñ${f}$ñ$ AS name FROM t",
+        "SELECT * FROM t UNION ALL BY NAME SUMMARIZE $ñ${f}$ñ$",
+        "INSERT INTO x SUMMARIZE $ñ${f}$ñ$",
+        "SELECT $tag_1${f}$tag_1$ AS name FROM t",
+    ],
+)
+def test_a_file_named_in_any_quoting_form_is_refused(a_file: str, template: str) -> None:
+    sql = template.replace("{f}", a_file)
+    with pytest.raises(StoreError) as refused:
+        _guarded(sql, table_functions())
+    assert refused.value.code == "STORE_STATEMENT_INVALID"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SUMMARIZE t",
+        "DESCRIBE t",
+        "DESC t",
+        "SHOW TABLES",
+        "SELECT * FROM (DESCRIBE t)",
+        "WITH w AS (SUMMARIZE t) SELECT * FROM w",
+        "CREATE TABLE x AS DESCRIBE t",
+        # Reviewer pass 1: after a set operator, as an INSERT source, after a WITH list.
+        "SELECT * FROM t UNION ALL BY NAME SUMMARIZE t",
+        "SELECT * FROM t UNION SHOW TABLES",
+        "SELECT * FROM t INTERSECT DESCRIBE t",
+        "SELECT * FROM t EXCEPT DESC t",
+        "INSERT INTO x SUMMARIZE t",
+        "INSERT INTO x BY NAME SUMMARIZE t",
+        "INSERT INTO x (a, b) DESCRIBE t",
+        "WITH w AS (SELECT 1) SUMMARIZE w",
+        "CREATE OR REPLACE TABLE x AS SHOW TABLES",
+        # Reviewer pass 2: empty statements before CREATE do not hide its query AS.
+        ";CREATE TABLE x AS SUMMARIZE t",
+        "; CREATE TABLE x AS DESCRIBE t",
+        ";;CREATE OR REPLACE TABLE x AS SHOW TABLES",
+    ],
+)
+def test_summarize_describe_and_show_are_refused(sql: str) -> None:
+    with pytest.raises(StoreError) as refused:
+        _guarded(sql, table_functions())
+    assert refused.value.code == "STORE_STATEMENT_INVALID"
+    assert "SUMMARIZE, DESCRIBE and SHOW" in refused.value.message
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT $$plain text$$ AS label",
+        "SELECT 'it''s' AS a",
+        "SELECT E'line\\n' AS b",
+        'SELECT "summarize", "describe", "show" FROM t',
+        'CREATE TABLE "describe" AS SELECT 1 AS x',
+        "SELECT a FROM t ORDER BY a DESC",
+        "SELECT row_number() OVER (ORDER BY a DESC) AS n FROM t",
+        # Reviewer pass 1: labels after AS were accepted on main and stay accepted.
+        "SELECT a AS desc FROM t",
+        "SELECT 1 AS show, 2 AS summarize, 3 AS describe",
+        "CREATE TABLE x AS SELECT a AS desc FROM t ORDER BY a DESC",
+        "SELECT a FROM t ORDER BY (a) DESC NULLS LAST, b DESC",
+        "SELECT string_agg(a, ',' ORDER BY b DESC) AS s FROM t",
+        "SELECT * FROM t UNION ALL SELECT * FROM u ORDER BY 1 DESC",
+        # Reviewer pass 2: a label is still a label after empty statements.
+        ";CREATE TABLE x AS SELECT a AS desc FROM t",
+        # Reviewer pass 3: qualified names, and the FROM of IS DISTINCT FROM.
+        "SELECT t.desc FROM t",
+        "SELECT t.show, s.desc FROM t",
+        "SELECT x.summarize FROM (SELECT 1 AS summarize) x",
+        "CREATE TABLE y AS SELECT t . desc FROM t",
+        "SELECT a FROM t ORDER BY a IS DISTINCT FROM 1 DESC",
+        "SELECT a FROM t ORDER BY a IS NOT DISTINCT FROM 1 DESC",
+    ],
+)
+def test_ordinary_statements_are_accepted(sql: str) -> None:
+    _guarded(sql, table_functions())
+
+
+@pytest.mark.parametrize("escape", ["\\x2e", "\\056", "\\."])
+def test_a_file_named_with_e_string_escapes_is_refused(a_file: str, escape: str) -> None:
+    # Reviewer pass 2: `E'…'` is read with DuckDB's own escapes, so `\x2e` for `.` still names it.
+    escaped = a_file.replace(".", escape)
+    with pytest.raises(StoreError) as refused:
+        _guarded(f"SELECT E'{escaped}' AS name FROM t", table_functions())
+    assert refused.value.code == "STORE_STATEMENT_INVALID"
+
+
+@pytest.mark.parametrize("sql", ["SELECT E'a\\'", "SELECT E'\\x00' AS a"])
+def test_a_malformed_e_string_fails_as_a_store_error(sql: str) -> None:
+    # Reviewer pass 3: decoding `E'…'` must not let a raw DuckDB error escape.
+    with pytest.raises(StoreError) as failed:
+        _single_statement(sql, table_functions())
+    assert failed.value.code == "STORE_QUERY_FAILED"

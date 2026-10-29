@@ -438,6 +438,7 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
     tokens = [token for token in every if token[1] != duckdb.token_type.comment]
     positions = [position for position, _ in every] + [len(sql)]
     _refuse_file_names(sql, tokens, positions)
+    _refuse_show_statements(sql, tokens, positions)
     for index, (position, kind) in enumerate(tokens):
         if kind not in {duckdb.token_type.identifier, duckdb.token_type.keyword}:
             continue
@@ -462,8 +463,9 @@ def _refuse_file_names(
     """Refuse a quoted string or quoted name that names an existing file or matches files.
 
     DuckDB reads such a string as a file in many places (`FROM '…'`, `MERGE … USING '…'`,
-    `PIVOT '…'`, `SUMMARIZE '…'`, …); a model reaches a file only through its source name. The
-    file sandbox, which allows exactly the declared files, is the boundary behind this check.
+    `PIVOT '…'`, `SUMMARIZE '…'`, …); a model reaches a file only through its source name. Every
+    quoting form counts (`'…'`, `E'…'`, `$$…$$`, `$tag$…$tag$`, `"…"`). The file sandbox, which
+    allows exactly the declared files, is the boundary behind this check.
     """
     for position, kind in tokens:
         end = next(later for later in positions if later > position)
@@ -477,10 +479,128 @@ def _refuse_file_names(
             )
 
 
-def _names_a_file(token: str) -> bool:
+# A dollar-quoted constant; DuckDB, like PostgreSQL, accepts any tag without `$` or white space
+# (non-ASCII letters included), so every such tag is read here (#153).
+_DOLLAR_QUOTED = re.compile(r"\$(?P<tag>[^$\s]*)\$(?P<body>.*)\$(?P=tag)\$", re.DOTALL)
+# Statement forms that read a table or file by name outside the lake's pinned reads (#153):
+# `SUMMARIZE <name or file>`, `DESCRIBE`/`DESC <name>`, `SHOW …`.
+_SHOW_STATEMENTS = frozenset({"summarize", "describe", "desc", "show"})
+# Keywords that start a clause; `DESC` is an ordering only inside an `ORDER BY` clause.
+_CLAUSES = frozenset(
+    {
+        "select",
+        "from",
+        "where",
+        "group",
+        "having",
+        "qualify",
+        "window",
+        "order",
+        "limit",
+        "offset",
+        "union",
+        "intersect",
+        "except",
+        "values",
+        "using",
+        "on",
+        "returning",
+        "set",
+    }
+)
+
+
+def _string_content(token: str) -> str:
+    """The text a quoted token stands for: `'…'` (with `''`), `E'…'`, `$$…$$`, `$tag$…$tag$` and
+    quoted names `"…"` (with `""`). An unquoted token is returned as it is."""
+    dollar = _DOLLAR_QUOTED.fullmatch(token)
+    if dollar is not None:
+        return dollar["body"]
     quote = token[-1:]
-    start = token.find(quote)
-    content = token[start + 1 : -1].replace(quote * 2, quote) if start >= 0 else token
+    if quote not in {"'", '"'}:
+        return token
+    if token[:1] in {"e", "E"} and token[1:2] == "'":
+        return _escape_string_value(token)
+    start = token.find(quote)  # after a prefix, if any
+    return token[start + 1 : -1].replace(quote * 2, quote)
+
+
+def _escape_string_value(token: str) -> str:
+    """The value of an `E'…'` constant, read by DuckDB itself so that every escape it accepts
+    (`\\x2e`, octal, `\\.` for `.`, …) is decoded exactly as it would be. The token must be
+    one string constant on its own; the connection has no external access."""
+    tokens = duckdb.tokenize(token)
+    if len(tokens) != 1 or tokens[0][1] != duckdb.token_type.string_const:
+        return token[2:-1]
+    try:
+        with duckdb.connect(config={"enable_external_access": False}) as connection:
+            row = connection.execute(f"SELECT {token}").fetchone()
+    except duckdb.Error:
+        # Not a valid constant (`E'a\\'`, `E'\\x00'`): the statement fails later, when it is
+        # parsed, with `STORE_QUERY_FAILED`.
+        return token[2:-1]
+    return str(row[0]) if row is not None and row[0] is not None else ""
+
+
+def _refuse_show_statements(
+    sql: str, tokens: list[tuple[int, duckdb.token_type]], positions: list[int]
+) -> None:
+    """Refuse `SUMMARIZE`, `DESCRIBE`, `DESC` and `SHOW` everywhere except where DuckDB reads
+    them as something else: a column label after `AS` (`SELECT a AS desc`), a part of a qualified
+    name after `.` (`t.desc`), and `DESC` as an ordering inside an `ORDER BY` clause. DuckDB
+    reads a quoted target of `SUMMARIZE` as a file, and these statement forms are not pinned to a
+    snapshot (#153). The rule lists what is allowed, so a position not thought of is refused.
+    Quoted names (`"describe"`) are ordinary names."""
+    words: list[tuple[str, duckdb.token_type]] = []
+    for position, kind in tokens:
+        end = next(later for later in positions if later > position)
+        words.append((sql[position:end].strip().lower(), kind))
+    # `CREATE TABLE x AS <query>`: that `AS` starts a query, it does not introduce a label. It is
+    # found in every statement, so empty statements before it (`;CREATE …`) do not hide it.
+    query_as: set[int] = set()
+    starts = [0] + [index + 1 for index, (word, _) in enumerate(words) if word == ";"]
+    for start in starts:
+        if start >= len(words) or words[start][0] != "create":
+            continue
+        depth = 0
+        for index in range(start, len(words)):
+            word = words[index][0]
+            if word == ";":
+                break
+            depth += (word == "(") - (word == ")")
+            if word == "as" and depth == 0:
+                query_as.add(index)
+                break
+    clauses = [""]  # the current clause at each parenthesis depth
+    for index, (word, kind) in enumerate(words):
+        if word == "(":
+            clauses.append("")
+            continue
+        if word == ")":
+            if len(clauses) > 1:
+                clauses.pop()
+            continue
+        if kind != duckdb.token_type.keyword:
+            continue
+        # The `FROM` of `IS [NOT] DISTINCT FROM` is a comparison, not a clause.
+        if word in _CLAUSES and not (word == "from" and words[index - 1][0] == "distinct"):
+            clauses[-1] = word
+        if word not in _SHOW_STATEMENTS:
+            continue
+        label = index > 0 and words[index - 1][0] == "as" and index - 1 not in query_as
+        # After `.`, the word is part of a qualified name (`t.desc`); DuckDB reads it as a name.
+        qualified = index > 0 and words[index - 1][0] == "."
+        ordering = word == "desc" and clauses[-1] == "order"
+        if not (label or qualified or ordering):
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "SUMMARIZE, DESCRIBE and SHOW are not allowed in statements.",
+                {"statement": word.upper()},
+            )
+
+
+def _names_a_file(token: str) -> bool:
+    content = _string_content(token)
     candidates = {content, content.removeprefix("file://")}
     for candidate in candidates:
         if not candidate:
@@ -1272,6 +1392,13 @@ class Lake:
         schemas = {schema for schema, _ in tables}
         ctes = _cte_names(tree)
         for node in _walk(tree):
+            if node.get("type") == "SHOW_REF":
+                # SUMMARIZE / DESCRIBE / SHOW: unpinned, and a quoted target is read as a file.
+                raise StoreError(
+                    "STORE_STATEMENT_INVALID",
+                    "SUMMARIZE, DESCRIBE and SHOW are not allowed in statements.",
+                    {},
+                )
             if node.get("type") == "TABLE_FUNCTION":
                 function = node.get("function")
                 name = function.get("function_name") if isinstance(function, dict) else None
