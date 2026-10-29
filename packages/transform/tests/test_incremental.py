@@ -1147,3 +1147,14 @@ def test_a_query_tree_with_a_row_limit_is_seen() -> None:
     assert not limits_rows(tree)
     for label in ("LIMIT", "OFFSET", "LIMIT BY", "LIMIT BY LIMIT", "LIMIT BY OFFSET"):
         assert limits_rows(f"{tree}  {label}\n    CONSTANT id: 9\n")
+
+
+@pytest.mark.parametrize("reader", ["query_table('c')", "query('SELECT * FROM c')"])
+def test_a_cte_read_again_by_name_at_run_time_is_not_followed(tmp_path: Path, reader: str) -> None:
+    # #162 Reviewer pass 6: these read the CTE again without a table reference to count.
+    sql = (
+        "WITH c AS (SELECT * FROM src WHERE day >= date_trunc('month', $since)) SELECT * FROM c "
+        f"WHERE day <> (SELECT min(day) + INTERVAL 1 DAY FROM {reader})"
+    )
+    found = config_problems(sql_model(tmp_path, BY_DAY, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]

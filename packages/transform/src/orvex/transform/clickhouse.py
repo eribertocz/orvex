@@ -760,6 +760,12 @@ def _per_row(function: str) -> bool:
     )
 
 
+def _aliased(node: _Node) -> str:
+    """The alias a node gives itself in `EXPLAIN AST` (`(alias day)`), lowercase; "" for none."""
+    found = re.search(r"\(alias ([^)]+)\)", node.detail)
+    return found.group(1).lower() if found is not None else ""
+
+
 def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
     """Whether, in the `EXPLAIN AST` of `mark_since`'s SQL, every marked `{since:…}` is in a
     lower bound of the time column of the rows the model returns, as `incremental.
@@ -887,6 +893,22 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
             # there would bound another column.
             for child in source.children:
                 follow(child)
+
+    # An alias named like the time column anywhere but as a select-list item (`WITH … AS day`,
+    # `ORDER BY … AS day`, `(… AS day)` inside a condition) is what ClickHouse reads that name
+    # as, in the select list too: the output would not be the bounded column.
+    listed = {
+        id(item)
+        for query in _nodes(root)
+        if query.kind == "SelectQuery"
+        for at, child in enumerate(query.children)
+        if child.kind == "ExpressionList"
+        and at + 1 < len(query.children)
+        and query.children[at + 1].kind == "TablesInSelectQuery"
+        for item in child.children
+    }
+    if any(_aliased(node) == wanted and id(node) not in listed for node in _nodes(root)):
+        return False
 
     for child in root.children:
         follow(child)

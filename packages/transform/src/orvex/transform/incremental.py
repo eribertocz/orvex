@@ -251,6 +251,12 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
         if n.get("type") == "BASE_TABLE" and not n.get("schema_name")
     ]
 
+    # `query('…')` and `query_table('…')` read relations by name at run time: their reads of a
+    # CTE cannot be counted, so no CTE is followed in a statement with them.
+    dynamic = any(
+        str(n.get("function_name", "")).lower() in {"query", "query_table"} for n in everything
+    )
+
     def named(item: Node) -> str:
         """The name a select-list item gives its column ("" when it is not a plain one)."""
         alias = str(item.get("alias") or "")
@@ -377,6 +383,7 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
                 not source.get("schema_name")
                 and inner.get(name) is not None
                 and reads.count(name) == 1
+                and not dynamic
             ):
                 # A CTE read again elsewhere (a subquery, a join) computes over the loaded rows.
                 follow(inner[name], {key: value for key, value in inner.items() if key != name})

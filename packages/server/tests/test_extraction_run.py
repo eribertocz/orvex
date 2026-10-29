@@ -598,6 +598,11 @@ def test_a_since_bound_that_reads_another_column_is_refused(
         "SELECT * FROM events WHERE day >= {since:Date} UNION ALL SELECT * FROM events",
         "SELECT * FROM events WHERE day >= {since:Date} LIMIT 1 > 0",
         "SELECT * FROM (SELECT * FROM events WHERE day >= {since:Date}) LIMIT NOT 0",
+        # Reviewer pass 6: the select list's `day` read as an alias defined elsewhere.
+        "WITH toDate(event_time) AS day SELECT event_id, month, day FROM events AS e "
+        "WHERE e.day >= {since:Date}",
+        "SELECT event_id, month, day FROM events AS e WHERE e.day >= {since:Date} "
+        "ORDER BY toDate(event_time) AS day",
     ],
     ids=[
         "in",
@@ -620,6 +625,8 @@ def test_a_since_bound_that_reads_another_column_is_refused(
         "union-all",
         "limit-a-condition",
         "limit-not-zero-outside",
+        "with-alias",
+        "order-by-alias",
     ],
 )
 def test_a_since_bound_the_oldest_row_check_cannot_follow_is_refused(
