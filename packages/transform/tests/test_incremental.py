@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import datetime as dt
+from collections.abc import Sequence
 from pathlib import Path
 
 import duckdb
-from orvex.contracts.store.v1 import StatementRequest
+from orvex.contracts.store.v1 import Parameter, StatementRequest
 from orvex.transform.incremental import (
     Check,
     Count,
@@ -463,3 +465,312 @@ def test_a_full_refresh_loading_nothing_drops_the_watermark() -> None:
     assert not any(sql.startswith("INSERT") for sql in sqls)
     kept = Watermark(step.request, "s.m", False)
     assert watermark_statements(kept, None) == []
+
+
+# --- #109: a $since filter that cuts a partition fails partition_overwrite -----------------------
+
+FILTERED = PARTITION.replace("[month]}", "[month], filter: manual}")
+LOADED = "SELECT * FROM src WHERE read_at > $since"
+WHOLE = "SELECT * FROM src WHERE read_at >= date_trunc('month', $since)"
+
+
+def run_since(
+    connection: duckdb.DuckDBPyConnection,
+    chosen: Model,
+    sql: str,
+    since: str,
+    full_refresh: bool = False,
+) -> tuple[str | None, str | None]:
+    """Run the steps with `$since` bound, like the runner: (failing code, its message), or
+    (None, None) when the transaction committed."""
+    # Every model here selects the source's columns.
+    described = connection.execute("DESCRIBE SELECT * FROM src").fetchall()
+    output = [(row[0], row[1]) for row in described]
+    connection.execute("BEGIN")
+    for step in steps(chosen, sql, output, table_columns(connection), since, full_refresh):
+        if isinstance(step, Refuse):
+            connection.execute("ROLLBACK")
+            return step.code, step.message
+        if isinstance(step, Watermark):
+            continue
+        parameters = {} if isinstance(step, Count) else typed(step.parameters)
+        if isinstance(step, StatementRequest):
+            connection.execute(step.sql, parameters)
+            continue
+        value = connection.execute(step.sql, parameters).fetchall()[0][0]
+        if isinstance(step, Check) and value not in {0, "0", None}:
+            connection.execute("ROLLBACK")
+            return step.code, step.failure(str(value))
+    connection.execute("COMMIT")
+    return None, None
+
+
+def typed(parameters: Sequence[Parameter]) -> dict[str, object]:
+    """Parameters as typed Python values, as the store binds them (never as text)."""
+    values: dict[str, object] = {}
+    for parameter in parameters:
+        kind, value = parameter.type.root, parameter.value
+        if value in {"infinity", "-infinity"}:
+            values[parameter.name] = value  # DuckDB casts the text, as the store does
+        elif value is not None and kind == "DATE":
+            values[parameter.name] = dt.date.fromisoformat(value)
+        elif value is not None and kind in {"TIMESTAMP", "TIMESTAMPTZ"}:
+            values[parameter.name] = dt.datetime.fromisoformat(value)
+        else:
+            values[parameter.name] = value
+    return values
+
+
+def days(first: str, last: str, kind: str = "DATE") -> str:
+    """Source rows (month, n, read_at), one per day; `n` marks the run that loaded them."""
+    return (
+        f"SELECT strftime(d, '%Y-%m') AS month, 0 AS n, CAST(d AS {kind}) AS read_at "
+        f"FROM range(TIMESTAMP '{first}', TIMESTAMP '{last}' + INTERVAL 1 DAY, INTERVAL 1 DAY) "
+        "AS r(d)"
+    )
+
+
+def partition_lake(kind: str = "DATE") -> duckdb.DuckDBPyConnection:
+    """October 1 to 20 already in the table (n = 0); October 21 to 25 new in the source (n = 1)."""
+    connection = lake()
+    connection.execute("CREATE SCHEMA s")
+    connection.execute(f"CREATE TABLE s.m AS {days('2026-10-01', '2026-10-20', kind)}")
+    connection.execute(
+        f"CREATE TABLE src AS {days('2026-10-01', '2026-10-25', kind)} "
+        "UNION ALL BY NAME SELECT '2026-11' AS month, 0 AS n, "
+        f"CAST(TIMESTAMP '2026-11-02' AS {kind}) AS read_at"
+    )
+    connection.execute("UPDATE src SET n = 1")
+    return connection
+
+
+def test_a_since_filter_that_cuts_a_partition_fails_and_writes_nothing(tmp_path: Path) -> None:
+    chosen = model(tmp_path, FILTERED)
+    connection = partition_lake()
+    code, message = run_since(connection, chosen, LOADED, "2026-10-20")
+    assert code == "PARTITION_INCOMPLETE"
+    assert message is not None
+    assert "s.m: the $since filter loaded only part of these partitions (month): " in message
+    assert "'2026-10' (1 in total)" in message
+    assert "date_trunc('month', $since)" in message
+    # Rolled back: October 1 to 20 are untouched, nothing of the new rows was written.
+    assert connection.execute("SELECT count(*), max(n) FROM s.m").fetchall() == [(20, 0)]
+
+
+def test_a_whole_partition_filter_passes_and_keeps_every_row(tmp_path: Path) -> None:
+    chosen = model(tmp_path, FILTERED)
+    connection = partition_lake()
+    assert run_since(connection, chosen, WHOLE, "2026-10-20") == (None, None)
+    assert connection.execute(
+        "SELECT month, count(*), min(n), max(n) FROM s.m GROUP BY month ORDER BY month"
+    ).fetchall() == [("2026-10", 25, 1, 1), ("2026-11", 1, 1, 1)]
+
+
+def test_a_new_partition_only_passes(tmp_path: Path) -> None:
+    chosen = model(tmp_path, FILTERED)
+    connection = partition_lake()
+    assert run_since(connection, chosen, LOADED, "2026-10-31") == (None, None)
+    assert connection.execute(
+        "SELECT month, count(*) FROM s.m GROUP BY month ORDER BY month"
+    ).fetchall() == [("2026-10", 20), ("2026-11", 1)]
+
+
+def test_every_temporal_type(tmp_path: Path) -> None:
+    for number, (kind, since) in enumerate(
+        [
+            ("DATE", "2026-10-20"),
+            ("TIMESTAMP", "2026-10-20T00:00:00.000000"),
+            ("TIMESTAMPTZ", "2026-10-20T00:00:00.000000+00:00"),
+        ]
+    ):
+        chosen = model(tmp_path / str(number), FILTERED)
+        connection = partition_lake(kind)
+        connection.execute("SET TimeZone = 'UTC'")
+        code, message = run_since(connection, chosen, LOADED, since)
+        assert (code, kind) == ("PARTITION_INCOMPLETE", kind)
+        assert message is not None
+        assert "'2026-10' (1 in total)" in message
+        assert run_since(connection, chosen, WHOLE, since) == (None, None), kind
+
+
+def test_a_null_partition_is_caught_and_named(tmp_path: Path) -> None:
+    by_region = FILTERED.replace("[month]", "[region]")
+    chosen = model(tmp_path, by_region)
+    connection = lake()
+    connection.execute("CREATE SCHEMA s")
+    connection.execute(
+        "CREATE TABLE s.m AS SELECT * FROM (VALUES (NULL, 1, DATE '2026-10-01'), "
+        "('n', 2, DATE '2026-10-01')) AS t(region, n, read_at)"
+    )
+    connection.execute(
+        "CREATE TABLE src AS SELECT * FROM (VALUES (CAST(NULL AS VARCHAR), 3, DATE '2026-10-05'), "
+        "(NULL, 4, DATE '2026-10-01')) AS t(region, n, read_at)"
+    )
+    code, message = run_since(connection, chosen, LOADED, "2026-10-02")
+    assert code == "PARTITION_INCOMPLETE"
+    assert message is not None
+    assert ": NULL (1 in total)." in message
+    assert connection.execute("SELECT count(*) FROM s.m").fetchall() == [(2,)]
+
+
+def test_undated_rows_the_filter_never_reloads_are_protected(tmp_path: Path) -> None:
+    by_region = FILTERED.replace("[month]", "[region]")
+    chosen = model(tmp_path, by_region)
+    connection = lake()
+    connection.execute("CREATE SCHEMA s")
+    connection.execute(
+        "CREATE TABLE s.m AS SELECT * FROM (VALUES ('n', 1, CAST(NULL AS DATE))) "
+        "AS t(region, n, read_at)"
+    )
+    connection.execute(
+        "CREATE TABLE src AS SELECT * FROM (VALUES ('n', 2, DATE '2026-10-05')) "
+        "AS t(region, n, read_at)"
+    )
+    code, message = run_since(connection, chosen, LOADED, "2026-10-02")
+    assert code == "PARTITION_INCOMPLETE"
+    assert message is not None
+    assert ": 'n' (1 in total)." in message
+    # A filter that also reloads undated rows passes.
+    reloads = "SELECT * FROM src WHERE read_at > $since OR read_at IS NULL"
+    connection.execute("INSERT INTO src VALUES ('n', 3, NULL)")
+    assert run_since(connection, chosen, reloads, "2026-10-02") == (None, None)
+    assert connection.execute("SELECT n FROM s.m ORDER BY n").fetchall() == [(2,), (3,)]
+
+
+def test_the_message_names_five_partitions_and_the_total(tmp_path: Path) -> None:
+    by_two = FILTERED.replace("[month]", "[region, month]")
+    chosen = model(tmp_path, by_two)
+    connection = lake()
+    connection.execute("CREATE SCHEMA s")
+    regions = "SELECT chr(CAST(97 + i AS INTEGER)) AS region FROM range(7) AS r(i)"
+    connection.execute(
+        f"CREATE TABLE s.m AS SELECT region, '2026-10' AS month, 0 AS n, DATE '2026-10-01' "
+        f"AS read_at FROM ({regions})"
+    )
+    connection.execute(
+        f"CREATE TABLE src AS SELECT region, '2026-10' AS month, 1 AS n, DATE '2026-10-09' "
+        f"AS read_at FROM ({regions})"
+    )
+    code, message = run_since(connection, chosen, LOADED, "2026-10-05")
+    assert code == "PARTITION_INCOMPLETE"
+    assert message is not None
+    assert (
+        "('a', '2026-10'), ('b', '2026-10'), ('c', '2026-10'), ('d', '2026-10'), "
+        "('e', '2026-10') (7 in total)." in message
+    )
+
+
+def test_first_runs_full_refreshes_and_unfiltered_models_skip_the_check(tmp_path: Path) -> None:
+    chosen = model(tmp_path, FILTERED)
+    existing = [("month", "VARCHAR"), ("n", "INTEGER"), ("read_at", "DATE")]
+
+    def codes(sql: str, since: str, full_refresh: bool = False, first: bool = False) -> list[str]:
+        planned = steps(chosen, sql, existing, None if first else existing, since, full_refresh)
+        return [step.code for step in planned if isinstance(step, Check)]
+
+    # A first run: no table yet, so nothing can be cut.
+    assert "PARTITION_INCOMPLETE" not in codes(LOADED, "-infinity", first=True)
+    assert "PARTITION_INCOMPLETE" in codes(LOADED, "2026-10-20")
+    # An existing table without a watermark still gets the check (its undated rows).
+    assert "PARTITION_INCOMPLETE" in codes(LOADED, "-infinity")
+    assert "PARTITION_INCOMPLETE" not in codes(LOADED, "2026-10-20", full_refresh=True)
+    assert "PARTITION_INCOMPLETE" not in codes("SELECT * FROM src", "2026-10-20")
+    # Other strategies replace by key or delete nothing.
+    for other in (MERGE, DELETE_INSERT, APPEND):
+        chosen_other = model(tmp_path / other[60:70].strip(), other)
+        planned = steps(chosen_other, LOADED, existing, existing, "2026-10-20")
+        assert all(
+            step.code != "PARTITION_INCOMPLETE" for step in planned if isinstance(step, Check)
+        )
+
+
+def test_since_reaches_the_check_only_as_a_bound_parameter(tmp_path: Path) -> None:
+    chosen = model(tmp_path, FILTERED)
+    existing = [("month", "VARCHAR"), ("n", "INTEGER"), ("read_at", "DATE")]
+    (check,) = [
+        step
+        for step in steps(chosen, LOADED, existing, existing, "2026-10-20")
+        if isinstance(step, Check) and step.code == "PARTITION_INCOMPLETE"
+    ]
+    assert "2026-10-20" not in check.sql
+    assert [(p.name, p.type.root, p.value) for p in check.parameters] == [
+        ("since", "DATE", "2026-10-20")
+    ]
+
+
+def test_partition_columns_cannot_collide_with_the_check_s_own_names(tmp_path: Path) -> None:
+    """Partition columns named like the query's internal names still compare as partitions."""
+    for number, name in enumerate(["older", "undated", "n_older", "p0", "cut_label", "loaded"]):
+        chosen = model(tmp_path / str(number), FILTERED.replace("[month]", f"[{name}]"))
+        connection = lake()
+        connection.execute("CREATE SCHEMA s")
+        connection.execute(
+            f"CREATE TABLE s.m AS SELECT 7 AS \"{name}\", 0 AS n, DATE '2026-10-01' AS read_at"
+        )
+        connection.execute(
+            f"CREATE TABLE src AS SELECT 7 AS \"{name}\", 1 AS n, DATE '2026-10-09' AS read_at"
+        )
+        code, message = run_since(connection, chosen, LOADED, "2026-10-05")
+        assert code == "PARTITION_INCOMPLETE", name
+        assert message is not None
+        assert ": 7 (1 in total)." in message, name
+        assert connection.execute("SELECT n FROM s.m").fetchall() == [(0,)], name
+
+
+def test_text_values_are_quoted_and_long_ones_shortened(tmp_path: Path) -> None:
+    by_region = FILTERED.replace("[month]", "[region]")
+    chosen = model(tmp_path, by_region)
+    connection = lake()
+    connection.execute("CREATE SCHEMA s")
+    long = "x" * 100
+    connection.execute(
+        "CREATE TABLE s.m AS SELECT * FROM (VALUES ('NULL', 1, DATE '2026-10-01'), "
+        f"(CAST(NULL AS VARCHAR), 2, DATE '2026-10-01'), ('{long}', 3, DATE '2026-10-01'), "
+        "('it''s', 4, DATE '2026-10-01')) AS t(region, n, read_at)"
+    )
+    connection.execute(
+        "CREATE TABLE src AS SELECT region, 9 AS n, DATE '2026-10-09' AS read_at FROM s.m"
+    )
+    code, message = run_since(connection, chosen, LOADED, "2026-10-05")
+    assert code == "PARTITION_INCOMPLETE"
+    assert message is not None
+    shown = "'" + "x" * 60 + "…'"  # shortened inside its quotes
+    assert f": 'NULL', '{'it' + chr(39) * 2 + 's'}', {shown}, NULL (4 in total)." in message
+
+
+def test_undated_rows_are_protected_before_any_watermark(tmp_path: Path) -> None:
+    """An existing table holding only undated rows has no watermark: $since is -infinity."""
+    by_region = FILTERED.replace("[month]", "[region]")
+    chosen = model(tmp_path, by_region)
+    connection = lake()
+    connection.execute("CREATE SCHEMA s")
+    connection.execute(
+        "CREATE TABLE s.m AS SELECT * FROM (VALUES ('n', 1, CAST(NULL AS DATE))) "
+        "AS t(region, n, read_at)"
+    )
+    connection.execute(
+        "CREATE TABLE src AS SELECT * FROM (VALUES ('n', 2, DATE '2026-10-05')) "
+        "AS t(region, n, read_at)"
+    )
+    code, _ = run_since(connection, chosen, LOADED, "-infinity")
+    assert code == "PARTITION_INCOMPLETE"
+
+
+def test_enum_values_are_quoted(tmp_path: Path) -> None:
+    by_kind = FILTERED.replace("[month]", "[k]")
+    chosen = model(tmp_path, by_kind)
+    connection = lake()
+    connection.execute("CREATE TYPE kinds AS ENUM ('NULL', 'b')")
+    connection.execute("CREATE SCHEMA s")
+    connection.execute(
+        "CREATE TABLE s.m AS SELECT CAST('NULL' AS kinds) AS k, 0 AS n, "
+        "DATE '2026-10-01' AS read_at"
+    )
+    connection.execute(
+        "CREATE TABLE src AS SELECT CAST('NULL' AS kinds) AS k, 1 AS n, "
+        "DATE '2026-10-09' AS read_at"
+    )
+    code, message = run_since(connection, chosen, LOADED, "2026-10-05")
+    assert code == "PARTITION_INCOMPLETE"
+    assert message is not None
+    assert ": 'NULL' (1 in total)." in message
