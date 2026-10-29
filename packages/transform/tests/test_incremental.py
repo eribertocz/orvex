@@ -1158,3 +1158,20 @@ def test_a_cte_read_again_by_name_at_run_time_is_not_followed(tmp_path: Path, re
     )
     found = config_problems(sql_model(tmp_path, BY_DAY, sql))
     assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+
+
+@pytest.mark.parametrize(
+    ("sql", "spaced"),
+    [
+        ("SELECT id, fecha FROM lect WHERE `fecha lectura` >= {since:Date}", True),
+        ('SELECT "a.b" FROM t', True),
+        ("SELECT `s (alias y)`.x FROM t AS `s (alias y)`", True),
+        ("SELECT `fecha_lectura`, 'a b' AS x FROM t", False),
+    ],
+)
+def test_a_clickhouse_name_explain_ast_cannot_delimit_is_seen(sql: str, spaced: bool) -> None:
+    # #162 Reviewer pass 7: `EXPLAIN AST` prints names as is; the rule reads a name up to its
+    # first space, so such names are refused for the `{since:…}` bound (`describe_model`).
+    from orvex.transform.clickhouse import scan
+
+    assert scan(sql).spaced_name is spaced

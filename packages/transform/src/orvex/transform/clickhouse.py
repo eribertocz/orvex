@@ -84,6 +84,9 @@ class Scan:
     # a separator): ClickHouse prints names unescaped in `EXPLAIN AST`, where it could forge a
     # line of the tree.
     unsafe_name: bool = False
+    # A quoted name with a space, a dot or a parenthesis: `EXPLAIN AST` prints it as is, so a
+    # node's name could not be told from what follows it (`fecha lectura` read as `fecha`).
+    spaced_name: bool = False
 
 
 class ScanError(ValueError):
@@ -187,13 +190,14 @@ def scan(sql: str) -> Scan:
     quoted identifier, comment or parameter is not terminated."""
     # The SQL with strings, quoted identifiers and comments blanked out (same offsets).
     masked = list(sql)
-    unsafe_name = False
+    unsafe_name = spaced_name = False
     for start, end, kind in _tokens(sql):
         if kind == "skipped":
             masked[start:end] = [" "] * (end - start)
             if sql[start] in '"`':
                 name = sql[start + 1 : end - 1]
                 unsafe_name = unsafe_name or "\\" in name or not name.isprintable()
+                spaced_name = spaced_name or any(char in name for char in " .()")
     code = "".join(masked)
     parameters: list[Parameter] = []
     index = 0
@@ -213,7 +217,7 @@ def scan(sql: str) -> Scan:
     if len(segments) > 1 and not segments[-1].strip():
         last = code.rindex(";")
         text = sql[:last] + sql[last + 1 :]
-    return Scan(tuple(parameters), statements, text, unsafe_name)
+    return Scan(tuple(parameters), statements, text, unsafe_name, spaced_name)
 
 
 # --- the `since` parameter type -------------------------------------------------------------
@@ -761,9 +765,9 @@ def _per_row(function: str) -> bool:
 
 
 def _aliased(node: _Node) -> str:
-    """The alias a node gives itself in `EXPLAIN AST` (`(alias day)`), lowercase; "" for none."""
+    """The alias a node gives itself in `EXPLAIN AST` (`(alias day)`); "" for none."""
     found = re.search(r"\(alias ([^)]+)\)", node.detail)
-    return found.group(1).lower() if found is not None else ""
+    return found.group(1) if found is not None else ""
 
 
 def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
@@ -783,34 +787,39 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
       `DISTINCT ON` or `SAMPLE` (`EXPLAIN AST` shows neither `DISTINCT` nor which bare
       condition is `HAVING`: with the column passed through and no `GROUP BY`, neither can
       group rows);
-    - the column matched by name (any letter case); a qualifier, if any, names that query's
+    - the column matched by name, in its own letter case (ClickHouse names are case-sensitive;
+      a quoted name with a space, dot or parenthesis is refused by the caller, as `EXPLAIN AST`
+      prints names as is); a qualifier, if any, names that query's
       table (its alias or name);
     - one exception to "as itself": in the query whose `WHERE` holds the bound, the time column
       may be renamed or computed (`event_time AS read_at`, `toDate(event_time) AS day`) when the
       bound names it without a qualifier. ClickHouse then reads the name as that alias
       (`prefer_column_name_to_alias = 0`, which every validation and run query sets), so the
-      bound bounds the output column.
+      bound bounds the output column;
+    - no alias named like the time column anywhere but as a select-list item (`WITH … AS day`,
+      `ORDER BY … AS day`, `(… AS day)` in a condition): ClickHouse would read the select
+      list's name as that alias.
 
     A tree that cannot be read counts as no."""
     root = _ast(tree)
     if root is None:
         return False
-    wanted = time_column.lower()
+    wanted = time_column  # ClickHouse names are case-sensitive
     row_queries: dict[int, set[str]] = {}
 
     def is_time_column(node: _Node, names: set[str]) -> bool:
         if node.kind != "Identifier":
             return False
-        qualifier, _, name = node.detail.split(" ", 1)[0].lower().rpartition(".")
-        return name == wanted and (not qualifier or qualifier in names)
+        qualifier, _, name = node.detail.split(" ", 1)[0].rpartition(".")
+        return name == wanted and (not qualifier or qualifier.lower() in names)
 
     def named(node: _Node) -> str:
         """The name a select-list item gives its column ("" when it is not a plain one)."""
         alias = re.search(r"\(alias ([^)]+)\)", node.detail)
         if alias is not None:
-            return alias.group(1).lower()
+            return alias.group(1)
         if node.kind == "Identifier":
-            return node.detail.split(" ", 1)[0].lower().rpartition(".")[2]
+            return node.detail.split(" ", 1)[0].rpartition(".")[2]
         return ""
 
     computed: set[int] = set()  # row queries whose time column is a computed alias
@@ -1546,7 +1555,8 @@ def describe_model(
             and incremental.strategy == "partition_overwrite"
             and since is not None
             and (
-                writes_since_mark(plain)
+                found.spaced_name
+                or writes_since_mark(plain)
                 or not since_is_a_lower_bound(
                     source.explain(mark_since(found), since), incremental.time_column.root
                 )

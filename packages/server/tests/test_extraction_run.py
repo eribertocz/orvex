@@ -603,6 +603,13 @@ def test_a_since_bound_that_reads_another_column_is_refused(
         "WHERE e.day >= {since:Date}",
         "SELECT event_id, month, day FROM events AS e WHERE e.day >= {since:Date} "
         "ORDER BY toDate(event_time) AS day",
+        # Reviewer pass 7: a name with a space, read only up to it in `EXPLAIN AST`; a column
+        # that differs only in letter case (ClickHouse names are case-sensitive).
+        "SELECT event_id, month, day FROM (SELECT *, toDate(event_time) AS `day read` "
+        "FROM events) WHERE `day read` >= {since:Date}",
+        "SELECT event_id, month, Day AS day FROM (SELECT event_id, month, "
+        "toDate(event_time) AS Day, toDate('2026-10-01') AS day FROM events) AS cs "
+        "WHERE cs.day >= {since:Date}",
     ],
     ids=[
         "in",
@@ -627,6 +634,8 @@ def test_a_since_bound_that_reads_another_column_is_refused(
         "limit-not-zero-outside",
         "with-alias",
         "order-by-alias",
+        "spaced-name",
+        "letter-case",
     ],
 )
 def test_a_since_bound_the_oldest_row_check_cannot_follow_is_refused(
