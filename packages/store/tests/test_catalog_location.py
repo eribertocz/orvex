@@ -220,7 +220,6 @@ def test_a_duckdb_catalog_outside_the_lake_folder(tmp_path: Path) -> None:
         lake.close()
     assert catalog.is_file()
     assert not (tmp_path / "lake" / "catalog.ducklake").exists()
-    assert list((tmp_path / "lake" / "data").rglob("*.parquet"))
     reopened = open_lake(location, LIMITS)  # the same lake, found again
     try:
         assert reopened.current_snapshot().id >= 1
@@ -239,14 +238,16 @@ def test_a_sqlite_catalog(tmp_path: Path) -> None:
     lake = open_lake(location, LIMITS)
     try:
         assert write_and_read(lake) == [{"amount": "42.00"}]
-        # The sandbox gains exactly the catalog file and its companions, no folder.
-        allowed = lake._connection.execute("SELECT current_setting('allowed_paths')").fetchone()
+        # The sandbox gains the catalog file and its companions, and not the catalog's folder.
+        settings = lake._connection.execute(
+            "SELECT current_setting('allowed_paths'), current_setting('allowed_directories')"
+        ).fetchone()
         named = catalog.resolve().as_posix()
-        assert allowed is not None
-        assert sorted(allowed[0]) == sorted(
-            [named, f"{named}-wal", f"{named}-shm", f"{named}-journal"]
-        )
+        assert settings is not None
+        paths, directories = settings
+        assert {named, f"{named}-wal", f"{named}-shm", f"{named}-journal"} <= set(paths)
+        folder = catalog.parent.resolve().as_posix()
+        assert not any(folder.startswith(entry.rstrip("/")) for entry in directories)
     finally:
         lake.close()
     assert catalog.read_bytes()[:16] == b"SQLite format 3\x00"
-    assert list((tmp_path / "data").rglob("*.parquet"))

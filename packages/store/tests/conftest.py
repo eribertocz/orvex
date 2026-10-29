@@ -65,8 +65,9 @@ def make_location(kind: str, tmp_path: Path) -> AnyLocation:
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     """Each lake test runs on the local and the PostgreSQL catalog; a module that sets
-    `EVERY_CATALOG = True` (the shared contract tests) also runs on SQLite (ADR-0027 §2)."""
-    if "location" in metafunc.fixturenames:
+    `EVERY_CATALOG = True` (the shared contract tests) also runs on SQLite (ADR-0027 §2). A
+    module with its own `location` fixture keeps it, unparametrized."""
+    if "location" in metafunc.fixturenames and not hasattr(metafunc.module, "location"):
         kinds = ["local", "postgres"]
         if getattr(metafunc.module, "EVERY_CATALOG", False):
             kinds.append("sqlite")

@@ -16,7 +16,7 @@ import duckdb
 import pytest
 from orvex.server import commands, scheduler
 from orvex.server.cli import main
-from orvex.server.identity import load_identity
+from orvex.server.identity import Identity, load_identity
 from orvex.server.scheduler import schedule
 from orvex.store.errors import StoreError
 
@@ -284,9 +284,9 @@ def test_idle_scheduling_does_not_touch_the_sources(
     checks: list[int] = []
     original = commands.check_project
 
-    def counted(folder: Path) -> commands.Checked:
+    def counted(folder: Path, identity: Identity | None = None) -> commands.Checked:
         checks.append(1)
-        return original(folder)
+        return original(folder, identity)
 
     monkeypatch.setattr(commands, "check_project", counted)
     scheduled(tmp_path, monkeypatch, START + dt.timedelta(hours=3))
@@ -310,7 +310,7 @@ def test_unreadable_records_never_crash_or_speed_up_runs(
     )
     calls: list[int] = []
 
-    def unreadable(_home: Path) -> object:
+    def unreadable(_home: Path, _place: object) -> object:
         calls.append(1)
         if len(calls) % 2:
             raise StoreError("STORE_EXTENSION_UNAVAILABLE", "unavailable", {})

@@ -169,6 +169,7 @@ def test_a_platform_without_detection_keeps_the_default_path_only(
     monkeypatch.setattr(lake_place, "file_system", lambda path: None)
     project(tmp_path, f"lake:\n  catalog:\n    type: duckdb\n    path: {tmp_path / 'c.ducklake'}\n")
     assert problem(capsys, tmp_path).startswith("LAKE_LOCATION_INVALID")
+    feed(tmp_path, 3)
     project(tmp_path, "lake:\n  catalog:\n    type: sqlite\n")  # the default path
     code, out = run(capsys, "validate", str(tmp_path))
     assert code == 0, out
