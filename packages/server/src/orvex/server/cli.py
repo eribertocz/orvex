@@ -91,7 +91,7 @@ def describe_versions(identity: Identity, versions: Versions) -> str:
 def server_config(port: int, versions: Versions, web_build: Path | None) -> uvicorn.Config:
     """Local mode binds to the loopback interface only, never to 0.0.0.0."""
     return uvicorn.Config(
-        create_app(versions, web_build),
+        create_app(versions, web_build, port),
         host=LOCAL_HOST,
         port=port,
         log_config=None,

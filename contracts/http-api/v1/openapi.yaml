@@ -43,6 +43,11 @@ components:
     METHOD_NOT_ALLOWED: >-
       The route exists but does not accept this HTTP method; the `Allow` header lists the
       methods it accepts.
+    HOST_NOT_ALLOWED: >-
+      The request's `Host` does not name this server; in local mode only `127.0.0.1:<port>` and
+      `localhost:<port>` are answered (DNS-rebinding protection).
+    ORIGIN_NOT_ALLOWED: >-
+      A browser sent the request from another site: its `Origin` is not this server's own.
     VALIDATION_FAILED: The request does not match the contract; `details` names each problem.
     INTERNAL_ERROR: An unexpected server failure; the request id identifies it in the server log.
   headers:

@@ -5,6 +5,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -67,6 +68,15 @@ def test_server_starts_and_answers(tmp_path: Path) -> None:
             except OSError:
                 time.sleep(0.1)
         assert body == {"status": "ok"}
+        # A page whose name was made to resolve to 127.0.0.1 (DNS rebinding) is refused (#45).
+        rebound = urllib.request.Request(
+            f"http://{LOCAL_HOST}:{port}/api/v1/health", headers={"Host": f"rebind.example:{port}"}
+        )
+        with pytest.raises(urllib.error.HTTPError) as refused:
+            urllib.request.urlopen(rebound)
+        with refused.value as answer:
+            assert answer.code == 400
+            assert json.loads(answer.read())["error"]["code"] == "HOST_NOT_ALLOWED"
         assert project.is_dir()
         assert (tmp_path / "instance" / "server.sqlite").is_file()
     finally:

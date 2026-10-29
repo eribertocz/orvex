@@ -17,6 +17,9 @@ from starlette.exceptions import HTTPException
 
 REQUEST_ID_HEADER = "X-Request-Id"
 API_PREFIX = "/api/"
+# Local mode answers only requests addressed to itself by one of these names (DNS rebinding).
+LOCAL_NAMES = ("127.0.0.1", "localhost")
+SHOWN = 200  # characters of a refused Host or Origin kept in the error details
 log = logging.getLogger("orvex.server.http")
 
 
@@ -38,7 +41,36 @@ def request_id_of(request: Request) -> str:
     return value
 
 
-def create_app(versions: Versions, web_build: Path | None) -> FastAPI:
+def refused_address(request: Request, port: int) -> JSONResponse | None:
+    """The refusal for a request not addressed to this local server, or None.
+
+    `Host` must name the server (`127.0.0.1:<port>` or `localhost:<port>`), so a page whose own
+    name was made to resolve to 127.0.0.1 (DNS rebinding) is refused. An `Origin`, when a browser
+    sends one, must be the server's own, so another site cannot send requests either."""
+    allowed = {f"{name}:{port}" for name in LOCAL_NAMES}
+    host = request.headers.get("host")
+    if host is None or host.lower() not in allowed:
+        return error_response(
+            400,
+            "HOST_NOT_ALLOWED",
+            "This local server answers only requests addressed to it as 127.0.0.1 or localhost",
+            request_id_of(request),
+            [v1.ErrorDetail(name="host", value=(host or "")[:SHOWN])],
+        )
+    origin = request.headers.get("origin")
+    if origin is not None and origin.lower() not in {f"http://{item}" for item in allowed}:
+        return error_response(
+            403,
+            "ORIGIN_NOT_ALLOWED",
+            "This local server answers only its own pages",
+            request_id_of(request),
+            [v1.ErrorDetail(name="origin", value=origin[:SHOWN])],
+        )
+    return None
+
+
+def create_app(versions: Versions, web_build: Path | None, port: int) -> FastAPI:
+    """The application served on 127.0.0.1:`port` (local mode)."""
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     def web_page(path: str) -> Path | None:
@@ -58,7 +90,8 @@ def create_app(versions: Versions, web_build: Path | None) -> FastAPI:
         request.state.request_id = uuid.uuid4().hex
         started = time.perf_counter()
         try:
-            response = await call_next(request)
+            # Before any route, the web build or the 404 handling.
+            response = refused_address(request, port) or await call_next(request)
         except Exception:
             log.exception("unhandled error", extra={"request_id": request.state.request_id})
             response = error_response(
