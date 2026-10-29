@@ -24,11 +24,13 @@ from orvex.contracts.store.v1 import (
 )
 from orvex.store.errors import StoreError
 from orvex.store.lake import (
+    AnyLakeLocation,
     Lake,
     Limits,
     _conninfo,
     _inline_secret,
     _require_tls,
+    _sandbox_entries,
     _with_root_cert,
     open_lake,
 )
@@ -232,6 +234,81 @@ def closed(lake: Lake, path: Path) -> None:
         lake._connection.execute(f"SELECT count(*) FROM read_csv('{path.as_posix()}')").fetchone()
 
 
+def only_listed_entries(lake: Lake, location: AnyLakeLocation) -> None:
+    """The connection may open exactly the store's own list, plus what DuckDB adds by itself:
+    the `.wal.checkpoint` and `.wal.recovery` files of each database it attached, and its
+    temporary folder (measured on DuckDB 2.0.0)."""
+    folders, files = _sandbox_entries(location, lake._spill)
+    settings = lake._connection.execute(
+        "SELECT current_setting('allowed_paths'), current_setting('allowed_directories'), "
+        "current_setting('temp_directory')"
+    ).fetchone()
+    assert settings is not None
+    paths, directories, temporary = settings
+    attached = [
+        str(path)
+        for (path,) in lake._connection.execute(
+            "SELECT path FROM duckdb_databases() WHERE path IS NOT NULL"
+        ).fetchall()
+    ]
+    by_duckdb = {f"{path}.wal.{kind}" for path in attached for kind in ("checkpoint", "recovery")}
+    assert set(files) <= set(paths)
+    assert set(paths) - set(files) <= by_duckdb, set(paths) - set(files)
+    listed = {folder.rstrip("/") + "/" for folder in folders}
+    assert listed <= set(directories)
+    assert set(directories) - listed <= {str(temporary).rstrip("/") + "/"}
+
+
+@pytest.mark.parametrize("catalog_path", [None, "elsewhere/my.ducklake"])
+def test_the_sandbox_lists_exactly_the_lake_and_its_catalog(
+    tmp_path: Path, catalog_path: str | None
+) -> None:
+    lake = (tmp_path / "lake").resolve().as_posix()
+    local = LocalLakeLocation(
+        kind="lake_location",
+        catalog="local",
+        path=str(tmp_path / "lake"),
+        catalog_path=None if catalog_path is None else str(tmp_path / catalog_path),
+    )
+    files = []
+    if catalog_path is not None:
+        named = (tmp_path / catalog_path).resolve().as_posix()
+        files = [named, f"{named}.wal"]
+    assert _sandbox_entries(local, "/spill", ["/srv/a.csv"]) == (
+        ["/spill", lake],
+        ["/srv/a.csv", *files],
+    )
+
+
+def test_the_sandbox_lists_exactly_a_sqlite_catalog_and_its_companions(tmp_path: Path) -> None:
+    catalog = (tmp_path / "catalog" / "lake.sqlite").resolve().as_posix()
+    location = SqliteLakeLocation(
+        kind="lake_location",
+        catalog="sqlite",
+        path=str(tmp_path / "catalog" / "lake.sqlite"),
+        data_path=(tmp_path / "data").as_posix() + "/",
+    )
+    assert _sandbox_entries(location, "/spill") == (
+        ["/spill", (tmp_path / "data").resolve().as_posix()],
+        [catalog, f"{catalog}-wal", f"{catalog}-shm", f"{catalog}-journal"],
+    )
+
+
+def test_the_sandbox_lists_no_catalog_file_for_postgres(tmp_path: Path) -> None:
+    location = PostgresLakeLocation(
+        kind="lake_location",
+        catalog="postgres",
+        connection="host=localhost dbname=lake user=lake",
+        password_env=PASSWORD_ENV,
+        metadata_schema="lake",
+        data_path=(tmp_path / "data").as_posix() + "/",
+    )
+    assert _sandbox_entries(location, "/spill") == (
+        ["/spill", (tmp_path / "data").resolve().as_posix()],
+        [],
+    )
+
+
 def test_a_duckdb_catalog_outside_the_lake_folder(tmp_path: Path) -> None:
     catalog = tmp_path / "elsewhere" / "my.ducklake"
     location = LocalLakeLocation(
@@ -247,10 +324,7 @@ def test_a_duckdb_catalog_outside_the_lake_folder(tmp_path: Path) -> None:
     try:
         assert write_and_read(lake) == [{"amount": "42.00"}]
         # The sandbox gains the catalog file and its write-ahead log, not their folder.
-        allowed = lake._connection.execute("SELECT current_setting('allowed_paths')").fetchone()
-        named = catalog.resolve().as_posix()
-        assert allowed is not None
-        assert {named, f"{named}.wal"} <= set(allowed[0])
+        only_listed_entries(lake, location)
         closed(lake, beside)
     finally:
         lake.close()
@@ -278,18 +352,9 @@ def test_a_sqlite_catalog(tmp_path: Path) -> None:
     try:
         assert write_and_read(lake) == [{"amount": "42.00"}]
         # The sandbox gains the catalog file and its companions, and not the catalog's folder:
-        # a file beside the catalog stays closed. (DuckDB adds entries of its own for each
-        # attached database, so the list itself is not compared for equality.)
+        # a file beside the catalog stays closed.
+        only_listed_entries(lake, location)
         closed(lake, beside)
-        settings = lake._connection.execute(
-            "SELECT current_setting('allowed_paths'), current_setting('allowed_directories')"
-        ).fetchone()
-        named = catalog.resolve().as_posix()
-        assert settings is not None
-        paths, directories = settings
-        assert {named, f"{named}-wal", f"{named}-shm", f"{named}-journal"} <= set(paths)
-        folder = catalog.parent.resolve().as_posix()
-        assert not any(folder.startswith(entry.rstrip("/")) for entry in directories)
     finally:
         lake.close()
     assert catalog.read_bytes()[:16] == b"SQLite format 3\x00"

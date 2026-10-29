@@ -638,6 +638,28 @@ def _typed(sql: str, parameters: list[Parameter]) -> str:
 READ_TABLE_FUNCTIONS = frozenset({"range", "generate_series", "unnest"})
 
 
+def _sandbox_entries(
+    location: AnyLakeLocation, spill: str, readable: Sequence[str] = ()
+) -> tuple[list[str], list[str]]:
+    """What the lake's connection may open, as (folders, files): the spill folder, the lake's
+    folder or local data folder, a catalog file with its companion files, and the declared source
+    files. Nothing else; DuckDB then adds entries of its own for each database it attaches (its
+    `.wal.checkpoint` and `.wal.recovery` files) and for its temporary folder."""
+    folders = [spill]
+    files = list(readable)
+    if isinstance(location, LocalLakeLocation):
+        folders.append(Path(location.path).resolve().as_posix())
+        if location.catalog_path is not None:
+            catalog = Path(location.catalog_path).resolve().as_posix()
+            files += [catalog, f"{catalog}.wal"]
+    elif "://" not in location.data_path:
+        folders.append(Path(location.data_path).resolve().as_posix())
+    if isinstance(location, SqliteLakeLocation):
+        catalog = Path(location.path).resolve().as_posix()
+        files += [catalog, *(f"{catalog}-{suffix}" for suffix in ("wal", "shm", "journal"))]
+    return folders, files
+
+
 class Lake:
     """One open lake. Reads may run concurrently; write transactions run one at a time."""
 
@@ -949,18 +971,7 @@ class Lake:
     ) -> None:
         """Limit file access to the lake's own folders, its catalog file and the declared source
         files, for good (DuckDB cannot undo it)."""
-        folders = [self._spill]
-        files = list(readable)
-        if isinstance(location, LocalLakeLocation):
-            folders.append(Path(location.path).resolve().as_posix())
-            if location.catalog_path is not None:
-                catalog = Path(location.catalog_path).resolve().as_posix()
-                files += [catalog, f"{catalog}.wal"]
-        elif "://" not in location.data_path:
-            folders.append(Path(location.data_path).resolve().as_posix())
-        if isinstance(location, SqliteLakeLocation):
-            catalog = Path(location.path).resolve().as_posix()
-            files += [catalog, *(f"{catalog}-{suffix}" for suffix in ("wal", "shm", "journal"))]
+        folders, files = _sandbox_entries(location, self._spill, readable)
         listed = ", ".join(_quote(folder.rstrip("/") + "/") for folder in folders)
         self._connection.sql(f"SET temp_directory = {_quote(self._spill)}")
         self._connection.sql(f"SET allowed_directories = [{listed}]")

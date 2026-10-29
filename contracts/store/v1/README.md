@@ -50,8 +50,8 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 
 ## File catalogs (`LocalLakeLocation.catalog_path`, `SqliteLakeLocation`)
 
-- `LocalLakeLocation.catalog_path`, when given, is the DuckDB catalog file instead of `<path>/catalog.ducklake`; data files stay under `<path>/data/`. The file sandbox gains exactly that file and its `.wal`.
-- `SqliteLakeLocation` keeps the catalog in the SQLite file `path` (DuckDB's official `sqlite` extension), so several processes on one machine can use the lake; data files go under `data_path`. The file sandbox gains exactly the catalog file and its `-wal`, `-shm` and `-journal` files, no folder.
+- `LocalLakeLocation.catalog_path`, when given, is the DuckDB catalog file instead of `<path>/catalog.ducklake`; data files stay under `<path>/data/`. The store adds exactly that file and its `.wal` to the file sandbox; DuckDB adds the `.wal.checkpoint` and `.wal.recovery` files of each database it attaches.
+- `SqliteLakeLocation` keeps the catalog in the SQLite file `path` (DuckDB's official `sqlite` extension), so several processes on one machine can use the lake; data files go under `data_path`. The store adds exactly the catalog file and its `-wal`, `-shm` and `-journal` files to the file sandbox, no folder.
 - A file catalog must be on a local disk; the server's loader checks that before it builds the location (`contracts/project/v1`).
 
 ## PostgreSQL catalog (`PostgresLakeLocation`)
