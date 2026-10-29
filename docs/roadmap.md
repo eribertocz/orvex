@@ -89,7 +89,7 @@
 | P1-19 | Scheduler: freshness-driven planning (minimum 5 minutes, `FRESHNESS_TOO_SHORT`), `full_refresh` cron with time zone, no overlapping runs, retries with backoff | transform |
 | P1-20 | Snapshot retention (from `project.yaml`) and compaction as maintenance runs | store |
 | P1-21 | Transformation worker process for server mode; load-performance baseline on the 100 M-row reference dataset | server |
-| P1-22 | Lake location in `project.yaml` (ADR-0027 §2): catalog (DuckDB file or SQLite on a local disk, or PostgreSQL local, networked or cloud with TLS `verify-full`) and data files (project folder, local path, network file system, object storage), optional data-file encryption (mode fixed at creation, deletion vectors off), credentials by `${env:NAME}` as temporary DuckDB secrets; every supported combination tested, invalid ones rejected | store, server |
+| P1-22 | Lake location in `project.yaml` (ADR-0027 §2): catalog (DuckDB file or SQLite on a local disk, or PostgreSQL local, networked or cloud with TLS `verify-full`; object storage over HTTPS only) and data files (project folder, local path, network file system, object storage), optional data-file encryption (mode fixed at creation, deletion vectors off), credentials by `${env:NAME}` as temporary DuckDB secrets; every supported combination tested, invalid ones rejected | store, server |
 
 **Exit criteria:** every strategy and every error code introduced in this phase tested; write–audit–publish proven with failing tests; incremental loads from PostgreSQL every 5 minutes on synthetic data without duplicates or gaps; valid lineage events; Owner demo.
 
@@ -109,7 +109,7 @@
 | P2-05 | `semantic-query` contract v1 (aggregate and detail-row modes); query binding and canonicalization | semantic |
 | P2-06 | `semantic-result` contract v1 and result envelope (Arrow schema, exact values as strings, masked columns) | semantic |
 | P2-07 | `receipt` contract v1 and receipt builder; every result from P2-12 on carries one, later issues extend its fields | semantic |
-| P2-08 | `security-policies` contract v1 and policy model parsing (`security.yaml`) | semantic |
+| P2-08 | `security-policies` contract v1 and policy model parsing (`security.yaml`), including the explicit registration of deny-list callers with nothing blocked (ADR-0027 §6) | semantic |
 | P2-09 | `security-context` contract v1 with a test provider (the real provider arrives in P3) | access |
 | P2-10 | `catalog` contract v1 (members visible to a caller) and Ossie export with loss report | semantic |
 | P2-11 | Correctness engine framework (facts, obligations, rejections) and grain algebra (C1) | semantic |
@@ -131,7 +131,7 @@
 | P2-27 | HTTP endpoints `query`, `explain`, `catalog`; corpus **21/21** becomes a required check; query performance baseline recorded | server |
 | P2-28 | Property-based tests for binder, correctness engine and planner | semantic |
 | P2-29 | Direct Query foundation (ADR-0027): engine per dataset, `CROSS_ENGINE_QUERY`, receipts naming every snapshot read, policy values from the managed lake bound as parameters with exact `NULL` semantics and a cap (`POLICY_NOT_SUPPORTED_ON_ENGINE`) | semantic, store |
-| P2-30 | Direct Query on an existing DuckLake: PostgreSQL or SQLite catalog attached `READ_ONLY` in a DuckDB instance of its own with a file sandbox, tables only, catalog version checked (`ENGINE_VERSION_UNTESTED`), served at its latest verified snapshot (evidence verified on each new snapshot); corpus green on it (development only until P3-13) | store, semantic |
+| P2-30 | Direct Query on an existing DuckLake: PostgreSQL or SQLite catalog attached `READ_ONLY` in a DuckDB instance of its own with a file sandbox, its data location separate from every other lake, tables only, catalog version checked (`ENGINE_VERSION_UNTESTED`), served at its latest verified snapshot (evidence verified on each new snapshot); corpus green on it (development only until P3-13) | store, semantic |
 
 **Exit criteria:** corpus **21/21** (including CASE-008, which SEF does not execute) on the managed lake and on every enabled Direct Query engine; every error code introduced in this phase tested; receipts on every result; evidence verification proven by tests that corrupt data; performance baseline recorded; Owner demo.
 
@@ -144,7 +144,7 @@
 
 | ID | Issue | Module |
 |---|---|---|
-| P3-01 | Normative cases: security scenarios (`conformance/security/scenarios/`) for pages, page-bound queries, rows, columns, masking, cache, export, possible values, MCP and missing attributes, plus the Direct Query cases of ADR-0027 §6 (empty allow- and deny-lists, cap, `NULL`, views and macros, files outside the data location, revoked mapping in cache) *(Owner merges)* | conformance |
+| P3-01 | Normative cases: security scenarios (`conformance/security/scenarios/`) for pages, page-bound queries, rows, columns, masking, cache, export, possible values, MCP and missing attributes, plus the Direct Query cases of ADR-0027 §6 (callers with no mapping under allow- and deny-lists, cap, `NULL`, views and macros, files outside the data location, overlapping locations, reused snapshot ids, revoked mapping in cache) *(Owner merges)* | conformance |
 | P3-02 | Users, project memberships, roles and the instance administrator (SQLite locally, PostgreSQL schema in server mode) | access |
 | P3-03 | `audit-event` contract v1; append-only audit log with hash chain; configurable retention | access |
 | P3-04 | Local authentication (`hashlib.scrypt`), server-side sessions, cookie and `Origin` rules | access |

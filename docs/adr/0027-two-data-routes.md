@@ -84,11 +84,14 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
   - The lake is attached with DuckDB's `READ_ONLY` and without automatic catalog migration.
   - The PostgreSQL catalog session is also read-only at the database level (`default_transaction_read_only = on`, as for PostgreSQL sources), or uses a role that cannot write. P2-30 shows which mechanism is used, and a connection it cannot make read-only is refused.
   - A catalog version the bundled DuckLake cannot read without migrating is refused with `ENGINE_VERSION_UNTESTED`, and so is any version the corpus has not run on.
-- **Isolation (law 3).** A lake Orvex does not own is untrusted. Its views and macros are DuckDB SQL that the reader binds, and its catalog decides which files each table reads (DuckLake allows absolute data-file paths). Four rules prevent it from reaching anything else:
+- **Isolation (law 3).** A lake Orvex does not own is untrusted. Its views and macros are DuckDB SQL that the reader binds, and its catalog decides which files each table reads (DuckLake allows absolute data-file paths). Five rules prevent it from reaching anything else:
   - **Separate instance.** Each existing DuckLake is attached in a DuckDB instance of its own, holding no other catalog and only that lake's secrets.
   - **File sandbox.**
-    - After the catalog is attached, the instance can read only the lake's declared data location: external access is limited to that prefix (DuckDB's `allowed_directories` / `allowed_paths`) and the configuration is locked (`lock_configuration`).
+    - After the catalog is attached, external access is disabled (`enable_external_access = false`). The instance can then read only an allow-list (DuckDB's `allowed_directories` / `allowed_paths`) of three things: the lake's declared data location, its SQLite catalog file if it has one, and the instance's own spill folder.
+    - Every setting the instance needs is set globally before the configuration is locked (`lock_configuration`), and `allowed_configs` never lists a security setting. Per-cursor settings used by the managed lake (time zone, replacement scans) are therefore set once, globally.
+    - P2-30 shows that a SQLite catalog still sees new snapshots under this sandbox. If it cannot, SQLite catalogs are refused for Route B.
     - Before a new snapshot is served, every data and delete file it references is checked to lie under that location. A snapshot that fails the check is never served.
+  - **Separate locations.** Validation rejects a declared data location that equals, contains or lies inside the managed lake's data location, the project or instance folders, or another existing lake's location (`STORE_SOURCE_INVALID`). The comparison uses whole path components after resolving the paths, and for object storage also the bucket and endpoint. Otherwise a catalog could point at files inside its own location that belong to the managed lake, and serve them without that data's policies.
   - **Tables only.** Semantic datasets may reference only the lake's tables. A dataset on a view is refused with `STORE_SOURCE_INVALID`, a narrower form of the rule `contracts/store/v1` applies to DuckDB and SQLite sources that define views or macros.
   - **No lake macros.** The lake is never on the instance's search path, and generated SQL qualifies every function, so no call can resolve to one of its macros.
 - **Data version.** Queries read the latest **verified** snapshot (§7).
@@ -112,6 +115,7 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
 - **Existing DuckLake:**
   - the receipt names the snapshot read and, when row policies apply, the managed-lake snapshot of each mapping table read (§6);
   - it is `exact` while all of those snapshots are retained (the external one by the lake's owner), and `explainable` afterwards;
+  - an external snapshot is identified by the connection, its id and its commit time, never by the id alone. A restored or replaced catalog can reuse ids for different data, so a current snapshot id lower than the last verified one is treated as a new lake: every cache entry of that connection is purged, the indicator turns red, and receipts naming the old snapshots become `explainable`;
   - freshness is the commit time of the snapshot read.
 - **Live engines (after v1.0.0):**
   - the receipt names the engine, connection and read instant, and is always `explainable`;
@@ -124,24 +128,26 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
 - **Mapping tables.** Mapping tables live in the managed lake (`security.md` §3.3). For a dataset on another engine:
   1. the policy's subquery on the mapping table is evaluated first on the managed lake, at a pinned snapshot;
   2. its values are bound as parameters of the engine's query: never concatenated, and never by joining engines;
-  3. the binding keeps the subquery's exact meaning, including its types, its `NULL`s and the empty set:
-     - `x NOT IN (…)` over a set that contains `NULL` still returns no rows;
-     - an empty allow-list (`IN`, `EXISTS`) is always false;
-     - an empty deny-list (`NOT IN`, `NOT EXISTS`) is always true;
+  3. the binding keeps the subquery's exact meaning, including its types and its `NULL`s. For example, `x NOT IN (…)` over a set that contains `NULL` still returns no rows;
   4. the receipt records the mapping table's snapshot.
 
   These values are the only rows Orvex holds between two engines. They are small, bounded results under ADR-0025 rule 6. A per-project cap on their number is stated in the security contract.
 - **Fail closed.**
-  - The predicate is never dropped. For a caller with no mapping under an allow-list policy, the empty set gives zero rows, as in `security.md` §3.3.
+  - **A caller with no mapping sees zero rows** under every row policy that reads a mapping table, allow-list (`IN`, `EXISTS`) and deny-list (`NOT IN`, `NOT EXISTS`) alike, on the managed lake and on every engine (`security.md` §3.3; Owner decision 9). An administrator's omission never opens data.
+    - A deny-list caller with nothing blocked must therefore be registered explicitly in the mapping.
+    - The `security-policies` contract defines how that registration is written, without `NULL`, so it cannot change a `NOT IN` result.
+  - The predicate is never dropped.
   - A value set above the cap rejects the query, and the error does not reveal how many values the mapping has.
   - A policy that cannot be placed safely on a dataset's engine makes that dataset unusable, never visible without the policy. The error is `POLICY_NOT_SUPPORTED_ON_ENGINE`, raised at model validation, or at query time for the cap.
 - **Security suite cases on every enabled engine:**
-  - an empty allow-list mapping;
-  - an empty deny-list mapping;
+  - a caller with no mapping, under an allow-list and under a deny-list (zero rows in both);
+  - a registered deny-list caller with nothing blocked;
   - a mapping above the cap;
   - a `NULL` in a deny-list mapping;
   - a view, and a macro, in an existing lake;
   - a data file outside an existing lake's declared data location;
+  - an existing lake whose declared location contains the managed lake's data location;
+  - a restored external catalog that reuses snapshot ids;
   - a mapping revoked while a result on that engine is cached.
 
 ### 7. Cache, evidence and cost outside the managed lake
@@ -150,18 +156,18 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
     - the query fingerprint;
     - the model fingerprint;
     - the permission fingerprint;
-    - the engine data version: the verified snapshot for an existing DuckLake, or the entry's read instant for a live engine, which a lookup matches while it is within `cache.ttl` (law 4: "within the declared freshness");
+    - the engine data version: the verified snapshot for an existing DuckLake (connection, id and commit time), or the entry's read instant for a live engine, which a lookup matches while it is within `cache.ttl` (law 4: "within the declared freshness");
     - the last-change snapshot of every managed-lake mapping table its policies read.
   - **Checked on every lookup.** The mapping-table snapshots are compared with the current ones on every lookup, without relying on run events. A mapping changed by a run or directly by the Builder is therefore never served from cache.
   - **Live datasets (after v1.0.0)** are cached only when they declare `cache.ttl`. An entry records its read instant and is served while its age is below the `ttl`, and the receipt shows the original read instant.
 - **Evidence** (uniqueness, cardinality, temporal non-overlap, bridge totals):
   - **Existing DuckLake.** Orvex checks the attached catalog for a new snapshot on the connection's schedule: declared per connection, at least 5 minutes, default 1 hour.
     - It verifies the file sandbox and evidence on that snapshot, and only then serves it.
-    - If a check fails, the snapshot is not served. The last verified snapshot stays visible, and the freshness indicator turns red with the reason, exactly as a failed run on the managed lake keeps the last good data.
+    - If a check fails, the whole snapshot is held back. The last verified snapshot stays visible for every dataset of that lake, and the freshness indicator turns red with the reason, until a later snapshot passes. This differs from the managed lake, where violated evidence blocks the dependent queries.
     - The indicator turns amber when the served snapshot is older than the connection's declared freshness.
     - No number silently depends on violated evidence.
   - **Live engines (after v1.0.0).** Evidence is verified on a schedule declared per connection (default daily). The receipt carries the verification instant: data changed since then is not yet checked, and the receipt says so.
-  - **Violated evidence** blocks dependent queries (`EVIDENCE_VIOLATED`), exactly as on the lake.
+  - **Violated evidence on the managed lake and on live engines** blocks dependent queries (`EVIDENCE_VIOLATED`). An existing DuckLake never reaches that state, because a snapshot with violated evidence is not served.
 - **Cost estimation (law 7)** for an existing DuckLake comes from DuckDB's `EXPLAIN` and DuckLake's statistics. Budgets are enforced while running by the separate instance's own DuckDB limits and cancellation, as for the managed lake. The managed-lake instance and every separate instance share one process memory budget and one admission control: their limits together never exceed it.
 - **Pre-aggregations (S5)** apply only to datasets in the managed lake in v1.0.0.
 
