@@ -588,6 +588,12 @@ def test_a_since_bound_that_reads_another_column_is_refused(
         "SELECT * FROM events WHERE day >= {since:Date} LIMIT 1 BY month",
         "SELECT * FROM events WHERE day >= {since:Date} ORDER BY day LIMIT 10",
         "SELECT * FROM events WHERE day >= {since:Date} - rand() % 30",
+        # Reviewer pass 4: a LIMIT whose value is a name; a UNION with the column elsewhere.
+        "WITH 25 AS n SELECT * FROM events WHERE day >= {since:Date} ORDER BY day LIMIT n",
+        "WITH 25 AS n SELECT * FROM (SELECT * FROM events WHERE day >= {since:Date}) LIMIT n",
+        "SELECT event_id, day, month FROM events WHERE day >= {since:Date} "
+        "UNION ALL SELECT event_id, month, day FROM events WHERE day >= {since:Date}",
+        "SELECT * FROM events PREWHERE event_id > 0 WHERE day >= {since:Date}",
     ],
     ids=[
         "in",
@@ -603,6 +609,10 @@ def test_a_since_bound_that_reads_another_column_is_refused(
         "limit-by",
         "limit",
         "random-bound",
+        "limit-a-name",
+        "limit-a-name-outside",
+        "union-other-order",
+        "prewhere-and-where",
     ],
 )
 def test_a_since_bound_the_oldest_row_check_cannot_follow_is_refused(

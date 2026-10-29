@@ -169,7 +169,9 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
       `GROUP BY`/`GROUP BY ALL`, `HAVING`, window function, `QUALIFY`, `LIMIT`/`OFFSET`,
       `DISTINCT ON` or sample (plain `DISTINCT` and `ORDER BY` are allowed);
     - the column is matched by name (any letter case); a qualifier, if any, must name that
-      query's table (its alias or name);
+      query's table (its alias or name); nothing on the path renames columns by position (a
+      column list `AS t(a, b)` or `WITH c(a, b)`, or a plain `UNION` whose branches use `*` or
+      return the time column at different places);
     - one exception to "as itself": the query that holds the bound may compute the time column
       (`CAST(read_at AS DATE) AS day`) when the bound names it without a qualifier and the table
       it reads has no column of that name. DuckDB then reads the name as that alias, so the
@@ -226,8 +228,31 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
         for entry in entries if isinstance(entries, list) else []:
             value = entry.get("value") if isinstance(entry, dict) else None
             if isinstance(value, dict) and isinstance(value.get("query_node"), dict):
-                found[str(entry.get("key", "")).lower()] = value["query_node"]
+                # `WITH c(a, b) AS (…)` renames by position: not followed (refused).
+                found[str(entry.get("key", "")).lower()] = (
+                    None if value.get("aliases") else value["query_node"]
+                )
         return found
+
+    def position(node: object) -> int | None:
+        """Where a branch of a positional `UNION` returns the time column: its index in an
+        explicit select list (no `*`), the same in every branch of a nested one; None when
+        unknown."""
+        if not isinstance(node, dict):
+            return None
+        if node.get("type") == "SET_OPERATION_NODE":
+            children = node.get("children")
+            found = {position(child) for child in (children if isinstance(children, list) else [])}
+            return found.pop() if len(found) == 1 else None
+        items = node.get("select_list")
+        if not isinstance(items, list) or any(
+            isinstance(item, dict) and item.get("class") == "STAR" for item in items
+        ):
+            return None
+        indexes = [
+            i for i, item in enumerate(items) if isinstance(item, dict) and named(item) == wanted
+        ]
+        return indexes[0] if len(indexes) == 1 else None
 
     def column_parts(node: Node) -> list[str]:
         """A column reference's name parts in lowercase; [] for anything else."""
@@ -345,7 +370,10 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
         if not isinstance(node, dict):
             return
         if node.get("type") == "SET_OPERATION_NODE":
-            if node.get("setop_type") in {"UNION", "UNION_BY_NAME"}:
+            kind = node.get("setop_type")
+            # A plain UNION pairs columns by position: every branch must return the time column
+            # at the same place (`UNION BY NAME` pairs them by name).
+            if kind == "UNION_BY_NAME" or (kind == "UNION" and position(node) is not None):
                 inner = scope | ctes(node)
                 children = node.get("children")
                 for child in children if isinstance(children, list) else []:
@@ -357,6 +385,8 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
         source = node.get("from_table")
         if not isinstance(source, dict) or source.get("type") not in {"BASE_TABLE", "SUBQUERY"}:
             return  # a join, a table function, no FROM: not a query the rule follows
+        if source.get("column_name_alias"):
+            return  # `AS t(a, b)` renames by position: not followed (refused)
         names = {str(source.get("alias") or "").lower()} - {""}
         if source.get("type") == "BASE_TABLE":
             names.add(str(source.get("table_name", "")).lower())
@@ -371,7 +401,11 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
             follow(subquery.get("node") if isinstance(subquery, dict) else None, inner)
         else:
             name = str(source.get("table_name", "")).lower()
-            if not source.get("schema_name") and name in inner and reads.count(name) == 1:
+            if (
+                not source.get("schema_name")
+                and inner.get(name) is not None
+                and reads.count(name) == 1
+            ):
                 # A CTE read again elsewhere (a subquery, a join) computes over the loaded rows.
                 follow(inner[name], {key: value for key, value in inner.items() if key != name})
 

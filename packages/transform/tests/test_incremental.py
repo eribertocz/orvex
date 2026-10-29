@@ -944,9 +944,12 @@ def test_the_same_column_rule_is_for_partition_overwrite_only(tmp_path: Path) ->
     [
         "SELECT * FROM (SELECT * FROM src WHERE day >= $since) AS s",
         "WITH w AS (SELECT * FROM src WHERE day >= $since) SELECT * FROM w",
-        "SELECT * FROM src WHERE day > $since UNION ALL SELECT * FROM src2 WHERE day > $since",
+        "SELECT id, day, month FROM src WHERE day > $since "
+        "UNION ALL SELECT id, day, month FROM src2 WHERE day > $since",
+        "SELECT * FROM src WHERE day > $since "
+        "UNION ALL BY NAME SELECT * FROM src2 WHERE day > $since",
     ],
-    ids=["from-subquery", "cte", "union-all"],
+    ids=["from-subquery", "cte", "union-all", "union-all-by-name"],
 )
 def test_a_bound_in_a_query_whose_rows_the_model_returns_is_accepted(
     tmp_path: Path, sql: str
@@ -1087,3 +1090,29 @@ def test_a_computed_time_column_counts_only_when_where_reads_it_as_the_alias(
 def test_without_the_columns_a_computed_time_column_is_left_to_the_server(tmp_path: Path) -> None:
     # The sidecar rules cannot see the tables: the server checks again with them.
     assert config_problems(sql_model(tmp_path, BY_DAY, FINER_DAY)) == []
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # #162 Reviewer pass 4: columns renamed by position, not by name.
+        "SELECT * FROM (SELECT month, id, CAST(read_at AS DATE) AS d, day FROM src "
+        "WHERE day > $since) AS t(month, id, day, ts)",
+        "WITH c(month, id, day, ts) AS (SELECT month, id, CAST(read_at AS DATE) AS d, day "
+        "FROM src WHERE day > $since) SELECT * FROM c",
+        "SELECT id, day, month FROM src WHERE day > $since "
+        "UNION ALL SELECT id, month, day FROM src2 WHERE day > $since",
+        "SELECT * FROM src WHERE day > $since UNION ALL SELECT * FROM src2 WHERE day > $since",
+        "SELECT * FROM src AS s(id, day, month) WHERE day > $since",
+    ],
+    ids=[
+        "subquery-column-list",
+        "cte-column-list",
+        "union-other-order",
+        "union-stars",
+        "table-column-list",
+    ],
+)
+def test_a_bound_behind_a_positional_rename_is_refused(tmp_path: Path, sql: str) -> None:
+    found = config_problems(sql_model(tmp_path, BY_DAY, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]

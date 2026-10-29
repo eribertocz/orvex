@@ -707,6 +707,38 @@ def writes_since_mark(tree: str) -> bool:
     return root is None or any(_is_mark(node) for node in _nodes(root))
 
 
+# Functions whose value is a condition: the only bare expression of a row query must be one
+# (`EXPLAIN AST` shows WHERE and LIMIT alike).
+_CONDITIONS = frozenset(
+    {
+        "and",
+        "or",
+        "not",
+        "xor",
+        "equals",
+        "notEquals",
+        "less",
+        "greater",
+        "lessOrEquals",
+        "greaterOrEquals",
+        "in",
+        "notIn",
+        "globalIn",
+        "globalNotIn",
+        "like",
+        "notLike",
+        "ilike",
+        "notILike",
+        "isNull",
+        "isNotNull",
+        "match",
+        "has",
+        "startsWith",
+        "endsWith",
+    }
+)
+
+
 def _per_row(function: str) -> bool:
     """A ClickHouse function whose value changes from row to row (`rand`, `randUniform`,
     `generateUUIDv4`…; `randConstant` is one value per query)."""
@@ -775,13 +807,20 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
         items = children[at - 1].children
         if any(n.kind == "SampleRatio" for n in _nodes(children[at])):
             return False
+        # `EXPLAIN AST` does not say which bare expression is WHERE, PREWHERE, HAVING, LIMIT or
+        # OFFSET. So: at most one, a condition (a boolean function), before any ORDER BY; a
+        # second one (PREWHERE with WHERE, HAVING, LIMIT…) or one after ORDER BY is refused.
+        conditions: list[_Node] = []
+        ordered = False
         for child in children[at + 1 :]:
             if child.kind == "ExpressionList":
                 if not all(item.kind == "OrderByElement" for item in child.children):
                     return False  # GROUP BY, LIMIT BY, DISTINCT ON
-            elif not any(n.kind == "Identifier" for n in _nodes(child)):
-                return False  # LIMIT, OFFSET (a condition always reads a column here)
-        conditions = [c for c in children[at + 1 :] if c.kind != "ExpressionList"]
+                ordered = True
+            elif ordered or conditions or _function_name(child) not in _CONDITIONS:
+                return False  # LIMIT, OFFSET, a second condition
+            else:
+                conditions.append(child)
         if any(n.kind == "WindowDefinition" for c in [*items, *conditions] for n in _nodes(c)):
             return False
         kept = 0
@@ -801,11 +840,41 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
                 kept += 1
         return kept == 1
 
+    def position(node: _Node) -> int | None:
+        """Where a branch of a `UNION` (columns paired by position) returns the time column: its
+        index in an explicit select list (no `*`); None when unknown."""
+        if node.kind == "SelectWithUnionQuery":
+            found = {
+                position(child)
+                for listed in node.children
+                if listed.kind == "ExpressionList"
+                for child in listed.children
+            }
+            return found.pop() if len(found) == 1 else None
+        if node.kind != "SelectQuery":
+            return None
+        at = next(
+            (i for i, child in enumerate(node.children) if child.kind == "TablesInSelectQuery"),
+            len(node.children),
+        )
+        items = node.children[at - 1].children if at > 0 else []
+        if any(item.kind in {"Asterisk", "QualifiedAsterisk"} for item in items):
+            return None
+        indexes = [i for i, item in enumerate(items) if named(item) == wanted]
+        return indexes[0] if len(indexes) == 1 else None
+
     def follow(node: _Node) -> None:
         if node.kind == "SelectWithUnionQuery":
-            for listed in node.children:
-                for child in listed.children if listed.kind == "ExpressionList" else []:
-                    follow(child)
+            branches = [
+                child
+                for listed in node.children
+                if listed.kind == "ExpressionList"
+                for child in listed.children
+            ]
+            if len(branches) > 1 and position(node) is None:
+                return  # the time column at different places, or behind a `*`
+            for child in branches:
+                follow(child)
             return
         if node.kind != "SelectQuery":
             return  # EXCEPT, INTERSECT and anything else: not followed
