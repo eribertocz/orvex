@@ -427,7 +427,8 @@ def test_a_partition_overwrite_model_is_checked_against_the_since_clickhouse_use
 def test_a_whole_partition_filter_passes_the_check(
     tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # The same model reloading whole months: the check passes and nothing is lost.
+    # The same model reloading whole months: the check passes and nothing is lost. The filter
+    # compares read_at itself (#155: `toStartOfMonth(read_at) >= …` is refused).
     folder = project(
         tmp_path,
         source,
@@ -436,7 +437,7 @@ def test_a_whole_partition_filter_passes_the_check(
                 "SELECT event_id, month, read_at FROM (SELECT event_id, "
                 "toString(toStartOfMonth(event_time)) AS month, "
                 "addMilliseconds(event_time, 500) AS read_at FROM events) "
-                "WHERE toStartOfMonth(read_at) >= toStartOfMonth({since:DateTime64(0, 'UTC')})"
+                "WHERE read_at >= toStartOfMonth({since:DateTime64(0, 'UTC')})"
             ),
             "models/raw/ch_events.yaml": (
                 "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
@@ -450,6 +451,63 @@ def test_a_whole_partition_filter_passes_the_check(
     assert code == 0, out
     assert record(folder)[0:4] == ("success", None, None, "1000")
     assert lake_value(folder, "SELECT count(*) FROM lake.raw.ch_events") == [(1000,)]
+
+
+PARTIAL_SIDECAR = (
+    "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
+    "incremental:\n  strategy: partition_overwrite\n  time_column: read_at\n"
+    "  partition_by: [month]\n  filter: manual\n"
+)
+
+
+def test_a_partial_reload_fails_and_keeps_the_table(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #155: `>= {since:…}` reloads the last row of the month again; under the #95 rule that row
+    # counted as the partition's older rows and the overwrite deleted the other 999.
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "SELECT event_id, toString(toStartOfMonth(event_time)) AS month, "
+                "event_time AS read_at FROM events "
+                "WHERE read_at >= {since:DateTime64(6, 'UTC')}"
+            ),
+            "models/raw/ch_events.yaml": PARTIAL_SIDECAR,
+        },
+    )
+    assert run(capsys, folder)[0] == 0
+    count = "SELECT count(*) FROM lake.raw.ch_events"
+    assert lake_value(folder, count) == [(1000,)]
+    code, out = run(capsys, folder)  # nothing changed at the source
+    assert code == 1, out
+    assert "PARTITION_INCOMPLETE" in out
+    assert record(folder)[0:2] == ("failed", "PARTITION_INCOMPLETE")
+    assert lake_value(folder, count) == [(1000,)]  # nothing deleted
+
+
+def test_a_since_filter_on_another_column_is_refused_before_anything_runs(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #155: the filter compares event_time, but the time column is read_at.
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "SELECT event_id, toString(toStartOfMonth(event_time)) AS month, "
+                "addMilliseconds(event_time, 500) AS read_at FROM events "
+                "WHERE event_time > {since:DateTime64(6, 'UTC')}"
+            ),
+            "models/raw/ch_events.yaml": PARTIAL_SIDECAR,
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert "time_column read_at" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
 
 
 def zoned_events(tmp_path: Path, source: dict[str, str], declared: str) -> Path:

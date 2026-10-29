@@ -662,6 +662,56 @@ def evaluated_while_describing(tree: str) -> bool:
     return any(visit(child, None, None, position) for position, child in enumerate(root.children))
 
 
+_COMPARISONS = frozenset({"equals", "greater", "greaterOrEquals", "less", "lessOrEquals"})
+_SINCE_MARK = "identity"  # wraps each `{since:…}` so it can be found in the tree (#155)
+
+
+def mark_since(found: Scan) -> str:
+    """The SQL with each `{since:…}` wrapped in `identity(…)`: the same value, but a node of its
+    own in `EXPLAIN AST`, where ClickHouse shows a bound parameter as a plain literal."""
+    text = found.text
+    for parameter in sorted(found.parameters, key=lambda item: item.offset, reverse=True):
+        if parameter.name != SINCE:
+            continue
+        match = _PARAMETER.match(text, parameter.offset)
+        assert match is not None  # the scan found it there
+        _, after = _parameter_type(text, match.end())
+        text = (
+            f"{text[: parameter.offset]}{_SINCE_MARK}({text[parameter.offset : after]})"
+            f"{text[after:]}"
+        )
+    return text
+
+
+def since_compares_time_column(tree: str, time_column: str) -> bool:
+    """Whether, in the `EXPLAIN AST` of `mark_since`'s SQL, every marked `{since:…}` is inside
+    one side of a comparison (`=`, `<`, `<=`, `>`, `>=`; `BETWEEN` becomes two of them) whose
+    other side is the identifier `time_column` (any qualifier, any letter case). A tree that
+    cannot be read counts as no."""
+    root = _ast(tree)
+    if root is None:
+        return False
+    wanted = time_column.lower()
+
+    def is_time_column(node: _Node | None) -> bool:
+        if node is None or node.kind != "Identifier":
+            return False
+        name = node.detail.split(" ", 1)[0]
+        return name.rsplit(".", 1)[-1].lower() == wanted
+
+    def check(node: _Node, other: _Node | None, compared: bool) -> bool:
+        if _function_name(node) == _SINCE_MARK:
+            return compared and is_time_column(other)
+        if _function_name(node) in _COMPARISONS and node.children:
+            arguments = node.children[0].children
+            if len(arguments) == 2:
+                left, right = arguments
+                return check(left, right, True) and check(right, left, True)
+        return all(check(child, other, compared) for child in node.children)
+
+    return check(root, None, False)
+
+
 # --- the server -----------------------------------------------------------------------------
 
 
@@ -812,9 +862,8 @@ class Source:
             raise self._error(error, "INVALID_MODEL_SQL") from None
         return [tuple(row) for row in result.result_rows]
 
-    def check_select(self, text: str, since: SinceType | None) -> None:
-        """ClickHouse parses the SQL (nothing runs); `SourceError` with `INVALID_MODEL_SQL` when it
-        does not parse or is not a SELECT."""
+    def explain(self, text: str, since: SinceType | None) -> str:
+        """ClickHouse's `EXPLAIN AST` of the SQL (nothing runs)."""
         # Sent as is: a `FORMAT` clause added after it would belong to the explained query.
         try:
             answer = self._client.raw_query(
@@ -824,7 +873,12 @@ class Source:
             )
         except ClickHouseError as error:
             raise self._error(error, "INVALID_MODEL_SQL") from None
-        tree = answer.decode("utf-8", "replace").strip("\n")
+        return answer.decode("utf-8", "replace").strip("\n")
+
+    def check_select(self, text: str, since: SinceType | None) -> None:
+        """ClickHouse parses the SQL (nothing runs); `SourceError` with `INVALID_MODEL_SQL` when it
+        does not parse or is not a SELECT."""
+        tree = self.explain(text, since)
         first = tree.lstrip().split("\n", 1)[0].strip()
         if not first.startswith("SelectWithUnionQuery"):
             kind = first.split(" ", 1)[0] or "nothing"
@@ -1207,8 +1261,27 @@ def describe_model(
         source = Source(model.config.connection, connection, password)
     except SourceError as error:
         return problem(error.code, error.message, file, model=model.name)
+    incremental = model.config.incremental
     try:
         source.check_select(found.text, since)
+        if (
+            incremental is not None
+            and incremental.strategy == "partition_overwrite"
+            and since is not None
+            and not since_compares_time_column(
+                source.explain(mark_since(found), since), incremental.time_column.root
+            )
+        ):
+            column = incremental.time_column.root
+            return problem(
+                "INVALID_MODEL_SQL",
+                f"{model.name}: a partition_overwrite model compares {{since:…}} with its "
+                f"time_column {column} only, so every partition it reloads is whole (for "
+                f"example WHERE {column} >= toStartOfMonth({{since:Date}})); each {{since:…}} "
+                f"must be one side of a comparison whose other side is {column}.",
+                file,
+                model=model.name,
+            )
         return source.describe(found.text, since)
     except SourceError as error:
         return problem(error.code, f"{model.name}: {error.message}", file, model=model.name)

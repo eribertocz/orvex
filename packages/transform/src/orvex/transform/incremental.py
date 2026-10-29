@@ -15,11 +15,11 @@ Every strategy is "delete the target rows the loaded rows replace, insert the lo
 - `partition_overwrite` deletes the rows whose partition is loaded (`NULL` is a partition).
 Rows are inserted by column name, so a target whose columns were added at the end still matches.
 
-A `partition_overwrite` run filtered by `$since` (for example `> $since`) can load only the newer
-rows of a partition, and the delete would then lose its older rows. When a loaded partition has
-older (or undated) rows in the table and none among the loaded rows, the run fails with
-`PARTITION_INCOMPLETE` (#109, decision #95). A filter that reloads only some older rows
-(`>= $since`, a hand-written lookback) is not detected; whole-partition filters are the rule.
+A `partition_overwrite` run filtered by `$since` can load only part of a partition, and the
+delete would then lose the rest. When the table holds rows of a loaded partition older than its
+oldest loaded row, or undated rows the run does not reload, the run fails with
+`PARTITION_INCOMPLETE` (#155, decision #128 option B). Its `$since` filter must compare
+`time_column` itself, which validation checks (`since_compares_time_column`).
 
 Which rows are loaded (P1-14): the model's SQL uses `$since`, bound as a typed parameter to the
 previous watermark minus `lookback` (`-infinity` on a first run or a full refresh). The new
@@ -31,6 +31,7 @@ it commits or rolls back with the rows — never the clock, and never a separate
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -132,6 +133,66 @@ def uses_since(sql: str) -> bool:
     )
 
 
+_COMPARISONS = frozenset(
+    {
+        "COMPARE_EQUAL",
+        "COMPARE_GREATERTHAN",
+        "COMPARE_GREATERTHANOREQUALTO",
+        "COMPARE_LESSTHAN",
+        "COMPARE_LESSTHANOREQUALTO",
+    }
+)
+
+
+def since_compares_time_column(sql: str, time_column: str) -> bool:
+    """Whether every `$since` of a DuckDB-SQL model is inside one side of a comparison (`=`,
+    `<`, `<=`, `>`, `>=`, `BETWEEN`) whose other side is the column `time_column` (any table
+    qualifier, any letter case), read from DuckDB's parse tree (#155). The `$since` side may be
+    an expression (`date_trunc('month', $since)`). False when the SQL cannot be read."""
+    connection = duckdb.connect()  # parses only: no files, no extensions
+    try:
+        connection.execute("SET enable_external_access = false")
+        connection.execute("SET autoload_known_extensions = false")
+        row = connection.execute("SELECT json_serialize_sql($sql)", {"sql": sql}).fetchone()
+    except duckdb.Error:
+        return False
+    finally:
+        connection.close()
+    tree = json.loads(str(row[0])) if row else {"error": True}
+    if tree.get("error"):
+        return False
+    wanted = time_column.lower()
+
+    def is_time_column(node: object) -> bool:
+        if not isinstance(node, dict) or node.get("class") != "COLUMN_REF":
+            return False
+        names = node.get("column_names")
+        return isinstance(names, list) and bool(names) and str(names[-1]).lower() == wanted
+
+    def check(node: object, sides: tuple[object, ...] | None) -> bool:
+        """`sides`: (this side, the other side) of the closest comparison above, or None."""
+        if isinstance(node, list):
+            return all(check(item, sides) for item in node)
+        if not isinstance(node, dict):
+            return True
+        kind = node.get("type")
+        if node.get("class") == "PARAMETER" and str(node.get("identifier", "")).lower() == SINCE:
+            return sides is not None and is_time_column(sides[1])
+        if node.get("class") == "COMPARISON" and kind in _COMPARISONS:
+            left, right = node.get("left"), node.get("right")
+            return check(left, (left, right)) and check(right, (right, left))
+        if node.get("class") == "BETWEEN":
+            subject = node.get("input")
+            bounds = (node.get("lower"), node.get("upper"))
+            # `$since` belongs in a bound; in the subject it is compared with the bounds.
+            return check(subject, (subject, None)) and all(
+                check(bound, (bound, subject)) for bound in bounds
+            )
+        return all(check(value, sides) for value in node.values())
+
+    return check(tree.get("statements"), None)
+
+
 def config_problems(model: Model) -> list[ModelError]:
     """Rules that need only the sidecar."""
     config = model.config
@@ -170,6 +231,24 @@ def config_problems(model: Model) -> list[ModelError]:
                 "MISSING_SINCE_PARAMETER",
                 f"{model.sql_file}: filter: manual needs $since in the SQL, where the "
                 "incremental filter belongs (for example WHERE <time_column> > $since).",
+                model.sql_file,
+                model=model.name,
+            )
+        )
+    elif (
+        not automatic
+        and not model.extraction
+        and strategy == "partition_overwrite"
+        and not since_compares_time_column(model.sql, incremental.time_column.root)
+    ):
+        column = incremental.time_column.root
+        found.append(
+            problem(
+                "INVALID_MODEL_SQL",
+                f"{model.sql_file}: a partition_overwrite model compares $since with its "
+                f"time_column {column} only, so every partition it reloads is whole (for "
+                f"example WHERE {column} >= date_trunc('month', $since)); each $since must be "
+                f"one side of a comparison whose other side is {column}.",
                 model.sql_file,
                 model=model.name,
             )
@@ -538,8 +617,7 @@ def steps(
         # no row is older, but undated rows the filter never reloads are still protected.
         by_since = bool(parameters) if filtered is None else filtered
         if strategy == "partition_overwrite" and by_since:
-            bound = Parameter(name=SINCE, type=ParameterType(PARAMETER_TYPES[kind]), value=since)
-            result.append(_cut_partitions(model, target, stage, output, bound))
+            result.append(_cut_partitions(model, target, stage, output))
         replaced = _replaced(model, target)
         if replaced is not None:
             result.append(
@@ -578,25 +656,26 @@ def _label(alias: str, kind: str) -> str:
     return f"coalesce({shown}, 'NULL')"
 
 
-def _cut_partitions(
-    model: Model, target: str, stage: str, output: Columns, since: Parameter
-) -> Check:
-    """Fails when the `$since` filter cut a loaded partition (#109, decision #95).
+def _cut_partitions(model: Model, target: str, stage: str, output: Columns) -> Check:
+    """Fails when the `$since` filter loaded only part of a loaded partition (#155, decision
+    #128 option B; #109 before it).
 
-    A loaded partition is cut when the table holds rows of it at or before `$since` while the
-    loaded rows of that partition have none, or holds rows of it with a `NULL` time column
-    while the loaded rows have none (a `$since` filter never reloads those). Partitions compare
-    with `IS NOT DISTINCT FROM`, as the delete does, so `NULL` is a partition.
+    A loaded partition is cut when the table holds dated rows of it older than the oldest dated
+    loaded row of it (or the loaded rows of it have no dated row), or holds rows of it with a
+    `NULL` time column while the loaded rows have none (a `$since` filter never reloads those).
+    Any partial reload by time leaves older rows in the table, whatever the filter's form
+    (`> $since`, `>= $since`, a lookback). Partitions compare with `IS NOT DISTINCT FROM`, as the
+    delete does, so `NULL` is a partition. Rows with the same time as the oldest loaded row but
+    not reloaded are not detected; the filter compares `time_column` itself (validation), so
+    only another condition could leave them.
 
-    This detects a filter that loads only rows newer than `$since`. It does not detect a filter
-    that reloads some but not all older rows of a partition (`>= $since`, or a hand-written
-    lookback), and it also fails when the source itself no longer has a partition's older rows
-    (then `--full-refresh` reloads it).
+    It also fails when the source itself no longer has a partition's oldest rows (then
+    `--full-refresh` reloads it).
 
     One grouped pass over the loaded rows and one over the table's rows of loaded partitions.
     Partition columns are renamed `p0`, `p1`, … inside the query, so no column name can collide
-    with the query's own names. `$since` is bound with the time column's type. The result is
-    `'0'`, or up to five cut partitions, ordered by value, and their total.
+    with the query's own names. The result is `'0'`, or up to five cut partitions, ordered by
+    value, and their total.
     """
     incremental = model.config.incremental
     assert incremental is not None
@@ -614,10 +693,8 @@ def _cut_partitions(
             for name, alias in zip(left_names, aliases, strict=True)
         )
 
-    counted = (
-        f"count(*) FILTER (WHERE {time} <= $since) AS n_older, "
-        f"count(*) FILTER (WHERE {time} IS NULL) AS n_undated"
-    )
+    # `min` skips NULL times: `oldest` is NULL when a partition has no dated row.
+    counted = f"min({time}) AS oldest, count(*) FILTER (WHERE {time} IS NULL) AS n_undated"
     labels = [
         _label(f"loaded.{alias}", types.get(column.root.lower(), ""))
         for column, alias in zip(incremental.partition_by, aliases, strict=True)
@@ -631,7 +708,8 @@ def _cut_partitions(
         "GROUP BY ALL), "
         f"cut AS (SELECT {label} AS cut_label, row_number() OVER (ORDER BY {order}) AS cut_rank "
         f"FROM loaded JOIN held ON {matches('held', aliases)} "
-        "WHERE (held.n_older > 0 AND loaded.n_older = 0) "
+        "WHERE (held.oldest IS NOT NULL "
+        "AND (loaded.oldest IS NULL OR held.oldest < loaded.oldest)) "
         "OR (held.n_undated > 0 AND loaded.n_undated = 0)) "
         "SELECT CASE WHEN count(*) = 0 THEN '0' ELSE "
         f"string_agg(cut_label, ', ' ORDER BY cut_rank) FILTER (WHERE cut_rank <= {_CUT_SHOWN}) "
@@ -643,12 +721,12 @@ def _cut_partitions(
         sql,
         "PARTITION_INCOMPLETE",
         f"{model.name}: the $since filter loaded only part of these partitions ({partition_by}): "
-        "{detail}. The table holds rows of them that this run did not reload (at or before "
-        f"$since, or with a NULL {name}), and partition_overwrite would delete them; nothing is "
+        "{detail}. The table holds rows of them older than the oldest row this run loaded of "
+        f"them, or with a NULL {name}, and partition_overwrite would delete them; nothing is "
         "written. Load whole partitions, for example "
         f"WHERE {name} >= date_trunc('month', $since) for monthly partitions; if the source "
         "itself no longer has those rows, use --full-refresh.",
-        (since,),
+        (),
         detail=True,
     )
 

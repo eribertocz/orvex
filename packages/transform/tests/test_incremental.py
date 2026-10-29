@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import duckdb
+import pytest
 from orvex.contracts.store.v1 import Parameter, StatementRequest
 from orvex.transform.incremental import (
     Check,
@@ -684,7 +685,9 @@ def test_first_runs_full_refreshes_and_unfiltered_models_skip_the_check(tmp_path
         )
 
 
-def test_since_reaches_the_check_only_as_a_bound_parameter(tmp_path: Path) -> None:
+def test_the_check_needs_no_since_value(tmp_path: Path) -> None:
+    # #155: the oldest-row rule compares loaded and held rows only; `$since` is not bound into
+    # the check, and its value never appears in the SQL.
     chosen = model(tmp_path, FILTERED)
     existing = [("month", "VARCHAR"), ("n", "INTEGER"), ("read_at", "DATE")]
     (check,) = [
@@ -693,9 +696,7 @@ def test_since_reaches_the_check_only_as_a_bound_parameter(tmp_path: Path) -> No
         if isinstance(step, Check) and step.code == "PARTITION_INCOMPLETE"
     ]
     assert "2026-10-20" not in check.sql
-    assert [(p.name, p.type.root, p.value) for p in check.parameters] == [
-        ("since", "DATE", "2026-10-20")
-    ]
+    assert list(check.parameters) == []
 
 
 def test_partition_columns_cannot_collide_with_the_check_s_own_names(tmp_path: Path) -> None:
@@ -774,3 +775,130 @@ def test_enum_values_are_quoted(tmp_path: Path) -> None:
     assert code == "PARTITION_INCOMPLETE"
     assert message is not None
     assert ": 'NULL' (1 in total)." in message
+
+
+# --- #155: the oldest-row rule (decision #128, option B) ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("sql", "loaded"),
+    [
+        ("SELECT * FROM src WHERE read_at >= $since", 6),
+        ("SELECT * FROM src WHERE read_at > $since - INTERVAL 3 DAY", 8),
+    ],
+    ids=["at-or-after-since", "hand-written-lookback"],
+)
+def test_a_partial_reload_fails_and_keeps_the_table(tmp_path: Path, sql: str, loaded: int) -> None:
+    # The #128 measurements: 20 rows became 6 and 8 under the #95 rule.
+    chosen = model(tmp_path, FILTERED)
+    connection = partition_lake()
+    reloaded = connection.execute(
+        f"SELECT count(*) FROM ({sql.replace('$since', "DATE '2026-10-20'")}) "
+        "WHERE month = '2026-10'"
+    ).fetchall()
+    assert reloaded == [(loaded,)]
+    code, message = run_since(connection, chosen, sql, "2026-10-20")
+    assert code == "PARTITION_INCOMPLETE"
+    assert message is not None
+    assert "older than the oldest row this run loaded" in message
+    assert connection.execute("SELECT count(*), max(n) FROM s.m").fetchall() == [(20, 0)]
+
+
+def test_a_source_that_dropped_its_oldest_row_fails_until_a_full_refresh(tmp_path: Path) -> None:
+    chosen = model(tmp_path, FILTERED)
+    connection = partition_lake()
+    connection.execute("DELETE FROM src WHERE read_at = DATE '2026-10-01'")
+    code, message = run_since(connection, chosen, WHOLE, "2026-10-20")
+    assert code == "PARTITION_INCOMPLETE"
+    assert message is not None
+    assert "--full-refresh" in message
+    assert connection.execute("SELECT count(*) FROM s.m").fetchall() == [(20,)]
+    assert run_since(connection, chosen, WHOLE, "2026-10-20", full_refresh=True) == (None, None)
+    assert connection.execute(
+        "SELECT month, count(*) FROM s.m GROUP BY month ORDER BY month"
+    ).fetchall() == [("2026-10", 24), ("2026-11", 1)]
+
+
+def test_the_same_oldest_time_passes(tmp_path: Path) -> None:
+    # The documented limit: a row with the oldest loaded time, not reloaded, is not detected.
+    chosen = model(tmp_path, FILTERED)
+    connection = partition_lake()
+    connection.execute("INSERT INTO s.m VALUES ('2026-10', 7, DATE '2026-10-01')")
+    assert run_since(connection, chosen, WHOLE, "2026-10-20") == (None, None)
+
+
+def test_only_undated_loaded_rows_of_a_dated_partition_fail(tmp_path: Path) -> None:
+    by_region = FILTERED.replace("[month]", "[region]")
+    chosen = model(tmp_path, by_region)
+    connection = lake()
+    connection.execute("CREATE SCHEMA s")
+    connection.execute(
+        "CREATE TABLE s.m AS SELECT * FROM (VALUES ('n', 1, DATE '2026-10-01')) "
+        "AS t(region, n, read_at)"
+    )
+    connection.execute(
+        "CREATE TABLE src AS SELECT * FROM (VALUES ('n', 2, CAST(NULL AS DATE))) "
+        "AS t(region, n, read_at)"
+    )
+    reloads = "SELECT * FROM src WHERE read_at > $since OR read_at IS NULL"
+    code, _ = run_since(connection, chosen, reloads, "2026-10-02")
+    assert code == "PARTITION_INCOMPLETE"
+    assert connection.execute("SELECT n FROM s.m").fetchall() == [(1,)]
+
+
+def sql_model(tmp_path: Path, sidecar: str, sql: str) -> Model:
+    folder = tmp_path / "models" / "s"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "m.sql").write_text(sql, encoding="utf-8")
+    (folder / "m.yaml").write_text(sidecar, encoding="utf-8")
+    found = discover_models(tmp_path, {})
+    return found.models[0]
+
+
+BY_DAY = (
+    "version: 1\nmaterialized: incremental\n"
+    "incremental: {strategy: partition_overwrite, time_column: day, partition_by: [month], "
+    "filter: manual}\n"
+)
+
+
+@pytest.mark.parametrize(
+    "where",
+    [
+        "read_at > $since",
+        "coalesce(read_at, day) > $since",
+        "day > $since AND $since IS NOT NULL",
+    ],
+    ids=["finer-column", "expression", "outside-a-comparison"],
+)
+def test_a_since_filter_on_another_column_is_refused(tmp_path: Path, where: str) -> None:
+    chosen = sql_model(tmp_path, BY_DAY, f"SELECT * FROM src WHERE {where}")
+    found = config_problems(chosen)
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+    assert "time_column day" in found[0].message
+
+
+def test_since_outside_a_comparison_in_the_select_list_is_refused(tmp_path: Path) -> None:
+    chosen = sql_model(tmp_path, BY_DAY, "SELECT $since AS s, * FROM src WHERE day > $since")
+    assert [item.code.root for item in config_problems(chosen)] == ["INVALID_MODEL_SQL"]
+
+
+@pytest.mark.parametrize(
+    "where",
+    [
+        "day > $since",
+        "m.day >= date_trunc('month', $since)",
+        "$since < day",
+        "day BETWEEN $since AND $since + INTERVAL 1 MONTH",
+        "DAY > $since - INTERVAL 3 DAY",
+    ],
+)
+def test_a_since_filter_on_the_time_column_is_accepted(tmp_path: Path, where: str) -> None:
+    chosen = sql_model(tmp_path, BY_DAY, f"SELECT * FROM src AS m WHERE {where}")
+    assert config_problems(chosen) == []
+
+
+def test_the_same_column_rule_is_for_partition_overwrite_only(tmp_path: Path) -> None:
+    append = BY_DAY.replace("partition_overwrite", "append").replace(", partition_by: [month]", "")
+    chosen = sql_model(tmp_path, append, "SELECT * FROM src WHERE read_at > $since")
+    assert config_problems(chosen) == []
