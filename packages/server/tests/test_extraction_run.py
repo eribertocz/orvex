@@ -7,6 +7,7 @@ administrator in `TRANSFORM_TEST_CLICKHOUSE_USER` / `_PASSWORD`. Each test gets 
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import threading
@@ -501,3 +502,75 @@ def test_a_time_since_on_a_zoned_column_is_exact(
     assert code == 0, out
     assert record(folder)[0:4] == ("success", None, None, "0")
     assert lake_value(folder, count) == [(111,)]
+
+
+def reconciled(tmp_path: Path, source: dict[str, str], rows: int) -> Path:
+    """The §3.5 extraction model with reconciliation checks against a Parquet copy of the
+    source's first `rows` events (DuckDB cannot read ClickHouse, so the copy stands in)."""
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": EXAMPLE,
+            "models/raw/ch_events.yaml": EXTRACTION
+            + "reconciliation:\n"
+            + "  - {name: rows, measure: count(*), source: feed.data}\n"
+            + "  - {name: total, measure: sum(value), source: feed.data}\n",
+        },
+    )
+    (folder / "data").mkdir()
+    copy = duckdb.connect()
+    copy.execute(
+        "COPY (SELECT i::UBIGINT AS event_id, CAST(i / 8 AS DECIMAL(18,4)) AS value "
+        f"FROM range({rows}) AS r(i)) TO '{folder / 'data' / 'feed.parquet'}'"
+    )
+    copy.close()
+    with (folder / "connections.yaml").open("a", encoding="utf-8") as connections:
+        connections.write("  feed:\n    type: parquet\n    path: data/feed.parquet\n")
+    return folder
+
+
+def reconciliation_results(folder: Path) -> list[dict[str, object]]:
+    (row,) = lake_value(
+        folder,
+        "SELECT reconciliation FROM lake._meta.run_records WHERE model = 'raw.ch_events' "
+        "ORDER BY started_at DESC LIMIT 1",
+    )
+    found: list[dict[str, object]] = json.loads(str(row[0]))
+    return found
+
+
+def test_an_extraction_model_is_reconciled_after_its_load(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The issue's goal: after the load, the usual tests and reconciliation apply.
+    folder = reconciled(tmp_path, source, 1000)
+    code, out = main_output(capsys, ["validate", str(folder)])
+    assert code == 0, out
+    code, out = run(capsys, folder)
+    assert code == 0, out
+    assert reconciliation_results(folder) == [
+        {"name": "rows", "outcome": "passed", "failing_rows": "0"},
+        {"name": "total", "outcome": "passed", "failing_rows": "0"},
+    ]
+    assert lake_value(folder, "SELECT count(*) FROM lake.raw.ch_events") == [(1000,)]
+
+
+def test_a_failed_reconciliation_rolls_the_extraction_back(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    folder = reconciled(tmp_path, source, 999)  # the source copy lacks the last event
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "RECONCILIATION_FAILED" in out
+    assert "Traceback" not in out
+    assert reconciliation_results(folder) == [
+        {"name": "rows", "outcome": "failed", "failing_rows": "1"},
+        {"name": "total", "outcome": "failed", "failing_rows": "1"},
+    ]
+    # Only the run records commit: the extracted rows are rolled back with the run.
+    assert lake_value(
+        folder,
+        "SELECT count(*) FROM information_schema.tables "
+        "WHERE table_catalog = 'lake' AND table_name = 'ch_events'",
+    ) == [(0,)]

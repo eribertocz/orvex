@@ -209,31 +209,30 @@ def _bind(
                     _stand_in(lake, model, [(c.name, c.mapped.duckdb) for c in described])
                     # DuckDB's own names for the mapped types, as for every other model.
                     columns[name] = lake.describe(_relation_sql(model))
-                    if model.config.tests:
-                        problems += _bind_tests(lake, model, columns, by_name, relations)
-                    continue
-                try:
-                    output = _describe(lake, model, compiled_sql(model, by_name))
-                except StoreError as error:
-                    failed.add(name)
-                    problems.append(
-                        Problem(
-                            "INVALID_MODEL_SQL",
-                            model.sql_file,
-                            None,
-                            f"{name}: {_store_message(error)}",
+                else:
+                    try:
+                        output = _describe(lake, model, compiled_sql(model, by_name))
+                    except StoreError as error:
+                        failed.add(name)
+                        problems.append(
+                            Problem(
+                                "INVALID_MODEL_SQL",
+                                model.sql_file,
+                                None,
+                                f"{name}: {_store_message(error)}",
+                            )
                         )
-                    )
-                    continue
-                columns[name] = output
-                if _automatic(model):
-                    proven = _prove_filter(lake, model, output, by_name)
-                    if isinstance(proven, Problem):
-                        problems.append(proven)
-                    else:
-                        filtered[name] = proven
-                if model.config.materialized != "view":
-                    _stand_in(lake, model, output)
+                        continue
+                    columns[name] = output
+                    if _automatic(model):
+                        proven = _prove_filter(lake, model, output, by_name)
+                        if isinstance(proven, Problem):
+                            problems.append(proven)
+                        else:
+                            filtered[name] = proven
+                    if model.config.materialized != "view":
+                        _stand_in(lake, model, output)
+                # Tests and reconciliation check the stored table, whatever produced it.
                 if model.config.tests:
                     problems += _bind_tests(lake, model, columns, by_name, relations)
                 if model.config.reconciliation:

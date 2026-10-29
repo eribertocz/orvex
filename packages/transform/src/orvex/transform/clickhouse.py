@@ -291,7 +291,8 @@ def since_column_problems(model: Model, columns: tuple[Column, ...]) -> list[Mod
             f"model whose time_column {found.name} is a {found.clickhouse}: ClickHouse compares "
             "a date with it at midnight in a zone the run cannot see, so the run cannot tell "
             "which rows of a partition it reloaded. Declare {since:DateTime64(p, 'zone')} as "
-            "precise as the time column, or use a Date time column.",
+            "precise as the time column, or use a Date time column and compare {since:Date} "
+            "with it.",
             model.sql_file,
             model=model.name,
         )
@@ -1356,8 +1357,10 @@ def since_bound(since: SinceType, text: str, server: str) -> tuple[str, str]:
     own boundary, whatever zone it compared in. ClickHouse reads an ambiguous local time as the
     earlier instant (measured on 26.9), as `fold=0` does here.
 
-    A run's own checks compare with this value, not with the stored watermark: `since_value`
-    truncates to the declared type, so rows between the two are read again (#98)."""
+    The partition check of `partition_overwrite` (the only check that uses it today) compares
+    with this value, not with the stored watermark: `since_value` truncates to the declared type,
+    so rows between the two are read again (#98). A date's instant is kept as its earliest
+    midnight, the value no row ClickHouse did not read is ever after."""
     local = dt.datetime.fromisoformat(text)
     zone = _since_zone(since, server, earliest=True)
     instant = local.replace(tzinfo=zone).astimezone(dt.UTC)
