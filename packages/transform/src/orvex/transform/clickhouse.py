@@ -662,13 +662,16 @@ def evaluated_while_describing(tree: str) -> bool:
     return any(visit(child, None, None, position) for position, child in enumerate(root.children))
 
 
-_COMPARISONS = frozenset({"equals", "greater", "greaterOrEquals", "less", "lessOrEquals"})
-_SINCE_MARK = "identity"  # wraps each `{since:…}` so it can be found in the tree (#155)
+# `time_column > …`, `>= …` (and the same written the other way round), as in DuckDB (#155).
+_FROM_BELOW = {"greater": 0, "greaterOrEquals": 0, "less": 1, "lessOrEquals": 1}
+_SINCE_MARK = "identity"  # `identity(identity({since:…}))` marks a parameter in the tree (#155)
 
 
 def mark_since(found: Scan) -> str:
-    """The SQL with each `{since:…}` wrapped in `identity(…)`: the same value, but a node of its
-    own in `EXPLAIN AST`, where ClickHouse shows a bound parameter as a plain literal."""
+    """The SQL with each `{since:…}` wrapped in `identity(identity(…))`: the same value, but
+    nodes of their own in `EXPLAIN AST`, where ClickHouse shows a bound parameter as a plain
+    literal. A model that itself nests `identity(identity(…))` is refused
+    (`writes_since_mark`), so the mark cannot be forged."""
     text = found.text
     for parameter in sorted(found.parameters, key=lambda item: item.offset, reverse=True):
         if parameter.name != SINCE:
@@ -677,39 +680,93 @@ def mark_since(found: Scan) -> str:
         assert match is not None  # the scan found it there
         _, after = _parameter_type(text, match.end())
         text = (
-            f"{text[: parameter.offset]}{_SINCE_MARK}({text[parameter.offset : after]})"
-            f"{text[after:]}"
+            f"{text[: parameter.offset]}{_SINCE_MARK}({_SINCE_MARK}("
+            f"{text[parameter.offset : after]})){text[after:]}"
         )
     return text
 
 
-def since_compares_time_column(tree: str, time_column: str) -> bool:
-    """Whether, in the `EXPLAIN AST` of `mark_since`'s SQL, every marked `{since:…}` is inside
-    one side of a comparison (`=`, `<`, `<=`, `>`, `>=`; `BETWEEN` becomes two of them) whose
-    other side is the identifier `time_column` (any qualifier, any letter case). A tree that
-    cannot be read counts as no."""
+def _is_mark(node: _Node) -> bool:
+    if _function_name(node) != _SINCE_MARK or not node.children:
+        return False
+    arguments = node.children[0].children
+    return len(arguments) == 1 and _function_name(arguments[0]) == _SINCE_MARK
+
+
+def _nodes(node: _Node) -> list[_Node]:
+    found = [node]
+    for child in node.children:
+        found += _nodes(child)
+    return found
+
+
+def writes_since_mark(tree: str) -> bool:
+    """Whether the model's own SQL (its `EXPLAIN AST`) nests `identity(identity(…))`, the mark
+    of `mark_since`; a tree that cannot be read counts as yes."""
+    root = _ast(tree)
+    return root is None or any(_is_mark(node) for node in _nodes(root))
+
+
+def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
+    """Whether, in the `EXPLAIN AST` of `mark_since`'s SQL, every marked `{since:…}` is in a
+    lower bound of the time column: `time_column > x` or `>= x` (or `x < time_column`, `x <=
+    time_column`), a condition of a `WHERE` (or `PREWHERE`, `HAVING`) joined to it by `and`
+    only, where `x` uses `{since:…}` and constants but no column; `OR time_column IS NULL`
+    may follow it (#155, as `incremental.
+    since_is_a_lower_bound` for DuckDB SQL). The column is matched by name (any qualifier, any
+    letter case). A tree that cannot be read counts as no."""
     root = _ast(tree)
     if root is None:
         return False
     wanted = time_column.lower()
 
-    def is_time_column(node: _Node | None) -> bool:
-        if node is None or node.kind != "Identifier":
+    def is_time_column(node: _Node) -> bool:
+        if node.kind != "Identifier":
             return False
         name = node.detail.split(" ", 1)[0]
         return name.rsplit(".", 1)[-1].lower() == wanted
 
-    def check(node: _Node, other: _Node | None, compared: bool) -> bool:
-        if _function_name(node) == _SINCE_MARK:
-            return compared and is_time_column(other)
-        if _function_name(node) in _COMPARISONS and node.children:
-            arguments = node.children[0].children
-            if len(arguments) == 2:
-                left, right = arguments
-                return check(left, right, True) and check(right, left, True)
-        return all(check(child, other, compared) for child in node.children)
+    def bound(node: _Node) -> bool:
+        inside = _nodes(node)
+        return any(_is_mark(n) for n in inside) and not any(n.kind == "Identifier" for n in inside)
 
-    return check(root, None, False)
+    def arguments(node: _Node) -> list[_Node]:
+        return node.children[0].children if node.children else []
+
+    def lower_bound(node: _Node) -> bool:
+        position = _FROM_BELOW.get(_function_name(node))
+        found = arguments(node)
+        return (
+            position is not None
+            and len(found) == 2
+            and is_time_column(found[position])
+            and bound(found[1 - position])
+        )
+
+    def is_time_null(node: _Node) -> bool:
+        found = arguments(node)
+        return _function_name(node) == "isNull" and len(found) == 1 and is_time_column(found[0])
+
+    def check(node: _Node, condition: bool) -> bool:
+        if _is_mark(node):
+            return False  # reached outside an accepted lower bound
+        if condition and lower_bound(node):
+            return True
+        if condition and _function_name(node) == "or":
+            # `time_column > {since:…} OR time_column IS NULL`: the undated rows too.
+            return all(lower_bound(child) or is_time_null(child) for child in arguments(node))
+        if condition and _function_name(node) == "and" and node.children:
+            return all(check(child, True) for child in node.children[0].children)
+        if node.kind == "SelectQuery":
+            # Its conditions (WHERE, PREWHERE, HAVING) are its bare expressions; the select
+            # list, the tables, GROUP BY and ORDER BY come as lists.
+            return all(
+                check(child, child.kind not in {"ExpressionList", "TablesInSelectQuery"})
+                for child in node.children
+            )
+        return all(check(child, False) for child in node.children)
+
+    return check(root, False)
 
 
 # --- the server -----------------------------------------------------------------------------
@@ -875,7 +932,7 @@ class Source:
             raise self._error(error, "INVALID_MODEL_SQL") from None
         return answer.decode("utf-8", "replace").strip("\n")
 
-    def check_select(self, text: str, since: SinceType | None) -> None:
+    def check_select(self, text: str, since: SinceType | None) -> str:
         """ClickHouse parses the SQL (nothing runs); `SourceError` with `INVALID_MODEL_SQL` when it
         does not parse or is not a SELECT."""
         tree = self.explain(text, since)
@@ -894,6 +951,7 @@ class Source:
             )
         if evaluated_while_describing(tree):
             raise SourceError("INVALID_MODEL_SQL", self._rows_read_message())
+        return tree
 
     def _rows_read_message(self) -> str:
         return (
@@ -1263,22 +1321,26 @@ def describe_model(
         return problem(error.code, error.message, file, model=model.name)
     incremental = model.config.incremental
     try:
-        source.check_select(found.text, since)
+        plain = source.check_select(found.text, since)
         if (
             incremental is not None
             and incremental.strategy == "partition_overwrite"
             and since is not None
-            and not since_compares_time_column(
-                source.explain(mark_since(found), since), incremental.time_column.root
+            and (
+                writes_since_mark(plain)
+                or not since_is_a_lower_bound(
+                    source.explain(mark_since(found), since), incremental.time_column.root
+                )
             )
         ):
             column = incremental.time_column.root
             return problem(
                 "INVALID_MODEL_SQL",
-                f"{model.name}: a partition_overwrite model compares {{since:…}} with its "
-                f"time_column {column} only, so every partition it reloads is whole (for "
-                f"example WHERE {column} >= toStartOfMonth({{since:Date}})); each {{since:…}} "
-                f"must be one side of a comparison whose other side is {column}.",
+                f"{model.name}: in a partition_overwrite model, {{since:…}} may only set a "
+                f"lower bound of the time_column {column}, as a WHERE condition joined by AND "
+                f"(for example WHERE {column} >= toStartOfMonth({{since:Date}})), so the run "
+                "can see any partition it loads in part; identity(identity(…)) is reserved "
+                "for that check.",
                 file,
                 model=model.name,
             )

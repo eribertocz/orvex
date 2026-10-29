@@ -302,11 +302,11 @@ PARTITION = (
     "incremental: {strategy: partition_overwrite, time_column: read_at, partition_by: [month], "
     "filter: manual}\n"
 )
-# Every row on each run, with `$since` compared to the time column itself (#155: a
-# partition_overwrite model's `$since` may appear only in such a comparison).
+# Every row on each run, with `$since` in a lower bound of the time column (#155: the only
+# place a partition_overwrite model's `$since` may be).
 BY_MONTH = (
     "SELECT id, region, kwh, strftime(read_at, '%Y-%m') AS month, read_at FROM feed.data "
-    "WHERE read_at >= $since OR read_at < $since OR read_at IS NULL"
+    "WHERE read_at > $since - INTERVAL 100 YEAR OR read_at IS NULL"
 )
 
 

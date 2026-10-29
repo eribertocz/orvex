@@ -31,7 +31,7 @@ New cross-field rules are added by the issues that implement those behaviors, as
 | `MODEL_SCHEMA_CONFLICT` | A model folder named like a connection, or `lake` |
 | `ORPHAN_MODEL_CONFIG` | A sidecar without its `.sql` |
 | `UNSUPPORTED_MODEL_KIND` | A `.py` model (reserved for after v1.0.0, ADR-0023) |
-| `INVALID_MODEL_SQL` | A DuckDB-SQL model that is not exactly one `SELECT` (or `WITH … SELECT`); for ClickHouse extraction models, SQL ClickHouse refuses or that breaks the rules of the extraction section (`{since:…}`, settings, subqueries); a `partition_overwrite` model whose `$since`/`{since:…}` filter does not compare its `time_column` (see "Partitions cut by `$since`") |
+| `INVALID_MODEL_SQL` | A DuckDB-SQL model that is not exactly one `SELECT` (or `WITH … SELECT`); for ClickHouse extraction models, SQL ClickHouse refuses or that breaks the rules of the extraction section (`{since:…}`, settings, subqueries); a `partition_overwrite` model whose `$since`/`{since:…}` is not only in a lower bound of its `time_column` (see "Partitions cut by `$since`") |
 | `MODEL_CONFIG_INVALID` | A sidecar that is not valid YAML or does not match `ModelConfig`, or whose `connection` is not a `clickhouse` connection of the project, or an incremental model with `filter: auto` whose SQL already uses `$since` (`path` `/incremental/filter`) |
 | `MODEL_REFERENCE_UNKNOWN` | A model reads a table that is neither a model (`<folder>.<name>`) nor a source (`<connection>.<table>`) |
 | `DEPENDENCY_CYCLE` | Models depend on each other in a cycle (the message lists it in order) |
@@ -152,18 +152,24 @@ The filter `<table>.<time_column> > $since` is added to the query that reads the
 
 A `partition_overwrite` run deletes every table row of each partition it loads, then inserts the loaded rows. With a `$since` filter, a run can load only part of a partition; the delete would then lose the rest. Two rules prevent it (#155, decision #128 option B).
 
-**At validation: the filter compares the time column.** In a `partition_overwrite` model with `filter: manual`, every `$since` (DuckDB SQL) or `{since:…}` (ClickHouse SQL) must be inside one side of a comparison (`=`, `<`, `<=`, `>`, `>=`, `BETWEEN`) whose other side is the model's `time_column` itself: the column, with any table qualifier and in any letter case. The `$since` side may be an expression (`date_trunc('month', $since)`, `$since - INTERVAL 3 DAY`, `toStartOfMonth({since:Date})`). Anything else, such as a filter on a finer column (`read_at > $since` with `time_column: day`), a function of the time column (`toStartOfMonth(read_at) >= …`) or a `$since` outside a comparison, is `INVALID_MODEL_SQL` before anything runs. It is read from the parse tree (DuckDB's, or ClickHouse's `EXPLAIN AST`), never from the text.
+**At validation: `$since` only sets a lower bound of the time column.** In a `partition_overwrite` model with `filter: manual`, every `$since` (DuckDB SQL) or `{since:…}` (ClickHouse SQL) must be in a comparison `time_column > x` or `time_column >= x` (or `x < time_column`, `x <= time_column`):
+- the comparison is a condition of a `WHERE` clause (in ClickHouse also `PREWHERE` or `HAVING`), joined to it by `AND` only; `OR time_column IS NULL` may follow it, to reload undated rows too;
+- `x` uses `$since` and constants but no column (`date_trunc('month', $since)`, `$since - INTERVAL 3 DAY`, `toStartOfMonth({since:Date})`);
+- `time_column` is the column itself, with any table qualifier and in any letter case.
+
+Anything else is `INVALID_MODEL_SQL` before anything runs. That includes a filter on a finer column (`read_at > $since` with `time_column: day`), a function of the time column (`toStartOfMonth(read_at) >= …`), an upper bound (`< $since + …`, `BETWEEN`), an `OR` or `NOT` around the bound, a bound that reads another column (`greatest($since, read_at)`), and a `$since` outside a comparison. Each of these can drop rows in the middle or at the end of a partition, which no check of the loaded rows can see. The rule is read from the parse tree (DuckDB's, or ClickHouse's `EXPLAIN AST`), never from the text. In ClickHouse SQL, `identity(identity(…))` is reserved for that check.
 
 **In each run: the oldest-row rule.** An incremental run with `$since` (not a first run, not a full refresh) checks, inside its transaction and before the delete, each loaded partition (`partition_by` values compared with `IS NOT DISTINCT FROM`, so `NULL` is a partition). It is cut when:
 
 - the table has dated rows of it older than the oldest dated loaded row of it, or the loaded rows of it have no dated row; or
 - the table has rows of it with a `NULL` time column, and the loaded rows of it have none (a `$since` filter never reloads those).
 
-Either fails the run with `PARTITION_INCOMPLETE` and nothing is written. Any partial reload by time fails, whatever the filter's form (`> $since`, `>= $since`, a hand-written lookback). Load whole partitions instead, for example `WHERE read_at >= date_trunc('month', $since)` for monthly partitions. A model whose SQL does not use `$since` reloads everything it selects and is not checked. The message quotes text values (`'2026-10'`), writes SQL `NULL` as `NULL`, and shortens values longer than 60 characters.
+Either fails the run with `PARTITION_INCOMPLETE` and nothing is written. With the filter a lower bound (validation), a run loads every row of a partition from some time on, so any partition it loads in part has older rows left in the table, and fails: `> $since`, `>= $since` and a hand-written lookback all do. Load whole partitions instead, for example `WHERE read_at >= date_trunc('month', $since)` for monthly partitions. A model whose SQL does not use `$since` reloads everything it selects and is not checked. The message quotes text values (`'2026-10'`), writes SQL `NULL` as `NULL`, and shortens values longer than 60 characters.
 
 Limits of the check:
 - It looks only at what the table and the loaded rows contain, so a source that deleted any of a partition's oldest rows fails it too. `--full-refresh` then rebuilds the table from what the model selects now. If the source keeps only recent data, that also removes every older partition the source no longer has.
-- A table row with the same time as the oldest loaded row, but not reloaded, is not detected. Since the filter compares the time column itself, only another condition in the filter can leave such a row out.
+- A table row with the same time as the oldest loaded row, but not reloaded, is not detected. With the filter a lower bound, only another condition of the `WHERE` clause can leave such a row out.
+- The time column is matched by name: a finer column renamed to the time column's name in a subquery is not seen.
 
 ## Compatibility
 

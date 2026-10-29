@@ -868,8 +868,27 @@ BY_DAY = (
         "read_at > $since",
         "coalesce(read_at, day) > $since",
         "day > $since AND $since IS NOT NULL",
+        # #162 Reviewer pass 1: each of these lost rows the source still had.
+        "day BETWEEN $since AND $since + INTERVAL 1 MONTH",
+        "day >= date_trunc('month', $since) AND day < $since + INTERVAL 3 DAY",
+        "day = date_trunc('month', $since) OR day >= $since",
+        "day NOT BETWEEN date_trunc('month', $since) + INTERVAL 1 DAY AND $since",
+        "day >= greatest($since, read_at::DATE)",
+        "day < $since",
+        "day > $since OR x = 1",
     ],
-    ids=["finer-column", "expression", "outside-a-comparison"],
+    ids=[
+        "finer-column",
+        "expression",
+        "outside-a-comparison",
+        "between",
+        "upper-bound",
+        "or",
+        "not-between",
+        "column-in-the-bound",
+        "only-an-upper-bound",
+        "or-another-condition",
+    ],
 )
 def test_a_since_filter_on_another_column_is_refused(tmp_path: Path, where: str) -> None:
     chosen = sql_model(tmp_path, BY_DAY, f"SELECT * FROM src WHERE {where}")
@@ -889,8 +908,10 @@ def test_since_outside_a_comparison_in_the_select_list_is_refused(tmp_path: Path
         "day > $since",
         "m.day >= date_trunc('month', $since)",
         "$since < day",
-        "day BETWEEN $since AND $since + INTERVAL 1 MONTH",
         "DAY > $since - INTERVAL 3 DAY",
+        "day > $since OR day IS NULL",
+        "(day >= $since OR day IS NULL) AND status = 'valid'",
+        "day IN (SELECT day FROM src AS s WHERE s.day > $since)",
     ],
 )
 def test_a_since_filter_on_the_time_column_is_accepted(tmp_path: Path, where: str) -> None:

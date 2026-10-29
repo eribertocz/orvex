@@ -510,6 +510,59 @@ def test_a_since_filter_on_another_column_is_refused_before_anything_runs(
     assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
 
 
+def test_a_date_time_column_with_a_month_filter_is_accepted(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #155, accepted form: a Date time column, `{since:Date}` in its lower bound.
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "SELECT event_id, toString(toStartOfMonth(event_time)) AS month, "
+                "toDate(event_time) AS day FROM events "
+                "WHERE day >= toStartOfMonth({since:Date})"
+            ),
+            "models/raw/ch_events.yaml": PARTIAL_SIDECAR.replace(
+                "time_column: read_at", "time_column: day"
+            ),
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 0, out
+    code, out = run(capsys, folder)  # the whole month again: nothing lost
+    assert code == 0, out
+    assert lake_value(folder, "SELECT count(*) FROM lake.raw.ch_events") == [(1000,)]
+
+
+def test_a_since_bound_that_reads_another_column_is_refused(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #162 Reviewer pass 1: a forged mark, and a bound that depends on a finer column.
+    sidecar = PARTIAL_SIDECAR.replace("time_column: read_at", "time_column: day")
+    for number, where in enumerate(
+        (
+            "day >= identity(identity({since:Date}))",
+            "day >= identity(if(event_time > {since:DateTime64(3, 'UTC')}, "
+            "toDate('1970-01-01'), toDate('2200-01-01')))",
+        )
+    ):
+        folder = project(
+            tmp_path / str(number),
+            source,
+            {
+                "models/raw/ch_events.sql": (
+                    "SELECT event_id, toString(toStartOfMonth(event_time)) AS month, "
+                    f"toDate(event_time) AS day FROM events WHERE {where}"
+                ),
+                "models/raw/ch_events.yaml": sidecar,
+            },
+        )
+        code, out = run(capsys, folder)
+        assert code == 1, out
+        assert "INVALID_MODEL_SQL" in out
+
+
 def zoned_events(tmp_path: Path, source: dict[str, str], declared: str) -> Path:
     """A reading every 6 hours of February, in a Tokyo-zoned column, partitioned by month."""
     return project(

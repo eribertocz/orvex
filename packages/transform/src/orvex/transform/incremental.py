@@ -19,7 +19,7 @@ A `partition_overwrite` run filtered by `$since` can load only part of a partiti
 delete would then lose the rest. When the table holds rows of a loaded partition older than its
 oldest loaded row, or undated rows the run does not reload, the run fails with
 `PARTITION_INCOMPLETE` (#155, decision #128 option B). Its `$since` filter must compare
-`time_column` itself, which validation checks (`since_compares_time_column`).
+`time_column` itself, as a lower bound, which validation checks (`since_is_a_lower_bound`).
 
 Which rows are loaded (P1-14): the model's SQL uses `$since`, bound as a typed parameter to the
 previous watermark minus `lookback` (`-infinity` on a first run or a full refresh). The new
@@ -133,22 +133,28 @@ def uses_since(sql: str) -> bool:
     )
 
 
-_COMPARISONS = frozenset(
-    {
-        "COMPARE_EQUAL",
-        "COMPARE_GREATERTHAN",
-        "COMPARE_GREATERTHANOREQUALTO",
-        "COMPARE_LESSTHAN",
-        "COMPARE_LESSTHANOREQUALTO",
-    }
-)
+# `time_column > …`, `time_column >= …` (and the same written the other way round): the only
+# comparisons a `$since` may be in, in a partition_overwrite model (#155).
+_FROM_BELOW = {
+    "COMPARE_GREATERTHAN": "left",
+    "COMPARE_GREATERTHANOREQUALTO": "left",
+    "COMPARE_LESSTHAN": "right",
+    "COMPARE_LESSTHANOREQUALTO": "right",
+}
 
 
-def since_compares_time_column(sql: str, time_column: str) -> bool:
-    """Whether every `$since` of a DuckDB-SQL model is inside one side of a comparison (`=`,
-    `<`, `<=`, `>`, `>=`, `BETWEEN`) whose other side is the column `time_column` (any table
-    qualifier, any letter case), read from DuckDB's parse tree (#155). The `$since` side may be
-    an expression (`date_trunc('month', $since)`). False when the SQL cannot be read."""
+def since_is_a_lower_bound(sql: str, time_column: str) -> bool:
+    """Whether every `$since` of a DuckDB-SQL model is in a lower bound of the time column: a
+    comparison `time_column > x` or `time_column >= x` (or `x < time_column`, `x <=
+    time_column`) that is a condition of a `WHERE` clause, joined to it by `AND` only, where `x`
+    uses `$since` and constants but no column (#155). `OR time_column IS NULL` may follow it,
+    to reload the undated rows too.
+
+    Such a filter loads every row of a partition from some time on, so the oldest-row check sees
+    any partition it cuts. An upper bound, an `OR`, a `NOT`, a `BETWEEN` or a column in `x`
+    could drop rows in the middle or at the end of a partition, which no check of the loaded
+    rows can see. The column is matched by name (any table qualifier, any letter case). Read
+    from DuckDB's parse tree; False when the SQL cannot be read."""
     connection = duckdb.connect()  # parses only: no files, no extensions
     try:
         connection.execute("SET enable_external_access = false")
@@ -163,34 +169,83 @@ def since_compares_time_column(sql: str, time_column: str) -> bool:
         return False
     wanted = time_column.lower()
 
+    def is_since(node: object) -> bool:
+        return (
+            isinstance(node, dict)
+            and node.get("class") == "PARAMETER"
+            and str(node.get("identifier", "")).lower() == SINCE
+        )
+
+    def nodes(node: object) -> list[dict[str, object]]:
+        found: list[dict[str, object]] = []
+        if isinstance(node, list):
+            for item in node:
+                found += nodes(item)
+        elif isinstance(node, dict):
+            found.append(node)
+            for value in node.values():
+                found += nodes(value)
+        return found
+
     def is_time_column(node: object) -> bool:
         if not isinstance(node, dict) or node.get("class") != "COLUMN_REF":
             return False
         names = node.get("column_names")
         return isinstance(names, list) and bool(names) and str(names[-1]).lower() == wanted
 
-    def check(node: object, sides: tuple[object, ...] | None) -> bool:
-        """`sides`: (this side, the other side) of the closest comparison above, or None."""
+    def bound(node: object) -> bool:
+        """`$since` and constants only: no column, so the bound is the same for every row."""
+        inside = nodes(node)
+        return any(is_since(n) for n in inside) and not any(
+            n.get("class") == "COLUMN_REF" for n in inside
+        )
+
+    def lower_bound(node: object) -> bool:
+        if not isinstance(node, dict) or node.get("class") != "COMPARISON":
+            return False
+        side = _FROM_BELOW.get(str(node.get("type")))
+        if side is None:
+            return False
+        other = node.get("right" if side == "left" else "left")
+        return is_time_column(node.get(side)) and bound(other)
+
+    def is_time_null(node: object) -> bool:
+        if not isinstance(node, dict) or node.get("type") != "OPERATOR_IS_NULL":
+            return False
+        children = node.get("children")
+        return isinstance(children, list) and len(children) == 1 and is_time_column(children[0])
+
+    def check(node: object, condition: bool) -> bool:
+        """`condition`: the node is a condition of a WHERE clause, joined to it by AND only."""
         if isinstance(node, list):
-            return all(check(item, sides) for item in node)
+            return all(check(item, condition) for item in node)
         if not isinstance(node, dict):
             return True
-        kind = node.get("type")
-        if node.get("class") == "PARAMETER" and str(node.get("identifier", "")).lower() == SINCE:
-            return sides is not None and is_time_column(sides[1])
-        if node.get("class") == "COMPARISON" and kind in _COMPARISONS:
-            left, right = node.get("left"), node.get("right")
-            return check(left, (left, right)) and check(right, (right, left))
-        if node.get("class") == "BETWEEN":
-            subject = node.get("input")
-            bounds = (node.get("lower"), node.get("upper"))
-            # `$since` belongs in a bound; in the subject it is compared with the bounds.
-            return check(subject, (subject, None)) and all(
-                check(bound, (bound, subject)) for bound in bounds
+        if is_since(node):
+            return False  # reached outside an accepted lower bound
+        if condition and lower_bound(node):
+            return True
+        if (
+            condition
+            and node.get("class") == "CONJUNCTION"
+            and node.get("type") == ("CONJUNCTION_OR")
+        ):
+            # `time_column > $since OR time_column IS NULL`: the undated rows too.
+            children = node.get("children")
+            return isinstance(children, list) and all(
+                lower_bound(child) or is_time_null(child) for child in children
             )
-        return all(check(value, sides) for value in node.values())
+        conjunction = node.get("class") == "CONJUNCTION" and node.get("type") == "CONJUNCTION_AND"
+        return all(
+            check(
+                value,
+                (node.get("type") == "SELECT_NODE" and key == "where_clause")
+                or (conjunction and condition and key == "children"),
+            )
+            for key, value in node.items()
+        )
 
-    return check(tree.get("statements"), None)
+    return check(tree.get("statements"), False)
 
 
 def config_problems(model: Model) -> list[ModelError]:
@@ -239,16 +294,16 @@ def config_problems(model: Model) -> list[ModelError]:
         not automatic
         and not model.extraction
         and strategy == "partition_overwrite"
-        and not since_compares_time_column(model.sql, incremental.time_column.root)
+        and not since_is_a_lower_bound(model.sql, incremental.time_column.root)
     ):
         column = incremental.time_column.root
         found.append(
             problem(
                 "INVALID_MODEL_SQL",
-                f"{model.sql_file}: a partition_overwrite model compares $since with its "
-                f"time_column {column} only, so every partition it reloads is whole (for "
-                f"example WHERE {column} >= date_trunc('month', $since)); each $since must be "
-                f"one side of a comparison whose other side is {column}.",
+                f"{model.sql_file}: in a partition_overwrite model, $since may only set a "
+                f"lower bound of the time_column {column}, as a WHERE condition joined by AND "
+                f"(for example WHERE {column} >= date_trunc('month', $since)), so the run can "
+                "see any partition it loads in part.",
                 model.sql_file,
                 model=model.name,
             )
@@ -663,11 +718,12 @@ def _cut_partitions(model: Model, target: str, stage: str, output: Columns) -> C
     A loaded partition is cut when the table holds dated rows of it older than the oldest dated
     loaded row of it (or the loaded rows of it have no dated row), or holds rows of it with a
     `NULL` time column while the loaded rows have none (a `$since` filter never reloads those).
-    Any partial reload by time leaves older rows in the table, whatever the filter's form
-    (`> $since`, `>= $since`, a lookback). Partitions compare with `IS NOT DISTINCT FROM`, as the
-    delete does, so `NULL` is a partition. Rows with the same time as the oldest loaded row but
-    not reloaded are not detected; the filter compares `time_column` itself (validation), so
-    only another condition could leave them.
+    With the filter a lower bound of `time_column` (validation, `since_is_a_lower_bound`), a
+    run loads every row of a partition from some time on, so a partition it loads in part has
+    older rows left in the table (`> $since`, `>= $since`, a lookback). Partitions compare with
+    `IS NOT DISTINCT FROM`, as the delete does, so `NULL` is a partition. Rows with the same
+    time as the oldest loaded row but not reloaded are not detected: with the filter a lower
+    bound, only another condition of the WHERE clause could leave them out.
 
     It also fails when the source itself no longer has a partition's oldest rows (then
     `--full-refresh` reloads it).
