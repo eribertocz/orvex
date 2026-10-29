@@ -1,6 +1,6 @@
 # 0012 — Result cache keyed by permission fingerprint, invalidated by runs
 
-**Status:** Accepted (2026-10-26)
+**Status:** Accepted (2026-10-26); amended in part by [ADR-0027](0027-two-data-routes.md) (cache for datasets outside the managed lake)
 
 ## Context
 Studied Cube's two-level cache (in-memory results with `refresh_key`; pre-aggregations), whose cache is hard to disable and must be isolated per tenant to avoid serving one tenant's data to another. Apache Ossie does not define caching.

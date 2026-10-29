@@ -187,10 +187,11 @@ Every run produces a **run record** (`contracts/run-record/v1`): run id, model, 
 
 | Mode | Catalog | Data files |
 |---|---|---|
-| Local (default) | DuckDB file inside `.<slug>/lake/` (single client, recommended by DuckLake for local single-user use). Only one process opens it: CLI commands (`orvex run`, `orvex validate`, and the stdio MCP server `orvex mcp`) talk to the running instance over its local API when one is running; otherwise they open the warehouse themselves, and a second opener fails with `PROJECT_LOCKED` | Local Parquet under `.<slug>/lake/data/`, or object storage |
-| Server | PostgreSQL (recommended by DuckLake for multi-user use with concurrent clients) | Local disk (processes on one machine only) or object storage |
+| Local (default) | DuckDB file inside `.<slug>/lake/` (single client, recommended by DuckLake for local single-user use). Only one process opens it: CLI commands (`orvex run`, `orvex validate`, and the stdio MCP server `orvex mcp`) talk to the running instance over its local API when one is running; otherwise they open the warehouse themselves, and a second opener fails with `PROJECT_LOCKED` | Local Parquet under `.<slug>/lake/data/` (default), another local folder, a network file system or object storage |
+| Local or server, one machine | SQLite file on a local disk (several local processes; one writer at a time) | Any of the above |
+| Server | PostgreSQL on the same machine, the network or a managed cloud service (recommended by DuckLake for multi-user use with concurrent clients) | Local disk (processes on one machine only), a network file system or object storage |
 
-- The location is declared in `project.yaml` (ADR-0027 §2). Object storage is reached through DuckDB's official extensions; its credentials are `${env:NAME}` references turned into temporary DuckDB secrets, never persisted. Processes on different machines need an absolute data path or an object-storage URL.
+- The location is declared in `project.yaml`; the full matrix and its rules are in ADR-0027 §2. Catalog files stay on a local disk. Object storage is reached through DuckDB's official extensions, and its credentials are `${env:NAME}` references turned into temporary DuckDB secrets, never persisted. Several machines need PostgreSQL plus a network file system or object storage. A remote catalog connection requires TLS. Data-file encryption is available.
 - Not offered: a MySQL catalog (known issues documented by DuckLake) and a catalog served through Quack (experimental in DuckLake).
 
 - Snapshot retention is configured by the user in `project.yaml` (default 90 days). Retention defines how long receipts stay **exactly** reproducible.

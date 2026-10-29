@@ -17,7 +17,7 @@ Records 0001–0026 were approved by the Owner during the design session of 2026
 | [0009](0009-apache-ossie-native-format.md) | Apache Ossie as the native semantic format with `ORVEX` extensions | Accepted |
 | [0010](0010-semantic-engine-scope.md) | Semantic engine scope: SEF parity plus S1–S6; normative corpus | Accepted |
 | [0011](0011-security-model.md) | Security model: roles, groups, row and column policies, own evaluator | Accepted |
-| [0012](0012-result-cache.md) | Result cache keyed by permission fingerprint, invalidated by runs | Accepted |
+| [0012](0012-result-cache.md) | Result cache keyed by permission fingerprint, invalidated by runs | Accepted; amended in part by 0027 |
 | [0013](0013-dashboards-as-yaml.md) | Dashboards as YAML validated by JSON Schema | Accepted |
 | [0014](0014-frontend-stack-and-design-system.md) | Frontend stack, design system and own matrix component | Accepted |
 | [0015](0015-traceability.md) | Receipts, OpenLineage, run records and write–audit–publish | Accepted |
@@ -30,6 +30,6 @@ Records 0001–0026 were approved by the Owner during the design session of 2026
 | [0022](0022-latest-stable-dependencies.md) | Always the latest stable versions of dependencies | Accepted |
 | [0023](0023-python-models-and-ml-extension-path.md) | Extension path for Python models, ML predictions and Python visuals (after v1.0.0) | Accepted (direction only) |
 | [0024](0024-project-writer.md) | Project writer: code editors save text as typed; forms only for dashboards and metrics | Accepted |
-| [0025](0025-lazy-relations-no-python-materialization.md) | Data stays in DuckDB: lazy relations, no materialization in Python | Accepted |
-| [0026](0026-one-dialect-per-engine.md) | One SQL dialect per engine; no transpilation (no SQLGlot) | Accepted; rule 1 to be superseded in part by 0027 after v1.0.0 |
+| [0025](0025-lazy-relations-no-python-materialization.md) | Data stays in DuckDB: lazy relations, no materialization in Python | Accepted; rule 1 to be amended in part by 0027 after v1.0.0 |
+| [0026](0026-one-dialect-per-engine.md) | One SQL dialect per engine; no transpilation (no SQLGlot) | Accepted; rules 1 and 3 to be superseded in part by 0027 after v1.0.0 |
 | [0027](0027-two-data-routes.md) | Two data routes: managed DuckLake and Direct Query, one semantic engine | Accepted (Direct Query on ClickHouse: direction only, after v1.0.0) |

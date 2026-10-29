@@ -89,7 +89,7 @@
 | P1-19 | Scheduler: freshness-driven planning (minimum 5 minutes, `FRESHNESS_TOO_SHORT`), `full_refresh` cron with time zone, no overlapping runs, retries with backoff | transform |
 | P1-20 | Snapshot retention (from `project.yaml`) and compaction as maintenance runs | store |
 | P1-21 | Transformation worker process for server mode; load-performance baseline on the 100 M-row reference dataset | server |
-| P1-22 | Lake location in `project.yaml` (ADR-0027 §2): catalog (local DuckDB file or PostgreSQL) and data files (project folder, local path or object storage), credentials by `${env:NAME}` as temporary DuckDB secrets; every supported combination tested | store, server |
+| P1-22 | Lake location in `project.yaml` (ADR-0027 §2): catalog (DuckDB file, SQLite, or PostgreSQL local, networked or cloud with TLS) and data files (project folder, local path, network file system, object storage), optional data-file encryption, credentials by `${env:NAME}` as temporary DuckDB secrets; every supported combination tested, invalid ones rejected | store, server |
 
 **Exit criteria:** every strategy and every error code introduced in this phase tested; write–audit–publish proven with failing tests; incremental loads from PostgreSQL every 5 minutes on synthetic data without duplicates or gaps; valid lineage events; Owner demo.
 

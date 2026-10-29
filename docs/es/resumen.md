@@ -6,7 +6,7 @@ Este documento resume, en lenguaje llano, lo que dicen los documentos en inglés
 
 Una herramienta BI propia, de código abierto (Apache-2.0), que:
 
-- trabaja con **dos rutas de datos** (ADR-0027): fuentes en bruto (Parquet, CSV, DuckDB, SQLite, PostgreSQL y ClickHouse por extracción) que transforma con **SQL puro** y guarda en **DuckLake**, o motores analíticos existentes (un DuckLake existente, DuckDB remoto con Quack; ClickHouse en vivo después de la versión 1.0) que consulta en vivo, sin copiar;
+- trabaja con **dos rutas de datos** (ADR-0027): fuentes en bruto (Parquet, CSV, DuckDB, SQLite, PostgreSQL y ClickHouse por extracción) que transforma con **SQL puro** y guarda en **DuckLake**, o motores analíticos existentes que consulta en su lugar, sin copiar: un DuckLake existente (en su última versión verificada), DuckDB remoto con Quack (en vivo) y, después de la versión 1.0, ClickHouse en vivo;
 - define el significado del negocio en **Apache Ossie**;
 - tiene un **motor semántico** que garantiza números correctos o rechaza la pregunta con un error claro;
 - muestra dashboards con páginas, gráficos, KPIs, filtros y la **matriz**;
@@ -65,8 +65,8 @@ Cada modelo es un `.sql` puro más un `.yaml` opcional con la configuración (in
 
 - **Un dialecto por motor, sin traducir SQL (ADR-0026):** los modelos se escriben en SQL de DuckDB. ClickHouse se puede copiar con *modelos de extracción* escritos en SQL de ClickHouse que se ejecutan en ClickHouse (solo lectura) y llegan a DuckDB como Arrow.
 - **Dos rutas, un solo motor semántico (ADR-0027):** el motor genera el SQL del motor de cada dataset a partir del mismo plan, sin traducir SQL (en la versión 1.0 todos hablan SQL de DuckDB; ClickHouse en vivo llega después). Las consultas en vivo dan recibos *explicables* (qué se leyó y a qué hora). Una consulta no puede mezclar dos motores. Cada motor se habilita solo cuando toda la batería de pruebas de números y de seguridad da resultados idénticos.
-- **Dónde vive el lago:** catálogo local o en PostgreSQL; archivos de datos en una carpeta o en almacenamiento en la nube.
-- **Los datos se quedan en DuckDB (ADR-0025):** relaciones perezosas, nada se materializa en Python, cada resultado se lee una sola vez y en un snapshot fijo.
+- **Dónde vive el lago:** catálogo en archivo DuckDB o SQLite (disco local) o en PostgreSQL (local, en la red o en la nube); archivos de datos en una carpeta local, en una carpeta de red o en la nube (S3 y compatibles, Google Cloud Storage, Azure). MySQL y Quack como catálogo no se ofrecen hasta que DuckLake los declare estables.
+- **Los datos se quedan en DuckDB (ADR-0025):** relaciones perezosas, nada se materializa en Python, cada resultado se lee una sola vez; en DuckLake, en un snapshot fijo.
 
 ## 7. Quién hace qué
 

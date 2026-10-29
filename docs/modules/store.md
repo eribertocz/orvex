@@ -28,5 +28,5 @@ Store contract tests; integration tests with real DuckDB and DuckLake (local Duc
 ## Key rules
 - Never concatenate values into SQL; bound parameters only; no `SET VARIABLE` on shared connections.
 - DuckDB memory and thread limits configured explicitly; blocking calls run in worker threads.
-- Direct Query engines (ClickHouse, remote DuckDB through Quack, an existing DuckLake attached read-only) are optional, read-only connections (ADR-0027 §3, §8); none is required to start.
+- Direct Query engines (an existing DuckLake attached read-only, remote DuckDB through Quack; ClickHouse only after v1.0.0) are optional, read-only connections (ADR-0027 §3, §8); none is required to start.
 - **ADR-0025:** relations are lazy and rerun on every read; build the query as a relation or SQL with `params`, apply budgets in SQL, read it **once** into Arrow (`to_arrow_reader`/`to_arrow_table` with explicit `batch_size`), pin the DuckLake snapshot. `DuckDBPyRelation` never leaves this module; the contract returns Arrow.
