@@ -868,13 +868,18 @@ class Source:
                 fmt="ArrowStream",
             )
         except ClickHouseError as error:
-            raise self._error(error, "SOURCE_QUERY_FAILED") from None
+            raise self.failure(error) from None
         assert isinstance(response, io.IOBase)  # `raw_stream` returns the HTTP response
         return Stream(self, response)
 
     def failure(self, error: BaseException) -> SourceError:
-        """A failure while reading the stream, worded like every other source error."""
-        return self._error(error, "SOURCE_QUERY_FAILED")
+        """A failure of a run query, worded like every other source error, with ClickHouse's
+        own code when its message gives one."""
+        failure = self._error(error, "SOURCE_QUERY_FAILED")
+        found = _EXCEPTION_CODE.search(failure.message)
+        if found is None or failure.code != "SOURCE_QUERY_FAILED":
+            return failure
+        return SourceError(failure.code, f"{failure.message} (ClickHouse code {found.group(1)})")
 
     def close(self) -> None:
         self._client.close()
@@ -987,12 +992,7 @@ class Stream:
         """ClickHouse's own error when the body ends with one, else the transport failure."""
         self._file.drain()
         message = self._exception()
-        if message is None:
-            return self._source.failure(error)
-        found = _EXCEPTION_CODE.search(message)
-        code = f" (ClickHouse code {found.group(1)})" if found else ""
-        failure = self._source.failure(RuntimeError(message))
-        return SourceError("SOURCE_QUERY_FAILED", failure.message + code)
+        return self._source.failure(error if message is None else RuntimeError(message))
 
     def _exception(self) -> str | None:
         if not self._tag:

@@ -1,4 +1,4 @@
-"""P1-17 part 2 (#98): `orvex run` brings an extraction model's rows from ClickHouse into the lake.
+"""P1-17 part 2 (#98): the `run` command brings extraction models' ClickHouse rows to the lake.
 
 Needs a ClickHouse server, as `test_clickhouse.py`: `TRANSFORM_TEST_CLICKHOUSE` with an
 administrator in `TRANSFORM_TEST_CLICKHOUSE_USER` / `_PASSWORD`. Each test gets its own database,
@@ -149,7 +149,7 @@ def test_incremental_runs_merge_new_and_late_rows(
     assert len(first) == 1000
     assert first[999] == (999, "M5", "2024-01-01 00:16:39.000000", "124.8750")
     assert record(folder)[0:4] == ("success", None, None, "1000")
-    assert record(folder)[4] == "1900-01-01 00:00:00.000000"  # the lowest DateTime64 value
+    assert record(folder)[4] == "1900-01-01 00:00:00"  # the lowest DateTime64 value
     assert record(folder)[5] == "2024-01-01T00:16:39.000000+00:00"
     # Downstream DuckDB model, in the same run, after the extraction model.
     assert lake_value(folder, "SELECT sum(events) FROM lake.marts.by_meter") == [(1000,)]
