@@ -99,8 +99,9 @@ def steps(
     selected = ", ".join(_identifier(name) for name, _ in output)
     rows = f"SELECT {selected} FROM {extracted}"
     if model.config.materialized == "incremental":
-        # Rows were selected by `{since:…}` on ClickHouse when a watermark was bound.
-        filtered = extract.since is not None and watermark is not None
+        # Rows were selected by `{since:…}` on ClickHouse (the lowest value when there is no
+        # watermark yet).
+        filtered = extract.since is not None
         result += incremental.steps(
             model, rows, output, existing, since, full_refresh, previous, filtered=filtered
         )
