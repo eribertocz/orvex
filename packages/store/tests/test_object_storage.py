@@ -51,7 +51,9 @@ _HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def s3_request(method: str, url: str, body: bytes | None = None) -> bytes:
-    request = urllib.request.Request(url, data=body, method=method)
+    # Without a content type, urllib sends a body as a form, and moto waits on a binary one.
+    headers = {"Content-Type": "application/octet-stream"} if body is not None else {}
+    request = urllib.request.Request(url, data=body, method=method, headers=headers)
     with _HTTP.open(request, timeout=30) as response:
         content: bytes = response.read()
         return content
