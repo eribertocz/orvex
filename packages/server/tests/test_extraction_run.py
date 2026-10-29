@@ -451,15 +451,9 @@ def test_a_whole_partition_filter_passes_the_check(
     assert lake_value(folder, "SELECT count(*) FROM lake.raw.ch_events") == [(1000,)]
 
 
-@pytest.mark.parametrize("declared", ["Date", "Date32"])
-def test_a_date_since_on_a_zoned_column_cannot_delete_rows(
-    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str], declared: str
-) -> None:
-    # A reading every 6 hours of February, in a Tokyo-zoned column. ClickHouse compares the
-    # `{since:Date}` at midnight in Tokyo, earlier than in the server's zone. Checked against a
-    # later boundary, the rows read again between the two would pass for the month's older
-    # rows, and the overwrite would delete the other readings of February.
-    folder = project(
+def zoned_events(tmp_path: Path, source: dict[str, str], declared: str) -> Path:
+    """A reading every 6 hours of February, in a Tokyo-zoned column, partitioned by month."""
+    return project(
         tmp_path,
         source,
         {
@@ -476,20 +470,34 @@ def test_a_date_since_on_a_zoned_column_cannot_delete_rows(
             ),
         },
     )
+
+
+@pytest.mark.parametrize("declared", ["Date", "Date32"])
+def test_a_date_since_on_a_zoned_column_is_refused_before_anything_runs(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str], declared: str
+) -> None:
+    # ClickHouse compares a `{since:Date}` with a DateTime column at midnight in a zone the run
+    # cannot see (here Tokyo, not the server's zone), so no boundary the partition check could
+    # use is exact. A partition_overwrite model would risk deleting rows: refused at validation.
+    folder = zoned_events(tmp_path, source, declared)
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert "ch_events" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+
+
+def test_a_time_since_on_a_zoned_column_is_exact(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The supported form: a time parameter as precise as the column. The second run reads the
+    # readings after the watermark only (none), and the month is kept whole.
+    folder = zoned_events(tmp_path, source, "DateTime64(3, 'Asia/Tokyo')")
     code, out = run(capsys, folder)
     assert code == 0, out
     count = "SELECT count(*) FROM lake.raw.ch_events"
     assert lake_value(folder, count) == [(111,)]
     code, out = run(capsys, folder)  # nothing changed at the source
-    assert code == 1, out
-    assert "PARTITION_INCOMPLETE" in out
-    outcome, error_code, _, rows_read, since, _ = record(folder)
-    # Watermark 28 Feb 12:00 UTC: `since` is 28 Feb, whose midnight in Tokyo is 27 Feb 15:00
-    # UTC; the readings of 27 Feb 18:00 and 28 Feb 00:00, 06:00 and 12:00 are read again.
-    assert (outcome, error_code, rows_read, since) == (
-        "failed",
-        "PARTITION_INCOMPLETE",
-        "4",
-        "2024-02-28",
-    )
-    assert lake_value(folder, count) == [(111,)]  # nothing deleted
+    assert code == 0, out
+    assert record(folder)[0:4] == ("success", None, None, "0")
+    assert lake_value(folder, count) == [(111,)]

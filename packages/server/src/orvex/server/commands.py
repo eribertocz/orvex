@@ -200,6 +200,11 @@ def _bind(
                         failed.add(name)
                         problems.append(described)
                         continue
+                    refused = clickhouse.since_column_problems(model, described)
+                    if refused:
+                        failed.add(name)
+                        problems += [_from_model_error(item) for item in refused]
+                        continue
                     extracted[name] = described
                     _stand_in(lake, model, [(c.name, c.mapped.duckdb) for c in described])
                     # DuckDB's own names for the mapped types, as for every other model.

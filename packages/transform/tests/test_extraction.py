@@ -7,6 +7,7 @@ The streaming itself is tested against a live ClickHouse by the server package
 from __future__ import annotations
 
 import datetime as dt
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -224,3 +225,64 @@ def test_a_date_since_holds_in_every_zone() -> None:
         ):
             midnight = dt.datetime(2024, 3, 1, tzinfo=ZoneInfo(zone))
             assert dt.datetime.fromisoformat(instant) <= midnight <= watermark, zone
+
+
+def test_a_date_boundary_uses_a_fixed_offset_in_every_year() -> None:
+    from orvex.transform.clickhouse import since_bound
+
+    found = since_type("Date32")
+    assert found is not None
+    # UTC+14 whatever the year: Pacific/Kiritimati itself was UTC-10:40 before 1995.
+    assert since_bound(found, "1994-06-01", "UTC")[0] == "1994-05-31T10:00:00+00:00"
+    assert since_bound(found, "1960-06-01", "UTC")[0] == "1960-05-31T10:00:00+00:00"
+
+
+def test_a_date_since_is_refused_for_partition_overwrite_on_a_datetime_column(
+    tmp_path: Path,
+) -> None:
+    from orvex.contracts.project.v1 import ClickhouseConnection
+    from orvex.transform.clickhouse import map_type, since_column_problems
+    from orvex.transform.models import discover_models
+
+    connection = ClickhouseConnection.model_validate(
+        {
+            "type": "clickhouse",
+            "host": "h",
+            "port": 8123,
+            "database": "d",
+            "user": "u",
+            "password": "${env:UNUSED}",
+            "read_only": True,
+        }
+    )
+
+    def problems(strategy: str, declared: str, column_type: str) -> list[str]:
+        folder = tmp_path / f"{strategy}-{declared}-{column_type}".replace("(", "").replace(")", "")
+        (folder / "models" / "raw").mkdir(parents=True)
+        (folder / "models" / "raw" / "e.sql").write_text(
+            f"SELECT id, month, t FROM events WHERE t > {{since:{declared}}}", encoding="utf-8"
+        )
+        extra = (
+            "  partition_by: [month]\n"
+            if strategy == "partition_overwrite"
+            else ("  unique_key: [id]\n")
+        )
+        (folder / "models" / "raw" / "e.yaml").write_text(
+            "version: 1\nconnection: ch\nmaterialized: incremental\nincremental:\n"
+            f"  strategy: {strategy}\n  time_column: t\n{extra}  filter: manual\n",
+            encoding="utf-8",
+        )
+        found = discover_models(folder, {"ch": connection})
+        assert found.problems == ()
+        mapped = map_type(column_type)
+        assert mapped is not None
+        columns = (Column("t", column_type, mapped),)
+        return [item.code.root for item in since_column_problems(found.models[0], columns)]
+
+    assert problems("partition_overwrite", "Date", "DateTime64(3, 'UTC')") == ["INVALID_MODEL_SQL"]
+    assert problems("partition_overwrite", "Date32", "DateTime") == ["INVALID_MODEL_SQL"]
+    # Exact boundaries: a date column, or a time parameter.
+    assert problems("partition_overwrite", "Date", "Date") == []
+    assert problems("partition_overwrite", "DateTime64(3, 'UTC')", "DateTime64(3, 'UTC')") == []
+    # Only the partition check needs the exact boundary.
+    assert problems("merge", "Date", "DateTime64(3, 'UTC')") == []

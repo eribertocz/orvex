@@ -265,6 +265,39 @@ def since_type(text: str) -> SinceType | None:
     return None
 
 
+def since_column_problems(model: Model, columns: tuple[Column, ...]) -> list[ModelError]:
+    """`{since:Date}` or `{since:Date32}` cannot protect a `partition_overwrite` model whose
+    time column is a `DateTime`: ClickHouse compares the date at midnight in the zone of the
+    expression the SQL compares it with, which the run cannot see, so the run's partition check
+    (`PARTITION_INCOMPLETE`) cannot know which rows were reloaded. A date time column, or a
+    `{since:DateTime…}` parameter, has an exact boundary."""
+    incremental = model.config.incremental
+    since = declared_since(model)
+    if (
+        incremental is None
+        or incremental.strategy != "partition_overwrite"
+        or since is None
+        or since.family not in {"Date", "Date32"}
+    ):
+        return []
+    time_column = incremental.time_column.root.lower()
+    found = next((column for column in columns if column.name.lower() == time_column), None)
+    if found is None or found.mapped.duckdb != "TIMESTAMPTZ":
+        return []
+    return [
+        problem(
+            "INVALID_MODEL_SQL",
+            f"{model.sql_file}: {{since:{since.family}}} cannot protect a partition_overwrite "
+            f"model whose time_column {found.name} is a {found.clickhouse}: ClickHouse compares "
+            "a date with it at midnight in a zone the run cannot see, so the run cannot tell "
+            "which rows of a partition it reloaded. Declare {since:DateTime64(p, 'zone')} as "
+            "precise as the time column, or use a Date time column.",
+            model.sql_file,
+            model=model.name,
+        )
+    ]
+
+
 def since_problems(model: Model) -> list[ModelError]:
     """The rules of `{since:Type}` in an extraction model, from its text alone
     (transformation.md §3.5): incremental models need it, others must not use it, its type is a
@@ -1303,7 +1336,7 @@ _LOWEST = {
 # it with, which the run cannot see. Every zone lies between these two (tz database; measured on
 # ClickHouse 26.9), so both values below hold whichever zone ClickHouse used.
 _LATEST_MIDNIGHT = "Etc/GMT+12"  # UTC-12: a date's midnight comes last here
-_EARLIEST_MIDNIGHT = "Pacific/Kiritimati"  # UTC+14: a date's midnight comes first here
+_EARLIEST_MIDNIGHT = "Etc/GMT-14"  # UTC+14, fixed: a date's midnight comes first here
 
 
 def _since_zone(since: SinceType, server: str, *, earliest: bool = False) -> ZoneInfo:
