@@ -11,7 +11,7 @@ Every result returned by the semantic engine carries a receipt (`contracts/recei
 | `plan` | Plan fingerprint and the discharged correctness obligations |
 | `security` | Permission fingerprint; policies applied, described without protected values |
 | `evidence` | Evidence used and its status (`declared` or `verified`, with the verification run, or the verification instant on a live engine after v1.0.0; ADR-0027 §7) |
-| `data` | DuckLake snapshot id(s) read (managed lake, existing DuckLake, and the mapping tables read by row policies), or live source and read instant |
+| `data` | DuckLake snapshot id(s) read (managed lake, existing DuckLake, and the managed-lake tables read by row policies and their registration checks), or live source and read instant |
 | `freshness` | Last successful run per upstream model and declared freshness; for Direct Query, the commit time of the snapshot read (existing DuckLake) or the read instant (live engine, after v1.0.0) (ADR-0027 §5) |
 | `execution` | Cache hit or miss, pre-aggregation used, duration |
 | `reproducibility` | `exact` (all snapshots retained) or `explainable` (snapshot expired or live read) |
@@ -38,4 +38,4 @@ Every dashboard and visual shows "Data as of <timestamp>"; it turns amber when t
 
 ## 6. Caching
 
-See `semantic-engine.md` §10. The cache never crosses permission fingerprints and is invalidated by run records. For datasets outside the managed lake the key also carries the last-change snapshot of every mapping table their policies read, checked on every lookup, so a revoked mapping is never served from cache; live datasets (after v1.0.0) are cached only with a declared `cache.ttl` (ADR-0027 §7).
+See `semantic-engine.md` §10. The cache never crosses permission fingerprints and is invalidated by run records. For datasets outside the managed lake the key also carries the last-change snapshot of every managed-lake table read by their policies or by their registration check, checked on every lookup, so a revoked mapping or registration is never served from cache; live datasets (after v1.0.0) are cached only with a declared `cache.ttl` (ADR-0027 §7).

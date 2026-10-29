@@ -90,7 +90,11 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
   - **File sandbox.**
     - After the catalog is attached, external access is disabled (`enable_external_access = false`). The instance can then read only an allow-list (DuckDB's `allowed_directories` / `allowed_paths`) of three things: the lake's declared data location, its SQLite catalog file if it has one, and the instance's own spill folder.
     - Every setting the instance needs is set globally before the configuration is locked (`lock_configuration`), and `allowed_configs` never lists a security setting. Per-cursor settings used by the managed lake (time zone, replacement scans) are therefore set once, globally.
-    - **No symbolic links out of the location.** A read never follows a link that resolves outside the declared location. The check happens when each file is read, not only when the snapshot is verified, because a writer can swap a verified file for a link later. On a network file system, links are resolved by any client, so the writer does not need access to the Orvex machine. P2-30 shows that such a read is refused. If it cannot, Route B accepts only object-storage data locations, which have no links.
+    - **No links of any kind out of the location.** No link, symbolic or hard, can make a read reach data outside the declared location. The check holds when each file is read, not only when the snapshot is verified, because a writer can swap a verified file for a link later.
+      - On a network file system, symbolic links are resolved by any client, and a hard link can be made by any writer on the same export, so the writer needs no access to the Orvex machine.
+      - Path checks and link counts cannot detect a hard link.
+      - P2-30 therefore shows a mechanism that holds for both kinds. Examples are reading the lake under an operating-system identity with no access to any other lake, or requiring a file system that holds no other lake.
+      - If it cannot, Route B accepts only object-storage data locations, which have no links.
     - P2-30 shows that a SQLite catalog still sees new snapshots under this sandbox. If it cannot, SQLite catalogs are refused for Route B.
     - Before a new snapshot is served, every data and delete file it references is checked to lie under that location. A snapshot that fails the check is never served.
   - **Separate locations.** Validation rejects a declared data location that equals, contains or lies inside the managed lake's data location, the project or instance folders, or another existing lake's location (`STORE_SOURCE_INVALID`). The comparison uses whole path components after resolving the paths, and for object storage also the bucket and endpoint. Otherwise a catalog could point at files inside its own location that belong to the managed lake, and serve them without that data's policies.
@@ -134,7 +138,7 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
   1. the policy's subquery on the mapping table is evaluated first on the managed lake, at a pinned snapshot;
   2. its values are bound as parameters of the engine's query: never concatenated, and never by joining engines;
   3. the binding keeps the subquery's exact meaning, including its types and its `NULL`s. For example, `x NOT IN (…)` over a set that contains `NULL` still returns no rows;
-  4. the receipt records the mapping table's snapshot.
+  4. the receipt records the snapshot of every managed-lake table read by the policies or by their registration check.
 
   These values are the only rows Orvex holds between two engines. They are small, bounded results under ADR-0025 rule 6. A per-project cap on their number is stated in the security contract.
 - **Fail closed.**
@@ -154,10 +158,11 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
   - a view, and a macro, in an existing lake;
   - a data file outside an existing lake's declared data location;
   - a symbolic link in an existing lake's data location that points outside it, including one swapped in after verification;
+  - a hard link in an existing lake's data location to a managed-lake data file;
   - a policy whose mapping subquery reads a table outside the managed lake;
   - an existing lake whose declared location contains the managed lake's data location;
   - a restored external catalog that reuses snapshot ids;
-  - a mapping revoked while a result on that engine is cached.
+  - a mapping or a registration revoked while a result on that engine is cached.
 
 ### 7. Cache, evidence and cost outside the managed lake
 - **Cache (amends ADR-0012; built with the cache in P3-10):**
@@ -166,7 +171,7 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
     - the model fingerprint;
     - the permission fingerprint;
     - the engine data version: the verified snapshot for an existing DuckLake (connection, id and commit time), or the entry's read instant for a live engine, which a lookup matches while it is within `cache.ttl` (law 4: "within the declared freshness");
-    - the last-change snapshot of every managed-lake mapping table its policies read.
+    - the last-change snapshot of every managed-lake table read by its policies or by their registration check.
   - **Checked on every lookup.** The mapping-table snapshots are compared with the current ones on every lookup, without relying on run events. A mapping changed by a run or directly by the Builder is therefore never served from cache.
   - **Live datasets (after v1.0.0)** are cached only when they declare `cache.ttl`. An entry records its read instant and is served while its age is below the `ttl`, and the receipt shows the original read instant.
 - **Evidence** (uniqueness, cardinality, temporal non-overlap, bridge totals):
