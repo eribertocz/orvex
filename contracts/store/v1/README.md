@@ -56,6 +56,16 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 - `SqliteLakeLocation` keeps the catalog in the SQLite file `path` (DuckDB's official `sqlite` extension), so several processes on one machine can use the lake; data files go under `data_path`. The store adds exactly the catalog file and its `-wal`, `-shm` and `-journal` files to the file sandbox, no folder.
 - A file catalog must be on a local disk; the server's loader checks that before it builds the location (`contracts/project/v1`).
 
+## Data files (`data_path`, `storage`, `encrypted`, #126)
+
+- `data_path` is where data files are written: `<path>/data/` by default for `LocalLakeLocation`, otherwise an absolute local folder or `s3://bucket/prefix/`.
+- An `s3://` path needs `storage` (type `s3`: `region`, `use_ssl`, optional `endpoint` and `url_style`, and the names of the environment variables holding `key_id` and `secret`). `storage` needs an `s3://` path. Any other URL is refused (`STORE_STATEMENT_INVALID`).
+- The credentials are read when the lake opens and registered so no error shows them. They become a **temporary** DuckDB secret (official `httpfs` extension) scoped to the prefix; persistent secrets are never loaded. An unset variable is `STORE_SECRET_MISSING`.
+- `use_ssl: false` is refused unless the endpoint is the local machine (`STORE_TLS_REQUIRED`), before anything is opened.
+- The file sandbox allows exactly the data prefix. DuckDB checks remote paths against it too: another prefix of the same bucket stays closed.
+- `encrypted: true` attaches with DuckLake's `ENCRYPTED`; the keys are stored in the catalog. Deletion vectors (`WRITE_DELETION_VECTORS`, written unencrypted) are never enabled.
+- Maintenance (expiration, merging, cleanup and orphan deletion) works the same on object storage.
+
 ## PostgreSQL catalog (`PostgresLakeLocation`)
 
 Several processes read and write one lake. `connection` holds libpq `key=value` pairs **without** a password (any `password` key or URI form is refused with `STORE_SECRET_INLINE`); the password is read at open time from the environment variable named in `password_env` and never appears in errors. `metadata_schema` keeps the catalog tables of one lake in their own PostgreSQL schema (default `public`), so one database can hold several lakes. `data_path` is where data files are written.

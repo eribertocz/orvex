@@ -409,12 +409,20 @@
       }
     },
     "Lake": {
-      "description": "Where the project's managed lake lives (ADR-0027 §2). Absent: a DuckDB-file catalog and data files in the project's own folder, as before. A lake's catalog is fixed when the lake is created.",
+      "description": "Where the project's managed lake lives (ADR-0027 §2). Absent: a DuckDB-file catalog and data files in the project's own folder, as before. A lake's catalog, data location and encryption are fixed when the lake is created.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "catalog": {
           "$ref": "#/$defs/LakeCatalog"
+        },
+        "data": {
+          "$ref": "#/$defs/LakeData"
+        },
+        "encrypted": {
+          "description": "DuckLake data-file encryption, fixed when the lake is created. The keys are stored in the catalog: encryption protects the files only from someone without catalog access.",
+          "type": "boolean",
+          "default": false
         }
       }
     },
@@ -531,6 +539,65 @@
           "type": "string",
           "pattern": "^(system|\\$\\{env:[A-Z_][A-Z0-9_]*\\})$",
           "default": "system"
+        }
+      }
+    },
+    "LakeData": {
+      "description": "Where the lake's data files live: a local folder (relative to the project folder; a network file system mounted at the same path counts) or S3-compatible object storage (`s3://bucket/prefix/`, with `s3`). Default: `.<slug>/lake/data/`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "s3": {
+          "$ref": "#/$defs/S3Storage"
+        }
+      }
+    },
+    "S3Storage": {
+      "description": "S3 or an S3-compatible service. Credentials only as `${env:NAME}`; they become a temporary DuckDB secret. `use_ssl: false` is accepted only for an endpoint on the local machine.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "region",
+        "key_id",
+        "secret"
+      ],
+      "properties": {
+        "region": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "endpoint": {
+          "description": "Host and optional port of an S3-compatible service (no scheme); default AWS S3.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 260,
+          "pattern": "^[A-Za-z0-9.\\-]+(:[0-9]{1,5})?$|^\\[[0-9A-Fa-f:]+\\](:[0-9]{1,5})?$"
+        },
+        "url_style": {
+          "enum": [
+            "path",
+            "vhost"
+          ]
+        },
+        "use_ssl": {
+          "type": "boolean",
+          "default": true
+        },
+        "key_id": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "secret": {
+          "$ref": "#/$defs/SecretReference"
         }
       }
     }

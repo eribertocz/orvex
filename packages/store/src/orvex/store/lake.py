@@ -44,6 +44,7 @@ from orvex.contracts.store.v1 import (
     PostgresLakeLocation,
     PostgresSourceAttachment,
     ReadRequest,
+    S3Storage,
     Snapshot,
     SourceAttachment,
     SqliteLakeLocation,
@@ -371,6 +372,71 @@ def _with_root_cert(connection: str) -> str:
     if pairs.get("sslmode") == "verify-full" and "sslrootcert" not in pairs:
         return f"{connection} sslrootcert=system"
     return connection
+
+
+@dataclass(frozen=True, slots=True)
+class _Storage:
+    """Object storage settings with their credentials, read from the environment."""
+
+    settings: S3Storage
+    key_id: str
+    secret: str
+
+
+def _data_path(location: AnyLakeLocation) -> str:
+    """Where the lake's data files go: `data_path`, or `<path>/data/` for a local lake."""
+    if isinstance(location, LocalLakeLocation):
+        if location.data_path is None:
+            return (Path(location.path) / "data").as_posix() + "/"
+        return location.data_path
+    return location.data_path
+
+
+def _storage_credentials(storage: S3Storage | None, data_path: str) -> _Storage | None:
+    """Check the data location and read its credentials, before anything is opened.
+
+    An `s3://` data path needs `storage`, and `storage` needs an `s3://` data path; any other
+    URL is refused. Unencrypted HTTP is refused unless the endpoint is the local machine
+    (`STORE_TLS_REQUIRED`). The credentials are registered so no error can show them.
+    """
+    remote = "://" in data_path
+    if remote and not data_path.startswith("s3://"):
+        raise StoreError(
+            "STORE_STATEMENT_INVALID",
+            "Data files can be on a local path or in S3-compatible storage (s3://) only.",
+            {"data_path": data_path},
+        )
+    if remote != (storage is not None):
+        raise StoreError(
+            "STORE_STATEMENT_INVALID",
+            "An s3:// data path needs its storage settings, and storage settings need an "
+            "s3:// data path.",
+            {"data_path": data_path},
+        )
+    if storage is None:
+        return None
+    if not storage.use_ssl:
+        endpoint = storage.endpoint or ""
+        host = endpoint[1 : endpoint.find("]")] if endpoint.startswith("[") else endpoint
+        host = host if endpoint.startswith("[") else endpoint.split(":", 1)[0]
+        if not host or host.lower() not in _LOCAL_HOSTS:
+            raise StoreError(
+                "STORE_TLS_REQUIRED",
+                "Object storage on another machine must be reached over HTTPS (use_ssl).",
+                {"endpoint": storage.endpoint or "(AWS S3)"},
+            )
+    values: list[str] = []
+    for variable in (storage.key_id_env, storage.secret_env):
+        value = os.environ.get(variable, "")
+        if not value:
+            raise StoreError(
+                "STORE_SECRET_MISSING",
+                f"The environment variable {variable} is not set.",
+                {"variable": variable},
+            )
+        register_secret(value)
+        values.append(value)
+    return _Storage(storage, values[0], values[1])
 
 
 def _postgres_password(location: PostgresLakeLocation) -> str:
@@ -766,6 +832,12 @@ def _typed(sql: str, parameters: list[Parameter]) -> str:
 READ_TABLE_FUNCTIONS = frozenset({"range", "generate_series", "unnest"})
 
 
+def _sandbox_folder(data_path: str) -> str:
+    """A data path as the sandbox lists it: an object-storage prefix as written (DuckDB checks
+    remote paths against it too), a local folder resolved."""
+    return data_path if "://" in data_path else Path(data_path).resolve().as_posix()
+
+
 def _sandbox_entries(
     location: AnyLakeLocation, spill: str, readable: Sequence[str] = ()
 ) -> tuple[list[str], list[str]]:
@@ -780,8 +852,10 @@ def _sandbox_entries(
         if location.catalog_path is not None:
             catalog = Path(location.catalog_path).resolve().as_posix()
             files += [catalog, f"{catalog}.wal"]
-    elif "://" not in location.data_path:
-        folders.append(Path(location.data_path).resolve().as_posix())
+        if location.data_path is not None:  # data files outside the lake's folder (#126)
+            folders.append(_sandbox_folder(location.data_path))
+    else:
+        folders.append(_sandbox_folder(location.data_path))
     if isinstance(location, SqliteLakeLocation):
         catalog = Path(location.path).resolve().as_posix()
         files += [catalog, *(f"{catalog}-{suffix}" for suffix in ("wal", "shm", "journal"))]
@@ -803,6 +877,8 @@ class Lake:
         password = (
             _postgres_password(location) if isinstance(location, PostgresLakeLocation) else ""
         )
+        data_path = _data_path(location)
+        storage = _storage_credentials(location.storage, data_path)
         if (
             not limits.memory_limit
             or not limits.threads
@@ -874,12 +950,20 @@ class Lake:
             self._metadata = METADATA
             if isinstance(location, PostgresLakeLocation) and location.metadata_schema:
                 self._metadata = f"{METADATA}.{location.metadata_schema}"
-            if isinstance(location, LocalLakeLocation):
-                self._attach_local(Path(location.path), location.catalog_path)
-            elif isinstance(location, SqliteLakeLocation):
-                self._attach_sqlite_catalog(location)
+            if storage is not None:
+                self._storage_secret(storage, data_path)
             else:
-                self._attach_postgres(location, password)
+                Path(data_path).mkdir(parents=True, exist_ok=True)
+            options = [f"DATA_PATH {_quote(data_path)}"]
+            if location.encrypted:
+                # Fixed when the lake is created; deletion vectors stay off (written unencrypted).
+                options.append("ENCRYPTED")
+            if isinstance(location, LocalLakeLocation):
+                self._attach_local(Path(location.path), location.catalog_path, options)
+            elif isinstance(location, SqliteLakeLocation):
+                self._attach_sqlite_catalog(location, options)
+            else:
+                self._attach_postgres(location, password, options)
             # Nothing may load code or reach data the lake did not ask for after this point.
             self._connection.sql("SET autoinstall_known_extensions = false")
             self._connection.sql("SET autoload_known_extensions = false")
@@ -1111,42 +1195,66 @@ class Lake:
         for extension in EXTENSIONS:
             self._load_extension(extension)
 
-    def _attach_local(self, folder: Path, catalog_path: str | None = None) -> None:
-        (folder / "data").mkdir(parents=True, exist_ok=True)
+    def _attach_local(self, folder: Path, catalog_path: str | None, options: Sequence[str]) -> None:
+        folder.mkdir(parents=True, exist_ok=True)
         if catalog_path is None:
             catalog = (folder / "catalog.ducklake").as_posix()
         else:
             Path(catalog_path).parent.mkdir(parents=True, exist_ok=True)
             catalog = Path(catalog_path).as_posix()
-        data = (folder / "data").as_posix() + "/"
         # Paths come from the project configuration, not from query input; quoted as literals.
-        self._connection.sql(
-            f"ATTACH {_quote('ducklake:' + catalog)} AS {LAKE} (DATA_PATH {_quote(data)})"
-        )
+        self._attach(f"ATTACH {_quote('ducklake:' + catalog)} AS {LAKE} ({', '.join(options)})")
 
-    def _attach_sqlite_catalog(self, location: SqliteLakeLocation) -> None:
-        """Attach a lake whose catalog is a SQLite file (several processes on one machine)."""
-        Path(location.path).parent.mkdir(parents=True, exist_ok=True)
-        if "://" not in location.data_path:
-            Path(location.data_path).mkdir(parents=True, exist_ok=True)
-        self._load_extension("sqlite")
-        data = location.data_path if location.data_path.endswith("/") else location.data_path + "/"
+    def _attach(self, sql: str) -> None:
+        """Attach the lake; object storage that refuses the credentials or cannot be reached is
+        reported without them."""
         try:
-            self._connection.sql(
-                f"ATTACH {_quote('ducklake:sqlite:' + Path(location.path).as_posix())} AS {LAKE} "
-                f"(DATA_PATH {_quote(data)})"
-            )
+            self._connection.sql(sql)
         except duckdb.Error as error:
             raise StoreError(
                 "STORE_CATALOG_UNAVAILABLE",
-                "The SQLite catalog could not be opened.",
+                "The lake could not be opened (its catalog or its data files).",
                 {"duckdb": str(error)},
             ) from None
 
-    def _attach_postgres(self, location: PostgresLakeLocation, password: str) -> None:
+    def _storage_secret(self, storage: _Storage, data_path: str) -> None:
+        """A temporary S3 secret for the lake's prefix only; never persisted."""
+        self._load_extension("httpfs")
+        settings = storage.settings
+        options = [
+            "TYPE s3",
+            f"KEY_ID {_quote(storage.key_id)}",
+            f"SECRET {_quote(storage.secret)}",
+            f"REGION {_quote(settings.region)}",
+            f"USE_SSL {'true' if settings.use_ssl else 'false'}",
+            f"SCOPE {_quote(data_path)}",
+        ]
+        if settings.endpoint is not None:
+            options.append(f"ENDPOINT {_quote(settings.endpoint)}")
+        if settings.url_style is not None:
+            options.append(f"URL_STYLE {_quote(settings.url_style)}")
+        try:
+            self._connection.sql(f"CREATE TEMPORARY SECRET lake_storage ({', '.join(options)})")
+        except duckdb.Error as error:
+            raise StoreError(
+                "STORE_CATALOG_UNAVAILABLE",
+                "The lake's object storage settings were refused.",
+                {"duckdb": str(error)},
+            ) from None
+
+    def _attach_sqlite_catalog(self, location: SqliteLakeLocation, options: Sequence[str]) -> None:
+        """Attach a lake whose catalog is a SQLite file (several processes on one machine)."""
+        Path(location.path).parent.mkdir(parents=True, exist_ok=True)
+        self._load_extension("sqlite")
+        self._attach(
+            f"ATTACH {_quote('ducklake:sqlite:' + Path(location.path).as_posix())} AS {LAKE} "
+            f"({', '.join(options)})"
+        )
+
+    def _attach_postgres(
+        self, location: PostgresLakeLocation, password: str, attach_options: Sequence[str]
+    ) -> None:
         """Attach a lake whose catalog is in PostgreSQL; the password comes from the environment."""
-        if "://" not in location.data_path:
-            Path(location.data_path).mkdir(parents=True, exist_ok=True)
         self._load_extension("postgres")
         try:
             # A temporary default secret supplies the password to every PostgreSQL connection of
@@ -1154,7 +1262,7 @@ class Lake:
             self._connection.sql(
                 f"CREATE TEMPORARY SECRET (TYPE postgres, PASSWORD {_quote(password)})"
             )
-            options = [f"DATA_PATH {_quote(location.data_path)}"]
+            options = list(attach_options)
             if location.metadata_schema:
                 options.append(f"METADATA_SCHEMA {_quote(location.metadata_schema)}")
             connection = _with_root_cert(location.connection)
