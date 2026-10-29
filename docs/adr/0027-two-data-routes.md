@@ -99,7 +99,11 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
       - If it cannot, Route B accepts only object-storage data locations, which have no links.
     - P2-30 shows that a SQLite catalog still sees new snapshots under this sandbox. If it cannot, SQLite catalogs are refused for Route B.
     - Before a new snapshot is served, every data and delete file it references is checked to lie under that location. A snapshot that fails the check is never served.
-  - **Separate locations.** Every file Orvex reads for any other purpose is protected: the managed lake's data location, the project and instance folders, every other existing lake's location, and every path read by the project's file sources (Parquet, CSV, DuckDB-file and SQLite sources).
+  - **Separate locations.** Every file Orvex reads for any other purpose, in any project of the instance, is protected:
+    - the instance folders;
+    - for every project registered in the instance: its folder, its managed lake's data location, its existing lakes' locations, and every path read by its file sources (Parquet, CSV, DuckDB-file and SQLite sources).
+
+    The set is instance-wide because one project's existing lake must never reach another project's data, whose members and policies differ.
     - Validation rejects a declared data location that equals, contains or lies inside any of them (`STORE_SOURCE_INVALID`).
     - The comparison uses whole path components after resolving the paths, and for object storage also the bucket and endpoint. Ambiguous cases fail closed, for example one export mounted at two paths, or two spellings of one endpoint.
     - Otherwise a catalog could register a protected file as its own, and serve its data without the policies of the data built from it.
@@ -165,6 +169,7 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
   - a symbolic link in an existing lake's data location that points outside it, including one swapped in after verification;
   - a hard link in an existing lake's data location to a managed-lake data file;
   - an existing lake that registers a file of a Route A file source, by absolute path or by hard link;
+  - an existing lake that registers a data file or file-source file of another project in the same instance, by absolute path or by hard link;
   - a policy whose mapping subquery reads a table outside the managed lake;
   - an existing lake whose declared location contains the managed lake's data location;
   - a restored external catalog that reuses snapshot ids;
