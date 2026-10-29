@@ -510,7 +510,9 @@ def typed(parameters: Sequence[Parameter]) -> dict[str, object]:
     values: dict[str, object] = {}
     for parameter in parameters:
         kind, value = parameter.type.root, parameter.value
-        if value is not None and kind == "DATE":
+        if value in {"infinity", "-infinity"}:
+            values[parameter.name] = value  # DuckDB casts the text, as the store does
+        elif value is not None and kind == "DATE":
             values[parameter.name] = dt.date.fromisoformat(value)
         elif value is not None and kind in {"TIMESTAMP", "TIMESTAMPTZ"}:
             values[parameter.name] = dt.datetime.fromisoformat(value)
@@ -667,7 +669,8 @@ def test_first_runs_full_refreshes_and_unfiltered_models_skip_the_check(tmp_path
         return [step.code for step in planned if isinstance(step, Check)]
 
     assert "PARTITION_INCOMPLETE" in codes(LOADED, "2026-10-20")
-    assert "PARTITION_INCOMPLETE" not in codes(LOADED, "-infinity")  # no watermark yet
+    # An existing table without a watermark still gets the check (its undated rows).
+    assert "PARTITION_INCOMPLETE" in codes(LOADED, "-infinity")
     assert "PARTITION_INCOMPLETE" not in codes(LOADED, "2026-10-20", full_refresh=True)
     assert "PARTITION_INCOMPLETE" not in codes("SELECT * FROM src", "2026-10-20")
     # Other strategies replace by key or delete nothing.
@@ -731,3 +734,41 @@ def test_text_values_are_quoted_and_long_ones_shortened(tmp_path: Path) -> None:
     assert message is not None
     shown = "'" + "x" * 59 + "…"
     assert f": 'NULL', '{'it' + chr(39) * 2 + 's'}', {shown}, NULL (4 in total)." in message
+
+
+def test_undated_rows_are_protected_before_any_watermark(tmp_path: Path) -> None:
+    """An existing table holding only undated rows has no watermark: $since is -infinity."""
+    by_region = FILTERED.replace("[month]", "[region]")
+    chosen = model(tmp_path, by_region)
+    connection = lake()
+    connection.execute("CREATE SCHEMA s")
+    connection.execute(
+        "CREATE TABLE s.m AS SELECT * FROM (VALUES ('n', 1, CAST(NULL AS DATE))) "
+        "AS t(region, n, read_at)"
+    )
+    connection.execute(
+        "CREATE TABLE src AS SELECT * FROM (VALUES ('n', 2, DATE '2026-10-05')) "
+        "AS t(region, n, read_at)"
+    )
+    code, _ = run_since(connection, chosen, LOADED, "-infinity")
+    assert code == "PARTITION_INCOMPLETE"
+
+
+def test_enum_values_are_quoted(tmp_path: Path) -> None:
+    by_kind = FILTERED.replace("[month]", "[k]")
+    chosen = model(tmp_path, by_kind)
+    connection = lake()
+    connection.execute("CREATE TYPE kinds AS ENUM ('NULL', 'b')")
+    connection.execute("CREATE SCHEMA s")
+    connection.execute(
+        "CREATE TABLE s.m AS SELECT CAST('NULL' AS kinds) AS k, 0 AS n, "
+        "DATE '2026-10-01' AS read_at"
+    )
+    connection.execute(
+        "CREATE TABLE src AS SELECT CAST('NULL' AS kinds) AS k, 1 AS n, "
+        "DATE '2026-10-09' AS read_at"
+    )
+    code, message = run_since(connection, chosen, LOADED, "2026-10-05")
+    assert code == "PARTITION_INCOMPLETE"
+    assert message is not None
+    assert ": 'NULL' (1 in total)." in message

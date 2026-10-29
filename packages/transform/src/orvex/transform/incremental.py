@@ -531,7 +531,9 @@ def steps(
                 "written.",
             )
         )
-        if strategy == "partition_overwrite" and parameters and since != LOWEST:
+        # Only on an existing table (this branch): with no watermark yet `$since` is -infinity,
+        # no row is older, but undated rows the filter never reloads are still protected.
+        if strategy == "partition_overwrite" and parameters:
             result.append(_cut_partitions(model, target, stage, output, parameters[0]))
         replaced = _replaced(model, target)
         if replaced is not None:
@@ -561,7 +563,7 @@ def _label(alias: str, kind: str) -> str:
     """A partition value as message text: `NULL` for SQL NULL, text values quoted (so the text
     `NULL` reads `'NULL'`), at most `_LABEL_LENGTH` characters."""
     text = f"CAST({alias} AS VARCHAR)"
-    if kind in _TEXT_TYPES:
+    if kind in _TEXT_TYPES or kind.startswith("ENUM("):
         text = f"{_QUOTE} || replace({text}, {_QUOTE}, '''''') || {_QUOTE}"
     shown = (
         f"CASE WHEN length({text}) > {_LABEL_LENGTH} "
