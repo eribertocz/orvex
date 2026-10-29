@@ -544,16 +544,35 @@ def _refuse_file_names(
     quoting form counts (`'…'`, `E'…'`, `$$…$$`, `$tag$…$tag$`, `"…"`). The file sandbox, which
     allows exactly the declared files, is the boundary behind this check.
     """
+    refused = StoreError(
+        "STORE_STATEMENT_INVALID",
+        "A file cannot be named in a statement; declare it as a source and use its name.",
+        {},
+    )
+    texts: list[tuple[str, duckdb.token_type]] = []
     for position, kind in tokens:
         end = next(later for later in positions if later > position)
         text = sql[position:end].strip()
+        texts.append((text, kind))
         quoted = kind == duckdb.token_type.string_const or text.startswith('"')
         if quoted and _names_a_file(text):
-            raise StoreError(
-                "STORE_STATEMENT_INVALID",
-                "A file cannot be named in a statement; declare it as a source and use its name.",
-                {},
-            )
+            raise refused
+    # A dotted name: DuckDB joins its parts with `.` and reads the result as a file when no
+    # table has that name (`"<dir>/x".parquet`, `x.parquet`, `"<dir>/*".csv`; measured on
+    # 2.0.0), so every chain of name parts is checked as one path too (#136, Reviewer pass 6).
+    names = (duckdb.token_type.identifier, duckdb.token_type.keyword)
+    index = 0
+    while index < len(texts):
+        if texts[index][1] not in names:
+            index += 1
+            continue
+        parts = [_string_content(texts[index][0])]
+        index += 1
+        while index + 1 < len(texts) and texts[index][0] == "." and texts[index + 1][1] in names:
+            parts.append(_string_content(texts[index + 1][0]))
+            index += 2
+        if len(parts) > 1 and _names_a_file(".".join(parts)):
+            raise refused
 
 
 # A dollar-quoted constant; DuckDB, like PostgreSQL, accepts any tag without `$` or white space

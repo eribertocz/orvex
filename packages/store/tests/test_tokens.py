@@ -123,10 +123,16 @@ def a_file(tmp_path: Path) -> str:
         "CREATE TABLE leak AS SELECT * FROM 'file://localhost{f}'",
         "SELECT * FROM $$file:{f}$$",
         "CREATE TABLE leak AS SELECT * FROM 'file://localhost{f}*'",
+        # #136 Reviewer pass 6: dotted names, which DuckDB joins into a file path.
+        'SELECT * FROM "{stem}".csv',
+        'SELECT * FROM "{stem}"."csv"',
+        'SELECT * FROM "{stem}" . csv',
+        'CREATE TABLE leak AS SELECT * FROM "{folder}/[t]".csv',
     ],
 )
 def test_a_file_named_in_any_quoting_form_is_refused(a_file: str, template: str) -> None:
-    sql = template.replace("{f}", a_file)
+    stem, folder = a_file.removesuffix(".csv"), a_file.rsplit("/", 1)[0]
+    sql = template.replace("{f}", a_file).replace("{stem}", stem).replace("{folder}", folder)
     with pytest.raises(StoreError) as refused:
         _guarded(sql, table_functions())
     assert refused.value.code == "STORE_STATEMENT_INVALID"
@@ -212,3 +218,15 @@ def test_a_malformed_e_string_fails_as_a_store_error(sql: str) -> None:
     with pytest.raises(StoreError) as failed:
         _single_statement(sql, table_functions())
     assert failed.value.code == "STORE_QUERY_FAILED"
+
+
+def test_a_file_in_the_working_folder_named_by_a_dotted_name_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `x.csv` unquoted: DuckDB reads `x.csv` in the working folder (#136, Reviewer pass 6).
+    (tmp_path / "x.csv").write_text("a\n1\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(StoreError) as refused:
+        _guarded("CREATE TABLE leak AS SELECT * FROM x.csv", table_functions())
+    assert refused.value.code == "STORE_STATEMENT_INVALID"
+    _guarded("CREATE TABLE ok AS SELECT * FROM s.t", table_functions())  # an ordinary name
