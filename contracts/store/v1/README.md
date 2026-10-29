@@ -97,6 +97,19 @@ Other types (lists, structs, maps, unions, `TIME`, geometry, …) are refused wi
 
 `ReadRequest` and `StatementRequest` accept `timeout_ms` (1–3,600,000; default set by the lake). A lake runs a bounded number of statements at once (reads until their stream ends, transactions until they commit or roll back); further requests wait in arrival order in a bounded queue, and are refused with `STORE_BUSY` when it is full. Waiting counts against the timeout. A statement past its time limit is interrupted (`STORE_TIMEOUT`); a read or a transaction can be cancelled from another thread (`STORE_CANCELLED`); an interrupted or cancelled transaction rolls back.
 
+## Arrow loads (`Transaction.load_arrow`)
+
+`load_arrow(schema, table, reader, columns, on_interrupt=None, timeout_ms=None)` creates `schema.table` in the lake, inside the write transaction, from an Arrow record-batch stream (P1-17, #98):
+- `columns` are `(name, DuckDB type)` pairs. The stream's fields must be exactly those names, in order (`STORE_STATEMENT_INVALID` otherwise).
+- Each column is cast to its type (`CREATE TABLE … AS SELECT CAST(…) …`). The stream is read once, batch by batch, by DuckDB, and no row passes through Python.
+- It returns the number of rows.
+- A type name must be a DuckDB type name with optional numeric arguments (`DECIMAL(18,4)`); anything else is refused before the SQL is built.
+- Time limits and cancellation apply as for statements. `on_interrupt` is called from another thread when the statement times out or is cancelled, so the caller can close the stream's source (a remote query then stops).
+- An exception raised by the stream itself propagates unchanged.
+- The transaction rolls back on any failure.
+
+Like a Python method, this is part of the contract's Python protocol; it has no JSON message.
+
 ## Maintenance (`MaintenanceReport`)
 
 `Lake.maintain(expire_before, orphans_before)` takes two aware instants. It waits for every read and write of the lake to end and runs alone: it takes every admission slot, then the writer lock. It follows DuckLake's own `CHECKPOINT` order, step by step, so that each step is counted:

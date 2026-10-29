@@ -441,12 +441,15 @@ def steps(
     since: str = LOWEST,
     full_refresh: bool = False,
     previous: str | None = None,
+    filtered: bool | None = None,
 ) -> list[Step]:
     """The run steps of one incremental model.
 
     `existing`: its table's columns (None if absent); `since`: the `$since` value (text of the
     time column's type); `full_refresh`: replace the table with every loaded row; `previous`:
-    the stored watermark (ignored on a full refresh).
+    the stored watermark (ignored on a full refresh); `filtered`: whether the loaded rows were
+    selected by `$since` (default: whether `sql` uses it; an extraction model's rows were
+    filtered on ClickHouse, so its SQL here does not).
     """
     incremental = model.config.incremental
     assert incremental is not None  # only incremental models get here
@@ -533,8 +536,10 @@ def steps(
         )
         # Only on an existing table (this branch): with no watermark yet `$since` is -infinity,
         # no row is older, but undated rows the filter never reloads are still protected.
-        if strategy == "partition_overwrite" and parameters:
-            result.append(_cut_partitions(model, target, stage, output, parameters[0]))
+        by_since = bool(parameters) if filtered is None else filtered
+        if strategy == "partition_overwrite" and by_since:
+            bound = Parameter(name=SINCE, type=ParameterType(PARAMETER_TYPES[kind]), value=since)
+            result.append(_cut_partitions(model, target, stage, output, bound))
         replaced = _replaced(model, target)
         if replaced is not None:
             result.append(

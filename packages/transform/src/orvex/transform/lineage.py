@@ -117,7 +117,14 @@ def inputs(
 ) -> list[Dataset]:
     """The datasets a model reads, in order of first appearance, without repeats."""
     if model.extraction:
-        return []  # its source query is described when extraction runs (P1-17)
+        # ClickHouse SQL is never parsed here: the input is the connection's database as a
+        # whole (namespace `clickhouse://host:port`, name `<database>`; #98).
+        connection = connections.get(model.config.connection or "")
+        if isinstance(connection, ClickhouseConnection):
+            return [
+                Dataset(f"clickhouse://{connection.host}:{connection.port}", connection.database)
+            ]
+        return []
     connection_ = _parser()
     try:
         tree = _tree(connection_, model.sql)

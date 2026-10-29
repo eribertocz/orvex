@@ -20,6 +20,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+import uuid
 import weakref
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
@@ -241,6 +242,10 @@ class ReadHandle:
 
     def cancel(self) -> None:
         self._guard.cancel()
+
+
+# A DuckDB type name as `load_arrow` accepts it: a name, optionally with numeric arguments.
+_ARROW_LOAD_TYPE = re.compile(r"[A-Z][A-Z0-9_]*(?: [A-Z][A-Z0-9_]*)*(?:\([0-9]+(?:,[0-9]+)?\))?")
 
 
 def _quote(text: str) -> str:
@@ -1563,6 +1568,76 @@ class Transaction:
         finally:
             guard.stop()
             self._guard = None
+
+    def load_arrow(
+        self,
+        schema: str,
+        table: str,
+        reader: pa.RecordBatchReader,
+        columns: Sequence[tuple[str, str]],
+        on_interrupt: Callable[[], None] | None = None,
+        timeout_ms: int | None = None,
+    ) -> int:
+        """Create `schema.table` in the lake, inside this transaction, from an Arrow stream: each
+        column `(name, DuckDB type)` is the stream's field of that name cast to that type, in
+        order. The stream is read once, batch by batch, by DuckDB (no row passes through Python),
+        and the number of rows is returned.
+
+        `on_interrupt` is called from another thread when the statement times out or is
+        cancelled (to close the stream's source, so a remote query stops). An exception raised by
+        the stream itself propagates unchanged; the caller decides what it means.
+        """
+        names = [name for name, _ in columns]
+        if not columns or reader.schema.names != names:
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "The Arrow stream's fields must be exactly the declared columns, in order.",
+                {"fields": ", ".join(reader.schema.names), "columns": ", ".join(names)},
+            )
+        for _, kind in columns:
+            if _ARROW_LOAD_TYPE.fullmatch(kind) is None:
+                raise StoreError(
+                    "STORE_STATEMENT_INVALID", "Not a DuckDB type name.", {"type": kind}
+                )
+        failure: list[BaseException] = []
+
+        def batches() -> Iterator[pa.RecordBatch]:
+            try:
+                yield from reader
+            except BaseException as error:
+                failure.append(error)
+                raise
+
+        stream = pa.RecordBatchReader.from_batches(reader.schema, batches())
+        view = f"__arrow_{uuid.uuid4().hex}"
+        target = f"{_identifier(schema)}.{_identifier(table)}"
+        selected = ", ".join(
+            f"CAST({_identifier(name)} AS {kind}) AS {_identifier(name)}" for name, kind in columns
+        )
+        deadline = time.monotonic() + self._timeout_ms(timeout_ms) / 1000
+        guard = Guard(self._cursor, deadline)
+        guard.on_fire = on_interrupt
+        with self._lock:
+            if self.cancelled:
+                guard.stop()
+                raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
+            self._guard = guard
+        try:
+            self._cursor.sql(f"CREATE SCHEMA IF NOT EXISTS {_identifier(schema)}")
+            self._cursor.register(view, stream)
+            try:
+                self._cursor.execute(f"CREATE TABLE {target} AS SELECT {selected} FROM {view}")
+            finally:
+                self._cursor.unregister(view)
+            counted = self._cursor.execute(f"SELECT count(*) FROM {target}").fetchone()
+        except duckdb.Error as error:
+            if failure and guard.reason is None:
+                raise failure[0] from None
+            raise guard.error(error) from error
+        finally:
+            guard.stop()
+            self._guard = None
+        return int(counted[0]) if counted else 0
 
 
 def _inexact_column_read(

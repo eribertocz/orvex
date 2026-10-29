@@ -51,6 +51,8 @@ New cross-field rules are added by the issues that implement those behaviors, as
 | `FRESHNESS_TOO_SHORT` | `freshness` below `5m` (sources must not be polled more often) |
 | `UNSUPPORTED_SOURCE_TYPE` | An extraction model's output column whose ClickHouse type has no exact DuckDB type (see below); the message names each such column and its type, with a hint to cast it in the SQL |
 | `SOURCE_CONNECTION_FAILED` | An extraction model's ClickHouse connection cannot be reached or refuses the credentials; the message never contains the password |
+| `SOURCE_QUERY_FAILED` | An extraction model's ClickHouse query failed while it ran, before or after its first rows (for example `throwIf`, a time limit, a broken connection); the message gives ClickHouse's own message and code (`(ClickHouse code N)`) when ClickHouse wrote one, never a credential. The run rolls back |
+| `UNSUPPORTED_SOURCE_VALUE` | An extraction model sent text that is not valid UTF-8; the message names the column and the row's position in the stream. The value is never stored altered or dropped: the run rolls back |
 | `SOURCE_NOT_READ_ONLY` | An extraction model's ClickHouse user whose profile fixes `readonly` to `0` or `2`: its queries cannot be made read-only (`readonly = 1`) |
 | `SOURCE_LIMITS_REFUSED` | An extraction model's ClickHouse user that does not accept the validation limits (`max_execution_time`, `max_rows_to_read`, `read_overflow_mode`), or whose queries could lift them; the message gives the configuration (decision #114) |
 
@@ -94,6 +96,31 @@ Output types map exactly; anything else is `UNSUPPORTED_SOURCE_TYPE`:
 | `Nullable(T)` | `T`, nullable |
 
 Refused, for example: `Int256`, `UInt256`, `Decimal` with `p > 38`, `DateTime64` with `p > 6`, arrays, maps, tuples, JSON, geo types, `Nothing`. The password is read from its `${env:NAME}` variable when validation runs (unset → `PROJECT_SECRET_MISSING`, naming the variable).
+
+### Running an extraction model (#98)
+
+`orvex run` sends the model's SQL to ClickHouse unchanged, as a subquery under a projection that only makes each value travel exactly as Arrow:
+- `Int128`, `UInt128`, `Enum8`/`Enum16` and `FixedString` are sent as text, which DuckDB casts back exactly;
+- `DateTime` is sent as `DateTime64(0)` with its zone;
+- each row's position in the stream is added, and text is checked to be UTF-8.
+
+Every run query carries:
+- `readonly = 1`;
+- `max_execution_time`;
+- `cancel_http_readonly_queries_on_client_close = 1`;
+- `max_block_size = 65536`.
+
+`{since:…}` is bound by ClickHouse, never written into the SQL. Its value:
+- **First run, full refresh, or no stored watermark:** the lowest value of the declared type: `1970-01-01` for `Date`/`DateTime`, `1900-01-01` for `Date32`/`DateTime64`.
+- **Otherwise:** the stored watermark minus `lookback`, written in the parameter's zone (the server's when it declares none), and truncated, never rounded up: a date for `Date`/`Date32`, whole seconds for `DateTime`, `p` digits for `DateTime64(p)`.
+
+How the rows load and how the run ends:
+- **Into the run's transaction.** The result streams as Arrow record batches into a table of the run's DuckDB transaction (`Transaction.load_arrow`, `contracts/store/v1`), each column cast to its mapped type. No row is decoded in Python. The model's strategy, tests and watermark then apply as for any other model.
+- **Columns checked first.** Before reading, the output is described again; a type that changed since validation is `SCHEMA_CHANGED`.
+- **Failure and cancellation.** A failure, a time limit or a cancellation closes the response, so ClickHouse cancels the query, and the run rolls back. The run record keeps the rows read so far.
+- **Lineage.** The model's input dataset is `clickhouse://<host>:<port>`, named `<database>`.
+
+The ClickHouse user needs only `SELECT` on the model's tables; the functions the projection uses need no grant.
 
 ## The automatic filter (`filter: auto`)
 

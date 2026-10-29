@@ -157,6 +157,8 @@ class ModelErrorCode(
             "FRESHNESS_TOO_SHORT",
             "UNSUPPORTED_SOURCE_TYPE",
             "SOURCE_CONNECTION_FAILED",
+            "SOURCE_QUERY_FAILED",
+            "UNSUPPORTED_SOURCE_VALUE",
             "SOURCE_NOT_READ_ONLY",
             "SOURCE_LIMITS_REFUSED",
         ]
@@ -187,6 +189,8 @@ class ModelErrorCode(
         "FRESHNESS_TOO_SHORT",
         "UNSUPPORTED_SOURCE_TYPE",
         "SOURCE_CONNECTION_FAILED",
+        "SOURCE_QUERY_FAILED",
+        "UNSUPPORTED_SOURCE_VALUE",
         "SOURCE_NOT_READ_ONLY",
         "SOURCE_LIMITS_REFUSED",
     ]
