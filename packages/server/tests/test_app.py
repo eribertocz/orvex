@@ -89,8 +89,62 @@ def test_unexpected_failure_is_an_internal_error_envelope() -> None:
 
 
 def test_every_code_the_server_sends_is_registered() -> None:
-    sent = {"NOT_FOUND", "VALIDATION_FAILED", "INTERNAL_ERROR"}
+    sent = {"NOT_FOUND", "METHOD_NOT_ALLOWED", "VALIDATION_FAILED", "INTERNAL_ERROR"}
     assert sent <= set(DOCUMENT["components"]["x-error-codes"])
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "allowed"),
+    [("POST", "/api/v1/health", "GET"), ("DELETE", "/api/v1/version", "GET")],
+)
+def test_a_method_the_route_does_not_accept_is_method_not_allowed(
+    client: TestClient, method: str, path: str, allowed: str
+) -> None:
+    response = client.request(method, path)
+    assert response.status_code == 405
+    conforms(response.json(), "ErrorEnvelope")
+    error = response.json()["error"]
+    assert error["code"] == "METHOD_NOT_ALLOWED"
+    assert {"name": "method", "value": method} in error["details"]
+    assert {"name": "path", "value": path} in error["details"]
+    assert response.headers["Allow"] == allowed
+    assert error["request_id"] == response.headers["X-Request-Id"]
+
+
+def test_head_on_a_get_route_is_method_not_allowed(client: TestClient) -> None:
+    response = client.head("/api/v1/health")  # a HEAD answer has headers only
+    assert response.status_code == 405
+    assert response.headers["Allow"] == "GET"
+    assert response.headers["X-Request-Id"]
+
+
+def test_the_log_records_the_405(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level("INFO", logger="orvex.server.http")
+    response = client.post("/api/v1/health")
+    record = next(r for r in caplog.records if r.getMessage() == "request")
+    assert record.__dict__["status"] == 405
+    assert record.__dict__["method"] == "POST"
+    assert record.__dict__["request_id"] == response.headers["X-Request-Id"]
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "status", "code"),
+    [
+        ("GET", "/api/v1/unknown", 404, "NOT_FOUND"),
+        ("POST", "/api/v1/unknown", 404, "NOT_FOUND"),
+        ("POST", "/dashboards/arrears", 404, "NOT_FOUND"),  # no route; only GET serves pages
+        ("POST", "/", 404, "NOT_FOUND"),
+        ("PUT", "/api/v1/health", 405, "METHOD_NOT_ALLOWED"),
+    ],
+)
+def test_routing_errors_have_their_own_codes(
+    client: TestClient, method: str, path: str, status: int, code: str
+) -> None:
+    # 404 and 405 are the statuses the framework raises while routing; none may be presented as
+    # an unexpected failure.
+    response = client.request(method, path)
+    assert (response.status_code, response.json()["error"]["code"]) == (status, code)
+    assert response.json()["error"]["code"] in DOCUMENT["components"]["x-error-codes"]
 
 
 def test_static_files_and_client_side_routes(client: TestClient) -> None:

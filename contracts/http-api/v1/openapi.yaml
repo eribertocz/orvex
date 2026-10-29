@@ -40,6 +40,9 @@ components:
     # Registry of the codes the server sends in ErrorEnvelope.error.code. Adding a code is a
     # compatible change; removing one or changing its meaning requires v2 and an ADR.
     NOT_FOUND: No route or resource matches the request.
+    METHOD_NOT_ALLOWED: >-
+      The route exists but does not accept this HTTP method; the `Allow` header lists the
+      methods it accepts.
     VALIDATION_FAILED: The request does not match the contract; `details` names each problem.
     INTERNAL_ERROR: An unexpected server failure; the request id identifies it in the server log.
   headers:
