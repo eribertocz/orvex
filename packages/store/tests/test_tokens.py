@@ -333,3 +333,62 @@ def test_every_shared_name_but_the_harmless_ones_is_refused() -> None:
 )
 def test_the_harmless_shared_names_stay_allowed(sql: str) -> None:
     _guarded(sql, table_functions())
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # #136 Reviewer pass 11: DuckLake creates these in each lake schema on first use, so
+        # `duckdb_functions()` does not list them.
+        "CREATE TABLE x AS SELECT * FROM lake.set_option('write_deletion_vectors', true)",
+        "CREATE TABLE x AS SELECT * FROM set_option('require_commit_message', true)",
+        "INSERT INTO t SELECT * FROM lake.table_deletions('readings', 0, 1000)",
+        "CREATE TABLE x AS SELECT * FROM lake.main.table_changes('readings', 0, 1000)",
+        "CREATE TABLE x AS SELECT * FROM lake.settings()",
+        "CREATE TABLE x AS SELECT * FROM lake.merge_adjacent_files()",
+        "CREATE TABLE x AS SELECT * FROM lake.snapshots()",
+        "CREATE TABLE x AS SELECT * FROM lake.\"SET_OPTION\" /* c */ ('a', 1)",
+        "SELECT (SELECT count(*) FROM lake.set_option('write_deletion_vectors', true))",
+    ],
+)
+def test_ducklake_table_macros_are_refused(sql: str) -> None:
+    with pytest.raises(StoreError) as raised:
+        _guarded(sql, table_functions())
+    assert raised.value.code == "STORE_STATEMENT_INVALID"
+    assert "function" in raised.value.details
+
+
+@pytest.mark.parametrize(
+    ("sql", "clause"),
+    [
+        ("CREATE TABLE t (a INT) WITH (write_deletion_vectors = true)", "WITH"),
+        ("CREATE TABLE t WITH (write_deletion_vectors = true) AS SELECT 1 AS a", "WITH"),
+        ("ALTER TABLE readings SET (write_deletion_vectors = true)", "SET"),
+        ("ALTER TABLE readings RESET (write_deletion_vectors)", "RESET"),
+        ("ALTER TABLE readings SET /* c */ (write_deletion_vectors = true)", "SET"),
+    ],
+)
+def test_table_options_are_refused(sql: str, clause: str) -> None:
+    with pytest.raises(StoreError) as raised:
+        _guarded(sql, table_functions())
+    assert raised.value.code == "STORE_STATEMENT_INVALID"
+    assert raised.value.details == {"clause": clause}
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "CREATE TABLE t AS WITH c AS (SELECT 1 AS a) SELECT * FROM c",
+        "CREATE TABLE t AS WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM c "
+        "WHERE n < 3) SELECT * FROM c",
+        "UPDATE t SET a = (SELECT 1)",
+        "ALTER TABLE t ADD COLUMN settings INTEGER",
+        "CREATE TABLE t AS SELECT 1 AS options, 2 AS snapshots",
+        "INSERT INTO settings (a) VALUES (1)",
+        'INSERT INTO lake.main."options" (a) SELECT 1',
+        "CREATE TABLE snapshots (a INTEGER)",
+        "CREATE TABLE t (a INTEGER REFERENCES settings (a))",
+    ],
+)
+def test_ctes_updates_and_columns_named_like_the_macros_stay_allowed(sql: str) -> None:
+    _guarded(sql, table_functions())

@@ -573,6 +573,34 @@ def test_summarize_and_dollar_quoted_files_are_refused_through_the_lake(
     assert lake.current_snapshot().id == before  # nothing was created
 
 
+def test_histogram_ducklake_macros_and_table_options_are_refused_through_the_lake(
+    lake: Lake, tmp_path: Path
+) -> None:
+    # #136 Reviewer passes 10 and 11, through a real lake: histogram's table form reads a file
+    # named by an expression; DuckLake's table macros and table options change the lake's
+    # options (deletion vectors, written unencrypted) or read deleted rows.
+    write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(3)"))
+    before = lake.current_snapshot().id
+    files = sorted(tmp_path.rglob("*.parquet"))
+    named = files[0].as_posix() if files else (tmp_path / "x.parquet").as_posix()
+    half = len(named) // 2
+    refused = [
+        f"CREATE TABLE stolen AS SELECT * FROM histogram('{named[:half]}' || "
+        f"'{named[half:]}', a, technique := 'sample')",
+        "CREATE TABLE h AS SELECT histogram(a) AS h FROM m",
+        "CREATE TABLE x AS SELECT * FROM lake.set_option('write_deletion_vectors', true)",
+        "CREATE TABLE x AS SELECT * FROM lake.table_deletions('m', 0, 1000)",
+        "CREATE TABLE x AS SELECT * FROM lake.snapshots()",
+        "CREATE TABLE y (a INTEGER) WITH (write_deletion_vectors = true)",
+        "ALTER TABLE m SET (write_deletion_vectors = true)",
+    ]
+    for sql in refused:
+        assert code_of(lambda sql=sql: write(lake, statement(sql))) == "STORE_STATEMENT_INVALID", (
+            sql
+        )
+    assert lake.current_snapshot().id == before  # nothing was written
+
+
 def test_a_read_with_summarize_is_refused_by_the_tree_too(
     lake: Lake, monkeypatch: pytest.MonkeyPatch
 ) -> None:

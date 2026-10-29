@@ -503,10 +503,13 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
     """Refuse SQL that names the catalog database or calls a table function other than generators.
 
     Table functions read files, run SQL or open connections (`read_text`, `query`,
-    `postgres_execute`, …); only `range`, `generate_series` and `unnest` are allowed. Comments
-    between a name and its `(` are skipped. The catalog database (in PostgreSQL the whole
-    database, other lakes included) is only ever touched by DuckLake itself. The connection is
-    also sandboxed to the lake's folders (`Lake._sandbox`), so these checks are a first layer.
+    `postgres_execute`, …); only `range`, `generate_series` and `unnest` are allowed. DuckLake's
+    table macros (`set_option`, `table_changes`, …) and table options (`CREATE TABLE … WITH
+    (…)`, `ALTER TABLE … SET (…)`/`RESET (…)`) are refused too: the lake's options are the
+    store's. Comments between a name and its `(` are skipped. The catalog database (in
+    PostgreSQL the whole database, other lakes included) is only ever touched by DuckLake itself.
+    The connection is also sandboxed to the lake's folders (`Lake._sandbox`), so these checks are
+    a first layer.
     """
     if "\x00" in sql:
         # DuckDB picks a reader from a whole string but opens the path only up to a NUL, which
@@ -525,12 +528,36 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
     positions = [position for position, _ in every] + [len(sql)]
     _refuse_file_names(sql, tokens, positions)
     _refuse_show_statements(sql, tokens, positions)
+    first = ""
     for index, (position, kind) in enumerate(tokens):
         if kind not in {duckdb.token_type.identifier, duckdb.token_type.keyword}:
             continue
         end = next(later for later in positions if later > position)
         name = sql[position:end].strip().strip('"').lower()
         following = tokens[index + 1][0] if index + 1 < len(tokens) else len(sql)
+        first = first or name
+        # A CTE always names itself before its `(`: `WITH (` is a table's options.
+        if (
+            sql[following : following + 1] == "("
+            and kind == duckdb.token_type.keyword
+            and (name == "with" or (first == "alter" and name in {"set", "reset"}))
+        ):
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "Table options are not allowed: the lake's options are set by the store.",
+                {"clause": name.upper()},
+            )
+        if (
+            sql[following : following + 1] == "("
+            and name in DUCKLAKE_TABLE_MACROS
+            and not _names_a_table(sql, tokens, positions, index)
+        ):
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "DuckLake's own functions are not allowed: the store runs maintenance and sets "
+                "the lake's options.",
+                {"function": name},
+            )
         if (
             sql[following : following + 1] == "("
             and (name in table_functions or name in _EXTERNAL_SQL_FUNCTIONS)
@@ -543,6 +570,22 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
                 "refused in every form.",
                 {"function": name},
             )
+
+
+def _names_a_table(
+    sql: str, tokens: list[tuple[int, duckdb.token_type]], positions: list[int], index: int
+) -> bool:
+    """Whether the (possibly qualified) name at `index` follows `INTO`, `TABLE` or
+    `REFERENCES`: a table with a column list (`INSERT INTO settings (a)`), not a call."""
+    before = index - 1
+    while before >= 1 and sql[tokens[before][0] : tokens[before][0] + 1] == ".":
+        before -= 2  # `lake.main.settings`: skip each `name .`
+    if before < 0:
+        return False
+    position, kind = tokens[before]
+    end = next(later for later in positions if later > position)
+    word = sql[position:end].strip().lower()
+    return kind == duckdb.token_type.keyword and word in {"into", "table", "references"}
 
 
 def _refuse_file_names(
@@ -888,6 +931,26 @@ READ_TABLE_FUNCTIONS = frozenset({"range", "generate_series", "unnest"})
 # function (`histogram`, whose table form reads a table or file named by any expression, and
 # whatever an extension adds) is refused in every form, its scalar or aggregate form included.
 SHARED_HARMLESS_FUNCTIONS = frozenset({"repeat", "version"})
+# DuckLake's table macros, created in each lake schema on first use (so `duckdb_functions()`
+# never lists them): they change the lake's options (`set_option` could turn on deletion
+# vectors, which DuckLake writes unencrypted), set commit messages, merge files, or read deleted
+# rows and old snapshots. Only the store calls DuckLake's maintenance and options.
+DUCKLAKE_TABLE_MACROS = frozenset(
+    {
+        "set_option",
+        "set_commit_message",
+        "merge_adjacent_files",
+        "options",
+        "settings",
+        "current_snapshot",
+        "last_committed_snapshot",
+        "snapshots",
+        "table_info",
+        "table_changes",
+        "table_deletions",
+        "table_insertions",
+    }
+)
 TABLE_FUNCTIONS_SQL = (
     "SELECT string_agg(DISTINCT lower(function_name), '|') FROM duckdb_functions() "
     "WHERE function_type IN ('table', 'table_macro', 'pragma')"
