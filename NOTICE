@@ -19,3 +19,8 @@ The tests include, unchanged, the JSON Schemas of the OpenLineage specification
 (spec/OpenLineage.json and five facet schemas, https://github.com/OpenLineage/OpenLineage,
 commit ff6c73647044544c8614eaae9ab61918727a26c1), licensed under the Apache License 2.0;
 its notice is kept with them in packages/transform/tests/openlineage/NOTICE.txt.
+
+The server package includes the web application, built from web/. The build bundles
+third-party software, listed with its licenses in THIRD_PARTY_LICENSES.md, which is generated
+with every build and shipped next to the application (server/web/THIRD_PARTY_LICENSES.md in
+the server package).
