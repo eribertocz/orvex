@@ -34,7 +34,7 @@ Because the engine is deterministic and every input is versioned (project commit
 
 ## 5. Freshness visibility
 
-Every dashboard and visual shows "Data as of <timestamp>"; it turns amber when the declared freshness is exceeded and red when the last run failed (the last good data remains visible). A visual on a live engine (after v1.0.0) shows "live, read at <time>" instead (ADR-0027 §5).
+Every dashboard and visual shows "Data as of <timestamp>"; it turns amber when the declared freshness is exceeded and red when the last run failed (the last good data remains visible). For an existing DuckLake the same colors apply to the snapshot served: amber when it is older than the connection's declared freshness, red when the newest snapshot failed verification (the last verified one remains visible). A visual on a live engine (after v1.0.0) shows "live, read at <time>" instead (ADR-0027 §5, §7).
 
 ## 6. Caching
 

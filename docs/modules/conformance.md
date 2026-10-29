@@ -16,7 +16,7 @@
 | All | `product/laws.md` | §1–§2 |
 
 ## ADRs
-0009, 0010, 0011, 0012, 0015.
+0009, 0010, 0011, 0012, 0015, 0027.
 
 ## Rules
 - **Normative cases come before the code they test** and are merged by the Owner (`owner-merge`). Their issue title starts with "Normative cases".

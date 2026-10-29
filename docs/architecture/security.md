@@ -110,4 +110,4 @@ column_policies:
 
 ## 6. Security conformance suite
 
-`conformance/security/` contains negative tests that must always fail to access data: page access bypass, row-policy removal through filters, LOD and context modifiers, cache reuse across users with different permissions, export of hidden columns, possible-values leakage, MCP queries outside permissions, missing-attribute fail-closed. It runs on every pull request that touches `semantic`, `access`, `dashboards`, `mcp` or `server`.
+`conformance/security/` contains negative tests that must always fail to access data: page access bypass, row-policy removal through filters, LOD and context modifiers, cache reuse across users with different permissions, export of hidden columns, possible-values leakage, MCP queries outside permissions, missing-attribute fail-closed, and the Direct Query cases of ADR-0027 §6 on every enabled engine. It runs on every pull request that touches `semantic`, `access`, `dashboards`, `mcp` or `server`.

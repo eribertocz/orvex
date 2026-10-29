@@ -6,7 +6,7 @@ Each pack lists: purpose, contracts it owns and consumes, **required reading** (
 
 | Module | Pack | Built in phases |
 |---|---|---|
-| store | [`store.md`](store.md) | P1 |
+| store | [`store.md`](store.md) | P1, P2 (Direct Query on an existing DuckLake) |
 | transform | [`transform.md`](transform.md) | P1, P5 (pre-aggregation refresh) |
 | semantic | [`semantic.md`](semantic.md) | P2, P4, P5 (and support in P3, P7) |
 | access | [`access.md`](access.md) | P2 (`security-context`), P3, P9 (personal access tokens) |
