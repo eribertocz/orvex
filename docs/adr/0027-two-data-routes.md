@@ -97,14 +97,18 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
         - requiring that the data location's file system holds no file of that protected set, since a hard link cannot cross file systems;
         - reading the lake in a process of its own, under an operating-system identity with access only to the declared location, its catalog file and its spill folder. The memory rule of §7 then applies across processes.
       - If it cannot, Route B accepts only object-storage data locations, which have no links.
-    - P2-30 shows that a SQLite catalog still sees new snapshots under this sandbox. If it cannot, SQLite catalogs are refused for Route B.
-    - Before a new snapshot is served, every data and delete file it references is checked to lie under that location. A snapshot that fails the check is never served.
+    - **SQLite catalog file.** The catalog file of a Route B SQLite catalog must be a regular file, opened without following links, and lie outside the protected set. DuckLake can store small inserts inline in the catalog itself, and those rows never pass through the file sandbox. P2-30 shows that the catalog still sees new snapshots under this sandbox. If it cannot, SQLite catalogs are refused for Route B.
+    - Before a new snapshot is served, every data and delete file it references is checked: it must lie under the lake's location and outside the protected set as it stands at that moment. A snapshot that fails the check is never served.
   - **Separate locations.** Every file Orvex reads for any other purpose, in any project of the instance, is protected:
     - the instance folders;
-    - for every project registered in the instance: its folder, its managed lake's data location, its existing lakes' locations, and every path read by its file sources (Parquet, CSV, DuckDB-file and SQLite sources).
+    - for every project registered in the instance: its folder, its managed lake's data location and catalog file, its existing lakes' locations and catalog files (other than the lake being validated), and every path read by its file sources (Parquet, CSV, DuckDB-file and SQLite sources).
 
     The set is instance-wide because one project's existing lake must never reach another project's data, whose members and policies differ.
-    - Validation rejects a declared data location that equals, contains or lies inside any of them (`STORE_SOURCE_INVALID`).
+    - The check runs in both directions, across the instance, whenever any project's configuration is validated:
+      - an existing lake's location that equals, contains or lies inside a protected location is rejected;
+      - a protected location declared later in any project (a managed-lake location, a project folder, a file-source path, or another existing lake's location) that equals or lies inside an existing lake's location is rejected too.
+
+      Both are rejected with `STORE_SOURCE_INVALID`. The order in which projects or lakes are registered never matters.
     - The comparison uses whole path components after resolving the paths, and for object storage also the bucket and endpoint. Ambiguous cases fail closed, for example one export mounted at two paths, or two spellings of one endpoint.
     - Otherwise a catalog could register a protected file as its own, and serve its data without the policies of the data built from it.
   - **Tables only.** Semantic datasets may reference only the lake's tables. A dataset on a view is refused with `STORE_SOURCE_INVALID`, a narrower form of the rule `contracts/store/v1` applies to DuckDB and SQLite sources that define views or macros.
@@ -170,6 +174,8 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
   - a hard link in an existing lake's data location to a managed-lake data file;
   - an existing lake that registers a file of a Route A file source, by absolute path or by hard link;
   - an existing lake that registers a data file or file-source file of another project in the same instance, by absolute path or by hard link;
+  - a managed-lake location or file source registered in another project after an existing lake whose location contains it;
+  - an existing lake's SQLite catalog file replaced by a link to another catalog;
   - a policy whose mapping subquery reads a table outside the managed lake;
   - an existing lake whose declared location contains the managed lake's data location;
   - a restored external catalog that reuses snapshot ids;
