@@ -84,6 +84,11 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
 - **Read-only, proven.**
   - The lake is attached with DuckDB's `READ_ONLY` and without automatic catalog migration.
   - The PostgreSQL catalog session is also read-only at the database level (`default_transaction_read_only = on`, as for PostgreSQL sources), or uses a role that cannot write. P2-30 shows which mechanism is used, and a connection it cannot make read-only is refused.
+  - **A dedicated, minimal catalog role.** The catalog's untrusted owner can replace catalog tables with views over `SECURITY INVOKER` functions, and those run with Orvex's role. The PostgreSQL role of a Route B catalog therefore:
+    - is used for no other connection in the instance, neither another catalog nor a source;
+    - is refused if it can read any object outside that lake's catalog schema (system catalogs aside). Grants to `PUBLIC` count against it.
+
+    P2-30 shows how this is checked, failing closed. The managed lake's own catalog role is never reused for a Route B catalog.
   - A catalog version the bundled DuckLake cannot read without migrating is refused with `ENGINE_VERSION_UNTESTED`, and so is any version the corpus has not run on.
 - **Isolation (law 3).** A lake Orvex does not own is untrusted. Its views and macros are DuckDB SQL that the reader binds, and its catalog decides which files each table reads (DuckLake allows absolute data-file paths). Five rules prevent it from reaching anything else:
   - **Separate instance.** Each existing DuckLake is attached in a DuckDB instance of its own, holding no other catalog and only that lake's secrets.
@@ -97,11 +102,13 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
         - requiring that the data location's file system holds no file of that protected set, since a hard link cannot cross file systems;
         - reading the lake in a process of its own, under an operating-system identity with access only to the declared location, its catalog file and its spill folder. The memory rule of §7 then applies across processes.
       - If it cannot, Route B accepts only object-storage data locations, which have no links.
-    - **SQLite catalog file.** The catalog file of a Route B SQLite catalog must be a regular file, opened without following links, and lie outside the protected set. DuckLake can store small inserts inline in the catalog itself, and those rows never pass through the file sandbox. P2-30 shows that the catalog still sees new snapshots under this sandbox. If it cannot, SQLite catalogs are refused for Route B.
+    - **SQLite catalog file.** The catalog file of a Route B SQLite catalog must be a regular file, opened without following links, and lie outside the protected set. At each open, the device and inode of the catalog file and of its `-wal`, `-shm` and `-journal` files are compared with those of every protected catalog file and its companion files, so a hard link to another catalog is detected. DuckLake can store small inserts inline in the catalog itself, and those rows never pass through the file sandbox. P2-30 shows that the catalog still sees new snapshots under this sandbox. If it cannot, SQLite catalogs are refused for Route B.
     - Before a new snapshot is served, every data and delete file it references is checked: it must lie under the lake's location and outside the protected set as it stands at that moment. A snapshot that fails the check is never served.
   - **Separate locations.** Every file Orvex reads for any other purpose, in any project of the instance, is protected:
     - the instance folders;
     - for every project registered in the instance: its folder, its managed lake's data location and catalog file, its existing lakes' locations and catalog files (other than the lake being validated), and every path read by its file sources (Parquet, CSV, DuckDB-file and SQLite sources).
+
+    The same existing DuckLake may be connected in several projects, for example billing and collections. Connections with the same catalog identity and the same data location are one lake, not an overlap. Catalog identity means host, port, database and schema, or the same SQLite file by device and inode. Each project still applies its own policies to its own datasets.
 
     The set is instance-wide because one project's existing lake must never reach another project's data, whose members and policies differ.
     - The check runs in both directions, across the instance, whenever any project's configuration is validated:
@@ -175,7 +182,8 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
   - an existing lake that registers a file of a Route A file source, by absolute path or by hard link;
   - an existing lake that registers a data file or file-source file of another project in the same instance, by absolute path or by hard link;
   - a managed-lake location or file source registered in another project after an existing lake whose location contains it;
-  - an existing lake's SQLite catalog file replaced by a link to another catalog;
+  - an existing lake's SQLite catalog file, or one of its `-wal`, `-shm` or `-journal` files, replaced by a symbolic or hard link to another catalog's;
+  - an existing lake whose PostgreSQL catalog exposes another schema's rows through a view over a `SECURITY INVOKER` function, and a catalog role shared with another connection or able to read outside its schema;
   - a policy whose mapping subquery reads a table outside the managed lake;
   - an existing lake whose declared location contains the managed lake's data location;
   - a restored external catalog that reuses snapshot ids;
