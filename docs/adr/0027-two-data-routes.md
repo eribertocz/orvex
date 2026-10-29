@@ -86,7 +86,7 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
   - The PostgreSQL catalog session is also read-only at the database level (`default_transaction_read_only = on`, as for PostgreSQL sources), or uses a role that cannot write. P2-30 shows which mechanism is used, and a connection it cannot make read-only is refused.
   - **A dedicated, minimal catalog role.** The catalog's untrusted owner can replace catalog tables with views over `SECURITY INVOKER` functions, and those run with Orvex's role. The PostgreSQL role of a Route B catalog therefore:
     - is used for no other connection in the instance, neither another catalog nor a source;
-    - is refused if it can read any object outside that lake's catalog schema (system catalogs aside). Grants to `PUBLIC` count against it.
+    - is refused if it can read any object outside that lake's catalog schema (system catalogs aside). Grants to `PUBLIC` and membership in PostgreSQL's privileged built-in roles (for example `pg_read_all_data`, `pg_read_server_files`) count against it.
 
     P2-30 shows how this is checked, failing closed. The managed lake's own catalog role is never reused for a Route B catalog.
   - A catalog version the bundled DuckLake cannot read without migrating is refused with `ENGINE_VERSION_UNTESTED`, and so is any version the corpus has not run on.
@@ -102,7 +102,7 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
         - requiring that the data location's file system holds no file of that protected set, since a hard link cannot cross file systems;
         - reading the lake in a process of its own, under an operating-system identity with access only to the declared location, its catalog file and its spill folder. The memory rule of §7 then applies across processes.
       - If it cannot, Route B accepts only object-storage data locations, which have no links.
-    - **SQLite catalog file.** The catalog file of a Route B SQLite catalog must be a regular file, opened without following links, and lie outside the protected set. At each open, the device and inode of the catalog file and of its `-wal`, `-shm` and `-journal` files are compared with those of every protected catalog file and its companion files, so a hard link to another catalog is detected. DuckLake can store small inserts inline in the catalog itself, and those rows never pass through the file sandbox. P2-30 shows that the catalog still sees new snapshots under this sandbox. If it cannot, SQLite catalogs are refused for Route B.
+    - **SQLite catalog file.** The catalog file of a Route B SQLite catalog must be a regular file, opened without following links, and lie outside the protected set. At each open, the device and inode of the catalog file and of its `-wal`, `-shm` and `-journal` files are compared with those of every file in the protected set, including the `-wal`, `-shm` and `-journal` files of every protected catalog and Route A SQLite source, so a hard link to any of them is detected. P2-30 makes this check on the opened file descriptors, so it cannot race a later open. DuckLake can store small inserts inline in the catalog itself, and those rows never pass through the file sandbox. P2-30 shows that the catalog still sees new snapshots under this sandbox. If it cannot, SQLite catalogs are refused for Route B.
     - Before a new snapshot is served, every data and delete file it references is checked: it must lie under the lake's location and outside the protected set as it stands at that moment. A snapshot that fails the check is never served.
   - **Separate locations.** Every file Orvex reads for any other purpose, in any project of the instance, is protected:
     - the instance folders;
@@ -141,7 +141,7 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
 - **Existing DuckLake:**
   - the receipt names the snapshot read and, when row policies apply, the snapshot of every managed-lake table read by the policies or by their registration check (§6);
   - it is `exact` while all of those snapshots are retained (the external one by the lake's owner), and `explainable` afterwards;
-  - an external snapshot is identified by the connection, its id and its commit time, never by the id alone.
+  - an external snapshot is identified by the project, the connection, its id and its commit time, never by the id alone.
     - A restored or replaced catalog can reuse ids for different data.
     - Each query's read transaction therefore confirms that the pinned snapshot still has its recorded commit time, and the schedule check confirms that the current id is not lower than the last verified one.
     - If either check fails, the lake is treated as new: every cache entry of that connection is purged, nothing is served until a snapshot passes verification, the indicator turns red, and receipts naming the old snapshots become `explainable`;
@@ -182,7 +182,7 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
   - an existing lake that registers a file of a Route A file source, by absolute path or by hard link;
   - an existing lake that registers a data file or file-source file of another project in the same instance, by absolute path or by hard link;
   - a managed-lake location or file source registered in another project after an existing lake whose location contains it;
-  - an existing lake's SQLite catalog file, or one of its `-wal`, `-shm` or `-journal` files, replaced by a symbolic or hard link to another catalog's;
+  - an existing lake's SQLite catalog file, or one of its `-wal`, `-shm` or `-journal` files, replaced by a symbolic or hard link to another catalog's or to a Route A SQLite source's;
   - an existing lake whose PostgreSQL catalog exposes another schema's rows through a view over a `SECURITY INVOKER` function, and a catalog role shared with another connection or able to read outside its schema;
   - a policy whose mapping subquery reads a table outside the managed lake;
   - an existing lake whose declared location contains the managed lake's data location;
