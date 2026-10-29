@@ -176,14 +176,20 @@ def test_a_platform_without_detection_keeps_the_default_path_only(
     assert code == 0, out
 
 
+@pytest.mark.parametrize("host", ["127.0.0.2", "'/tmp,db.example.com'", "localhost,127.0.0.2"])
 @pytest.mark.parametrize("mode", ["", "    ssl_mode: require\n", "    ssl_mode: verify-ca\n"])
 def test_a_remote_postgres_catalog_needs_verify_full(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, mode: str
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    host: str,
 ) -> None:
+    # A host list counts as remote when any entry is (libpq tries them in turn).
     monkeypatch.setenv("LAKE_TEST_PASSWORD", "secret-value")
     project(
         tmp_path,
-        "lake:\n  catalog:\n    type: postgres\n    host: 127.0.0.2\n    database: d\n"
+        f"lake:\n  catalog:\n    type: postgres\n    host: {host}\n    database: d\n"
         f"    user: u\n    password: ${{env:LAKE_TEST_PASSWORD}}\n{mode}",
     )
     out = problem(capsys, tmp_path)

@@ -192,7 +192,11 @@ def _unescape(text: str) -> str:
 
 def _postgres(catalog: PostgresLakeCatalog, data: str) -> Place:
     host = catalog.host
-    local = host.startswith("/") or host.lower() in _LOCAL_HOSTS
+    # libpq reads `host` as a list: every entry must be the local machine.
+    local = all(
+        entry.strip().startswith("/") or entry.strip().lower() in _LOCAL_HOSTS
+        for entry in host.split(",")
+    )
     if not local and catalog.ssl_mode != "verify-full":
         mode = catalog.ssl_mode or "not set"
         raise ProjectLoadError(
