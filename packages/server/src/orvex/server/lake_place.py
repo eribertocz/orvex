@@ -34,7 +34,24 @@ MOUNTINFO = Path("/proc/self/mountinfo")
 # catalog there could be corrupted by two writers (ADR-0027 §2). Every FUSE file system
 # (`fuse.sshfs`, `fuse.s3fs`, …) is refused too: most are remote, and none can be proven local.
 NETWORK_FILE_SYSTEMS = frozenset(
-    {"nfs", "nfs4", "cifs", "smb3", "smbfs", "9p", "ceph", "glusterfs", "lustre", "afs"}
+    {
+        "nfs",
+        "nfs4",
+        "cifs",
+        "smb3",
+        "smbfs",
+        "9p",
+        "ceph",
+        "glusterfs",
+        "lustre",
+        "afs",
+        # Also remote or shared with another system: WebDAV, and folders a virtual machine
+        # shares with its host.
+        "fuse",
+        "davfs",
+        "vboxsf",
+        "virtiofs",
+    }
 )
 _URL = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
@@ -61,15 +78,16 @@ def place(project: Project, home: Path) -> Place:
     or `PROJECT_SECRET_MISSING` for one that must be refused. Nothing is opened or created."""
     lake = project.settings.lake
     catalog = lake.catalog.root if lake is not None and lake.catalog is not None else None
-    folder = lake_folder(home)
-    data = (folder / "data").as_posix() + "/"
     if catalog is None:
         # No `lake` section: exactly as before #120.
-        default = folder / DEFAULT_CATALOG["duckdb"]
         return Place(
-            LocalLakeLocation(kind="lake_location", catalog="local", path=str(folder)),
-            {"catalog": "duckdb", "path": default.as_posix()},
+            LocalLakeLocation(kind="lake_location", catalog="local", path=str(lake_folder(home))),
+            _default_identity(home),
         )
+    # Paths are compared and recorded resolved (symlinks and `..` followed), so the same file
+    # has one identity however the project folder was named.
+    folder = lake_folder(home).resolve()
+    data = (folder / "data").as_posix() + "/"
     if isinstance(catalog, PostgresLakeCatalog):
         return _postgres(catalog, data)
     kind = "duckdb" if isinstance(catalog, DuckdbLakeCatalog) else "sqlite"
@@ -114,8 +132,7 @@ def _catalog_file(
                 pointer,
             )
         expanded = Path(os.path.expanduser(text))
-        path = expanded if expanded.is_absolute() else folder / expanded
-    path = Path(os.path.normpath(path))
+        path = (expanded if expanded.is_absolute() else folder / expanded).resolve()
     kind = file_system(path)
     if kind is None:
         if path != default:
@@ -308,7 +325,9 @@ def _describe(identity: dict[str, str | int]) -> str:
 
 
 def _default_identity(home: Path) -> dict[str, str | int]:
-    return {"catalog": "duckdb", "path": (lake_folder(home) / DEFAULT_CATALOG["duckdb"]).as_posix()}
+    """The identity of the default DuckDB catalog, its path resolved."""
+    default = lake_folder(home).resolve() / DEFAULT_CATALOG["duckdb"]
+    return {"catalog": "duckdb", "path": default.as_posix()}
 
 
 def record(home: Path, chosen: Place) -> None:

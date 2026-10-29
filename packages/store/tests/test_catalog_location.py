@@ -13,6 +13,7 @@ import os
 import uuid
 from pathlib import Path
 
+import duckdb
 import pytest
 from orvex.contracts.store.v1 import (
     LocalLakeLocation,
@@ -22,7 +23,15 @@ from orvex.contracts.store.v1 import (
     StatementRequest,
 )
 from orvex.store.errors import StoreError
-from orvex.store.lake import Lake, Limits, _conninfo, _require_tls, _with_root_cert, open_lake
+from orvex.store.lake import (
+    Lake,
+    Limits,
+    _conninfo,
+    _inline_secret,
+    _require_tls,
+    _with_root_cert,
+    open_lake,
+)
 
 LIMITS = Limits(
     memory_limit="512MB", threads=1, max_concurrent=4, queue_size=16, default_timeout_ms=600_000
@@ -79,6 +88,17 @@ def test_connection_strings_are_read_as_libpq_reads_them() -> None:
         with pytest.raises(StoreError) as refused:
             _conninfo(broken)
         assert refused.value.code == "STORE_STATEMENT_INVALID"
+
+
+def test_a_password_is_a_keyword_not_a_word() -> None:
+    assert _inline_secret("host=h password=x")
+    assert _inline_secret("host=h PASSWORD = x")
+    assert _inline_secret("host=h sslpassword=x")
+    assert _inline_secret("postgresql://u:x@h/d")
+    # Not key=value pairs (an unterminated quote): judged by the word alone.
+    assert _inline_secret("host='broken password=x")
+    assert not _inline_secret("host='broken")
+    assert not _inline_secret("host='h' dbname='password_vault' user='passwords'")
 
 
 # --- the TLS rule ----------------------------------------------------------------------------
@@ -205,6 +225,13 @@ def test_verify_full_fails_closed_without_tls(tmp_path: Path) -> None:
 # --- file catalogs ---------------------------------------------------------------------------
 
 
+def closed(lake: Lake, path: Path) -> None:
+    """The lake's own DuckDB connection may not open `path`: the sandbox refuses it (the
+    statement guard, which refuses file readers anyway, is not involved)."""
+    with pytest.raises(duckdb.PermissionException):
+        lake._connection.execute(f"SELECT count(*) FROM read_csv('{path.as_posix()}')").fetchone()
+
+
 def test_a_duckdb_catalog_outside_the_lake_folder(tmp_path: Path) -> None:
     catalog = tmp_path / "elsewhere" / "my.ducklake"
     location = LocalLakeLocation(
@@ -213,9 +240,18 @@ def test_a_duckdb_catalog_outside_the_lake_folder(tmp_path: Path) -> None:
         path=str(tmp_path / "lake"),
         catalog_path=str(catalog),
     )
+    beside = tmp_path / "elsewhere" / "beside.csv"
+    beside.parent.mkdir(parents=True)
+    beside.write_text("x\n1\n", encoding="utf-8")
     lake = open_lake(location, LIMITS)
     try:
         assert write_and_read(lake) == [{"amount": "42.00"}]
+        # The sandbox gains the catalog file and its write-ahead log, not their folder.
+        allowed = lake._connection.execute("SELECT current_setting('allowed_paths')").fetchone()
+        named = catalog.resolve().as_posix()
+        assert allowed is not None
+        assert {named, f"{named}.wal"} <= set(allowed[0])
+        closed(lake, beside)
     finally:
         lake.close()
     assert catalog.is_file()
@@ -235,10 +271,16 @@ def test_a_sqlite_catalog(tmp_path: Path) -> None:
         path=str(catalog),
         data_path=(tmp_path / "data").as_posix() + "/",
     )
+    beside = tmp_path / "catalog" / "beside.csv"
+    beside.parent.mkdir(parents=True)
+    beside.write_text("x\n1\n", encoding="utf-8")
     lake = open_lake(location, LIMITS)
     try:
         assert write_and_read(lake) == [{"amount": "42.00"}]
-        # The sandbox gains the catalog file and its companions, and not the catalog's folder.
+        # The sandbox gains the catalog file and its companions, and not the catalog's folder:
+        # a file beside the catalog stays closed. (DuckDB adds entries of its own for each
+        # attached database, so the list itself is not compared for equality.)
+        closed(lake, beside)
         settings = lake._connection.execute(
             "SELECT current_setting('allowed_paths'), current_setting('allowed_directories')"
         ).fetchone()

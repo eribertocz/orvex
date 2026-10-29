@@ -311,6 +311,20 @@ def _conninfo(text: str) -> dict[str, str]:
         pairs[keyword.lower()] = "".join(value)
 
 
+def _inline_secret(connection: str) -> bool:
+    """Whether a connection string carries a password: a `password` or `sslpassword` keyword,
+    or any URI form (`user:pw@host`, `?password=`). A value that merely contains the word (a
+    database named `password_vault`) is not one. A string that is not key=value pairs is
+    judged by the word alone."""
+    if "://" in connection:
+        return True
+    try:
+        pairs = _conninfo(connection)
+    except StoreError:
+        return _INLINE_SECRET.search(connection) is not None
+    return bool({"password", "sslpassword"} & set(pairs))
+
+
 def _local_host(host: str) -> bool:
     return host == "" or host.startswith(("/", "@")) or host.lower() in _LOCAL_HOSTS
 
@@ -353,7 +367,7 @@ def _with_root_cert(connection: str) -> str:
 
 def _postgres_password(location: PostgresLakeLocation) -> str:
     """Refuse an unsafe PostgreSQL location, then read and register its password."""
-    if _INLINE_SECRET.search(location.connection):
+    if _inline_secret(location.connection):
         raise StoreError(
             "STORE_SECRET_INLINE",
             "The connection must be key=value pairs without any password; use password_env.",

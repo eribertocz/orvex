@@ -97,6 +97,7 @@ def full_flow(folder: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert out.count("success") == 2
     code, out = run(capsys, "maintain", str(folder))
     assert code == 0, out
+    assert "maintenance done" in out  # it ran on this catalog, not "nothing to maintain"
     assert count(folder) == 15
     data = home(folder) / "lake" / "data"
     assert list(data.rglob("*.parquet"))
@@ -396,3 +397,47 @@ def test_switching_catalogs_after_the_lake_exists_is_refused(
     project(tmp_path)  # back to the default: the same lake again
     assert run(capsys, "run", str(tmp_path))[0] == 0
     assert count(tmp_path) == 5
+
+
+# --- one identity however the folder is named ------------------------------------------------
+
+
+def bare(folder: Path, lake: str) -> Path:
+    """A project with no models: validating it opens no lake."""
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "project.yaml").write_text(PROJECT + lake, encoding="utf-8")
+    return folder
+
+
+def problems(folder: Path) -> list[str]:
+    return [str(problem) for problem in commands.check_project(folder).problems]
+
+
+def test_a_dotted_folder_name_is_the_same_lake(tmp_path: Path) -> None:
+    folder = bare(tmp_path / "proj", "lake:\n  catalog:\n    type: duckdb\n")
+    (tmp_path / "other").mkdir()
+    default = home(folder) / "lake" / "catalog.ducklake"
+    default.parent.mkdir(parents=True)
+    default.touch()  # an existing default lake
+    assert problems(tmp_path / "other" / ".." / "proj") == []
+    assert problems(folder) == []
+
+
+def test_a_symlinked_folder_is_the_same_lake(tmp_path: Path) -> None:
+    folder = bare(tmp_path / "proj", "lake:\n  catalog:\n    type: sqlite\n    path: c/l.sqlite\n")
+    (tmp_path / "link").symlink_to(folder)
+    linked = tmp_path / "link"
+    chosen = lake_place.place(load_project(linked), home(linked))
+    lake_place.record(home(linked), chosen)  # first opened through the link
+    assert problems(folder) == []
+    assert problems(linked) == []
+    assert chosen.identity["path"] == (folder / "c" / "l.sqlite").resolve().as_posix()
+
+
+def test_the_default_path_is_recognized_through_a_dotted_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(lake_place, "file_system", lambda path: None)
+    bare(tmp_path / "proj", "lake:\n  catalog:\n    type: sqlite\n")
+    (tmp_path / "other").mkdir()
+    assert problems(tmp_path / "other" / ".." / "proj") == []
