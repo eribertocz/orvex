@@ -504,6 +504,12 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
     database, other lakes included) is only ever touched by DuckLake itself. The connection is
     also sandboxed to the lake's folders (`Lake._sandbox`), so these checks are a first layer.
     """
+    if "\x00" in sql:
+        # DuckDB picks a reader from a whole string but opens the path only up to a NUL, which
+        # Python's file checks refuse to look at (#136, Reviewer pass 8).
+        raise StoreError(
+            "STORE_STATEMENT_INVALID", "A statement cannot contain a NUL character.", {}
+        )
     if METADATA_PREFIX in sql.lower():
         raise StoreError(
             "STORE_STATEMENT_INVALID",

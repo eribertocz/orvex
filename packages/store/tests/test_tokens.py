@@ -251,3 +251,18 @@ def test_a_glob_duckdb_expands_further_than_python_is_refused(tmp_path: Path, na
     with pytest.raises(StoreError) as refused:
         _guarded(sql, table_functions())
     assert refused.value.code == "STORE_STATEMENT_INVALID"
+
+
+@pytest.mark.parametrize(
+    "named",
+    ["'{f}\x00.parquet'", '"{f}\x00".parquet', '"{f}\x00.parquet"'],
+    ids=["string", "dotted", "quoted-name"],
+)
+def test_a_nul_character_cannot_cut_a_file_name(a_file: str, named: str) -> None:
+    # #136 Reviewer pass 8: DuckDB opens a path only up to a NUL, after choosing its reader
+    # from the whole string; Python's file checks do not look at such a path. (An escaped NUL,
+    # `E'…\\x00…'`, is a parser error in DuckDB 2.0.0: it never names a file.)
+    sql = "CREATE TABLE stolen AS FROM " + named.replace("{f}", a_file)
+    with pytest.raises(StoreError) as refused:
+        _guarded(sql, table_functions())
+    assert refused.value.code == "STORE_STATEMENT_INVALID"
