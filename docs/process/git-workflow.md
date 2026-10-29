@@ -75,7 +75,7 @@ Before merging, the Agent verifies its own pull request according to the risk ti
 |---|---|---|
 | **A — critical** | `semantic`, `access`, security, contracts, numeric exactness, concurrency, `conformance/` | All required checks green **and** an independent **Reviewer pass**: a separate subagent session with clean context and reviewer instructions (`docs/process/review.md`) that did not take part in writing the code. It checks every acceptance criterion and reads the full diff. Its verdict is posted on the pull request as a comment starting with `[Reviewer]` |
 | **B — standard** | `web`, `dashboards`, `transform`, `store`, `server`, `mcp`, tooling (unless they touch tier A topics) | All required checks green; the Agent checks every criterion and posts the case matrix with results |
-| **C — routine** | Dependabot patch and minor updates of Python and npm packages; typo fixes outside governed paths | Auto-merge when all required checks are green. GitHub Actions updates touch `.github/workflows/` and are therefore `owner-merge` |
+| **C — routine** | Dependabot patch and minor updates of Python and npm packages; typo fixes outside governed paths | Auto-merge when all required checks are green: `.github/workflows/dependabot-auto-merge.yml` enables it for these pull requests only, and every required check and rule still applies. A pip update merges once the Agent has pushed the regenerated lock files, since Dependabot cannot regenerate them. GitHub Actions updates touch `.github/workflows/` and are therefore `owner-merge` |
 
 A `[Reviewer]` verdict of **changes requested** blocks the merge until a new Reviewer pass approves.
 
