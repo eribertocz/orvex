@@ -438,6 +438,7 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
     tokens = [token for token in every if token[1] != duckdb.token_type.comment]
     positions = [position for position, _ in every] + [len(sql)]
     _refuse_file_names(sql, tokens, positions)
+    _refuse_show_statements(sql, tokens, positions)
     for index, (position, kind) in enumerate(tokens):
         if kind not in {duckdb.token_type.identifier, duckdb.token_type.keyword}:
             continue
@@ -462,8 +463,9 @@ def _refuse_file_names(
     """Refuse a quoted string or quoted name that names an existing file or matches files.
 
     DuckDB reads such a string as a file in many places (`FROM '…'`, `MERGE … USING '…'`,
-    `PIVOT '…'`, `SUMMARIZE '…'`, …); a model reaches a file only through its source name. The
-    file sandbox, which allows exactly the declared files, is the boundary behind this check.
+    `PIVOT '…'`, `SUMMARIZE '…'`, …); a model reaches a file only through its source name. Every
+    quoting form counts (`'…'`, `E'…'`, `$$…$$`, `$tag$…$tag$`, `"…"`). The file sandbox, which
+    allows exactly the declared files, is the boundary behind this check.
     """
     for position, kind in tokens:
         end = next(later for later in positions if later > position)
@@ -477,10 +479,53 @@ def _refuse_file_names(
             )
 
 
-def _names_a_file(token: str) -> bool:
+_DOLLAR_QUOTED = re.compile(
+    r"\$(?P<tag>[A-Za-z_][A-Za-z0-9_]*)?\$(?P<body>.*)\$(?P=tag)?\$", re.DOTALL
+)
+# Statement forms that read a table or file by name outside the lake's pinned reads (#153):
+# `SUMMARIZE <name or file>`, `DESCRIBE`/`DESC <name>`, `SHOW …`.
+_SHOW_STATEMENTS = frozenset({"summarize", "describe", "desc", "show"})
+
+
+def _string_content(token: str) -> str:
+    """The text a quoted token stands for: `'…'` (with `''`), `E'…'`, `$$…$$`, `$tag$…$tag$` and
+    quoted names `"…"` (with `""`). An unquoted token is returned as it is."""
+    dollar = _DOLLAR_QUOTED.fullmatch(token)
+    if dollar is not None:
+        return dollar["body"]
     quote = token[-1:]
-    start = token.find(quote)
-    content = token[start + 1 : -1].replace(quote * 2, quote) if start >= 0 else token
+    if quote not in {"'", '"'}:
+        return token
+    start = token.find(quote)  # after an `E` prefix, if any
+    return token[start + 1 : -1].replace(quote * 2, quote)
+
+
+def _refuse_show_statements(
+    sql: str, tokens: list[tuple[int, duckdb.token_type]], positions: list[int]
+) -> None:
+    """Refuse `SUMMARIZE`, `DESCRIBE`, `DESC` and `SHOW` where they start a statement or a
+    subquery (also after `AS`). DuckDB reads a quoted target of `SUMMARIZE` as a file, and a
+    read of these forms is not pinned to its snapshot (#153). Quoted names stay allowed."""
+    previous = ""
+    for position, kind in tokens:
+        end = next(later for later in positions if later > position)
+        text = sql[position:end].strip()
+        word = text.lower()
+        if (
+            kind == duckdb.token_type.keyword
+            and word in _SHOW_STATEMENTS
+            and previous in {"", "(", "as"}
+        ):
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "SUMMARIZE, DESCRIBE and SHOW are not allowed in statements.",
+                {"statement": word.upper()},
+            )
+        previous = word
+
+
+def _names_a_file(token: str) -> bool:
+    content = _string_content(token)
     candidates = {content, content.removeprefix("file://")}
     for candidate in candidates:
         if not candidate:

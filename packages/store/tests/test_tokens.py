@@ -83,3 +83,68 @@ def test_created_kinds_are_read_after_non_ascii_text() -> None:
     assert _created_kind_allowed(view, statement(view)) is False
     table = 'CREATE /* año */ TABLE "tabla_año" AS SELECT 1'
     assert _created_kind_allowed(table, statement(table)) is True
+
+
+# --- #153: every quoting form, and no SUMMARIZE / DESCRIBE / SHOW ---------------------------
+
+
+@pytest.fixture
+def a_file(tmp_path: Path) -> str:
+    target = tmp_path / "t.csv"
+    target.write_text("a,b\n1,2\n", encoding="utf-8")
+    return target.as_posix()
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "SUMMARIZE $${f}$$",
+        "SUMMARIZE $q${f}$q$",
+        "SELECT * FROM (SUMMARIZE $${f}$$)",
+        "CREATE TABLE x AS SUMMARIZE $${f}$$",
+        "SELECT * FROM t WHERE a IN (SELECT a FROM (SUMMARIZE $${f}$$))",
+        "SELECT $${f}$$ AS name FROM t",
+        "SELECT E'{f}' AS name FROM t",
+        "SELECT * FROM '{f}'",
+    ],
+)
+def test_a_file_named_in_any_quoting_form_is_refused(a_file: str, template: str) -> None:
+    sql = template.replace("{f}", a_file)
+    with pytest.raises(StoreError) as refused:
+        _guarded(sql, table_functions())
+    assert refused.value.code == "STORE_STATEMENT_INVALID"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SUMMARIZE t",
+        "DESCRIBE t",
+        "DESC t",
+        "SHOW TABLES",
+        "SELECT * FROM (DESCRIBE t)",
+        "WITH w AS (SUMMARIZE t) SELECT * FROM w",
+        "CREATE TABLE x AS DESCRIBE t",
+    ],
+)
+def test_summarize_describe_and_show_are_refused(sql: str) -> None:
+    with pytest.raises(StoreError) as refused:
+        _guarded(sql, table_functions())
+    assert refused.value.code == "STORE_STATEMENT_INVALID"
+    assert "SUMMARIZE, DESCRIBE and SHOW" in refused.value.message
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT $$plain text$$ AS label",
+        "SELECT 'it''s' AS a",
+        "SELECT E'line\\n' AS b",
+        'SELECT "summarize", "describe", "show" FROM t',
+        'CREATE TABLE "describe" AS SELECT 1 AS x',
+        "SELECT a FROM t ORDER BY a DESC",
+        "SELECT row_number() OVER (ORDER BY a DESC) AS n FROM t",
+    ],
+)
+def test_ordinary_statements_are_accepted(sql: str) -> None:
+    _guarded(sql, table_functions())

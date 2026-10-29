@@ -30,7 +30,8 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 
 - Only **write transactions** read sources; a read (`ReadRequest`) still sees only the lake (`STORE_STATEMENT_INVALID`).
 - The file sandbox gains exactly the declared files: for a glob, the files it matches when the lake opens (a file added later, or any other file in the same folder, stays unreadable).
-- Statements still cannot call file readers (`read_parquet`, `read_csv`, …), and a quoted string or name that names an existing file is refused wherever it appears (`FROM '…'`, `MERGE … USING '…'`, `PIVOT '…'`, …): a model reaches a file only through its connection (`STORE_STATEMENT_INVALID`).
+- Statements still cannot call file readers (`read_parquet`, `read_csv`, …), and a quoted string or name that names an existing file is refused wherever it appears (`FROM '…'`, `MERGE … USING '…'`, `PIVOT '…'`, …), in every quoting form (`'…'`, `E'…'`, `$$…$$`, `$tag$…$tag$`, `"…"`): a model reaches a file only through its connection (`STORE_STATEMENT_INVALID`).
+- `SUMMARIZE`, `DESCRIBE` (`DESC`) and `SHOW` are refused where they start a statement or a subquery (`STORE_STATEMENT_INVALID`): DuckDB reads a quoted `SUMMARIZE` target as a file, and these reads would not be pinned to their snapshot. Quoted names (`"describe"`) are ordinary names.
 - A DuckDB source that defines views or macros is refused (`STORE_SOURCE_INVALID`): they would run with the lake's connection.
 - Nothing can be written to a source; a DuckDB source file is never modified.
 - A path that matches no file → `SOURCE_NOT_FOUND`, naming the source, when the lake opens. Two sources with the same name → `STORE_SOURCE_INVALID`.
