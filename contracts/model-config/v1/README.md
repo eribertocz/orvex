@@ -36,6 +36,7 @@ New cross-field rules are added by the issues that implement those behaviors, as
 | `MODEL_REFERENCE_UNKNOWN` | A model reads a table that is neither a model (`<folder>.<name>`) nor a source (`<connection>.<table>`) |
 | `DEPENDENCY_CYCLE` | Models depend on each other in a cycle (the message lists it in order) |
 | `PROJECT_LOCKED` | Another process holds the project's local lake (`orvex run`) |
+| `SCHEDULER_ALREADY_RUNNING` | Another `orvex schedule` keeps the project; the message names its process id. One scheduler per project, held by an OS lock released when that process ends (#69) |
 | `MISSING_UNIQUE_KEY` | `merge` (or `delete_insert`) without `unique_key` |
 | `LOOKBACK_REQUIRES_UNIQUE_KEY` | `append` or `partition_overwrite` with a `lookback` greater than zero (re-read rows are only replaced by key: `merge` or `delete_insert`) |
 | `TIME_COLUMN_NOT_TEMPORAL` | `time_column` missing from the output, or not `DATE`, `TIMESTAMP` or `TIMESTAMP WITH TIME ZONE` |

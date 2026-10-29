@@ -123,7 +123,7 @@ def test_history_parameters_bind() -> None:
 
 def test_runs_without_any_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     project(tmp_path, MODELS)
-    assert command(capsys, "runs", str(tmp_path)) == (0, "no runs yet\n")
+    assert command(capsys, "runs", str(tmp_path)) == (0, "scheduler: has not run\nno runs yet\n")
 
 
 # --- with a lake (DuckLake extension, CI) --------------------------------------------------------
@@ -203,7 +203,9 @@ def test_runs_lists_newest_first_in_the_project_time_zone(
     ids = [re.search(r"^run (\S+)$", out, re.MULTILINE).group(1) for out in (first, second)]  # type: ignore[union-attr]
     code, out = command(capsys, "runs", str(tmp_path))
     assert code == 0
-    lines = out.splitlines()
+    # The first line is the scheduler's state (#69); the runs follow.
+    assert out.splitlines()[0] == "scheduler: has not run"
+    lines = out.splitlines()[1:]
     assert [line.split()[0] for line in lines] == [ids[1], ids[0]]
     assert "success" in lines[0]
     assert "s.a, s.b, s.c" in lines[0]
@@ -211,8 +213,8 @@ def test_runs_lists_newest_first_in_the_project_time_zone(
     local = dt.datetime.fromtimestamp(started_us / 1_000_000, zoneinfo.ZoneInfo("America/La_Paz"))
     assert local.strftime("%Y-%m-%d %H:%M:%S") in lines[0]
     code, out = command(capsys, "runs", str(tmp_path), "--limit", "1")
-    assert out.splitlines()[0].split()[0] == ids[1]
-    assert len(out.splitlines()) == 1
+    assert out.splitlines()[1].split()[0] == ids[1]
+    assert len(out.splitlines()) == 2
 
 
 def test_password_never_reaches_a_record(
