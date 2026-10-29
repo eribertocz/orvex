@@ -47,12 +47,16 @@ def validate(capsys: pytest.CaptureFixture[str], folder: Path) -> tuple[int, str
     return code, capsys.readouterr().out
 
 
+@pytest.mark.parametrize(
+    "host", ["127.0.0.2", "'/var/run/postgresql,127.0.0.2'", "'localhost,db.example.com'"]
+)
 def test_a_remote_source_without_verify_full_is_refused(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, host: str
 ) -> None:
+    # A host list counts as remote when any entry is (libpq tries them in turn).
     monkeypatch.setenv(PASSWORD_ENV, "secret-value")
     for extra in ["", "    ssl_mode: disable\n"]:
-        project(tmp_path, postgres("127.0.0.2", extra=extra))
+        project(tmp_path, postgres(host, extra=extra))
         code, out = validate(capsys, tmp_path)
         assert code == 1
         assert out.startswith("SOURCE_TLS_REQUIRED connections.yaml")
