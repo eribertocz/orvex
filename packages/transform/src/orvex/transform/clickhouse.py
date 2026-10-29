@@ -700,6 +700,18 @@ def _nodes(node: _Node) -> list[_Node]:
     return found
 
 
+# Clause labels of `EXPLAIN QUERY TREE` that cut a query's rows by count. A label is alone on
+# its line; names and values never are (a column or constant line starts with its kind).
+_ROW_LIMITS = frozenset({"LIMIT", "OFFSET", "LIMIT BY", "LIMIT BY LIMIT", "LIMIT BY OFFSET"})
+
+
+def limits_rows(query_tree: str) -> bool:
+    """Whether the `EXPLAIN QUERY TREE` of a model has a `LIMIT`, `OFFSET` or `LIMIT BY`
+    anywhere. `EXPLAIN AST` cannot tell `LIMIT (1 > 0)` from `WHERE 1 > 0`; the query tree
+    labels each clause."""
+    return any(line.strip() in _ROW_LIMITS for line in query_tree.split("\n"))
+
+
 def writes_since_mark(tree: str) -> bool:
     """Whether the model's own SQL (its `EXPLAIN AST`) nests `identity(identity(…))`, the mark
     of `mark_since`; a tree that cannot be read counts as yes."""
@@ -756,8 +768,8 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
     - `time_column > x` or `>= x` (or `x < time_column`, `x <= time_column`), `x` with
       `{since:…}` and constants but no column; `OR time_column IS NULL` may follow it;
     - a condition (`WHERE`, `PREWHERE`) of a query whose rows are the model's rows, joined to
-      it by `and` only: the model's query, a subquery it reads whole as its only `FROM`, or a
-      branch of a `UNION`; that query reads one table or subquery, not a join (named `WITH`
+      it by `and` only: the model's query or a subquery it reads whole as its only `FROM`,
+      never under a `UNION`; that query reads one table or subquery, not a join (named `WITH`
       queries are not followed: `EXPLAIN AST` does not show their names);
     - every query on that path passes the time column through unchanged and keeps its rows:
       the column is in its select list as itself (or a plain `*`/`t.*`), nothing else is named
@@ -840,41 +852,13 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
                 kept += 1
         return kept == 1
 
-    def position(node: _Node) -> int | None:
-        """Where a branch of a `UNION` (columns paired by position) returns the time column: its
-        index in an explicit select list (no `*`); None when unknown."""
-        if node.kind == "SelectWithUnionQuery":
-            found = {
-                position(child)
-                for listed in node.children
-                if listed.kind == "ExpressionList"
-                for child in listed.children
-            }
-            return found.pop() if len(found) == 1 else None
-        if node.kind != "SelectQuery":
-            return None
-        at = next(
-            (i for i, child in enumerate(node.children) if child.kind == "TablesInSelectQuery"),
-            len(node.children),
-        )
-        items = node.children[at - 1].children if at > 0 else []
-        if any(item.kind in {"Asterisk", "QualifiedAsterisk"} for item in items):
-            return None
-        indexes = [i for i, item in enumerate(items) if named(item) == wanted]
-        return indexes[0] if len(indexes) == 1 else None
-
     def follow(node: _Node) -> None:
         if node.kind == "SelectWithUnionQuery":
-            branches = [
-                child
-                for listed in node.children
-                if listed.kind == "ExpressionList"
-                for child in listed.children
-            ]
-            if len(branches) > 1 and position(node) is None:
-                return  # the time column at different places, or behind a `*`
-            for child in branches:
-                follow(child)
+            listed = [child for child in node.children if child.kind == "ExpressionList"]
+            branches = [child for found in listed for child in found.children]
+            if len(branches) == 1:
+                follow(branches[0])
+            # A UNION is not followed: another branch can load an older row of a partition.
             return
         if node.kind != "SelectQuery":
             return  # EXCEPT, INTERSECT and anything else: not followed
@@ -1127,12 +1111,13 @@ class Source:
             raise self._error(error, "INVALID_MODEL_SQL") from None
         return [tuple(row) for row in result.result_rows]
 
-    def explain(self, text: str, since: SinceType | None) -> str:
-        """ClickHouse's `EXPLAIN AST` of the SQL (nothing runs)."""
+    def explain(self, text: str, since: SinceType | None, kind: str = "AST") -> str:
+        """ClickHouse's `EXPLAIN AST` (or `QUERY TREE`, which resolves names against the tables)
+        of the SQL; nothing runs."""
         # Sent as is: a `FORMAT` clause added after it would belong to the explained query.
         try:
             answer = self._client.raw_query(
-                f"EXPLAIN AST\n{text}\n",
+                f"EXPLAIN {kind}\n{text}\n",
                 parameters=self._parameters(since),
                 settings=self.settings(),
             )
@@ -1543,6 +1528,7 @@ def describe_model(
                 or not since_is_a_lower_bound(
                     source.explain(mark_since(found), since), incremental.time_column.root
                 )
+                or limits_rows(source.explain(found.text, since, "QUERY TREE"))
             )
         ):
             column = incremental.time_column.root

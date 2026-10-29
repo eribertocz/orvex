@@ -944,12 +944,8 @@ def test_the_same_column_rule_is_for_partition_overwrite_only(tmp_path: Path) ->
     [
         "SELECT * FROM (SELECT * FROM src WHERE day >= $since) AS s",
         "WITH w AS (SELECT * FROM src WHERE day >= $since) SELECT * FROM w",
-        "SELECT id, day, month FROM src WHERE day > $since "
-        "UNION ALL SELECT id, day, month FROM src2 WHERE day > $since",
-        "SELECT * FROM src WHERE day > $since "
-        "UNION ALL BY NAME SELECT * FROM src2 WHERE day > $since",
     ],
-    ids=["from-subquery", "cte", "union-all", "union-all-by-name"],
+    ids=["from-subquery", "cte"],
 )
 def test_a_bound_in_a_query_whose_rows_the_model_returns_is_accepted(
     tmp_path: Path, sql: str
@@ -1116,3 +1112,38 @@ def test_without_the_columns_a_computed_time_column_is_left_to_the_server(tmp_pa
 def test_a_bound_behind_a_positional_rename_is_refused(tmp_path: Path, sql: str) -> None:
     found = config_problems(sql_model(tmp_path, BY_DAY, sql))
     assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # #162 Reviewer pass 5: another branch loads an older row of the partition (another
+        # table, an older bound, no bound), which hides the cut from the oldest-row check.
+        "SELECT month, id, day FROM src WHERE day >= $since UNION ALL SELECT month, id, day "
+        "FROM fixes",
+        "SELECT month, id, day FROM src WHERE day >= $since UNION ALL SELECT month, id, day "
+        "FROM fixes WHERE day >= $since - INTERVAL 30 DAY",
+        "SELECT * FROM src WHERE day > $since UNION ALL BY NAME SELECT * FROM fixes",
+        "SELECT id, day, month FROM src WHERE day > $since "
+        "UNION ALL SELECT id, day, month FROM src2 WHERE day > $since",
+        "SELECT * FROM (SELECT * FROM src WHERE day > $since UNION ALL SELECT * FROM fixes)",
+    ],
+    ids=["no-bound", "older-bound", "by-name", "same-bound", "under-a-subquery"],
+)
+def test_a_bound_under_a_union_is_refused(tmp_path: Path, sql: str) -> None:
+    found = config_problems(sql_model(tmp_path, BY_DAY, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+
+
+def test_a_query_tree_with_a_row_limit_is_seen() -> None:
+    # #162 Reviewer pass 5: `EXPLAIN AST` shows `LIMIT 1 > 0` as a condition; the query tree
+    # labels it. Names and values never stand alone on a line.
+    from orvex.transform.clickhouse import limits_rows
+
+    tree = (
+        "QUERY id: 0\n  PROJECTION COLUMNS\n    LIMIT UInt8\n  WHERE\n"
+        "    CONSTANT id: 4, constant_value: \\'LIMIT\\', constant_value_type: String\n"
+    )
+    assert not limits_rows(tree)
+    for label in ("LIMIT", "OFFSET", "LIMIT BY", "LIMIT BY LIMIT", "LIMIT BY OFFSET"):
+        assert limits_rows(f"{tree}  {label}\n    CONSTANT id: 9\n")

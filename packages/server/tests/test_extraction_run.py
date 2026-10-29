@@ -594,6 +594,10 @@ def test_a_since_bound_that_reads_another_column_is_refused(
         "SELECT event_id, day, month FROM events WHERE day >= {since:Date} "
         "UNION ALL SELECT event_id, month, day FROM events WHERE day >= {since:Date}",
         "SELECT * FROM events PREWHERE event_id > 0 WHERE day >= {since:Date}",
+        # Reviewer pass 5: a UNION; a LIMIT written as a condition.
+        "SELECT * FROM events WHERE day >= {since:Date} UNION ALL SELECT * FROM events",
+        "SELECT * FROM events WHERE day >= {since:Date} LIMIT 1 > 0",
+        "SELECT * FROM (SELECT * FROM events WHERE day >= {since:Date}) LIMIT NOT 0",
     ],
     ids=[
         "in",
@@ -613,6 +617,9 @@ def test_a_since_bound_that_reads_another_column_is_refused(
         "limit-a-name-outside",
         "union-other-order",
         "prewhere-and-where",
+        "union-all",
+        "limit-a-condition",
+        "limit-not-zero-outside",
     ],
 )
 def test_a_since_bound_the_oldest_row_check_cannot_follow_is_refused(

@@ -160,9 +160,8 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
       time_column`), where `x` uses `$since` and constants but no column; `OR time_column IS
       NULL` may follow it, to reload undated rows too;
     - it is a condition of the `WHERE` clause of a query whose rows are the model's rows: the
-      model's own query, a query it reads whole as its only `FROM` (a subquery or a CTE read
-      nowhere else), or a branch of a `UNION`; that query reads one table or subquery, not a
-      join;
+      model's own query, or a query it reads whole as its only `FROM` (a subquery or a CTE read
+      nowhere else), never under a `UNION`; that query reads one table or subquery, not a join;
     - every query on that path passes the time column through unchanged and keeps its rows as
       they are: the column is in its select list as itself (`read_at`, `t.read_at`, `read_at AS
       read_at`, or a plain `*`/`t.*`), nothing else is named like it, and the query has no
@@ -170,8 +169,7 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
       `DISTINCT ON` or sample (plain `DISTINCT` and `ORDER BY` are allowed);
     - the column is matched by name (any letter case); a qualifier, if any, must name that
       query's table (its alias or name); nothing on the path renames columns by position (a
-      column list `AS t(a, b)` or `WITH c(a, b)`, or a plain `UNION` whose branches use `*` or
-      return the time column at different places);
+      column list `AS t(a, b)` or `WITH c(a, b)`);
     - one exception to "as itself": the query that holds the bound may compute the time column
       (`CAST(read_at AS DATE) AS day`) when the bound names it without a qualifier and the table
       it reads has no column of that name. DuckDB then reads the name as that alias, so the
@@ -233,26 +231,6 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
                     None if value.get("aliases") else value["query_node"]
                 )
         return found
-
-    def position(node: object) -> int | None:
-        """Where a branch of a positional `UNION` returns the time column: its index in an
-        explicit select list (no `*`), the same in every branch of a nested one; None when
-        unknown."""
-        if not isinstance(node, dict):
-            return None
-        if node.get("type") == "SET_OPERATION_NODE":
-            children = node.get("children")
-            found = {position(child) for child in (children if isinstance(children, list) else [])}
-            return found.pop() if len(found) == 1 else None
-        items = node.get("select_list")
-        if not isinstance(items, list) or any(
-            isinstance(item, dict) and item.get("class") == "STAR" for item in items
-        ):
-            return None
-        indexes = [
-            i for i, item in enumerate(items) if isinstance(item, dict) and named(item) == wanted
-        ]
-        return indexes[0] if len(indexes) == 1 else None
 
     def column_parts(node: Node) -> list[str]:
         """A column reference's name parts in lowercase; [] for anything else."""
@@ -370,14 +348,8 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
         if not isinstance(node, dict):
             return
         if node.get("type") == "SET_OPERATION_NODE":
-            kind = node.get("setop_type")
-            # A plain UNION pairs columns by position: every branch must return the time column
-            # at the same place (`UNION BY NAME` pairs them by name).
-            if kind == "UNION_BY_NAME" or (kind == "UNION" and position(node) is not None):
-                inner = scope | ctes(node)
-                children = node.get("children")
-                for child in children if isinstance(children, list) else []:
-                    follow(child, inner)
+            # Not followed: another branch can load an older row of a partition (another table,
+            # an older bound, no bound), which hides the cut from the oldest-row check.
             return
         if node.get("type") != "SELECT_NODE":
             return
