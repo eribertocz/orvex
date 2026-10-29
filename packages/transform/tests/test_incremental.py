@@ -664,10 +664,12 @@ def test_first_runs_full_refreshes_and_unfiltered_models_skip_the_check(tmp_path
     chosen = model(tmp_path, FILTERED)
     existing = [("month", "VARCHAR"), ("n", "INTEGER"), ("read_at", "DATE")]
 
-    def codes(sql: str, since: str, full_refresh: bool = False) -> list[str]:
-        planned = steps(chosen, sql, existing, existing, since, full_refresh)
+    def codes(sql: str, since: str, full_refresh: bool = False, first: bool = False) -> list[str]:
+        planned = steps(chosen, sql, existing, None if first else existing, since, full_refresh)
         return [step.code for step in planned if isinstance(step, Check)]
 
+    # A first run: no table yet, so nothing can be cut.
+    assert "PARTITION_INCOMPLETE" not in codes(LOADED, "-infinity", first=True)
     assert "PARTITION_INCOMPLETE" in codes(LOADED, "2026-10-20")
     # An existing table without a watermark still gets the check (its undated rows).
     assert "PARTITION_INCOMPLETE" in codes(LOADED, "-infinity")
@@ -732,7 +734,7 @@ def test_text_values_are_quoted_and_long_ones_shortened(tmp_path: Path) -> None:
     code, message = run_since(connection, chosen, LOADED, "2026-10-05")
     assert code == "PARTITION_INCOMPLETE"
     assert message is not None
-    shown = "'" + "x" * 59 + "…"
+    shown = "'" + "x" * 60 + "…'"  # shortened inside its quotes
     assert f": 'NULL', '{'it' + chr(39) * 2 + 's'}', {shown}, NULL (4 in total)." in message
 
 

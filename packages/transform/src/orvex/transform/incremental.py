@@ -561,14 +561,15 @@ _QUOTE = "''''"  # a SQL string literal holding one single quote
 
 def _label(alias: str, kind: str) -> str:
     """A partition value as message text: `NULL` for SQL NULL, text values quoted (so the text
-    `NULL` reads `'NULL'`), at most `_LABEL_LENGTH` characters."""
+    `NULL` reads `'NULL'`), values longer than `_LABEL_LENGTH` characters shortened (before
+    quoting, so a shortened text value keeps its closing quote)."""
     text = f"CAST({alias} AS VARCHAR)"
-    if kind in _TEXT_TYPES or kind.startswith("ENUM("):
-        text = f"{_QUOTE} || replace({text}, {_QUOTE}, '''''') || {_QUOTE}"
     shown = (
         f"CASE WHEN length({text}) > {_LABEL_LENGTH} "
         f"THEN left({text}, {_LABEL_LENGTH}) || '…' ELSE {text} END"
     )
+    if kind in _TEXT_TYPES or kind.startswith("ENUM("):
+        shown = f"{_QUOTE} || replace({shown}, {_QUOTE}, '''''') || {_QUOTE}"
     return f"coalesce({shown}, 'NULL')"
 
 
