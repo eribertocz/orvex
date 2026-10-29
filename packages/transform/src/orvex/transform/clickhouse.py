@@ -1300,7 +1300,7 @@ _LOWEST = {
 
 
 # A `{since:Date}` is compared at midnight in the zone of whatever expression the SQL compares
-# it with, which Orvex cannot see. Every zone lies between these two (tz database; measured on
+# it with, which the run cannot see. Every zone lies between these two (tz database; measured on
 # ClickHouse 26.9), so both values below hold whichever zone ClickHouse used.
 _LATEST_MIDNIGHT = "Etc/GMT+12"  # UTC-12: a date's midnight comes last here
 _EARLIEST_MIDNIGHT = "Pacific/Kiritimati"  # UTC+14: a date's midnight comes first here
