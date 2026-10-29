@@ -107,6 +107,14 @@ Other types (lists, structs, maps, unions, `TIME`, geometry, …) are refused wi
 
 `ReadRequest` and `StatementRequest` accept `timeout_ms` (1–3,600,000; default set by the lake). A lake runs a bounded number of statements at once (reads until their stream ends, transactions until they commit or roll back); further requests wait in arrival order in a bounded queue, and are refused with `STORE_BUSY` when it is full. Waiting counts against the timeout. A statement past its time limit is interrupted (`STORE_TIMEOUT`); a read or a transaction can be cancelled from another thread (`STORE_CANCELLED`); an interrupted or cancelled transaction rolls back. Ctrl-C during a statement of a transaction (`execute`, `value`, `load_arrow`) raises Python's `KeyboardInterrupt`, as in any Python program, and the transaction rolls back.
 
+At the edges (#77):
+- **Every query of a read runs inside its slot.** The snapshot check and the pinning happen once the read is admitted.
+- **A slot is free before its error is seen.** A read that times out or is cancelled releases its slot before `start_read` raises, or before the stream's next read raises.
+- **A paused stream is closed at its limit.** When the limit or a cancel comes while the consumer holds a batch, the read ends at once (cursor closed, slot released), and the stream's next read raises `STORE_TIMEOUT` or `STORE_CANCELLED`. While DuckDB computes a batch, the read is interrupted.
+- **A transaction waits for the writer ahead before it takes a slot**, both within its limit, so a waiting writer holds no slot. Maintenance takes the writer lock, then every slot.
+- **The commit runs inside the transaction's limit** (the lake's default time limit, counted from `transaction()`): a block that ends past it rolls back with `STORE_TIMEOUT`. A commit that has started is one atomic catalog transaction and is not interrupted.
+- **An interrupted statement decides the transaction's outcome.** When a statement of the block fails with `STORE_TIMEOUT` or `STORE_CANCELLED`, the transaction rolls back and leaving the block raises that error, even if the block caught it. A cancel between statements makes leaving the block raise `STORE_CANCELLED`. Nothing is committed in either case.
+
 ## Arrow loads (`Transaction.load_arrow`)
 
 `load_arrow(schema, table, reader, columns, on_interrupt=None, timeout_ms=None)` creates `schema.table` in the lake, inside the write transaction, from an Arrow record-batch stream (P1-17, #98):
