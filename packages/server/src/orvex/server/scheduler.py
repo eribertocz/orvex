@@ -25,8 +25,8 @@ from types import FrameType
 from typing import IO
 from zoneinfo import ZoneInfo
 
-from orvex.server import commands, maintenance
-from orvex.server.commands import LAKE_FOLDER, Checked, Selection, project_lock
+from orvex.server import commands, lake_place, maintenance
+from orvex.server.commands import Checked, Selection, project_lock
 from orvex.server.identity import Identity
 from orvex.store.errors import StoreError
 from orvex.store.lake import open_lake
@@ -66,12 +66,12 @@ class _Records:
     maintained: maintenance.Last = field(default_factory=maintenance.Last)
 
 
-def _records(home: Path) -> _Records:
+def _records(home: Path, place: lake_place.Place) -> _Records:
     """What the run records say (nothing yet when there is no lake or no record)."""
-    if not (home / LAKE_FOLDER).exists():
+    if not lake_place.exists(home):
         return _Records({}, None, ())
     with project_lock(home):
-        lake = open_lake(commands._location(home), commands._limits())
+        lake = open_lake(place.location, commands._limits())
         try:
             maintained = maintenance.last_maintenance(lake)
             snapshot = lake.current_snapshot().id
@@ -200,7 +200,7 @@ def _cycle(
     if state.checked is None or fingerprint != state.fingerprint or stale or due_again:
         # Checked again when the files change, or every 5 minutes while the check fails (a
         # source may be back), never more often: checking binds models against the sources.
-        state.checked, state.fingerprint = commands.check_project(folder), fingerprint
+        state.checked, state.fingerprint = commands.check_project(folder, identity), fingerprint
         state.checked_at, state.recheck_at = monotonic(), None
     checked = state.checked
     if checked.problems or checked.project is None or checked.graph is None:
@@ -208,8 +208,10 @@ def _cycle(
     project, graph = checked.project, checked.graph
     zone = project.settings.time_zone
     home = project.folder / f".{identity.slug}"
+    assert checked.place is not None  # a refused lake location is a problem
+    place = checked.place
     try:
-        records = _records(home)
+        records = _records(home, place)
     except commands.ProjectLocked:
         return _report(out, state, ("waiting: another process holds the project",))
     except StoreError as error:
@@ -277,7 +279,7 @@ def _cycle(
         return 1.0
     after = clock()
     try:
-        latest: _Records | None = _records(home)
+        latest: _Records | None = _records(home, place)
     except commands.ProjectLocked, StoreError:
         latest = None
     if latest is None or latest.last_run_start in {None, previous_start}:
@@ -326,7 +328,7 @@ def _maybe_maintain(
     lake_exists = (
         checked is not None
         and checked.project is not None
-        and (checked.project.folder / f".{identity.slug}" / LAKE_FOLDER).exists()
+        and lake_place.exists(checked.project.folder / f".{identity.slug}")
     )
     if not lake_exists:  # nothing to maintain before the first run
         return max(1.0, (decided.wake_at - now).total_seconds())

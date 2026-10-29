@@ -50,8 +50,9 @@ jobs:
   python-tests:
     name: python-tests-${{ matrix.python }}
     runs-on: ubuntu-latest
-    # A hung test must fail the job, not hold it for the default six hours.
-    timeout-minutes: 20
+    # A hung test must fail the job, not hold it for the default six hours. The suite takes
+    # about 16 minutes; #120 runs the shared lake tests on a third catalog (SQLite).
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -87,6 +88,9 @@ jobs:
     env:
       STORE_TEST_POSTGRES: host=localhost port=5432 dbname=postgres user=postgres
       STORE_TEST_POSTGRES_PASSWORD: ci-disposable-database
+      # The PostgreSQL with TLS started below (#120), reached through 127.0.0.2: a host that is
+      # not the local machine for the catalog rule, so verify-full is required and tested.
+      STORE_TEST_POSTGRES_TLS: host=127.0.0.2 port=5433 dbname=postgres user=postgres
       TRANSFORM_TEST_CLICKHOUSE: http://localhost:8123
       TRANSFORM_TEST_CLICKHOUSE_USER: ci
       TRANSFORM_TEST_CLICKHOUSE_PASSWORD: ci-disposable-database
@@ -104,6 +108,43 @@ jobs:
           for package in packages/*/; do
             python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
           done
+      - name: Start a PostgreSQL with TLS for the catalog tests (#120)
+        # A certificate authority and a server certificate made for this job only: disposable,
+        # never committed, not secrets. The CA file is given to the tests by its path.
+        run: |
+          dir="$RUNNER_TEMP/postgres-tls"
+          mkdir -p "$dir"
+          cd "$dir"
+          openssl req -x509 -newkey rsa:3072 -nodes -days 2 -subj "/CN=ci-test-ca" \
+            -addext "basicConstraints=critical,CA:TRUE" \
+            -addext "keyUsage=critical,keyCertSign,cRLSign" \
+            -keyout ca.key -out ca.crt
+          openssl req -newkey rsa:3072 -nodes -subj "/CN=localhost" \
+            -keyout server.key -out server.csr
+          printf '%s\n' "basicConstraints=CA:FALSE" \
+            "keyUsage=critical,digitalSignature,keyEncipherment" \
+            "extendedKeyUsage=serverAuth" \
+            "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:127.0.0.2" > server.ext
+          openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 2 \
+            -extfile server.ext -out server.crt
+          rm ca.key server.csr
+          # The image's postgres user (uid 999) must own the key, readable by it only.
+          sudo chown 999:999 server.key server.crt
+          sudo chmod 600 server.key
+          # postgres:18.6-trixie, the same image as the service above.
+          docker run --detach --name postgres-tls --publish 5433:5432 \
+            --env POSTGRES_PASSWORD=ci-disposable-database \
+            --volume "$dir/server.crt:/tls/server.crt:ro" \
+            --volume "$dir/server.key:/tls/server.key:ro" \
+            postgres@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6 \
+            -c ssl=on -c ssl_cert_file=/tls/server.crt -c ssl_key_file=/tls/server.key
+          # Ready when it accepts TCP connections (the first start listens on a socket only).
+          for attempt in $(seq 60); do
+            if docker exec postgres-tls pg_isready -U postgres -h 127.0.0.1 -q; then break; fi
+            sleep 1
+          done
+          docker exec postgres-tls pg_isready -U postgres -h 127.0.0.1
+          echo "STORE_TEST_POSTGRES_TLS_CA=$dir/ca.crt" >> "$GITHUB_ENV"
       - run: pytest --junitxml=junit.xml
       - name: Report failures as annotations
         if: failure()

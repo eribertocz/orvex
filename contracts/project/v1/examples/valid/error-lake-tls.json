@@ -1,0 +1,1 @@
+{"code": "LAKE_TLS_REQUIRED", "message": "lake.catalog: a PostgreSQL catalog on db.example.com must use ssl_mode: verify-full (found: require).", "details": {"file": "project.yaml", "path": "/lake/catalog/ssl_mode"}}

@@ -15,10 +15,14 @@ from orvex.contracts.store.v1 import (
     LocalLakeLocation,
     PostgresLakeLocation,
     ReadRequest,
+    SqliteLakeLocation,
     StatementRequest,
 )
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake
+
+# The shared contract tests run on every catalog, SQLite included (#120).
+EVERY_CATALOG = True
 
 
 def statement(sql: str) -> StatementRequest:
@@ -70,7 +74,7 @@ def rows(lake: Lake, snapshot: int | None = None) -> list[int]:
     return [int(value) for value in table.column("id").to_pylist()]
 
 
-def data_folder(location: LocalLakeLocation | PostgresLakeLocation) -> Path:
+def data_folder(location: LocalLakeLocation | PostgresLakeLocation | SqliteLakeLocation) -> Path:
     if isinstance(location, LocalLakeLocation):
         return Path(location.path) / "data"
     return Path(location.data_path)

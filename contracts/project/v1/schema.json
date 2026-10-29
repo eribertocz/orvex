@@ -53,6 +53,9 @@
         },
         "lineage": {
           "$ref": "#/$defs/Lineage"
+        },
+        "lake": {
+          "$ref": "#/$defs/Lake"
         }
       }
     },
@@ -318,7 +321,10 @@
         "PROJECT_SCHEMA_INVALID",
         "PROJECT_VERSION_UNSUPPORTED",
         "PROJECT_SECRET_MISSING",
-        "SOURCE_NOT_READ_ONLY"
+        "SOURCE_NOT_READ_ONLY",
+        "LAKE_LOCATION_INVALID",
+        "LAKE_TLS_REQUIRED",
+        "LAKE_LOCATION_CHANGED"
       ]
     },
     "ProjectError": {
@@ -385,6 +391,132 @@
         },
         "api_key": {
           "$ref": "#/$defs/SecretReference"
+        }
+      }
+    },
+    "Lake": {
+      "description": "Where the project's managed lake lives (ADR-0027 §2). Absent: a DuckDB-file catalog and data files in the project's own folder, as before. A lake's catalog is fixed when the lake is created.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "catalog": {
+          "$ref": "#/$defs/LakeCatalog"
+        }
+      }
+    },
+    "LakeCatalog": {
+      "description": "The lake's catalog database.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/DuckdbLakeCatalog"
+        },
+        {
+          "$ref": "#/$defs/SqliteLakeCatalog"
+        },
+        {
+          "$ref": "#/$defs/PostgresLakeCatalog"
+        }
+      ]
+    },
+    "CatalogPath": {
+      "description": "A catalog file on a local disk; a relative path is resolved against the project folder. The loader refuses object-storage URLs and network or remote file systems.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "DuckdbLakeCatalog": {
+      "description": "A DuckDB-file catalog (one process). Default path: `.<slug>/lake/catalog.ducklake`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "duckdb"
+        },
+        "path": {
+          "$ref": "#/$defs/CatalogPath"
+        }
+      }
+    },
+    "SqliteLakeCatalog": {
+      "description": "A SQLite-file catalog (several processes on one machine). Default path: `.<slug>/lake/catalog.sqlite`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "sqlite"
+        },
+        "path": {
+          "$ref": "#/$defs/CatalogPath"
+        }
+      }
+    },
+    "PostgresLakeCatalog": {
+      "description": "A PostgreSQL catalog: on the same machine, on the network or a managed cloud service. Any host other than the local machine (`localhost`, `127.0.0.1`, `::1`, a Unix-socket directory) needs `ssl_mode: verify-full`; the loader refuses other modes with `LAKE_TLS_REQUIRED`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "host",
+        "database",
+        "user",
+        "password"
+      ],
+      "properties": {
+        "type": {
+          "const": "postgres"
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 5432
+        },
+        "database": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "user": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "password": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "schema": {
+          "description": "PostgreSQL schema holding the catalog tables (DuckLake `METADATA_SCHEMA`); default `public`.",
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "maxLength": 63
+        },
+        "ssl_mode": {
+          "description": "libpq `sslmode`. Required to be `verify-full` for any host other than the local machine.",
+          "enum": [
+            "disable",
+            "allow",
+            "prefer",
+            "require",
+            "verify-ca",
+            "verify-full"
+          ]
+        },
+        "ssl_root_cert": {
+          "description": "Certificate authorities that verify the server: `system` (the operating system's store, the default) or `${env:NAME}`, a variable holding the path of a CA file.",
+          "type": "string",
+          "pattern": "^(system|\\$\\{env:[A-Z_][A-Z0-9_]*\\})$",
+          "default": "system"
         }
       }
     }

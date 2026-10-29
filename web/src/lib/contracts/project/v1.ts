@@ -8,6 +8,14 @@ export type ProjectDocument = ProjectFile | ConnectionsFile | ProjectError;
  */
 export type SecretReference = string;
 /**
+ * The lake's catalog database.
+ */
+export type LakeCatalog = DuckdbLakeCatalog | SqliteLakeCatalog | PostgresLakeCatalog;
+/**
+ * A catalog file on a local disk; a relative path is resolved against the project folder. The loader refuses object-storage URLs and network or remote file systems.
+ */
+export type CatalogPath = string;
+/**
  * This interface was referenced by `undefined`'s JSON-Schema definition
  * via the `patternProperty` "^[a-z][a-z0-9_]{0,62}$".
  */
@@ -32,7 +40,10 @@ export type ProjectErrorCode =
 	| 'PROJECT_SCHEMA_INVALID'
 	| 'PROJECT_VERSION_UNSUPPORTED'
 	| 'PROJECT_SECRET_MISSING'
-	| 'SOURCE_NOT_READ_ONLY';
+	| 'SOURCE_NOT_READ_ONLY'
+	| 'LAKE_LOCATION_INVALID'
+	| 'LAKE_TLS_REQUIRED'
+	| 'LAKE_LOCATION_CHANGED';
 
 /**
  * `project.yaml`.
@@ -50,6 +61,7 @@ export interface ProjectFile {
 	locale?: 'es' | 'en';
 	retention?: Retention;
 	lineage?: Lineage;
+	lake?: Lake;
 }
 export interface Retention {
 	/**
@@ -66,6 +78,49 @@ export interface Lineage {
 	 */
 	url: string;
 	api_key?: SecretReference;
+}
+/**
+ * Where the project's managed lake lives (ADR-0027 §2). Absent: a DuckDB-file catalog and data files in the project's own folder, as before. A lake's catalog is fixed when the lake is created.
+ */
+export interface Lake {
+	catalog?: LakeCatalog;
+}
+/**
+ * A DuckDB-file catalog (one process). Default path: `.<slug>/lake/catalog.ducklake`.
+ */
+export interface DuckdbLakeCatalog {
+	type: 'duckdb';
+	path?: CatalogPath;
+}
+/**
+ * A SQLite-file catalog (several processes on one machine). Default path: `.<slug>/lake/catalog.sqlite`.
+ */
+export interface SqliteLakeCatalog {
+	type: 'sqlite';
+	path?: CatalogPath;
+}
+/**
+ * A PostgreSQL catalog: on the same machine, on the network or a managed cloud service. Any host other than the local machine (`localhost`, `127.0.0.1`, `::1`, a Unix-socket directory) needs `ssl_mode: verify-full`; the loader refuses other modes with `LAKE_TLS_REQUIRED`.
+ */
+export interface PostgresLakeCatalog {
+	type: 'postgres';
+	host: string;
+	port?: number;
+	database: string;
+	user: string;
+	password: SecretReference;
+	/**
+	 * PostgreSQL schema holding the catalog tables (DuckLake `METADATA_SCHEMA`); default `public`.
+	 */
+	schema?: string;
+	/**
+	 * libpq `sslmode`. Required to be `verify-full` for any host other than the local machine.
+	 */
+	ssl_mode?: 'disable' | 'allow' | 'prefer' | 'require' | 'verify-ca' | 'verify-full';
+	/**
+	 * Certificate authorities that verify the server: `system` (the operating system's store, the default) or `${env:NAME}`, a variable holding the path of a CA file.
+	 */
+	ssl_root_cert?: string;
 }
 /**
  * `connections.yaml`: data sources by name. A name becomes a SQL schema, so it follows identifier rules and cannot be `lake`.

@@ -1,4 +1,5 @@
-"""Lake fixtures: every lake test runs on the local catalog and on the PostgreSQL catalog.
+"""Lake fixtures: every lake test runs on the local catalog and on the PostgreSQL catalog; the
+shared contract tests (`test_lake.py`, `test_maintenance.py`) also run on a SQLite catalog.
 
 The PostgreSQL catalog needs `STORE_TEST_POSTGRES` (a libpq connection string without password)
 and `STORE_TEST_POSTGRES_PASSWORD`. In CI they are required; elsewhere the PostgreSQL variant is
@@ -13,7 +14,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from orvex.contracts.store.v1 import LocalLakeLocation, PostgresLakeLocation
+from orvex.contracts.store.v1 import LocalLakeLocation, PostgresLakeLocation, SqliteLakeLocation
 from orvex.store.lake import Lake, Limits, open_lake
 
 LIMITS = Limits(
@@ -42,13 +43,40 @@ def local_location(tmp_path: Path) -> LocalLakeLocation:
     return LocalLakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
 
 
-@pytest.fixture(params=["local", "postgres"])
-def location(
-    request: pytest.FixtureRequest, tmp_path: Path
-) -> LocalLakeLocation | PostgresLakeLocation:
-    if request.param == "postgres":
+def sqlite_location(tmp_path: Path) -> SqliteLakeLocation:
+    return SqliteLakeLocation(
+        kind="lake_location",
+        catalog="sqlite",
+        path=str(tmp_path / "catalog.sqlite"),
+        data_path=(tmp_path / "data").as_posix() + "/",
+    )
+
+
+type AnyLocation = LocalLakeLocation | PostgresLakeLocation | SqliteLakeLocation
+
+
+def make_location(kind: str, tmp_path: Path) -> AnyLocation:
+    if kind == "postgres":
         return make_postgres_location(tmp_path)
+    if kind == "sqlite":
+        return sqlite_location(tmp_path)
     return local_location(tmp_path)
+
+
+def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
+    """Each lake test runs on the local and the PostgreSQL catalog; a module that sets
+    `EVERY_CATALOG = True` (the shared contract tests) also runs on SQLite (ADR-0027 §2). A
+    module with its own `location` fixture keeps it, unparametrized."""
+    if "location" in metafunc.fixturenames and not hasattr(metafunc.module, "location"):
+        kinds = ["local", "postgres"]
+        if getattr(metafunc.module, "EVERY_CATALOG", False):
+            kinds.append("sqlite")
+        metafunc.parametrize("location", kinds, indirect=True)
+
+
+@pytest.fixture
+def location(request: pytest.FixtureRequest, tmp_path: Path) -> AnyLocation:
+    return make_location(request.param, tmp_path)
 
 
 @pytest.fixture
@@ -57,7 +85,7 @@ def postgres_location(tmp_path: Path) -> PostgresLakeLocation:
 
 
 @pytest.fixture
-def lake(location: LocalLakeLocation | PostgresLakeLocation) -> Iterator[Lake]:
+def lake(location: AnyLocation) -> Iterator[Lake]:
     opened = open_lake(location, LIMITS)
     yield opened
     opened.close()

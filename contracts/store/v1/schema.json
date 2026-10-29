@@ -243,6 +243,7 @@
         "STORE_SECRET_MISSING",
         "STORE_SECRET_INLINE",
         "STORE_CATALOG_UNAVAILABLE",
+        "STORE_TLS_REQUIRED",
         "STORE_TYPE_UNSUPPORTED",
         "STORE_TIMEOUT",
         "STORE_CANCELLED",
@@ -299,7 +300,7 @@
       }
     },
     "LocalLakeLocation": {
-      "description": "A DuckLake lake with a local DuckDB-file catalog at <path>/catalog.ducklake and data files under <path>/data/ (one process).",
+      "description": "A DuckLake lake with a DuckDB-file catalog (one process): the catalog at <catalog_path>, by default <path>/catalog.ducklake, and data files under <path>/data/.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -317,11 +318,43 @@
         "path": {
           "type": "string",
           "minLength": 1
+        },
+        "catalog_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the catalog file, when it is not <path>/catalog.ducklake. The file sandbox gains exactly that file and its write-ahead log."
+        }
+      }
+    },
+    "SqliteLakeLocation": {
+      "description": "A DuckLake lake with a SQLite-file catalog (several processes on one machine): the catalog at <path>, data files under <data_path>. The file sandbox gains exactly the catalog file and its -wal, -shm and -journal files.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "catalog",
+        "path",
+        "data_path"
+      ],
+      "properties": {
+        "kind": {
+          "const": "lake_location"
+        },
+        "catalog": {
+          "const": "sqlite"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "data_path": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
     "PostgresLakeLocation": {
-      "description": "A DuckLake lake whose catalog lives in PostgreSQL, so several processes can read and write it. The password is never part of the location: it is read from the environment variable named by password_env.",
+      "description": "A DuckLake lake whose catalog lives in PostgreSQL, so several processes can read and write it. The password is never part of the location: it is read from the environment variable named by password_env. A host other than the local machine (localhost, 127.0.0.1, ::1, a Unix-socket directory) needs sslmode=verify-full (STORE_TLS_REQUIRED otherwise).",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -341,7 +374,7 @@
         "connection": {
           "type": "string",
           "minLength": 1,
-          "description": "libpq key=value connection string without a password, e.g. host=db port=5432 dbname=lake user=analytics"
+          "description": "libpq key=value connection string without a password, e.g. host=db port=5432 dbname=lake user=analytics sslmode=verify-full"
         },
         "password_env": {
           "type": "string",
@@ -363,6 +396,9 @@
       "oneOf": [
         {
           "$ref": "#/$defs/LocalLakeLocation"
+        },
+        {
+          "$ref": "#/$defs/SqliteLakeLocation"
         },
         {
           "$ref": "#/$defs/PostgresLakeLocation"

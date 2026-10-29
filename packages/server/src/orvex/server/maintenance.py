@@ -31,8 +31,8 @@ from orvex.contracts.store.v1 import (
     ReadRequest,
     StatementRequest,
 )
-from orvex.server import commands
-from orvex.server.commands import LAKE_FOLDER, LOCK_FILE, Problem, project_lock
+from orvex.server import commands, lake_place
+from orvex.server.commands import LOCK_FILE, Problem, project_lock
 from orvex.server.identity import Identity
 from orvex.server.project import Project, ProjectLoadError, load_project
 from orvex.store.errors import StoreError
@@ -268,9 +268,14 @@ def summary(record: MaintenanceRecord) -> str:
     )
 
 
-def _load(folder: Path, out: IO[str]) -> Project | None:
+def _load(
+    folder: Path, identity: Identity, out: IO[str]
+) -> tuple[Project, Path, lake_place.Place] | None:
+    """The project, its `.<slug>` folder and where its lake is (#120), or None when refused."""
     try:
-        return load_project(folder)
+        project = load_project(folder)
+        home = project.folder / f".{identity.slug}"
+        return project, home, commands.lake_location(project, home)
     except ProjectLoadError as error:
         details = error.error.details
         print(Problem(error.code, details.file or ".", details.line, error.error.message), file=out)
@@ -293,16 +298,16 @@ def maintain(
     clock: Clock = _clock,
 ) -> int:
     """Expire snapshots older than the project's retention and compact the lake's files."""
-    project = _load(folder, out)
-    if project is None:
+    loaded = _load(folder, identity, out)
+    if loaded is None:
         return 1
-    home = project.folder / f".{identity.slug}"
-    if not (home / LAKE_FOLDER).exists():
+    project, home, place = loaded
+    if not lake_place.exists(home):
         print("nothing to maintain: the project has no lake yet", file=out)
         return 0
     try:
         with project_lock(home):
-            lake = open_lake(commands._location(home), commands._limits())
+            lake = open_lake(place.location, commands._limits())
             try:
                 record = run_maintenance(project, lake, identity, trigger, clock)
             finally:
@@ -324,15 +329,15 @@ def maintain(
 
 def history(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
     """Recent maintenance of a project, newest first, with times in the project's time zone."""
-    project = _load(folder, out)
-    if project is None:
+    loaded = _load(folder, identity, out)
+    if loaded is None:
         return 1
-    home = project.folder / f".{identity.slug}"
+    project, home, place = loaded
     rows: list[dict[str, object]] = []
-    if (home / LAKE_FOLDER).exists():
+    if lake_place.exists(home):
         try:
             with project_lock(home):
-                lake = open_lake(commands._location(home), commands._limits())
+                lake = open_lake(place.location, commands._limits())
                 try:
                     snapshot = lake.current_snapshot().id
                     request = history_request(snapshot, project.settings.time_zone, limit)

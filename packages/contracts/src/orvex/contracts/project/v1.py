@@ -134,6 +134,9 @@ class ProjectErrorCode(
             "PROJECT_VERSION_UNSUPPORTED",
             "PROJECT_SECRET_MISSING",
             "SOURCE_NOT_READ_ONLY",
+            "LAKE_LOCATION_INVALID",
+            "LAKE_TLS_REQUIRED",
+            "LAKE_LOCATION_CHANGED",
         ]
     ]
 ):
@@ -144,6 +147,9 @@ class ProjectErrorCode(
         "PROJECT_VERSION_UNSUPPORTED",
         "PROJECT_SECRET_MISSING",
         "SOURCE_NOT_READ_ONLY",
+        "LAKE_LOCATION_INVALID",
+        "LAKE_TLS_REQUIRED",
+        "LAKE_LOCATION_CHANGED",
     ]
 
 
@@ -183,31 +189,69 @@ class Lineage(BaseModel):
     api_key: SecretReference | None = None
 
 
-class ProjectFile(BaseModel):
+class CatalogPath(RootModel[str]):
+    root: Annotated[str, Field(max_length=4096, min_length=1)]
     """
-    `project.yaml`.
+    A catalog file on a local disk; a relative path is resolved against the project folder. The loader refuses object-storage URLs and network or remote file systems.
+    """
+
+
+class DuckdbLakeCatalog(BaseModel):
+    """
+    A DuckDB-file catalog (one process). Default path: `.<slug>/lake/catalog.ducklake`.
     """
 
     model_config = ConfigDict(
         extra="forbid",
     )
-    version: Literal[1]
-    name: Annotated[
-        str, Field(max_length=100, min_length=1, pattern="^[^\\u0000-\\u001f\\u007f]+$")
-    ]
+    type: Literal["duckdb"]
+    path: CatalogPath | None = None
+
+
+class SqliteLakeCatalog(BaseModel):
     """
-    Display name of the project; no control characters.
+    A SQLite-file catalog (several processes on one machine). Default path: `.<slug>/lake/catalog.sqlite`.
     """
-    time_zone: Annotated[
-        str,
-        Field(max_length=64, pattern="^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$"),
-    ]
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    type: Literal["sqlite"]
+    path: CatalogPath | None = None
+
+
+class PostgresLakeCatalog(BaseModel):
     """
-    IANA time zone name (for example `America/La_Paz`); required, never implicit. The loader checks it against the IANA database.
+    A PostgreSQL catalog: on the same machine, on the network or a managed cloud service. Any host other than the local machine (`localhost`, `127.0.0.1`, `::1`, a Unix-socket directory) needs `ssl_mode: verify-full`; the loader refuses other modes with `LAKE_TLS_REQUIRED`.
     """
-    locale: Literal["es", "en"] | None = "es"
-    retention: Retention | None = None
-    lineage: Lineage | None = None
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    type: Literal["postgres"]
+    host: Annotated[str, Field(max_length=253, min_length=1)]
+    port: Annotated[int | None, Field(ge=1, le=65535)] = 5432
+    database: Annotated[str, Field(max_length=128, min_length=1)]
+    user: Annotated[str, Field(max_length=128, min_length=1)]
+    password: SecretReference
+    schema_: Annotated[
+        str | None, Field(alias="schema", max_length=63, pattern="^[a-z_][a-z0-9_]*$")
+    ] = None
+    """
+    PostgreSQL schema holding the catalog tables (DuckLake `METADATA_SCHEMA`); default `public`.
+    """
+    ssl_mode: (
+        Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"] | None
+    ) = None
+    """
+    libpq `sslmode`. Required to be `verify-full` for any host other than the local machine.
+    """
+    ssl_root_cert: Annotated[
+        str | None, Field(pattern="^(system|\\$\\{env:[A-Z_][A-Z0-9_]*\\})$")
+    ] = "system"
+    """
+    Certificate authorities that verify the server: `system` (the operating system's store, the default) or `${env:NAME}`, a variable holding the path of a CA file.
+    """
 
 
 class Connection(
@@ -243,6 +287,13 @@ class ProjectError(BaseModel):
     details: ProjectErrorDetails
 
 
+class LakeCatalog(RootModel[DuckdbLakeCatalog | SqliteLakeCatalog | PostgresLakeCatalog]):
+    root: DuckdbLakeCatalog | SqliteLakeCatalog | PostgresLakeCatalog
+    """
+    The lake's catalog database.
+    """
+
+
 class ConnectionsFile(BaseModel):
     """
     `connections.yaml`: data sources by name. A name becomes a SQL schema, so it follows identifier rules and cannot be `lake`.
@@ -258,6 +309,45 @@ class ConnectionsFile(BaseModel):
     """
     Connections by name. A name becomes a SQL schema: lowercase identifier, not `lake`.
     """
+
+
+class Lake(BaseModel):
+    """
+    Where the project's managed lake lives (ADR-0027 §2). Absent: a DuckDB-file catalog and data files in the project's own folder, as before. A lake's catalog is fixed when the lake is created.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    catalog: LakeCatalog | None = None
+
+
+class ProjectFile(BaseModel):
+    """
+    `project.yaml`.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    version: Literal[1]
+    name: Annotated[
+        str, Field(max_length=100, min_length=1, pattern="^[^\\u0000-\\u001f\\u007f]+$")
+    ]
+    """
+    Display name of the project; no control characters.
+    """
+    time_zone: Annotated[
+        str,
+        Field(max_length=64, pattern="^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$"),
+    ]
+    """
+    IANA time zone name (for example `America/La_Paz`); required, never implicit. The loader checks it against the IANA database.
+    """
+    locale: Literal["es", "en"] | None = "es"
+    retention: Retention | None = None
+    lineage: Lineage | None = None
+    lake: Lake | None = None
 
 
 class ProjectDocument(RootModel[ProjectFile | ConnectionsFile | ProjectError]):

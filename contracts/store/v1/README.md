@@ -8,7 +8,7 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 
 | Message | Purpose |
 |---|---|
-| `LakeLocation` | Where the lake is: `LocalLakeLocation` (`catalog: local`, a DuckDB-file catalog at `<path>/catalog.ducklake`, data files under `<path>/data/`, one process) or `PostgresLakeLocation` (`catalog: postgres`, see below) |
+| `LakeLocation` | Where the lake is: `LocalLakeLocation` (`catalog: local`, a DuckDB-file catalog at `<path>/catalog.ducklake` or at `catalog_path`, data files under `<path>/data/`, one process), `SqliteLakeLocation` (`catalog: sqlite`, see below) or `PostgresLakeLocation` (`catalog: postgres`, see below) |
 | `StatementRequest` | One SQL statement run inside a write transaction (`CREATE TABLE … AS`, `INSERT … SELECT`, `MERGE`, `UPDATE`, `DELETE`, `DROP`, `ALTER`) |
 | `ReadRequest` | One `SELECT` read **once**, as of `snapshot`, in batches of `batch_size` rows |
 | `Parameter` | A value bound to `$name`; `value` is text (or `null`) converted to the declared DuckDB type, so exact values never travel as JSON numbers. Values are never concatenated into SQL. `DATE`, `TIMESTAMP` and `TIMESTAMPTZ` values are ISO 8601 (`YYYY-MM-DD`, `YYYY-MM-DDTHH:MM:SS[.ffffff]`, the same with `Z` or `±HH:MM`), or `"infinity"` / `"-infinity"` |
@@ -48,9 +48,17 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 - **Exact types (law 11):** a column DuckDB cannot carry exactly — PostgreSQL `numeric` without precision, with more than 38 digits or with a negative scale or one above its precision, `money` and arrays of either, in tables, views and materialized views; SQLite columns whose declared type contains `DEC` or `NUM` (`DECIMAL`, `NUMERIC`, `NUMBER`; DuckDB reads them as floating point, and SQLite stores them so) — is refused when a write reads it: `UNSUPPORTED_SOURCE_TYPE` naming `<source>.<table>.<column>`. Columns a write does not read do not matter.
 - A connection or credential failure is `STORE_CONNECTION_FAILED` naming the source, with the password redacted; an unset variable is `STORE_SECRET_MISSING`.
 
+## File catalogs (`LocalLakeLocation.catalog_path`, `SqliteLakeLocation`)
+
+- `LocalLakeLocation.catalog_path`, when given, is the DuckDB catalog file instead of `<path>/catalog.ducklake`; data files stay under `<path>/data/`. The store adds exactly that file and its `.wal` to the file sandbox; DuckDB adds the `.wal.checkpoint` and `.wal.recovery` files of each database it attaches.
+- `SqliteLakeLocation` keeps the catalog in the SQLite file `path` (DuckDB's official `sqlite` extension), so several processes on one machine can use the lake; data files go under `data_path`. The store adds exactly the catalog file and its `-wal`, `-shm` and `-journal` files to the file sandbox, no folder.
+- A file catalog must be on a local disk; the server's loader checks that before it builds the location (`contracts/project/v1`).
+
 ## PostgreSQL catalog (`PostgresLakeLocation`)
 
 Several processes read and write one lake. `connection` holds libpq `key=value` pairs **without** a password (any `password` key or URI form is refused with `STORE_SECRET_INLINE`); the password is read at open time from the environment variable named in `password_env` and never appears in errors. `metadata_schema` keeps the catalog tables of one lake in their own PostgreSQL schema (default `public`), so one database can hold several lakes. `data_path` is where data files are written.
+
+**TLS.** A catalog on a host other than the local machine must be reached with `sslmode=verify-full`, which encrypts the connection and checks that the server's certificate belongs to the named host; any other mode is refused before anything is opened (`STORE_TLS_REQUIRED`). Local means every host libpq could use is `localhost`, `127.0.0.1`, `::1` or a Unix-socket directory (a host starting with `/`), including `hostaddr`; `PGHOST`/`PGHOSTADDR` count when the connection names no host, and a service (`service=`, `PGSERVICE`) is never local. With `verify-full`, the operating system's authorities are used (`sslrootcert=system`) unless the connection names a CA file. The store is the enforcement point, so every user of this contract gets the rule.
 
 Statements never reference the catalog database itself, nor call functions that run SQL elsewhere (`postgres_query`, `postgres_execute`, `query`, …): `STORE_STATEMENT_INVALID`.
 
@@ -159,6 +167,7 @@ Preconditions:
 | `STORE_SECRET_INLINE` | The PostgreSQL `connection` contains a password or is a URI |
 | `STORE_TIMEOUT` | The statement exceeded its time limit (waiting included); a transaction rolled back |
 | `STORE_CANCELLED` | The read or transaction was cancelled; a transaction rolled back |
+| `STORE_TLS_REQUIRED` | A PostgreSQL catalog on another machine without `sslmode=verify-full`; `details` names the host and the mode found |
 | `STORE_BUSY` | The lake is running its maximum number of statements and its queue is full |
 | `STORE_TYPE_UNSUPPORTED` | A result column has a type with no JSON encoding yet |
 | `STORE_CATALOG_UNAVAILABLE` | The PostgreSQL catalog cannot be reached or refused the credentials |

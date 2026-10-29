@@ -8,7 +8,7 @@ A project folder holds plain YAML files under version control (law 8). This cont
 
 | Message | File | Content |
 |---|---|---|
-| `ProjectFile` | `project.yaml` (required) | `version: 1`; `name` (1–100 characters); `time_zone`, an IANA name, required (no implicit zone); `locale` `es` or `en` (default `es`); `retention.snapshots` `<n>d`, at least `1d` (default `90d`, decision #70); optional `lineage` (`url`, `https://`, or `http://` only to `localhost`/`127.0.0.1`, never with a user or password; optional `api_key`, a `${env:NAME}` reference sent as a bearer token) where OpenLineage events are also sent (P1-18) |
+| `ProjectFile` | `project.yaml` (required) | `version: 1`; `name` (1–100 characters); `time_zone`, an IANA name, required (no implicit zone); `locale` `es` or `en` (default `es`); `retention.snapshots` `<n>d`, at least `1d` (default `90d`, decision #70); optional `lineage` (`url`, `https://`, or `http://` only to `localhost`/`127.0.0.1`, never with a user or password; optional `api_key`, a `${env:NAME}` reference sent as a bearer token) where OpenLineage events are also sent (P1-18); optional `lake` (below) |
 | `ConnectionsFile` | `connections.yaml` (optional; absent = no connections) | `version: 1`; `connections`, a map from a name (`^[a-z][a-z0-9_]{0,62}$`, not `lake`) to one connection |
 | `ProjectError` | — | `code`, `message`, `details` (`file`, `path` as a JSON pointer into the file, `line`, `connection`, `variable`) |
 
@@ -22,6 +22,38 @@ Connection types (`type`):
 | `clickhouse` | `host`, `port`, `database`, `user`, `password`, `read_only`, optional `secure` (default `true`) |
 
 Relative `path` values are resolved against the project folder by the loader.
+
+## The lake's catalog (`lake.catalog`, #120)
+
+Where the project's managed lake keeps its catalog (ADR-0027 §2). Without a `lake` section, nothing changes: a DuckDB file at `.<slug>/lake/catalog.ducklake`. Data files stay in `.<slug>/lake/data/`.
+
+```yaml
+lake:
+  catalog:
+    type: postgres            # duckdb (default) | sqlite | postgres
+    host: db.example.com
+    port: 5432                # default 5432
+    database: analytics
+    user: bi_lake
+    password: ${env:BI_LAKE_PASSWORD}
+    schema: lake_billing      # catalog tables' schema (DuckLake METADATA_SCHEMA); default public
+    ssl_mode: verify-full     # required for any host other than the local machine
+    ssl_root_cert: system     # default; or ${env:NAME}, a variable holding a CA file's path
+```
+
+| `type` | Fields | Serves |
+|---|---|---|
+| `duckdb` | optional `path` (default `.<slug>/lake/catalog.ducklake`) | one process |
+| `sqlite` | optional `path` (default `.<slug>/lake/catalog.sqlite`) | several processes on one machine |
+| `postgres` | `host`, `port`, `database`, `user`, `password`, optional `schema`, `ssl_mode`, `ssl_root_cert` | several processes, on one or several machines |
+
+The loader checks, before anything is opened or created:
+- **A catalog file is on a local disk.** A `duckdb` or `sqlite` `path` (relative to the project folder) is refused when it is a URL (`s3://`, `gs://`, `https://`, …) or lies on a network or remote file system, read from Linux's `/proc/self/mountinfo` for the path's deepest existing folder: `nfs`, `nfs4`, `cifs`, `smb3`, `smbfs`, `9p`, `ceph`, `glusterfs`, `lustre`, `afs` and every `fuse.*`. Both databases rely on file locking, which is unreliable there. Where the file system cannot be read (other platforms, until P9-10), only the default path is accepted.
+- **Verified TLS for a remote PostgreSQL.** A host other than the local machine (`localhost`, `127.0.0.1`, `::1`, or a Unix-socket directory starting with `/`) needs `ssl_mode: verify-full`: `require` and `verify-ca` do not check that the certificate is the named host's. `ssl_root_cert` is `system` (the operating system's authorities) or `${env:NAME}`, whose value is the path of a CA file.
+- **A lake is never moved silently.** When a lake is created with a catalog other than the default, `.<slug>/lake.location` records its identity: the type, then the resolved path, or host, port, database and schema. A configuration that names another catalog for an existing lake is refused; the previous `lake.catalog` opens the same lake again. A lake made without this section is identified by its default catalog file.
+- `type: mysql`, `type: quack` and a literal `password` are schema errors: those catalogs are not offered (ADR-0027 §2).
+
+The connection's values are always quoted for libpq, so no value can add a connection keyword.
 
 ## Secrets
 
@@ -40,7 +72,10 @@ Relative `path` values are resolved against the project folder by the loader.
 | `PROJECT_VERSION_UNSUPPORTED` | `version` is an integer other than 1 |
 | `PROJECT_SCHEMA_INVALID` | the file does not match its message, `time_zone` is not a zone of the bundled IANA database (system-only names such as `localtime` and the placeholder `Factory` are refused), or a connection name appears twice |
 | `SOURCE_NOT_READ_ONLY` | a database connection declares `read_only: false` |
-| `PROJECT_SECRET_MISSING` | a referenced environment variable is not set when the secret is resolved |
+| `PROJECT_SECRET_MISSING` | a referenced environment variable is not set when the secret is resolved (for `lake.catalog`, when the project is validated) |
+| `LAKE_LOCATION_INVALID` | a `duckdb` or `sqlite` catalog `path` that is a URL, on a network or remote file system, or not the default where the file system cannot be read; an `ssl_root_cert` variable that does not name a file |
+| `LAKE_TLS_REQUIRED` | a `postgres` catalog on a host other than the local machine without `ssl_mode: verify-full` |
+| `LAKE_LOCATION_CHANGED` | the project's lake exists and `lake.catalog` names another catalog, or `.<slug>/lake.location` cannot be read |
 
 ## Compatibility
 
