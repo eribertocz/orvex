@@ -593,17 +593,20 @@ def test_since_from_a_watermark_bounds_the_rows_read(
 
 
 @live
-@pytest.mark.parametrize("zone", ["Asia/Tokyo", "America/Los_Angeles"])
+@pytest.mark.parametrize(
+    "zone", ["Etc/GMT+12", "America/Los_Angeles", "UTC", "Asia/Tokyo", "Pacific/Kiritimati"]
+)
 @pytest.mark.parametrize("declared", ["Date", "Date32"])
-def test_a_date_since_matches_how_clickhouse_compares_a_zoned_column(
+def test_a_date_since_holds_whatever_zone_clickhouse_compares_in(
     reader: dict[str, str], zone: str, declared: str
 ) -> None:
-    # A `{since:Date}` compared with a `DateTime64` column in its own zone: ClickHouse takes
-    # midnight in the column's zone. `since_value` and `since_bound` must agree with it, so the
-    # run's checks see the rows ClickHouse read, and no row newer than the watermark is skipped.
+    # ClickHouse compares a `{since:Date}` at midnight in the zone of the expression it meets:
+    # here a column in `zone`. The values the run uses, unchanged, must hold for every zone:
+    # no row newer than the watermark is skipped, and every row read is after the boundary
+    # the run's checks use (so a check never counts a row ClickHouse did not read).
     sql = (
-        f"SELECT number AS n, toDateTime64('2024-02-26 00:00:00', 3, 'UTC') + "
-        f"toIntervalHour(number) AS t FROM numbers(96) "
+        "SELECT number AS n, toDateTime64('2024-02-26 00:00:00', 3, 'UTC') + "
+        "toIntervalHour(number) AS t FROM numbers(144) "
         f"WHERE toTimeZone(t, '{zone}') > {{since:{declared}}}"
     )
     declared_since = since_type(declared)
@@ -611,22 +614,25 @@ def test_a_date_since_matches_how_clickhouse_compares_a_zoned_column(
     watermark = "2024-02-28T06:00:00+00:00"
     client = source(reader)
     try:
-        server = client.server_zone
-        dates = zone  # what `date_zone` gives for a column of that zone
-        since = since_value(declared_since, watermark, None, server, dates)
-        instant, _ = since_bound(declared_since, since, server, dates)
+        since = since_value(declared_since, watermark, None, client.server_zone)
+        instant, _ = since_bound(declared_since, since, client.server_zone)
         columns = client.describe(sql, declared_since).columns
         stream = client.stream(sql, columns, since, 60)
-        _, handle = transaction()
+        cursor, handle = transaction()
         rows = handle.load_arrow("_extract", "t", stream.reader, load_columns(columns))
         stream.close()
+        first = cursor.execute("SELECT min(n) FROM _extract.t").fetchone()
     finally:
         client.close()
     start = dt.datetime(2024, 2, 26, tzinfo=dt.UTC)
-    hours = [start + dt.timedelta(hours=number) for number in range(96)]
-    bound = dt.datetime.fromisoformat(instant)
-    assert rows == sum(1 for moment in hours if moment > bound)  # the check's boundary is exact
-    newer = sum(1 for moment in hours if moment > dt.datetime.fromisoformat(watermark))
+    assert first is not None
+    earliest_read = start + dt.timedelta(hours=int(str(first[0])))
+    assert earliest_read > dt.datetime.fromisoformat(instant)  # after the checks' boundary
+    newer = sum(
+        1
+        for hour in range(144)
+        if start + dt.timedelta(hours=hour) > dt.datetime.fromisoformat(watermark)
+    )
     assert rows >= newer  # nothing newer than the watermark was skipped
 
 

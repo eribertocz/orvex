@@ -449,3 +449,47 @@ def test_a_whole_partition_filter_passes_the_check(
     assert code == 0, out
     assert record(folder)[0:4] == ("success", None, None, "1000")
     assert lake_value(folder, "SELECT count(*) FROM lake.raw.ch_events") == [(1000,)]
+
+
+@pytest.mark.parametrize("declared", ["Date", "Date32"])
+def test_a_date_since_on_a_zoned_column_cannot_delete_rows(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str], declared: str
+) -> None:
+    # A reading every 6 hours of February, in a Tokyo-zoned column. ClickHouse compares the
+    # `{since:Date}` at midnight in Tokyo, earlier than in the server's zone. Checked against a
+    # later boundary, the rows read again between the two would pass for the month's older
+    # rows, and the overwrite would delete the other readings of February.
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "SELECT n AS id, toString(toStartOfMonth(t)) AS month, t FROM (SELECT number AS n, "
+                "toTimeZone(toDateTime64('2024-02-01 00:00:00', 3, 'UTC') + "
+                "toIntervalHour(6 * number), 'Asia/Tokyo') AS t FROM numbers(111)) "
+                f"WHERE t > {{since:{declared}}}"
+            ),
+            "models/raw/ch_events.yaml": (
+                "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
+                "incremental:\n  strategy: partition_overwrite\n  time_column: t\n"
+                "  partition_by: [month]\n  filter: manual\n"
+            ),
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 0, out
+    count = "SELECT count(*) FROM lake.raw.ch_events"
+    assert lake_value(folder, count) == [(111,)]
+    code, out = run(capsys, folder)  # nothing changed at the source
+    assert code == 1, out
+    assert "PARTITION_INCOMPLETE" in out
+    outcome, error_code, _, rows_read, since, _ = record(folder)
+    # Watermark 28 Feb 12:00 UTC: `since` is 28 Feb, whose midnight in Tokyo is 27 Feb 15:00
+    # UTC; the readings of 27 Feb 18:00 and 28 Feb 00:00, 06:00 and 12:00 are read again.
+    assert (outcome, error_code, rows_read, since) == (
+        "failed",
+        "PARTITION_INCOMPLETE",
+        "4",
+        "2024-02-28",
+    )
+    assert lake_value(folder, count) == [(111,)]  # nothing deleted

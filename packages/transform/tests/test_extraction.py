@@ -6,6 +6,9 @@ The streaming itself is tested against a live ClickHouse by the server package
 
 from __future__ import annotations
 
+import datetime as dt
+from zoneinfo import ZoneInfo
+
 import pytest
 from orvex.transform.clickhouse import (
     Column,
@@ -28,8 +31,9 @@ def kind(text: str) -> object:
 @pytest.mark.parametrize(
     ("declared", "expected"),
     [
-        ("Date", "2024-03-01"),
-        ("Date32", "2024-03-01"),
+        # A date is taken in UTC-12 (where midnight comes last): 11:50 UTC is still 29 February.
+        ("Date", "2024-02-29"),
+        ("Date32", "2024-02-29"),
         ("DateTime", "2024-03-01 07:50:00"),  # the server's zone: America/La_Paz (UTC-4)
         ("DateTime('UTC')", "2024-03-01 11:50:00"),
         ("DateTime64(3)", "2024-03-01 07:50:00.123"),
@@ -182,8 +186,9 @@ def test_the_bound_is_the_value_clickhouse_filters_by() -> None:
         "2024-03-01T11:50:00+00:00",
         "2024-03-01",
     )
+    # A date's boundary is its earliest midnight (UTC+14), whatever the server's zone.
     assert bound("Date", "2024-03-01", "America/La_Paz") == (
-        "2024-03-01T04:00:00+00:00",
+        "2024-02-29T10:00:00+00:00",
         "2024-03-01",
     )
     assert bound("DateTime64(3)", "2024-03-01 07:50:00.123", "UTC")[0] == (
@@ -195,28 +200,27 @@ def test_the_bound_is_the_value_clickhouse_filters_by() -> None:
     )
 
 
-def test_a_date_since_is_midnight_in_the_time_columns_zone() -> None:
-    from orvex.transform.clickhouse import date_zone, map_type, since_bound
+def test_a_date_since_holds_in_every_zone() -> None:
+    from orvex.transform.clickhouse import since_bound
 
-    day = since_type("Date")
-    assert day is not None
-    # Server in La Paz (UTC-4), column in UTC: the date is taken, and compared, in UTC.
-    assert since_value(day, "2024-02-27T02:00:00+00:00", None, "America/La_Paz", "UTC") == (
-        "2024-02-27"
-    )
-    assert since_bound(day, "2024-02-27", "America/La_Paz", "UTC")[0] == (
-        "2024-02-27T00:00:00+00:00"
-    )
-    # Column in Los Angeles (UTC-8): 06:00 UTC is still 1 March there, so no later row is
-    # skipped (the server's zone would give 2 March, read as 08:00 UTC).
-    assert since_value(
-        day, "2024-03-02T06:00:00+00:00", None, "America/La_Paz", "America/Los_Angeles"
-    ) == ("2024-03-01")
-    mapped = map_type("DateTime64(3, 'Asia/Tokyo')")
-    assert mapped is not None
-    columns = (Column("event_time", "DateTime64(3, 'Asia/Tokyo')", mapped),)
-    assert date_zone(columns, "EVENT_TIME") == "Asia/Tokyo"
-    assert date_zone(columns, None) is None
-    plain = map_type("DateTime")
-    assert plain is not None
-    assert date_zone((Column("t", "DateTime", plain),), "t") is None  # the server's
+    # ClickHouse compares a date at midnight in the zone of the expression it meets, which the
+    # model's SQL decides. The date is taken where midnight comes last (UTC-12), so its midnight
+    # anywhere is no later than the watermark; the boundary for checks is where it comes first
+    # (UTC+14), no later than ClickHouse's own.
+    watermark = dt.datetime(2024, 3, 2, 6, tzinfo=dt.UTC)
+    for declared in ("Date", "Date32"):
+        found = since_type(declared)
+        assert found is not None
+        text = since_value(found, watermark.isoformat(), None, "Asia/Tokyo")
+        assert text == "2024-03-01"
+        instant, day = since_bound(found, text, "Asia/Tokyo")
+        assert (instant, day) == ("2024-02-29T10:00:00+00:00", "2024-03-01")
+        for zone in (
+            "Etc/GMT+12",
+            "America/Los_Angeles",
+            "UTC",
+            "Asia/Tokyo",
+            "Pacific/Kiritimati",
+        ):
+            midnight = dt.datetime(2024, 3, 1, tzinfo=ZoneInfo(zone))
+            assert dt.datetime.fromisoformat(instant) <= midnight <= watermark, zone

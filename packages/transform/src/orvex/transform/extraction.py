@@ -40,8 +40,6 @@ class Extract:
     lookback: str | None
     schema: str
     table: str
-    # The incremental time column: a `{since:Date}` compares at midnight in its zone.
-    time_column: str | None = None
 
 
 def _identifier(name: str) -> str:
@@ -83,9 +81,6 @@ def steps(
         lookback=incremental_config.lookback if incremental_config is not None else None,
         schema=SCHEMA,
         table=table,
-        time_column=(
-            incremental_config.time_column.root if incremental_config is not None else None
-        ),
     )
     result: list[Step | Extract] = [
         extract,
