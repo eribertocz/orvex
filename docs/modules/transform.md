@@ -17,7 +17,7 @@
 | `product/laws.md` | §1–§2 |
 
 ## ADRs
-0004, 0006, 0007, 0008, 0015, 0022, 0023, 0025, 0026.
+0004, 0006, 0007, 0008, 0015, 0022, 0023, 0025, 0026, 0027.
 
 ## Laws that are acceptance criteria
 4 (deterministic models, visible freshness), 8 (models as code), 9 (run observability), 11 (exact types), A6 (no silent failures), A10 (freshness).

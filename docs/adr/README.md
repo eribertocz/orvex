@@ -2,7 +2,7 @@
 
 One decision per file: `NNNN-kebab-title.md`. Each record contains **Status, Context, Decision, Alternatives considered, Consequences**. Product and architecture decisions require Owner approval. An ADR is never edited after acceptance except to change its status; a new ADR supersedes it explicitly.
 
-All records below were approved by the Owner during the design session of 2026-10-26.
+Records 0001–0026 were approved by the Owner during the design session of 2026-10-26; later records state their own date.
 
 | # | Decision | Status |
 |---|---|---|
@@ -11,7 +11,7 @@ All records below were approved by the Owner during the design session of 2026-1
 | [0003](0003-python-backend-and-svelte-web.md) | Python backend with FastAPI; SvelteKit web | Accepted |
 | [0004](0004-modules-contracts-and-independent-versions.md) | Modules with contracts, own state and independent versions | Accepted |
 | [0005](0005-local-and-server-runtime-modes.md) | Local zero-configuration mode and opt-in server mode | Accepted |
-| [0006](0006-duckdb-and-ducklake.md) | DuckDB as the only analytical engine; DuckLake as the warehouse | Accepted |
+| [0006](0006-duckdb-and-ducklake.md) | DuckDB as the only analytical engine; DuckLake as the warehouse | Accepted; superseded in part by 0027 |
 | [0007](0007-projects-as-files.md) | Projects as files in Git; module state separate | Accepted |
 | [0008](0008-sql-models-with-yaml-sidecar.md) | Transformation models: pure SQL plus YAML sidecar | Accepted |
 | [0009](0009-apache-ossie-native-format.md) | Apache Ossie as the native semantic format with `ORVEX` extensions | Accepted |
@@ -31,4 +31,5 @@ All records below were approved by the Owner during the design session of 2026-1
 | [0023](0023-python-models-and-ml-extension-path.md) | Extension path for Python models, ML predictions and Python visuals (after v1.0.0) | Accepted (direction only) |
 | [0024](0024-project-writer.md) | Project writer: code editors save text as typed; forms only for dashboards and metrics | Accepted |
 | [0025](0025-lazy-relations-no-python-materialization.md) | Data stays in DuckDB: lazy relations, no materialization in Python | Accepted |
-| [0026](0026-one-dialect-per-engine.md) | One SQL dialect per engine; no transpilation (no SQLGlot) | Accepted |
+| [0026](0026-one-dialect-per-engine.md) | One SQL dialect per engine; no transpilation (no SQLGlot) | Accepted; rule 1 to be superseded in part by 0027 after v1.0.0 |
+| [0027](0027-two-data-routes.md) | Two data routes: managed DuckLake and Direct Query, one semantic engine | Accepted (Direct Query on ClickHouse: direction only, after v1.0.0) |

@@ -63,7 +63,7 @@ The frontend never knows the physical structure of tables.
 | Layer | In Orvex |
 |---|---|
 | Ingestion / transformation | `transform` module: SQL models + YAML sidecar |
-| Storage | `store` module: DuckLake (DuckDB engine) |
+| Storage | `store` module: DuckLake (DuckDB engine); execution on Direct Query engines (ADR-0027) |
 | Semantic engine | `semantic` module: Apache Ossie in, typed results and receipts out |
 | Query API | OpenAPI with exact typed values |
 | Frontend | SvelteKit, Svelte 5, ECharts, own matrix component |

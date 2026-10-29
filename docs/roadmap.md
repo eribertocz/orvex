@@ -87,8 +87,9 @@
 | P1-17 | ClickHouse extraction models: `clickhouse-connect`, ClickHouse SQL validated with `EXPLAIN SYNTAX`, server-side `{since:…}`, Arrow streaming, exact type mapping | transform |
 | P1-18 | OpenLineage events (start, complete, fail; datasets; column lineage where derivable) | transform |
 | P1-19 | Scheduler: freshness-driven planning (minimum 5 minutes, `FRESHNESS_TOO_SHORT`), `full_refresh` cron with time zone, no overlapping runs, retries with backoff | transform |
-| P1-20 | Snapshot retention (from `project.yaml`) and compaction as maintenance runs; optional Quack adapter | store |
+| P1-20 | Snapshot retention (from `project.yaml`) and compaction as maintenance runs | store |
 | P1-21 | Transformation worker process for server mode; load-performance baseline on the 100 M-row reference dataset | server |
+| P1-22 | Lake location in `project.yaml` (ADR-0027 §2): catalog (local DuckDB file or PostgreSQL) and data files (project folder, local path or object storage), credentials by `${env:NAME}` as temporary DuckDB secrets; every supported combination tested | store, server |
 
 **Exit criteria:** every strategy and every error code introduced in this phase tested; write–audit–publish proven with failing tests; incremental loads from PostgreSQL every 5 minutes on synthetic data without duplicates or gaps; valid lineage events; Owner demo.
 
@@ -129,8 +130,11 @@
 | P2-26 | Evidence verification after runs (`declared` / `verified` / `violated`; `EVIDENCE_VIOLATED`) | semantic |
 | P2-27 | HTTP endpoints `query`, `explain`, `catalog`; corpus **21/21** becomes a required check; query performance baseline recorded | server |
 | P2-28 | Property-based tests for binder, correctness engine and planner | semantic |
+| P2-29 | Direct Query foundation (ADR-0027): engine per dataset, `CROSS_ENGINE_QUERY`, live receipts (`explainable`, read instant), cache only with `cache.ttl`, scheduled evidence verification, policy values from the managed lake bound as parameters (`POLICY_NOT_SUPPORTED_ON_ENGINE`) | semantic, store |
+| P2-30 | Direct Query on an existing DuckLake attached read-only: pinned snapshots, corpus green on it | store, semantic |
+| P2-31 | Direct Query on a remote DuckDB through Quack (read-only, token by `${env:NAME}`): corpus green on it | store |
 
-**Exit criteria:** corpus **21/21** (including CASE-008, which SEF does not execute); every error code introduced in this phase tested; receipts on every result; evidence verification proven by tests that corrupt data; performance baseline recorded; Owner demo.
+**Exit criteria:** corpus **21/21** (including CASE-008, which SEF does not execute) on the managed lake and on every enabled Direct Query engine; every error code introduced in this phase tested; receipts on every result; evidence verification proven by tests that corrupt data; performance baseline recorded; Owner demo.
 
 ---
 
@@ -153,7 +157,7 @@
 | P3-10 | Result cache keyed by permission fingerprint; invalidation by run records across workers (PostgreSQL `LISTEN`/`NOTIFY` in server mode); per-dataset settings | semantic |
 | P3-11 | Role enforcement on every HTTP route; per-role query limits and asynchronous queries | server |
 | P3-12 | Administration API and CLI: users (instance administrator), memberships and groups (project Builder) | server |
-| P3-13 | Security conformance runner over the scenarios, as a required check | conformance |
+| P3-13 | Security conformance runner over the scenarios, as a required check, on the managed lake and on every enabled Direct Query engine (ADR-0027 §6) | conformance |
 | P3-14 | Property-based non-broadening tests | semantic |
 
 **Exit criteria:** every security scenario passes, or is `expected-fail` linked to the later issue that implements it (pages P6, exports P6–P7, MCP P9); OIDC verified against a real identity provider in CI; threat models recorded; the cache never crosses permission fingerprints.
@@ -322,3 +326,10 @@
 
 - `v1.0.0-rc.1` is tagged when the beta has no open `priority:p0`/`p1` bugs and the release criteria are evidenced (Owner approval required). Only defect fixes between release candidates.
 - **`v1.0.0`** is tagged after the Owner comments `Approved for release v1.0.0` on the release issue. From then on, SemVer guarantees the public contracts.
+
+## After v1.0.0 (decided direction)
+
+| Item | Module | Decision |
+|---|---|---|
+| Direct Query on ClickHouse: ClickHouse dialect adapter (plan → ClickHouse SQL with bound parameters), execution with server-side limits, exact types, `EXPLAIN ESTIMATE`; corpus and security suite green with results identical to the DuckDB reference | semantic, store | ADR-0027 |
+| Python models, ML predictions and Python visuals | transform, semantic, web | ADR-0023 |

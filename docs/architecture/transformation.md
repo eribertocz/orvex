@@ -1,6 +1,6 @@
 # Transformation (`transform` module)
 
-Turns sources into clean, tested tables in DuckLake. Design principle: **the SQL file is pure SQL; configuration lives beside it.**
+Turns sources into clean, tested tables in DuckLake: route A of ADR-0027. Data that already lives in an analytical engine can instead be queried in place (route B, Direct Query); that route has no models and is executed by the semantic engine through `store` (`semantic-engine.md` §4). Design principle: **the SQL file is pure SQL; configuration lives beside it.**
 
 ## 1. References studied
 
@@ -35,7 +35,7 @@ connections:
 | `parquet`, `csv` | DuckDB native readers |
 | `duckdb` | `ATTACH ... (READ_ONLY)` |
 | `sqlite`, `postgres` | DuckDB official extensions, attached read-only |
-| `clickhouse` | `clickhouse-connect`, the official Python client maintained by ClickHouse, Inc.: **extraction models** written in ClickHouse SQL run on ClickHouse and stream Arrow record batches into DuckDB (§3.5) |
+| `clickhouse` | `clickhouse-connect`, the official Python client maintained by ClickHouse, Inc.: **extraction models** written in ClickHouse SQL run on ClickHouse and stream Arrow record batches into DuckDB (§3.5). Querying ClickHouse in place, without extraction, is Direct Query, planned for after v1.0.0 (ADR-0027) |
 
 For every type except `clickhouse`, a connection name becomes a SQL schema in DuckDB: `production.readings` reads table `readings` from connection `production`, and DuckDB pushes filters and projections down to the source. ClickHouse has no DuckDB extension that meets the dependency policy (ADR-0002), so it is reached only through extraction models.
 
@@ -187,8 +187,11 @@ Every run produces a **run record** (`contracts/run-record/v1`): run id, model, 
 
 | Mode | Catalog | Data files |
 |---|---|---|
-| Local | DuckDB file inside `.<slug>/lake/` (single client, recommended by DuckLake for local single-user use). Only one process opens it: CLI commands (`orvex run`, `orvex validate`, and the stdio MCP server `orvex mcp`) talk to the running instance over its local API when one is running; otherwise they open the warehouse themselves, and a second opener fails with `PROJECT_LOCKED` | Local Parquet under `.<slug>/lake/data/` |
-| Server | PostgreSQL (recommended by DuckLake for multi-user use with concurrent clients) | Local disk or object storage |
+| Local (default) | DuckDB file inside `.<slug>/lake/` (single client, recommended by DuckLake for local single-user use). Only one process opens it: CLI commands (`orvex run`, `orvex validate`, and the stdio MCP server `orvex mcp`) talk to the running instance over its local API when one is running; otherwise they open the warehouse themselves, and a second opener fails with `PROJECT_LOCKED` | Local Parquet under `.<slug>/lake/data/`, or object storage |
+| Server | PostgreSQL (recommended by DuckLake for multi-user use with concurrent clients) | Local disk (processes on one machine only) or object storage |
+
+- The location is declared in `project.yaml` (ADR-0027 §2). Object storage is reached through DuckDB's official extensions; its credentials are `${env:NAME}` references turned into temporary DuckDB secrets, never persisted. Processes on different machines need an absolute data path or an object-storage URL.
+- Not offered: a MySQL catalog (known issues documented by DuckLake) and a catalog served through Quack (experimental in DuckLake).
 
 - Snapshot retention is configured by the user in `project.yaml` (default 90 days). Retention defines how long receipts stay **exactly** reproducible.
 - Snapshot expiration and file compaction are scheduled maintenance tasks with their own run records.
