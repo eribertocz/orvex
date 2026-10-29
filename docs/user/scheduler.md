@@ -6,14 +6,20 @@ long to let it stop, and how to see what it is doing.
 
 ## How it stops
 
-`SIGTERM` (what service managers send) and Ctrl+C (`SIGINT`) behave the same:
+`SIGTERM` is what service managers send:
 
-- **Between runs**, the scheduler stops within a second. No run or lake maintenance starts after
-  a stop, even one already decided.
+- **While waiting between runs**, the scheduler stops within a second. While it is checking the
+  project or reading the run records, it stops once that step ends (connecting to a slow source
+  and validating against it can take tens of seconds). No run or lake maintenance starts after a stop, even one already decided.
 - **During a run**, the run may finish for the stop grace period (`--stop-grace`, 60 seconds by
   default). After that it is cancelled: nothing it wrote is kept, and the run records say it was
   cancelled. The next start runs it again.
 - **During lake maintenance**, maintenance finishes; it is not cancelled.
+
+Ctrl+C (`SIGINT`) does the same, with one exception: while a run is loading rows from a source
+connection (an extraction model), Ctrl+C cancels the load **at once**, as it does for `run`,
+without the grace period. The run is recorded as cancelled and the scheduler stops. Use
+`SIGTERM` to let a run finish.
 
 When it has stopped, it prints `stopped (SIGTERM)` (or `SIGINT`) and exits with code 0.
 
@@ -67,8 +73,12 @@ the scheduler waits while another command holds it.
 |---|---|
 | `scheduler: running since …, last decision at … (…), next at …` | Alive; what it last decided and when it looks again |
 | `scheduler: stopped at … (SIGTERM)` | Stopped cleanly, and why |
-| `scheduler: not responding (process N, last heard at …)` | No heartbeat for 3 minutes: killed, or hung |
+| `scheduler: not responding (process N, last heard at …)` | No heartbeat for 3 minutes: the process was killed or is frozen. A run or check that hangs inside the process still shows `running`, since the heartbeat is renewed during it; look at the last decision's time |
 | `scheduler: has not run` | No scheduler has run on this project |
 | `scheduler: unknown (…)` | The heartbeat file exists but cannot be read |
+
+The last decision is the last line the scheduler printed about a run, maintenance or a stop.
+Problems it prints (a project that does not check, another process holding the project) are not
+in the heartbeat: see the scheduler's output for them.
 
 The heartbeat names models and times only; it never holds a secret.

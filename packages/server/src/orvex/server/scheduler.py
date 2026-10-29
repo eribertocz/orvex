@@ -159,9 +159,10 @@ def schedule(
     """Run the due models of a project until stopped (#69 for running unattended).
 
     `SIGTERM` or Ctrl+C (`SIGINT`) stops it: at once between runs; during a run, the run may
-    finish for `stop_grace` seconds, then it is cancelled and rolls back. One scheduler per
-    project: a second one exits with `SCHEDULER_ALREADY_RUNNING`. While it runs, it keeps a
-    heartbeat (`heartbeat.py`) that the `runs` command shows.
+    finish for `stop_grace` seconds, then it is cancelled and rolls back. Exception: Ctrl+C while
+    a run loads from a source cancels the load at once (`store.lake._on_ctrl_c`, as for `run`).
+    One scheduler per project: a second one exits with `SCHEDULER_ALREADY_RUNNING`. While it
+    runs, it keeps a heartbeat (`heartbeat.py`) that the `runs` command shows.
     """
     home = Path(folder).expanduser().absolute() / f".{identity.slug}"
     try:
@@ -198,7 +199,8 @@ def _schedule(
 ) -> int:
     control = commands.RunControl()
     stop_reason: list[str] = []  # set once, by the first stop signal
-    grace: list[threading.Timer] = []
+    requested = threading.Event()  # a stop arrived: the grace period starts
+    finished = threading.Event()  # the scheduler is done: the grace period is moot
 
     # Reentrant: the main thread's handler may run again while the first call holds it.
     once = threading.RLock()
@@ -209,12 +211,18 @@ def _schedule(
             if stop_reason:
                 return
             stop_reason.append(signal.Signals(number).name)
-        # A run in progress may finish within the grace period; then it is cancelled. Between
-        # runs, the loop sees the stop within a second and nothing is cancelled.
-        timer = threading.Timer(stop_grace, control.cancel)
-        timer.daemon = True
-        grace.append(timer)
-        timer.start()
+        # Only an event is set here: a handler may run while the main thread is inside
+        # `Thread.start()`, so it must not start a thread itself.
+        requested.set()
+
+    def grace_then_cancel() -> None:
+        """A run in progress may finish within the grace period; then it is cancelled. Between
+        runs, the loop sees the stop within a second and nothing is cancelled."""
+        while not requested.wait(0.2):
+            if finished.is_set():
+                return
+        if not finished.wait(stop_grace):
+            control.cancel()
 
     def stopped() -> bool:
         return bool(stop_reason) or (should_stop is not None and should_stop())
@@ -295,8 +303,10 @@ def _schedule(
                 report()
                 renewed = monotonic()
 
+    grace = threading.Thread(target=grace_then_cancel, name="schedule-grace", daemon=True)
     restore = _watch_signals(stop) if should_stop is None else (lambda: None)
     try:
+        grace.start()
         report()
         while not stopped():
             try:
@@ -328,8 +338,9 @@ def _schedule(
             )
         return 0
     finally:
-        for timer in grace:
-            timer.cancel()
+        finished.set()
+        if grace.is_alive():
+            grace.join()
         restore()
 
 
