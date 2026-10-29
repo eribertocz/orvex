@@ -969,3 +969,76 @@ def test_a_bound_outside_the_row_queries_is_refused(tmp_path: Path, sql: str) ->
     # the oldest-row check cannot see.
     found = config_problems(sql_model(tmp_path, BY_DAY, sql))
     assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT month, id, CAST(day AS DATE) AS day FROM src WHERE day > $since",
+        "SELECT month, id, max(day) AS day, sum(kwh) AS kwh FROM src WHERE day >= $since "
+        "GROUP BY ALL",
+        "SELECT month, id, max(day) AS day FROM src WHERE day >= $since GROUP BY month, id",
+        "SELECT * FROM src WHERE day >= $since GROUP BY ALL HAVING count(*) > 1",
+        "SELECT *, sum(kwh) OVER (PARTITION BY month) AS total FROM src WHERE day >= $since",
+        "SELECT * FROM src WHERE day >= $since QUALIFY row_number() OVER () > 1",
+        "SELECT * FROM src WHERE day >= $since ORDER BY day LIMIT 10",
+        "SELECT * FROM src WHERE day >= $since OFFSET 2",
+        "SELECT DISTINCT ON (id) * FROM src WHERE day >= $since",
+        "SELECT * FROM src TABLESAMPLE 10 WHERE day >= $since",
+        "SELECT * REPLACE (CAST(day AS DATE) AS day) FROM src WHERE day >= $since",
+        "SELECT * RENAME (other AS day) FROM src WHERE day >= $since",
+        "SELECT COLUMNS(*) FROM src WHERE day >= $since",
+        "SELECT id, other AS day FROM src WHERE day >= $since",
+        "SELECT *, day FROM src WHERE day >= $since",
+        "SELECT id, day FROM (SELECT id, max(day) AS day FROM src WHERE day >= $since "
+        "GROUP BY id) AS s",
+        "WITH c AS (SELECT * FROM src WHERE day >= date_trunc('month', $since)) SELECT * FROM c "
+        "WHERE id IN (SELECT id FROM c WHERE day >= (SELECT min(day) FROM c) + INTERVAL 14 DAY)",
+        "SELECT * FROM src WHERE day >= $since - CAST(random() * 30 AS INTEGER)",
+    ],
+    ids=[
+        "cast-alias",
+        "aggregate-group-by-all",
+        "aggregate-group-by",
+        "having",
+        "window",
+        "qualify",
+        "limit",
+        "offset",
+        "distinct-on",
+        "sample",
+        "star-replace",
+        "star-rename",
+        "columns",
+        "another-column-named-like-it",
+        "twice",
+        "aggregate-below",
+        "cte-read-twice",
+        "random-bound",
+    ],
+)
+def test_a_bound_whose_query_changes_the_time_column_or_the_rows_is_refused(
+    tmp_path: Path, sql: str
+) -> None:
+    # #162 Reviewer pass 3: the run's check sees the output time column; a query that computes
+    # it, or computes over the filtered rows, could lose rows the check cannot see.
+    found = config_problems(sql_model(tmp_path, BY_DAY, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT id, kwh, day, month FROM src WHERE day > $since",
+        "SELECT id, s.day AS day, month FROM src AS s WHERE s.day > $since ORDER BY id",
+        "SELECT DISTINCT * FROM src WHERE day > $since",
+        "SELECT s.* FROM src AS s WHERE s.day > $since",
+        "SELECT * EXCLUDE (kwh) FROM src WHERE day > $since",
+        "SELECT * FROM (SELECT id, day, month FROM src WHERE day > $since) AS s ORDER BY day",
+    ],
+    ids=["columns", "qualified", "distinct", "qualified-star", "star-exclude", "subquery"],
+)
+def test_a_bound_whose_query_passes_the_time_column_through_is_accepted(
+    tmp_path: Path, sql: str
+) -> None:
+    assert config_problems(sql_model(tmp_path, BY_DAY, sql)) == []

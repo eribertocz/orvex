@@ -707,6 +707,15 @@ def writes_since_mark(tree: str) -> bool:
     return root is None or any(_is_mark(node) for node in _nodes(root))
 
 
+def _per_row(function: str) -> bool:
+    """A ClickHouse function whose value changes from row to row (`rand`, `randUniform`,
+    `generateUUIDv4`…; `randConstant` is one value per query)."""
+    name = function.lower()
+    return (name.startswith(("rand", "canonicalrand", "generateuuid", "generateulid"))) and (
+        name != "randconstant"
+    )
+
+
 def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
     """Whether, in the `EXPLAIN AST` of `mark_since`'s SQL, every marked `{since:…}` is in a
     lower bound of the time column of the rows the model returns, as `incremental.
@@ -714,12 +723,22 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
 
     - `time_column > x` or `>= x` (or `x < time_column`, `x <= time_column`), `x` with
       `{since:…}` and constants but no column; `OR time_column IS NULL` may follow it;
-    - a condition (`WHERE`, `PREWHERE`, `HAVING`) of a query whose rows are the model's rows,
-      joined to it by `and` only: the model's query, a subquery it reads whole as its only
-      `FROM`, or a branch of a `UNION`; that query reads one table or subquery, not a join
-      (named `WITH` queries are not followed: `EXPLAIN AST` does not show their names);
+    - a condition (`WHERE`, `PREWHERE`) of a query whose rows are the model's rows, joined to
+      it by `and` only: the model's query, a subquery it reads whole as its only `FROM`, or a
+      branch of a `UNION`; that query reads one table or subquery, not a join (named `WITH`
+      queries are not followed: `EXPLAIN AST` does not show their names);
+    - every query on that path passes the time column through unchanged and keeps its rows:
+      the column is in its select list as itself (or a plain `*`/`t.*`), nothing else is named
+      like it, and the query has no `GROUP BY`, window function, `LIMIT`, `LIMIT BY`,
+      `DISTINCT ON` or `SAMPLE` (`EXPLAIN AST` shows neither `DISTINCT` nor which bare
+      condition is `HAVING`: with the column passed through and no `GROUP BY`, neither can
+      group rows);
     - the column matched by name (any letter case); a qualifier, if any, names that query's
-      table (its alias or name).
+      table (its alias or name);
+    - one exception to "as itself": in the query whose `WHERE` holds the bound, the time column
+      may be computed (`toDate(event_time) AS day`) when the bound names it without a
+      qualifier. ClickHouse then reads the name as that alias (`prefer_column_name_to_alias =
+      0`, which every validation and run query sets), so the bound bounds the output column.
 
     A tree that cannot be read counts as no."""
     root = _ast(tree)
@@ -727,6 +746,61 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
         return False
     wanted = time_column.lower()
     row_queries: dict[int, set[str]] = {}
+
+    def is_time_column(node: _Node, names: set[str]) -> bool:
+        if node.kind != "Identifier":
+            return False
+        qualifier, _, name = node.detail.split(" ", 1)[0].lower().rpartition(".")
+        return name == wanted and (not qualifier or qualifier in names)
+
+    def named(node: _Node) -> str:
+        """The name a select-list item gives its column ("" when it is not a plain one)."""
+        alias = re.search(r"\(alias ([^)]+)\)", node.detail)
+        if alias is not None:
+            return alias.group(1).lower()
+        if node.kind == "Identifier":
+            return node.detail.split(" ", 1)[0].lower().rpartition(".")[2]
+        return ""
+
+    computed: set[int] = set()  # row queries whose time column is a computed alias
+
+    def passes_through(node: _Node, names: set[str]) -> bool:
+        """The query returns the time column unchanged (or as a computed alias, then bounded
+        only by its unqualified name), one output row per input row."""
+        children = node.children
+        at = next(i for i, child in enumerate(children) if child.kind == "TablesInSelectQuery")
+        if at == 0 or children[at - 1].kind != "ExpressionList":
+            return False
+        items = children[at - 1].children
+        if any(n.kind == "SampleRatio" for n in _nodes(children[at])):
+            return False
+        for child in children[at + 1 :]:
+            if child.kind == "ExpressionList":
+                if not all(item.kind == "OrderByElement" for item in child.children):
+                    return False  # GROUP BY, LIMIT BY, DISTINCT ON
+            elif not any(n.kind == "Identifier" for n in _nodes(child)):
+                return False  # LIMIT, OFFSET (a condition always reads a column here)
+        conditions = [c for c in children[at + 1 :] if c.kind != "ExpressionList"]
+        if any(n.kind == "WindowDefinition" for c in [*items, *conditions] for n in _nodes(c)):
+            return False
+        kept = 0
+        for item in items:
+            if item.kind in {"Asterisk", "QualifiedAsterisk"}:
+                qualifiers = [c for c in item.children if c.kind == "Identifier"]
+                if any(c.kind == "ColumnsTransformerList" for c in item.children) or any(
+                    c.detail.split(" ", 1)[0].lower() not in names for c in qualifiers
+                ):
+                    return False
+                kept += 1
+            elif item.kind.startswith("Columns"):
+                return False  # COLUMNS('regexp'), COLUMNS(list)
+            elif named(item) == wanted:
+                if not is_time_column(item, names):
+                    if item.kind == "Identifier":
+                        return False  # another column under the time column's name
+                    computed.add(id(node))
+                kept += 1
+        return kept == 1
 
     def follow(node: _Node) -> None:
         if node.kind == "SelectWithUnionQuery":
@@ -753,8 +827,12 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
             names |= {name, name.rsplit(".", 1)[-1]}
         elif source.kind != "Subquery":
             return  # a table function
+        if not passes_through(node, names):
+            return
         row_queries[id(node)] = names
-        if source.kind == "Subquery":
+        if source.kind == "Subquery" and id(node) not in computed:
+            # A query that computes its time column does not pass on its subquery's: a bound
+            # there would bound another column.
             for child in source.children:
                 follow(child)
 
@@ -764,16 +842,11 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
     def arguments(node: _Node) -> list[_Node]:
         return node.children[0].children if node.children else []
 
-    def is_time_column(node: _Node, names: set[str]) -> bool:
-        if node.kind != "Identifier":
-            return False
-        qualifier, _, name = node.detail.split(" ", 1)[0].lower().rpartition(".")
-        return name == wanted and (not qualifier or qualifier in names)
-
     def bound(node: _Node) -> bool:
+        """`{since:…}` and constants only: no column and no random value."""
         inside = _nodes(node)
         return any(_is_mark(n) for n in inside) and not any(
-            n.kind in {"Identifier", "Subquery"} for n in inside
+            n.kind in {"Identifier", "Subquery"} or _per_row(_function_name(n)) for n in inside
         )
 
     def lower_bound(node: _Node, names: set[str]) -> bool:
@@ -786,32 +859,47 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
             and bound(found[1 - position])
         )
 
+    def unqualified(node: _Node) -> bool:
+        """The comparison names the time column without a qualifier (so, in a query whose time
+        column is computed, ClickHouse reads it as that alias)."""
+        found = arguments(node)
+        return any(
+            child.kind == "Identifier" and "." not in child.detail.split(" ", 1)[0]
+            for child in found
+            if is_time_column(child, set())
+        )
+
     def is_time_null(node: _Node, names: set[str]) -> bool:
         found = arguments(node)
         return (
             _function_name(node) == "isNull" and len(found) == 1 and is_time_column(found[0], names)
         )
 
-    def check(node: _Node, names: set[str] | None) -> bool:
+    def check(node: _Node, names: set[str] | None, alias: bool = False) -> bool:
+        """`alias`: the query's time column is a computed alias, so a bound must name it
+        without a qualifier (a qualified name is the table's column)."""
         if _is_mark(node):
             return False  # reached outside an accepted lower bound
         if names is not None and lower_bound(node, names):
-            return True
+            return not alias or unqualified(node)
         if names is not None and _function_name(node) == "or":
             # `time_column > {since:…} OR time_column IS NULL`: the undated rows too.
             return all(
-                lower_bound(child, names) or is_time_null(child, names) for child in arguments(node)
+                (lower_bound(child, names) and (not alias or unqualified(child)))
+                or (is_time_null(child, names) and (not alias or unqualified(child)))
+                for child in arguments(node)
             )
         if names is not None and _function_name(node) == "and":
-            return all(check(child, names) for child in arguments(node))
+            return all(check(child, names, alias) for child in arguments(node))
         if node.kind == "SelectQuery":
-            # Its conditions (WHERE, PREWHERE, HAVING) are its bare expressions; the select
-            # list, WITH, the tables, GROUP BY and ORDER BY come as lists.
+            # Its conditions (WHERE, PREWHERE) are its bare expressions; the select list, WITH,
+            # the tables and ORDER BY come as lists.
             where = row_queries.get(id(node))
             return all(
                 check(
                     child,
                     where if child.kind not in {"ExpressionList", "TablesInSelectQuery"} else None,
+                    id(node) in computed,
                 )
                 for child in node.children
             )
@@ -955,6 +1043,7 @@ class Source:
         so the limits are accepted although `readonly = 1` forbids later changes (the connection
         check has made sure the user's profile allows exactly that)."""
         settings: dict[str, object] = dict(VALIDATION_LIMITS)
+        settings["prefer_column_name_to_alias"] = 0  # names resolve as in a run
         settings["readonly"] = 1
         return settings
 
@@ -1067,6 +1156,9 @@ class Source:
             # Row filters a profile can add to every table or to the result.
             "additional_table_filters": {},
             "additional_result_filter": "",
+            # A name in WHERE means the select list's alias first, as when the model was
+            # validated (#155: a lower bound on a computed time column bounds that column).
+            "prefer_column_name_to_alias": 0,
         }
         # Its own client: the receive timeout covers the run (a query may scan for minutes
         # before its next rows), not the validation queries' 30 s.
@@ -1117,8 +1209,9 @@ class Source:
             "SOURCE_LIMITS_REFUSED",
             f"ClickHouse connection {self.name}: the user's profile does not let a run set the "
             f"settings it needs{named}: read-only, its time limit, its block size, every "
-            "overflow mode 'throw' (a limit fails the run, never shortens it) and limit = 0, "
-            "offset = 0; remove those constraints from the profile.",
+            "overflow mode 'throw' (a limit fails the run, never shortens it), limit = 0, "
+            "offset = 0 and prefer_column_name_to_alias = 0; remove those constraints from the "
+            "profile.",
         )
 
     def failure(self, error: BaseException) -> SourceError:

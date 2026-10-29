@@ -564,6 +564,72 @@ def test_a_since_bound_that_reads_another_column_is_refused(
         assert "INVALID_MODEL_SQL" in out
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # Reviewer pass 2: rows that depend on other rows or other data.
+        "SELECT * FROM events WHERE day >= toStartOfMonth({since:Date}) "
+        "AND event_id IN (SELECT event_id FROM events WHERE day >= {since:Date})",
+        "SELECT * FROM events WHERE day >= toStartOfMonth({since:Date}) "
+        "AND day NOT IN (SELECT day FROM events WHERE day >= {since:Date})",
+        "SELECT * FROM events WHERE day >= toStartOfMonth({since:Date}) "
+        "EXCEPT ALL SELECT * FROM events WHERE day >= {since:Date}",
+        "SELECT e.* FROM events AS e JOIN events AS c USING (event_id) WHERE c.day >= {since:Date}",
+        "SELECT * FROM events WHERE day >= toStartOfMonth({since:Date}) "
+        "AND day < (SELECT min(day) + 3 FROM events WHERE day >= {since:Date})",
+        "SELECT * FROM events WHERE EXISTS (SELECT 1 FROM events AS s WHERE s.day > {since:Date})",
+        "SELECT * FROM events WHERE day > {since:Date} INTERSECT SELECT * FROM events",
+        # Reviewer pass 3: a time column computed over the filtered rows, or rows dropped.
+        "SELECT month, max(e.day) AS day, count() AS n FROM events AS e "
+        "WHERE e.day >= {since:Date} GROUP BY month",
+        "SELECT event_id, month, toDate(event_time) AS day FROM events AS e "
+        "WHERE e.day >= {since:Date}",
+        "SELECT *, count() OVER (PARTITION BY month) AS n FROM events WHERE day >= {since:Date}",
+        "SELECT * FROM events WHERE day >= {since:Date} LIMIT 1 BY month",
+        "SELECT * FROM events WHERE day >= {since:Date} ORDER BY day LIMIT 10",
+        "SELECT * FROM events WHERE day >= {since:Date} - rand() % 30",
+    ],
+    ids=[
+        "in",
+        "not-in",
+        "except-all",
+        "join",
+        "scalar-subquery",
+        "exists",
+        "intersect",
+        "aggregate",
+        "computed-qualified",
+        "window",
+        "limit-by",
+        "limit",
+        "random-bound",
+    ],
+)
+def test_a_since_bound_the_oldest_row_check_cannot_follow_is_refused(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str], sql: str
+) -> None:
+    # The source's `events` has no `day` or `month`: a subquery adds them, so each form reads
+    # like a model over a dated table.
+    dated = (
+        "(SELECT event_id, event_time, toDate(event_time) AS day, "
+        "toString(toStartOfMonth(event_time)) AS month FROM events)"
+    )
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": sql.replace("FROM events", f"FROM {dated}"),
+            "models/raw/ch_events.yaml": PARTIAL_SIDECAR.replace(
+                "time_column: read_at", "time_column: day"
+            ),
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+
+
 def zoned_events(tmp_path: Path, source: dict[str, str], declared: str) -> Path:
     """A reading every 6 hours of February, in a Tokyo-zoned column, partitioned by month."""
     return project(

@@ -143,6 +143,10 @@ _FROM_BELOW = {
 }
 
 
+# Functions whose value changes from row to row: a bound using one is not one bound.
+_PER_ROW_FUNCTIONS = frozenset({"random", "gen_random_uuid", "uuid", "uuidv4", "uuidv7"})
+
+
 def since_is_a_lower_bound(sql: str, time_column: str) -> bool:
     """Whether every `$since` of a DuckDB-SQL model is in a lower bound of the time column of
     the rows the model returns (#155):
@@ -151,15 +155,24 @@ def since_is_a_lower_bound(sql: str, time_column: str) -> bool:
       time_column`), where `x` uses `$since` and constants but no column; `OR time_column IS
       NULL` may follow it, to reload undated rows too;
     - it is a condition of the `WHERE` clause of a query whose rows are the model's rows: the
-      model's own query, a query it reads whole as its only `FROM` (a subquery or a CTE), or a
-      branch of a `UNION`; that query reads one table or subquery, not a join;
+      model's own query, a query it reads whole as its only `FROM` (a subquery or a CTE read
+      nowhere else), or a branch of a `UNION`; that query reads one table or subquery, not a
+      join;
+    - every query on that path passes the time column through unchanged and keeps its rows as
+      they are: the column is in its select list as itself (`read_at`, `t.read_at`, `read_at AS
+      read_at`, or a plain `*`/`t.*`), nothing else is named like it, and the query has no
+      `GROUP BY`/`GROUP BY ALL`, `HAVING`, window function, `QUALIFY`, `LIMIT`/`OFFSET`,
+      `DISTINCT ON` or sample (plain `DISTINCT` and `ORDER BY` are allowed);
     - the column is matched by name (any letter case); a qualifier, if any, must name that
       query's table (its alias or name).
 
-    Such a filter loads every row of a partition from some time on, so the oldest-row check sees
-    any partition it loads in part. Anything else (an upper bound, `BETWEEN`, `OR`/`NOT` around
-    the bound, a bound that reads a column, a `$since` in an `IN`/`EXISTS`/scalar subquery, in
-    `EXCEPT`/`INTERSECT`, or in a query that joins) could drop rows the check cannot see.
+    Such a filter loads every row of a partition from some time on, and the output's time
+    column is that same column, so the oldest-row check sees any partition it loads in part.
+    Anything else (an upper bound, `BETWEEN`, `OR`/`NOT` around the bound, a bound that reads a
+    column or a random value, a `$since` in an `IN`/`EXISTS`/scalar subquery, in
+    `EXCEPT`/`INTERSECT`, in a query that joins, an output time column computed from it (a
+    cast, an aggregate), or rows computed over the filtered rows) could drop rows the check
+    cannot see.
     Read from DuckDB's parse tree; False when the SQL cannot be read."""
     connection = duckdb.connect()  # parses only: no files, no extensions
     try:
@@ -207,6 +220,81 @@ def since_is_a_lower_bound(sql: str, time_column: str) -> bool:
 
     # The queries whose rows are the model's rows, each with the names of its one table.
     row_queries: dict[int, set[str]] = {}
+    everything = nodes(statements)
+    reads = [
+        str(n.get("table_name", "")).lower()
+        for n in everything
+        if n.get("type") == "BASE_TABLE" and not n.get("schema_name")
+    ]
+
+    def named(item: Node) -> str:
+        """The name a select-list item gives its column ("" when it is not a plain one)."""
+        alias = str(item.get("alias") or "")
+        if alias:
+            return alias.lower()
+        parts = item.get("column_names")
+        if item.get("class") == "COLUMN_REF" and isinstance(parts, list) and parts:
+            return str(parts[-1]).lower()
+        return ""
+
+    def passes_through(node: Node, names: set[str]) -> bool:
+        """The query returns the time column unchanged, one output row per input row."""
+        modifiers = node.get("modifiers")
+        for modifier in modifiers if isinstance(modifiers, list) else []:
+            kind = modifier.get("type") if isinstance(modifier, dict) else None
+            if kind == "ORDER_MODIFIER":
+                continue
+            if kind == "DISTINCT_MODIFIER" and not modifier.get("distinct_on_targets"):
+                continue  # identical rows, time included: all of them or none are reloaded
+            return False  # LIMIT, OFFSET, DISTINCT ON
+        source = node.get("from_table")
+        if (
+            node.get("group_expressions")
+            or node.get("aggregate_handling") != "STANDARD_HANDLING"
+            or node.get("having") is not None
+            or node.get("qualify") is not None
+            or node.get("sample") is not None
+            or (isinstance(source, dict) and source.get("sample") is not None)
+        ):
+            return False
+        items = node.get("select_list")
+        if not isinstance(items, list) or any(n.get("class") == "WINDOW" for n in nodes(items)):
+            return False
+        kept = 0
+        for item in items:
+            if not isinstance(item, dict):
+                return False
+            if item.get("class") == "STAR":
+                relation = str(item.get("relation_name") or "").lower()
+                replaced = item.get("replace_list")
+                if (
+                    item.get("columns")
+                    or item.get("expr") is not None
+                    or item.get("rename_list")
+                    or (relation and relation not in names)
+                    or wanted in {str(x).lower() for x in item.get("exclude_list") or []}
+                    or item.get("qualified_exclude_list")
+                    or any(
+                        str(entry.get("key", "")).lower() == wanted
+                        for entry in (replaced if isinstance(replaced, list) else [])
+                        if isinstance(entry, dict)
+                    )
+                ):
+                    return False
+                kept += 1
+            elif named(item) == wanted:
+                if not is_time_column(item, names):
+                    return False  # computed (a cast, an aggregate…) or another column
+                kept += 1
+        return kept == 1
+
+    def is_time_column(node: object, names: set[str]) -> bool:
+        if not isinstance(node, dict) or node.get("class") != "COLUMN_REF":
+            return False
+        parts = node.get("column_names")
+        if not isinstance(parts, list) or not parts or str(parts[-1]).lower() != wanted:
+            return False
+        return len(parts) == 1 or str(parts[-2]).lower() in names
 
     def follow(node: object, scope: dict[str, object]) -> None:
         if not isinstance(node, dict):
@@ -227,30 +315,28 @@ def since_is_a_lower_bound(sql: str, time_column: str) -> bool:
         names = {str(source.get("alias") or "").lower()} - {""}
         if source.get("type") == "BASE_TABLE":
             names.add(str(source.get("table_name", "")).lower())
+        if not passes_through(node, names):
+            return
         row_queries[id(node)] = names
         if source.get("type") == "SUBQUERY":
             subquery = source.get("subquery")
             follow(subquery.get("node") if isinstance(subquery, dict) else None, inner)
         else:
             name = str(source.get("table_name", "")).lower()
-            if not source.get("schema_name") and name in inner:
+            if not source.get("schema_name") and name in inner and reads.count(name) == 1:
+                # A CTE read again elsewhere (a subquery, a join) computes over the loaded rows.
                 follow(inner[name], {key: value for key, value in inner.items() if key != name})
 
     follow(statements[0].get("node") if isinstance(statements[0], dict) else None, {})
 
-    def is_time_column(node: object, names: set[str]) -> bool:
-        if not isinstance(node, dict) or node.get("class") != "COLUMN_REF":
-            return False
-        parts = node.get("column_names")
-        if not isinstance(parts, list) or not parts or str(parts[-1]).lower() != wanted:
-            return False
-        return len(parts) == 1 or str(parts[-2]).lower() in names
-
     def bound(node: object) -> bool:
-        """`$since` and constants only: no column, so the bound is the same for every row."""
+        """`$since` and constants only: no column and no random value, so the bound is the same
+        for every row."""
         inside = nodes(node)
         return any(is_since(n) for n in inside) and not any(
-            n.get("class") in {"COLUMN_REF", "SUBQUERY"} for n in inside
+            n.get("class") in {"COLUMN_REF", "SUBQUERY"}
+            or str(n.get("function_name", "")).lower() in _PER_ROW_FUNCTIONS
+            for n in inside
         )
 
     def lower_bound(node: object, names: set[str]) -> bool:
