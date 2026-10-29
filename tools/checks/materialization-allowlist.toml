@@ -43,3 +43,28 @@ reason = "SQL parsing and rendering on a data-less connection: one serialized or
 file = "packages/transform/src/orvex/transform/auto_filter.py"
 call = "fetchall"
 reason = "The catalog of aggregate function names on a data-less connection, never data rows"
+
+[[allow]]
+file = "packages/store/src/orvex/store/json_encoding.py"
+call = "to_pylist"
+reason = "ResultJson encoding streams one record batch at a time (arrow_to_json reads its reader batch by batch and yields text): at most the read's batch_size rows are Python values at once"
+
+[[allow]]
+file = "packages/server/src/orvex/server/commands.py"
+call = "to_pylist"
+reason = "Run metadata, not analytical data: _column reads one watermark (one row per model in _meta.watermarks, or one max() row); runs reads at most --limit runs (LIMIT $p_limit in the SQL, default 20)"
+
+[[allow]]
+file = "packages/server/src/orvex/server/commands.py"
+call = "as_py"
+reason = "_count reads one count(*) value"
+
+[[allow]]
+file = "packages/server/src/orvex/server/maintenance.py"
+call = "to_pylist"
+reason = "Maintenance records: last_maintenance reads one aggregate row; history reads at most --limit rows (LIMIT $p_limit in the SQL, default 20)"
+
+[[allow]]
+file = "packages/server/src/orvex/server/scheduler.py"
+call = "to_pylist"
+reason = "Run records: one row per model of the project (model_history_request groups by model) and one aggregate row for the last run"

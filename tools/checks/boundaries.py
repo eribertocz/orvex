@@ -2,13 +2,17 @@
 
 1. MODULE_BOUNDARY_VIOLATION: code in `packages/<module>/` imports only its own module,
    `<namespace>.contracts`, the standard library and third-party packages; `server` composes all.
-2. MATERIALIZATION_IN_PYTHON: product code never pulls rows into Python (ADR-0025), unless the
-   call is listed in `materialization-allowlist.toml` with a reason.
+2. MATERIALIZATION_IN_PYTHON: product code never pulls rows into Python objects (ADR-0025), unless
+   the (file, name) is listed in `materialization-allowlist.toml` with a reason that states its
+   bound, or with the issue (`tracked`) that removes an unbounded use. Reading a result once into
+   Arrow (`to_arrow_table`, `to_arrow_reader`, `fetch_arrow_table`, `fetch_record_batch`,
+   `read_all`, `read_next_batch`) is allowed by ADR-0025 rule 3 and not reported.
 """
 
 from __future__ import annotations
 
 import ast
+import re
 import sys
 import tomllib
 from dataclasses import dataclass
@@ -16,7 +20,33 @@ from pathlib import Path
 
 from tools.repository import MODULES, REPOSITORY_ROOT, identity
 
-MATERIALIZING_CALLS = frozenset({"fetchall", "fetchone", "fetchmany", "df", "pl", "to_pandas"})
+# Every way of turning query rows into Python objects (ADR-0025 rules 1 and 6).
+MATERIALIZING_NAMES = frozenset(
+    {
+        # DuckDB results and relations
+        "fetchall",
+        "fetchone",
+        "fetchmany",
+        "fetchdf",
+        "fetch_df",
+        "fetch_df_chunk",
+        "fetchnumpy",
+        "df",
+        "pl",
+        "to_df",
+        "torch",
+        "tf",
+        # DataFrame and array conversions
+        "to_pandas",
+        "to_numpy",
+        "tolist",
+        # Arrow to Python
+        "to_pylist",
+        "to_pydict",
+        "as_py",
+    }
+)
+TRACKED = re.compile(r"#[1-9][0-9]*")
 SHARED_MODULES = frozenset({"contracts"})
 COMPOSER = "server"
 ALLOW_LIST = Path(__file__).with_name("materialization-allowlist.toml")
@@ -34,7 +64,7 @@ class Finding:
 
 
 class AllowListError(ValueError):
-    code = "ALLOWLIST_ENTRY_INVALID"
+    code = "MATERIALIZATION_ALLOW_LIST_INVALID"
 
 
 def load_allow_list(path: Path = ALLOW_LIST) -> set[tuple[str, str]]:
@@ -47,6 +77,11 @@ def load_allow_list(path: Path = ALLOW_LIST) -> set[tuple[str, str]]:
         ):
             raise AllowListError(
                 f"{AllowListError.code}: entry {entry!r} needs file, call and reason"
+            )
+        tracked = entry.get("tracked")
+        if tracked is not None and not (isinstance(tracked, str) and TRACKED.fullmatch(tracked)):
+            raise AllowListError(
+                f"{AllowListError.code}: entry {entry!r}: tracked must be an issue, #<number>"
             )
         allowed.add((entry["file"], entry["call"]))
     return allowed
@@ -89,23 +124,47 @@ def boundary_findings(tree: ast.AST, owner: str, namespace: str, relative: str) 
 def materialization_findings(
     tree: ast.AST, relative: str, allowed: set[tuple[str, str]]
 ) -> list[Finding]:
+    """Every read of a materializing name, called or not (`rows = result.to_pylist` too);
+    assigning an attribute of that name (`obj.df = …`) is not a read."""
     findings: list[Finding] = []
     for node in ast.walk(tree):
         if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr in MATERIALIZING_CALLS
-            and (relative, node.func.attr) not in allowed
+            isinstance(node, ast.Attribute)
+            and isinstance(node.ctx, ast.Load)
+            and node.attr in MATERIALIZING_NAMES
+            and (relative, node.attr) not in allowed
         ):
             findings.append(
                 Finding(
                     "MATERIALIZATION_IN_PYTHON",
                     relative,
                     node.lineno,
-                    f".{node.func.attr}() reads rows into Python (ADR-0025)",
+                    f".{node.attr} reads rows into Python (ADR-0025)",
                 )
             )
     return findings
+
+
+def stale_entries(root: Path, allowed: set[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Allow-list entries that no longer match any use, so permissions cannot outlive the code."""
+    used: set[tuple[str, str]] = set()
+    for path, relative in product_files(root):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
+        used |= {
+            (relative, finding.detail.split()[0].removeprefix("."))
+            for finding in materialization_findings(tree, relative, set())
+        }
+    return sorted(allowed - used)
+
+
+def product_files(root: Path) -> list[tuple[Path, str]]:
+    found: list[tuple[Path, str]] = []
+    for package in sorted(path for path in (root / "packages").iterdir() if path.is_dir()):
+        for path in sorted(package.rglob("*.py")):
+            relative = path.relative_to(root).as_posix()
+            if "/src/" in relative:
+                found.append((path, relative))
+    return found
 
 
 def scan(root: Path, allowed: set[tuple[str, str]]) -> list[Finding]:
@@ -123,10 +182,16 @@ def scan(root: Path, allowed: set[tuple[str, str]]) -> list[Finding]:
 
 def main() -> int:
     try:
-        findings = scan(REPOSITORY_ROOT, load_allow_list())
+        allowed = load_allow_list()
     except AllowListError as error:
         print(error)
         return 1
+    stale = stale_entries(REPOSITORY_ROOT, allowed)
+    for file, call in stale:
+        print(f"{AllowListError.code}: entry ({file}, {call}) matches no use; remove it")
+    if stale:
+        return 1
+    findings = scan(REPOSITORY_ROOT, allowed)
     for finding in findings:
         print(finding)
     print(f"boundaries: {len(findings)} finding(s)")
