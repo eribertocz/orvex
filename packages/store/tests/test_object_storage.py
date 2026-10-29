@@ -26,7 +26,7 @@ from orvex.contracts.store.v1 import (
     StatementRequest,
 )
 from orvex.store.errors import StoreError
-from orvex.store.lake import Lake, Limits, _guarded, open_lake
+from orvex.store.lake import Lake, Limits, _guarded, _sandbox_entries, open_lake
 
 LIMITS = Limits(
     memory_limit="512MB", threads=1, max_concurrent=4, queue_size=16, default_timeout_ms=600_000
@@ -310,6 +310,35 @@ def test_storage_and_path_must_match(
     with pytest.raises(StoreError) as refused:
         open_lake(location, LIMITS)
     assert refused.value.code == "STORE_STATEMENT_INVALID"
+
+
+def test_the_sandbox_lists_the_data_folder_or_prefix_exactly(tmp_path: Path) -> None:
+    # #132's exact list, with #126's data locations: a local folder resolved, a prefix as written.
+    local = LocalLakeLocation(
+        kind="lake_location",
+        catalog="local",
+        path=str(tmp_path / "lake"),
+        data_path=(tmp_path / "elsewhere").as_posix() + "/",
+    )
+    assert _sandbox_entries(local, "/spill") == (
+        [
+            "/spill",
+            (tmp_path / "lake").resolve().as_posix(),
+            (tmp_path / "elsewhere").resolve().as_posix(),
+        ],
+        [],
+    )
+    on_s3 = LocalLakeLocation(
+        kind="lake_location",
+        catalog="local",
+        path=str(tmp_path / "lake"),
+        data_path="s3://lake/billing/",
+        storage=storage("127.0.0.1:9000"),
+    )
+    assert _sandbox_entries(on_s3, "/spill") == (
+        ["/spill", (tmp_path / "lake").resolve().as_posix(), "s3://lake/billing/"],
+        [],
+    )
 
 
 # --- statements never name an object (#136 review) -------------------------------------------

@@ -278,6 +278,23 @@ def test_changing_the_data_path_or_encryption_of_an_existing_lake_is_refused(
     assert problems(folder) == []  # the default folder, named explicitly: the same lake
 
 
+def test_a_changed_data_path_exits_1_and_creates_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #126: "changing path after the lake exists" is among the refusals that create nothing.
+    folder = bare(tmp_path / "proj", "")
+    default = home(folder) / "lake" / "catalog.ducklake"
+    default.parent.mkdir(parents=True)
+    default.write_bytes(b"existing lake")
+    other = tmp_path / "other"
+    bare(folder, f"lake:\n  data:\n    path: {other}\n")
+    code, out = run(capsys, "run", str(folder))
+    assert code == 1, out
+    assert out.startswith("LAKE_LOCATION_CHANGED"), out
+    assert not other.exists()
+    assert default.read_bytes() == b"existing lake"
+
+
 # --- flows (CI) ------------------------------------------------------------------------------
 
 
