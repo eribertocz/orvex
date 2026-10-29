@@ -131,7 +131,7 @@
 | P2-27 | HTTP endpoints `query`, `explain`, `catalog`; corpus **21/21** becomes a required check; query performance baseline recorded | server |
 | P2-28 | Property-based tests for binder, correctness engine and planner | semantic |
 | P2-29 | Direct Query foundation (ADR-0027): engine per dataset, `CROSS_ENGINE_QUERY`, receipts naming every snapshot read, policy values from the managed lake bound as parameters with exact `NULL` semantics and a cap (`POLICY_NOT_SUPPORTED_ON_ENGINE`) | semantic, store |
-| P2-30 | Direct Query on an existing DuckLake: PostgreSQL or SQLite catalog attached `READ_ONLY` in a DuckDB instance of its own with a file sandbox, its data location separate from every other lake, tables only, catalog version checked (`ENGINE_VERSION_UNTESTED`), served at its latest verified snapshot (evidence verified on each new snapshot); corpus green on it (development only until P3-13) | store, semantic |
+| P2-30 | Direct Query on an existing DuckLake: PostgreSQL or SQLite catalog attached `READ_ONLY` in a DuckDB instance of its own with a file sandbox, its data location separate from every other lake and every file source, tables only, catalog version checked (`ENGINE_VERSION_UNTESTED`), served at its latest verified snapshot (evidence verified on each new snapshot); corpus green on it (development only until P3-13) | store, semantic |
 
 **Exit criteria:** corpus **21/21** (including CASE-008, which SEF does not execute) on the managed lake and on every enabled Direct Query engine; every error code introduced in this phase tested; receipts on every result; evidence verification proven by tests that corrupt data; performance baseline recorded; Owner demo.
 
@@ -144,7 +144,7 @@
 
 | ID | Issue | Module |
 |---|---|---|
-| P3-01 | Normative cases: security scenarios (`conformance/security/scenarios/`) for pages, page-bound queries, rows, columns, masking, cache, export, possible values, MCP and missing attributes, plus the Direct Query cases of ADR-0027 §6 (callers with no mapping under allow- and deny-lists, registered deny-list callers with nothing blocked, cap, `NULL`, mapping tables outside the managed lake, views and macros, files, symbolic links and hard links reaching outside the data location, overlapping locations, reused snapshot ids, revoked mapping or registration in cache) *(Owner merges)* | conformance |
+| P3-01 | Normative cases: security scenarios (`conformance/security/scenarios/`) for pages, page-bound queries, rows, columns, masking, cache, export, possible values, MCP and missing attributes, plus the Direct Query cases of ADR-0027 §6 (callers with no mapping under allow- and deny-lists, registered deny-list callers with nothing blocked, cap, `NULL`, mapping tables outside the managed lake, views and macros, files, symbolic links and hard links reaching outside the data location, files of Route A file sources, overlapping locations, reused snapshot ids, revoked mapping or registration in cache) *(Owner merges)* | conformance |
 | P3-02 | Users, project memberships, roles and the instance administrator (SQLite locally, PostgreSQL schema in server mode) | access |
 | P3-03 | `audit-event` contract v1; append-only audit log with hash chain; configurable retention | access |
 | P3-04 | Local authentication (`hashlib.scrypt`), server-side sessions, cookie and `Origin` rules | access |
@@ -153,7 +153,7 @@
 | P3-07 | Row policies: evaluation and placement before aggregation on every path | semantic |
 | P3-08 | Column policies: visible, masked, hidden, with the masking rules of `security.md` §3.3 | semantic |
 | P3-09 | Fail-closed on missing attributes: zero rows, `POLICY_ATTRIBUTE_MISSING` notice, audit event | semantic |
-| P3-10 | Result cache keyed by permission fingerprint; invalidation by run records across workers (PostgreSQL `LISTEN`/`NOTIFY` in server mode); per-dataset settings; for datasets outside the managed lake, the key of ADR-0027 §7 with mapping-table snapshots checked on every lookup | semantic |
+| P3-10 | Result cache keyed by permission fingerprint; invalidation by run records across workers (PostgreSQL `LISTEN`/`NOTIFY` in server mode); per-dataset settings; for datasets outside the managed lake, the key of ADR-0027 §7 with mapping- and registration-table snapshots checked on every lookup | semantic |
 | P3-11 | Role enforcement on every HTTP route; per-role query limits and asynchronous queries | server |
 | P3-12 | Administration API and CLI: users (instance administrator), memberships and groups (project Builder) | server |
 | P3-13 | Security conformance runner over the scenarios, as a required check, on the managed lake and on every enabled Direct Query engine (ADR-0027 §6) | conformance |

@@ -92,12 +92,17 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
     - Every setting the instance needs is set globally before the configuration is locked (`lock_configuration`), and `allowed_configs` never lists a security setting. Per-cursor settings used by the managed lake (time zone, replacement scans) are therefore set once, globally.
     - **No links of any kind out of the location.** No link, symbolic or hard, can make a read reach data outside the declared location. The check holds when each file is read, not only when the snapshot is verified, because a writer can swap a verified file for a link later.
       - On a network file system, symbolic links are resolved by any client, and a hard link can be made by any writer on the same export, so the writer needs no access to the Orvex machine.
-      - Path checks and link counts cannot detect a hard link.
-      - P2-30 therefore shows a mechanism that holds for both kinds. Examples are reading the lake under an operating-system identity with no access to any other lake, or requiring a file system that holds no other lake.
+      - Path checks cannot detect a hard link. A link count is not conclusive either, because the original name can be removed later, for example by compaction.
+      - P2-30 therefore shows a mechanism that holds for both kinds, stated against the protected set defined under "Separate locations". Examples:
+        - requiring that the data location's file system holds no file of that protected set, since a hard link cannot cross file systems;
+        - reading the lake in a process of its own, under an operating-system identity with access only to the declared location, its catalog file and its spill folder. The memory rule of §7 then applies across processes.
       - If it cannot, Route B accepts only object-storage data locations, which have no links.
     - P2-30 shows that a SQLite catalog still sees new snapshots under this sandbox. If it cannot, SQLite catalogs are refused for Route B.
     - Before a new snapshot is served, every data and delete file it references is checked to lie under that location. A snapshot that fails the check is never served.
-  - **Separate locations.** Validation rejects a declared data location that equals, contains or lies inside the managed lake's data location, the project or instance folders, or another existing lake's location (`STORE_SOURCE_INVALID`). The comparison uses whole path components after resolving the paths, and for object storage also the bucket and endpoint. Otherwise a catalog could point at files inside its own location that belong to the managed lake, and serve them without that data's policies.
+  - **Separate locations.** Every file Orvex reads for any other purpose is protected: the managed lake's data location, the project and instance folders, every other existing lake's location, and every path read by the project's file sources (Parquet, CSV, DuckDB-file and SQLite sources).
+    - Validation rejects a declared data location that equals, contains or lies inside any of them (`STORE_SOURCE_INVALID`).
+    - The comparison uses whole path components after resolving the paths, and for object storage also the bucket and endpoint. Ambiguous cases fail closed, for example one export mounted at two paths, or two spellings of one endpoint.
+    - Otherwise a catalog could register a protected file as its own, and serve its data without the policies of the data built from it.
   - **Tables only.** Semantic datasets may reference only the lake's tables. A dataset on a view is refused with `STORE_SOURCE_INVALID`, a narrower form of the rule `contracts/store/v1` applies to DuckDB and SQLite sources that define views or macros.
   - **No lake macros.** The lake is never on the instance's search path, and generated SQL qualifies every function, so no call can resolve to one of its macros.
 - **Data version.** Queries read the latest **verified** snapshot (§7).
@@ -119,7 +124,7 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
 
 ### 5. Receipts, freshness and reproducibility (law 4)
 - **Existing DuckLake:**
-  - the receipt names the snapshot read and, when row policies apply, the managed-lake snapshot of each mapping table read (§6);
+  - the receipt names the snapshot read and, when row policies apply, the snapshot of every managed-lake table read by the policies or by their registration check (§6);
   - it is `exact` while all of those snapshots are retained (the external one by the lake's owner), and `explainable` afterwards;
   - an external snapshot is identified by the connection, its id and its commit time, never by the id alone.
     - A restored or replaced catalog can reuse ids for different data.
@@ -159,6 +164,7 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
   - a data file outside an existing lake's declared data location;
   - a symbolic link in an existing lake's data location that points outside it, including one swapped in after verification;
   - a hard link in an existing lake's data location to a managed-lake data file;
+  - an existing lake that registers a file of a Route A file source, by absolute path or by hard link;
   - a policy whose mapping subquery reads a table outside the managed lake;
   - an existing lake whose declared location contains the managed lake's data location;
   - a restored external catalog that reuses snapshot ids;
@@ -172,7 +178,7 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
     - the permission fingerprint;
     - the engine data version: the verified snapshot for an existing DuckLake (connection, id and commit time), or the entry's read instant for a live engine, which a lookup matches while it is within `cache.ttl` (law 4: "within the declared freshness");
     - the last-change snapshot of every managed-lake table read by its policies or by their registration check.
-  - **Checked on every lookup.** The mapping-table snapshots are compared with the current ones on every lookup, without relying on run events. A mapping changed by a run or directly by the Builder is therefore never served from cache.
+  - **Checked on every lookup.** The snapshots of those managed-lake tables are compared with the current ones on every lookup, without relying on run events. A mapping or registration changed by a run or directly by the Builder is therefore never served from cache.
   - **Live datasets (after v1.0.0)** are cached only when they declare `cache.ttl`. An entry records its read instant and is served while its age is below the `ttl`, and the receipt shows the original read instant.
 - **Evidence** (uniqueness, cardinality, temporal non-overlap, bridge totals):
   - **Existing DuckLake.** Orvex checks the attached catalog for a new snapshot on the connection's schedule: declared per connection, at least 5 minutes, default 1 hour.
@@ -182,7 +188,7 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
     - No number silently depends on violated evidence.
   - **Live engines (after v1.0.0).** Evidence is verified on a schedule declared per connection (default daily). The receipt carries the verification instant: data changed since then is not yet checked, and the receipt says so.
   - **Violated evidence on the managed lake and on live engines** blocks dependent queries (`EVIDENCE_VIOLATED`). An existing DuckLake never reaches that state, because a snapshot with violated evidence is not served.
-- **Cost estimation (law 7)** for an existing DuckLake comes from DuckDB's `EXPLAIN` and DuckLake's statistics. Budgets are enforced while running by the separate instance's own DuckDB limits and cancellation, as for the managed lake. The managed-lake instance and every separate instance share one process memory budget and one admission control: their limits together never exceed it.
+- **Cost estimation (law 7)** for an existing DuckLake comes from DuckDB's `EXPLAIN` and DuckLake's statistics. Budgets are enforced while running by the separate instance's own DuckDB limits and cancellation, as for the managed lake. The managed-lake instance and every separate instance share one memory budget and one admission control, across processes when an instance runs in its own process (§3): their limits together never exceed it.
 - **Pre-aggregations (S5)** apply only to datasets in the managed lake in v1.0.0.
 
 ### 8. Module boundaries
