@@ -144,17 +144,23 @@ _FROM_BELOW = {
 
 
 def since_is_a_lower_bound(sql: str, time_column: str) -> bool:
-    """Whether every `$since` of a DuckDB-SQL model is in a lower bound of the time column: a
-    comparison `time_column > x` or `time_column >= x` (or `x < time_column`, `x <=
-    time_column`) that is a condition of a `WHERE` clause, joined to it by `AND` only, where `x`
-    uses `$since` and constants but no column (#155). `OR time_column IS NULL` may follow it,
-    to reload the undated rows too.
+    """Whether every `$since` of a DuckDB-SQL model is in a lower bound of the time column of
+    the rows the model returns (#155):
+
+    - the bound is `time_column > x` or `time_column >= x` (or `x < time_column`, `x <=
+      time_column`), where `x` uses `$since` and constants but no column; `OR time_column IS
+      NULL` may follow it, to reload undated rows too;
+    - it is a condition of the `WHERE` clause of a query whose rows are the model's rows: the
+      model's own query, a query it reads whole as its only `FROM` (a subquery or a CTE), or a
+      branch of a `UNION`; that query reads one table or subquery, not a join;
+    - the column is matched by name (any letter case); a qualifier, if any, must name that
+      query's table (its alias or name).
 
     Such a filter loads every row of a partition from some time on, so the oldest-row check sees
-    any partition it cuts. An upper bound, an `OR`, a `NOT`, a `BETWEEN` or a column in `x`
-    could drop rows in the middle or at the end of a partition, which no check of the loaded
-    rows can see. The column is matched by name (any table qualifier, any letter case). Read
-    from DuckDB's parse tree; False when the SQL cannot be read."""
+    any partition it loads in part. Anything else (an upper bound, `BETWEEN`, `OR`/`NOT` around
+    the bound, a bound that reads a column, a `$since` in an `IN`/`EXISTS`/scalar subquery, in
+    `EXCEPT`/`INTERSECT`, or in a query that joins) could drop rows the check cannot see.
+    Read from DuckDB's parse tree; False when the SQL cannot be read."""
     connection = duckdb.connect()  # parses only: no files, no extensions
     try:
         connection.execute("SET enable_external_access = false")
@@ -165,9 +171,11 @@ def since_is_a_lower_bound(sql: str, time_column: str) -> bool:
     finally:
         connection.close()
     tree = json.loads(str(row[0])) if row else {"error": True}
-    if tree.get("error"):
+    statements = tree.get("statements")
+    if tree.get("error") or not isinstance(statements, list) or len(statements) != 1:
         return False
     wanted = time_column.lower()
+    type Node = dict[str, object]
 
     def is_since(node: object) -> bool:
         return (
@@ -176,8 +184,8 @@ def since_is_a_lower_bound(sql: str, time_column: str) -> bool:
             and str(node.get("identifier", "")).lower() == SINCE
         )
 
-    def nodes(node: object) -> list[dict[str, object]]:
-        found: list[dict[str, object]] = []
+    def nodes(node: object) -> list[Node]:
+        found: list[Node] = []
         if isinstance(node, list):
             for item in node:
                 found += nodes(item)
@@ -187,65 +195,107 @@ def since_is_a_lower_bound(sql: str, time_column: str) -> bool:
                 found += nodes(value)
         return found
 
-    def is_time_column(node: object) -> bool:
+    def ctes(node: Node) -> dict[str, object]:
+        found: dict[str, object] = {}
+        cte_map = node.get("cte_map")
+        entries = cte_map.get("map") if isinstance(cte_map, dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            value = entry.get("value") if isinstance(entry, dict) else None
+            if isinstance(value, dict) and isinstance(value.get("query_node"), dict):
+                found[str(entry.get("key", "")).lower()] = value["query_node"]
+        return found
+
+    # The queries whose rows are the model's rows, each with the names of its one table.
+    row_queries: dict[int, set[str]] = {}
+
+    def follow(node: object, scope: dict[str, object]) -> None:
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "SET_OPERATION_NODE":
+            if node.get("setop_type") in {"UNION", "UNION_BY_NAME"}:
+                inner = scope | ctes(node)
+                children = node.get("children")
+                for child in children if isinstance(children, list) else []:
+                    follow(child, inner)
+            return
+        if node.get("type") != "SELECT_NODE":
+            return
+        inner = scope | ctes(node)
+        source = node.get("from_table")
+        if not isinstance(source, dict) or source.get("type") not in {"BASE_TABLE", "SUBQUERY"}:
+            return  # a join, a table function, no FROM: not a query the rule follows
+        names = {str(source.get("alias") or "").lower()} - {""}
+        if source.get("type") == "BASE_TABLE":
+            names.add(str(source.get("table_name", "")).lower())
+        row_queries[id(node)] = names
+        if source.get("type") == "SUBQUERY":
+            subquery = source.get("subquery")
+            follow(subquery.get("node") if isinstance(subquery, dict) else None, inner)
+        else:
+            name = str(source.get("table_name", "")).lower()
+            if not source.get("schema_name") and name in inner:
+                follow(inner[name], {key: value for key, value in inner.items() if key != name})
+
+    follow(statements[0].get("node") if isinstance(statements[0], dict) else None, {})
+
+    def is_time_column(node: object, names: set[str]) -> bool:
         if not isinstance(node, dict) or node.get("class") != "COLUMN_REF":
             return False
-        names = node.get("column_names")
-        return isinstance(names, list) and bool(names) and str(names[-1]).lower() == wanted
+        parts = node.get("column_names")
+        if not isinstance(parts, list) or not parts or str(parts[-1]).lower() != wanted:
+            return False
+        return len(parts) == 1 or str(parts[-2]).lower() in names
 
     def bound(node: object) -> bool:
         """`$since` and constants only: no column, so the bound is the same for every row."""
         inside = nodes(node)
         return any(is_since(n) for n in inside) and not any(
-            n.get("class") == "COLUMN_REF" for n in inside
+            n.get("class") in {"COLUMN_REF", "SUBQUERY"} for n in inside
         )
 
-    def lower_bound(node: object) -> bool:
+    def lower_bound(node: object, names: set[str]) -> bool:
         if not isinstance(node, dict) or node.get("class") != "COMPARISON":
             return False
         side = _FROM_BELOW.get(str(node.get("type")))
         if side is None:
             return False
         other = node.get("right" if side == "left" else "left")
-        return is_time_column(node.get(side)) and bound(other)
+        return is_time_column(node.get(side), names) and bound(other)
 
-    def is_time_null(node: object) -> bool:
+    def is_time_null(node: object, names: set[str]) -> bool:
         if not isinstance(node, dict) or node.get("type") != "OPERATOR_IS_NULL":
             return False
         children = node.get("children")
-        return isinstance(children, list) and len(children) == 1 and is_time_column(children[0])
+        return (
+            isinstance(children, list) and len(children) == 1 and is_time_column(children[0], names)
+        )
 
-    def check(node: object, condition: bool) -> bool:
-        """`condition`: the node is a condition of a WHERE clause, joined to it by AND only."""
+    def check(node: object, names: set[str] | None) -> bool:
+        """`names`: the node is a condition of the WHERE clause of a row query, joined to it by
+        AND only, and these are the names of that query's table; None otherwise."""
         if isinstance(node, list):
-            return all(check(item, condition) for item in node)
+            return all(check(item, names) for item in node)
         if not isinstance(node, dict):
             return True
         if is_since(node):
             return False  # reached outside an accepted lower bound
-        if condition and lower_bound(node):
+        if names is not None and lower_bound(node, names):
             return True
-        if (
-            condition
-            and node.get("class") == "CONJUNCTION"
-            and node.get("type") == ("CONJUNCTION_OR")
-        ):
-            # `time_column > $since OR time_column IS NULL`: the undated rows too.
+        if names is not None and node.get("class") == "CONJUNCTION":
             children = node.get("children")
-            return isinstance(children, list) and all(
-                lower_bound(child) or is_time_null(child) for child in children
-            )
-        conjunction = node.get("class") == "CONJUNCTION" and node.get("type") == "CONJUNCTION_AND"
+            if node.get("type") == "CONJUNCTION_OR":
+                # `time_column > $since OR time_column IS NULL`: the undated rows too.
+                return isinstance(children, list) and all(
+                    lower_bound(child, names) or is_time_null(child, names) for child in children
+                )
+            if node.get("type") == "CONJUNCTION_AND":
+                return check(children, names)
+        where = row_queries.get(id(node))
         return all(
-            check(
-                value,
-                (node.get("type") == "SELECT_NODE" and key == "where_clause")
-                or (conjunction and condition and key == "children"),
-            )
-            for key, value in node.items()
+            check(value, where if key == "where_clause" else None) for key, value in node.items()
         )
 
-    return check(tree.get("statements"), False)
+    return check(statements, None)
 
 
 def config_problems(model: Model) -> list[ModelError]:

@@ -153,11 +153,11 @@ The filter `<table>.<time_column> > $since` is added to the query that reads the
 A `partition_overwrite` run deletes every table row of each partition it loads, then inserts the loaded rows. With a `$since` filter, a run can load only part of a partition; the delete would then lose the rest. Two rules prevent it (#155, decision #128 option B).
 
 **At validation: `$since` only sets a lower bound of the time column.** In a `partition_overwrite` model with `filter: manual`, every `$since` (DuckDB SQL) or `{since:…}` (ClickHouse SQL) must be in a comparison `time_column > x` or `time_column >= x` (or `x < time_column`, `x <= time_column`):
-- the comparison is a condition of a `WHERE` clause (in ClickHouse also `PREWHERE` or `HAVING`), joined to it by `AND` only; `OR time_column IS NULL` may follow it, to reload undated rows too;
+- the comparison is a condition of the `WHERE` clause (in ClickHouse also `PREWHERE` or `HAVING`) of a query whose rows are the model's rows, joined to it by `AND` only. Such a query is the model's query, a query it reads whole as its only `FROM` (a subquery, or in DuckDB SQL a CTE), or a branch of a `UNION`, and it reads one table or subquery, not a join. `OR time_column IS NULL` may follow the comparison, to reload undated rows too;
 - `x` uses `$since` and constants but no column (`date_trunc('month', $since)`, `$since - INTERVAL 3 DAY`, `toStartOfMonth({since:Date})`);
-- `time_column` is the column itself, with any table qualifier and in any letter case.
+- `time_column` is the column itself, in any letter case; a qualifier, if written, names that query's table (its alias or name).
 
-Anything else is `INVALID_MODEL_SQL` before anything runs. That includes a filter on a finer column (`read_at > $since` with `time_column: day`), a function of the time column (`toStartOfMonth(read_at) >= …`), an upper bound (`< $since + …`, `BETWEEN`), an `OR` or `NOT` around the bound, a bound that reads another column (`greatest($since, read_at)`), and a `$since` outside a comparison. Each of these can drop rows in the middle or at the end of a partition, which no check of the loaded rows can see. The rule is read from the parse tree (DuckDB's, or ClickHouse's `EXPLAIN AST`), never from the text. In ClickHouse SQL, `identity(identity(…))` is reserved for that check.
+Anything else is `INVALID_MODEL_SQL` before anything runs. That includes a filter on a finer column (`read_at > $since` with `time_column: day`), a function of the time column (`toStartOfMonth(read_at) >= …`), an upper bound (`< $since + …`, `BETWEEN`), an `OR` or `NOT` around the bound, a bound that reads another column (`greatest($since, read_at)`), a `$since` in an `IN`, `EXISTS` or scalar subquery, in `EXCEPT`/`INTERSECT`, or in a query that joins, and a `$since` outside a comparison. Each of these can drop rows in the middle or at the end of a partition, which no check of the loaded rows can see. The rule is read from the parse tree (DuckDB's, or ClickHouse's `EXPLAIN AST`), never from the text. In ClickHouse SQL, `identity(identity(…))` is reserved for that check.
 
 **In each run: the oldest-row rule.** An incremental run with `$since` (not a first run, not a full refresh) checks, inside its transaction and before the delete, each loaded partition (`partition_by` values compared with `IS NOT DISTINCT FROM`, so `NULL` is a partition). It is cut when:
 
@@ -170,6 +170,7 @@ Limits of the check:
 - It looks only at what the table and the loaded rows contain, so a source that deleted any of a partition's oldest rows fails it too. `--full-refresh` then rebuilds the table from what the model selects now. If the source keeps only recent data, that also removes every older partition the source no longer has.
 - A table row with the same time as the oldest loaded row, but not reloaded, is not detected. With the filter a lower bound, only another condition of the `WHERE` clause can leave such a row out.
 - The time column is matched by name: a finer column renamed to the time column's name in a subquery is not seen.
+- In ClickHouse SQL, a named `WITH` query is not followed (its `EXPLAIN AST` does not show the name): a bound there is refused; write it in a `FROM` subquery instead. A model that joins and filters by `$since` is refused in both languages (#164 tracks following columns through joins).
 
 ## Compatibility
 

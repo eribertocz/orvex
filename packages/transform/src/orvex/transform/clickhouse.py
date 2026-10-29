@@ -709,64 +709,115 @@ def writes_since_mark(tree: str) -> bool:
 
 def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
     """Whether, in the `EXPLAIN AST` of `mark_since`'s SQL, every marked `{since:…}` is in a
-    lower bound of the time column: `time_column > x` or `>= x` (or `x < time_column`, `x <=
-    time_column`), a condition of a `WHERE` (or `PREWHERE`, `HAVING`) joined to it by `and`
-    only, where `x` uses `{since:…}` and constants but no column; `OR time_column IS NULL`
-    may follow it (#155, as `incremental.
-    since_is_a_lower_bound` for DuckDB SQL). The column is matched by name (any qualifier, any
-    letter case). A tree that cannot be read counts as no."""
+    lower bound of the time column of the rows the model returns, as `incremental.
+    since_is_a_lower_bound` requires of DuckDB SQL (#155):
+
+    - `time_column > x` or `>= x` (or `x < time_column`, `x <= time_column`), `x` with
+      `{since:…}` and constants but no column; `OR time_column IS NULL` may follow it;
+    - a condition (`WHERE`, `PREWHERE`, `HAVING`) of a query whose rows are the model's rows,
+      joined to it by `and` only: the model's query, a subquery it reads whole as its only
+      `FROM`, or a branch of a `UNION`; that query reads one table or subquery, not a join
+      (named `WITH` queries are not followed: `EXPLAIN AST` does not show their names);
+    - the column matched by name (any letter case); a qualifier, if any, names that query's
+      table (its alias or name).
+
+    A tree that cannot be read counts as no."""
     root = _ast(tree)
     if root is None:
         return False
     wanted = time_column.lower()
+    row_queries: dict[int, set[str]] = {}
 
-    def is_time_column(node: _Node) -> bool:
-        if node.kind != "Identifier":
-            return False
-        name = node.detail.split(" ", 1)[0]
-        return name.rsplit(".", 1)[-1].lower() == wanted
+    def follow(node: _Node) -> None:
+        if node.kind == "SelectWithUnionQuery":
+            for listed in node.children:
+                for child in listed.children if listed.kind == "ExpressionList" else []:
+                    follow(child)
+            return
+        if node.kind != "SelectQuery":
+            return  # EXCEPT, INTERSECT and anything else: not followed
+        tables = [child for child in node.children if child.kind == "TablesInSelectQuery"]
+        elements = tables[0].children if len(tables) == 1 else []
+        if len(elements) != 1 or len(elements[0].children) != 1:
+            return  # no FROM, or a join
+        expression = elements[0].children[0]
+        source = expression.children[0] if len(expression.children) == 1 else None
+        if source is None:
+            return
+        names: set[str] = set()
+        alias = re.search(r"\(alias ([^)]+)\)", source.detail)
+        if alias is not None:
+            names.add(alias.group(1).lower())
+        if source.kind == "TableIdentifier":
+            name = source.detail.split(" ", 1)[0].lower()
+            names |= {name, name.rsplit(".", 1)[-1]}
+        elif source.kind != "Subquery":
+            return  # a table function
+        row_queries[id(node)] = names
+        if source.kind == "Subquery":
+            for child in source.children:
+                follow(child)
 
-    def bound(node: _Node) -> bool:
-        inside = _nodes(node)
-        return any(_is_mark(n) for n in inside) and not any(n.kind == "Identifier" for n in inside)
+    for child in root.children:
+        follow(child)
 
     def arguments(node: _Node) -> list[_Node]:
         return node.children[0].children if node.children else []
 
-    def lower_bound(node: _Node) -> bool:
+    def is_time_column(node: _Node, names: set[str]) -> bool:
+        if node.kind != "Identifier":
+            return False
+        qualifier, _, name = node.detail.split(" ", 1)[0].lower().rpartition(".")
+        return name == wanted and (not qualifier or qualifier in names)
+
+    def bound(node: _Node) -> bool:
+        inside = _nodes(node)
+        return any(_is_mark(n) for n in inside) and not any(
+            n.kind in {"Identifier", "Subquery"} for n in inside
+        )
+
+    def lower_bound(node: _Node, names: set[str]) -> bool:
         position = _FROM_BELOW.get(_function_name(node))
         found = arguments(node)
         return (
             position is not None
             and len(found) == 2
-            and is_time_column(found[position])
+            and is_time_column(found[position], names)
             and bound(found[1 - position])
         )
 
-    def is_time_null(node: _Node) -> bool:
+    def is_time_null(node: _Node, names: set[str]) -> bool:
         found = arguments(node)
-        return _function_name(node) == "isNull" and len(found) == 1 and is_time_column(found[0])
+        return (
+            _function_name(node) == "isNull" and len(found) == 1 and is_time_column(found[0], names)
+        )
 
-    def check(node: _Node, condition: bool) -> bool:
+    def check(node: _Node, names: set[str] | None) -> bool:
         if _is_mark(node):
             return False  # reached outside an accepted lower bound
-        if condition and lower_bound(node):
+        if names is not None and lower_bound(node, names):
             return True
-        if condition and _function_name(node) == "or":
+        if names is not None and _function_name(node) == "or":
             # `time_column > {since:…} OR time_column IS NULL`: the undated rows too.
-            return all(lower_bound(child) or is_time_null(child) for child in arguments(node))
-        if condition and _function_name(node) == "and" and node.children:
-            return all(check(child, True) for child in node.children[0].children)
+            return all(
+                lower_bound(child, names) or is_time_null(child, names) for child in arguments(node)
+            )
+        if names is not None and _function_name(node) == "and":
+            return all(check(child, names) for child in arguments(node))
         if node.kind == "SelectQuery":
             # Its conditions (WHERE, PREWHERE, HAVING) are its bare expressions; the select
-            # list, the tables, GROUP BY and ORDER BY come as lists.
+            # list, WITH, the tables, GROUP BY and ORDER BY come as lists.
+            where = row_queries.get(id(node))
             return all(
-                check(child, child.kind not in {"ExpressionList", "TablesInSelectQuery"})
+                check(
+                    child,
+                    where if child.kind not in {"ExpressionList", "TablesInSelectQuery"} else None,
+                )
                 for child in node.children
             )
-        return all(check(child, False) for child in node.children)
+        return all(check(child, None) for child in node.children)
 
-    return check(root, False)
+    return check(root, None)
 
 
 # --- the server -----------------------------------------------------------------------------

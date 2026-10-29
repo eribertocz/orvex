@@ -513,14 +513,15 @@ def test_a_since_filter_on_another_column_is_refused_before_anything_runs(
 def test_a_date_time_column_with_a_month_filter_is_accepted(
     tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # #155, accepted form: a Date time column, `{since:Date}` in its lower bound.
+    # #155, accepted form: a Date time column, `{since:Date}` in its lower bound. The model's
+    # own `identity(1)` is not taken for the check's mark (#162 Reviewer passes 1 and 2).
     folder = project(
         tmp_path,
         source,
         {
             "models/raw/ch_events.sql": (
                 "SELECT event_id, toString(toStartOfMonth(event_time)) AS month, "
-                "toDate(event_time) AS day FROM events "
+                "toDate(event_time) AS day, identity(1) AS one FROM events "
                 "WHERE day >= toStartOfMonth({since:Date})"
             ),
             "models/raw/ch_events.yaml": PARTIAL_SIDECAR.replace(

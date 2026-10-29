@@ -876,6 +876,14 @@ BY_DAY = (
         "day >= greatest($since, read_at::DATE)",
         "day < $since",
         "day > $since OR x = 1",
+        # #162 Reviewer pass 2: a bound outside the query that returns the rows.
+        "day >= date_trunc('month', $since) AND day < "
+        "(SELECT min(day) + INTERVAL 3 DAY FROM src WHERE day >= $since)",
+        "day >= date_trunc('month', $since) AND day NOT IN "
+        "(SELECT day FROM src WHERE day >= $since)",
+        "day >= date_trunc('month', $since) AND id IN (SELECT id FROM src WHERE day >= $since)",
+        "EXISTS (SELECT 1 FROM src AS s WHERE s.day > $since)",
+        "c.day >= $since",
     ],
     ids=[
         "finer-column",
@@ -888,6 +896,11 @@ BY_DAY = (
         "column-in-the-bound",
         "only-an-upper-bound",
         "or-another-condition",
+        "scalar-subquery",
+        "not-in",
+        "in-semi-join",
+        "exists",
+        "another-table",
     ],
 )
 def test_a_since_filter_on_another_column_is_refused(tmp_path: Path, where: str) -> None:
@@ -911,7 +924,7 @@ def test_since_outside_a_comparison_in_the_select_list_is_refused(tmp_path: Path
         "DAY > $since - INTERVAL 3 DAY",
         "day > $since OR day IS NULL",
         "(day >= $since OR day IS NULL) AND status = 'valid'",
-        "day IN (SELECT day FROM src AS s WHERE s.day > $since)",
+        "m.day > $since AND id > 0",
     ],
 )
 def test_a_since_filter_on_the_time_column_is_accepted(tmp_path: Path, where: str) -> None:
@@ -923,3 +936,36 @@ def test_the_same_column_rule_is_for_partition_overwrite_only(tmp_path: Path) ->
     append = BY_DAY.replace("partition_overwrite", "append").replace(", partition_by: [month]", "")
     chosen = sql_model(tmp_path, append, "SELECT * FROM src WHERE read_at > $since")
     assert config_problems(chosen) == []
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM (SELECT * FROM src WHERE day >= $since) AS s",
+        "WITH w AS (SELECT * FROM src WHERE day >= $since) SELECT * FROM w",
+        "SELECT * FROM src WHERE day > $since UNION ALL SELECT * FROM src2 WHERE day > $since",
+    ],
+    ids=["from-subquery", "cte", "union-all"],
+)
+def test_a_bound_in_a_query_whose_rows_the_model_returns_is_accepted(
+    tmp_path: Path, sql: str
+) -> None:
+    assert config_problems(sql_model(tmp_path, BY_DAY, sql)) == []
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM src EXCEPT ALL SELECT * FROM src WHERE day >= $since",
+        "SELECT * FROM src WHERE day > $since INTERSECT SELECT * FROM src",
+        "SELECT r.* FROM src AS r JOIN changes AS c ON r.id = c.id WHERE c.day >= $since",
+        "SELECT r.* FROM src AS r JOIN changes AS c ON r.id = c.id WHERE r.day >= $since",
+        "WITH w AS (SELECT * FROM src WHERE day >= $since) SELECT * FROM w JOIN x USING (id)",
+    ],
+    ids=["except", "intersect", "join-other-table", "join", "cte-in-a-join"],
+)
+def test_a_bound_outside_the_row_queries_is_refused(tmp_path: Path, sql: str) -> None:
+    # #162 Reviewer pass 2: rows a join, EXCEPT or INTERSECT drops depend on other data, which
+    # the oldest-row check cannot see.
+    found = config_problems(sql_model(tmp_path, BY_DAY, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
