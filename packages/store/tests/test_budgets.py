@@ -260,11 +260,16 @@ def test_waiting_for_the_writer_ahead_counts_against_the_timeout(
     lake = open_lake(location, limits(max_concurrent=2, queue_size=1, timeout_ms=500))
     holding = threading.Event()
     release = threading.Event()
+    ahead_outcome: list[str] = []
 
     def writer() -> None:
-        with lake.transaction():
-            holding.set()
-            release.wait(5)
+        # This writer outlives its own limit on purpose, so it rolls back (#77).
+        try:
+            with lake.transaction():
+                holding.set()
+                release.wait(5)
+        except StoreError as error:
+            ahead_outcome.append(error.code)
 
     ahead = threading.Thread(target=writer)
     ahead.start()
@@ -282,6 +287,7 @@ def test_waiting_for_the_writer_ahead_counts_against_the_timeout(
         release.set()
         ahead.join(5)
         lake.close()
+    assert ahead_outcome == ["STORE_TIMEOUT"]
 
 
 def test_timeout_during_setup_frees_the_slot(lake: Lake, monkeypatch: pytest.MonkeyPatch) -> None:
