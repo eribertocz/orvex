@@ -1519,6 +1519,15 @@ class Lake:
         phase = "setup"
         released = threading.Event()
 
+        def close() -> None:
+            """Called once, by whoever moved the read to "finished"."""
+            try:
+                guard.stop()
+                cursor.close()
+            finally:
+                self._admission.release()
+                released.set()
+
         def finish() -> None:
             nonlocal phase
             with state:
@@ -1528,18 +1537,18 @@ class Lake:
                 # Closed by another thread: its error is seen only once the slot is free.
                 released.wait()
                 return
-            try:
-                guard.stop()
-                cursor.close()
-            finally:
-                self._admission.release()
-                released.set()
+            close()
 
         def release_if_idle() -> None:
+            nonlocal phase
+            # Checked and claimed in one step, so the reading thread cannot take the cursor back
+            # in between (#159, Reviewer pass 1).
             with state:
                 unowned = phase in {"idle", "paused"}
+                if unowned:
+                    phase = "finished"
             if unowned:
-                finish()
+                close()
 
         guard.on_fire = release_if_idle
 
@@ -1600,11 +1609,15 @@ class Lake:
                         batch = stream.read_next_batch()
                     except StopIteration:
                         return
-                    if guard.reason is not None:
-                        raise guard.error()
+                    # Checked and paused in one step: a guard that fires before it is seen here,
+                    # one that fires after finds the read paused and closes it (#159, Reviewer
+                    # pass 1).
                     with state:
-                        if phase == "computing":
+                        fired = guard.reason is not None
+                        if not fired and phase == "computing":
                             phase = "paused"
+                    if fired:
+                        raise guard.error()
                     # While the consumer holds this batch, the guard may close the read.
                     yield batch if batch.schema == schema else batch.cast(schema)
                     take()
