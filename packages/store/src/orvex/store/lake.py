@@ -538,7 +538,9 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
         ):
             raise StoreError(
                 "STORE_STATEMENT_INVALID",
-                "Only the table functions range, generate_series and unnest are allowed.",
+                "Only the table functions range, generate_series and unnest are allowed; a "
+                "function that shares its name with another table function (histogram) is "
+                "refused in every form.",
                 {"function": name},
             )
 
@@ -881,6 +883,15 @@ def _typed(sql: str, parameters: list[Parameter]) -> str:
 
 
 READ_TABLE_FUNCTIONS = frozenset({"range", "generate_series", "unnest"})
+# Table functions whose name is also a scalar function, known to read nothing in either form:
+# `repeat` generates rows, `version` reports DuckDB's version. Any other name that is a table
+# function (`histogram`, whose table form reads a table or file named by any expression, and
+# whatever an extension adds) is refused in every form, its scalar or aggregate form included.
+SHARED_HARMLESS_FUNCTIONS = frozenset({"repeat", "version"})
+TABLE_FUNCTIONS_SQL = (
+    "SELECT string_agg(DISTINCT lower(function_name), '|') FROM duckdb_functions() "
+    "WHERE function_type IN ('table', 'table_macro', 'pragma')"
+)
 
 
 def _sandbox_folder(data_path: str) -> str:
@@ -1038,17 +1049,9 @@ class Lake:
             raise
 
     def _names_of_table_functions(self) -> frozenset[str]:
-        row = self._one(
-            # Names that are also scalar or aggregate functions (repeat, version, histogram, …)
-            # are generators or harmless in their table form, and their scalar form is common.
-            "SELECT string_agg(DISTINCT lower(function_name), '|') FROM duckdb_functions() "
-            "WHERE function_type IN ('table', 'table_macro', 'pragma') "
-            "AND lower(function_name) NOT IN (SELECT lower(function_name) FROM duckdb_functions() "
-            "WHERE function_type IN ('scalar', 'aggregate', 'macro'))",
-            {},
-        )
+        row = self._one(TABLE_FUNCTIONS_SQL, {})
         text = str(row[0]) if row and row[0] is not None else ""
-        return frozenset(text.split("|")) - {""}
+        return frozenset(text.split("|")) - {""} - SHARED_HARMLESS_FUNCTIONS
 
     def _attach_sqlite(self, source: SqliteSourceAttachment) -> list[str]:
         """Attach a private copy of a SQLite file, read-only.

@@ -13,6 +13,8 @@ import pytest
 from orvex.contracts.store.v1 import Parameter, ParameterType
 from orvex.store.errors import StoreError
 from orvex.store.lake import (
+    SHARED_HARMLESS_FUNCTIONS,
+    TABLE_FUNCTIONS_SQL,
     _created_kind_allowed,
     _guarded,
     _single_statement,
@@ -22,16 +24,11 @@ from orvex.store.lake import (
 
 
 def table_functions() -> frozenset[str]:
-    """The same set the lake builds: table functions that are not also scalar functions."""
+    """The same set the lake builds: every table function but the harmless shared names."""
     connection = duckdb.connect()
-    rows = connection.execute(
-        "SELECT DISTINCT lower(function_name) FROM duckdb_functions() "
-        "WHERE function_type IN ('table', 'table_macro', 'pragma') "
-        "AND lower(function_name) NOT IN (SELECT lower(function_name) FROM duckdb_functions() "
-        "WHERE function_type IN ('scalar', 'aggregate', 'macro'))"
-    ).fetchall()
+    (row,) = connection.execute(TABLE_FUNCTIONS_SQL).fetchall()
     connection.close()
-    return frozenset(str(row[0]) for row in rows)
+    return frozenset(str(row[0]).split("|")) - {""} - SHARED_HARMLESS_FUNCTIONS
 
 
 def test_tokens_are_positioned_by_character() -> None:
@@ -284,3 +281,55 @@ def test_functions_that_bind_sql_text_are_refused(sql: str) -> None:
     with pytest.raises(StoreError) as refused:
         _guarded(sql, table_functions())
     assert refused.value.code == "STORE_STATEMENT_INVALID"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # Pass 10: the table form reads the table or file its first argument names, and the
+        # name can be built by an expression no file-name check sees.
+        "CREATE TABLE stolen AS SELECT * FROM histogram('da' || 'ta.parquet', name)",
+        "CREATE TABLE stolen AS SELECT * FROM histogram('s3:/' || '/b/x.parquet', n, "
+        "technique := 'sample')",
+        "INSERT INTO t SELECT * FROM HISTOGRAM(concat('a', 'b'), n, bin_count := 1000)",
+        "SELECT * FROM \"histogram\"('t', n)",
+        "SELECT * FROM main.histogram('t', n)",
+        # Its aggregate form shares the name, and a name alone cannot tell the two apart.
+        "CREATE TABLE h AS SELECT histogram(n) AS h FROM t",
+    ],
+)
+def test_histogram_is_refused_in_every_form(sql: str) -> None:
+    with pytest.raises(StoreError) as raised:
+        _guarded(sql, table_functions())
+    assert raised.value.code == "STORE_STATEMENT_INVALID"
+    assert raised.value.details == {"function": "histogram"}
+
+
+def test_every_shared_name_but_the_harmless_ones_is_refused() -> None:
+    """A table function that shares its name with a scalar or aggregate function is refused,
+    unless it is known to read nothing; a new one (from DuckDB or an extension) is refused."""
+    connection = duckdb.connect()
+    shared = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT DISTINCT lower(function_name) FROM duckdb_functions() "
+            "WHERE function_type IN ('table', 'table_macro', 'pragma') "
+            "AND lower(function_name) IN (SELECT lower(function_name) FROM duckdb_functions() "
+            "WHERE function_type IN ('scalar', 'aggregate', 'macro'))"
+        ).fetchall()
+    }
+    connection.close()
+    assert "histogram" in shared
+    assert shared - SHARED_HARMLESS_FUNCTIONS - {"range", "generate_series"} <= table_functions()
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "CREATE TABLE r AS SELECT repeat('x', 3) AS s",
+        "CREATE TABLE r AS SELECT * FROM repeat(1, 3)",
+        "CREATE TABLE v AS SELECT version() AS v",
+    ],
+)
+def test_the_harmless_shared_names_stay_allowed(sql: str) -> None:
+    _guarded(sql, table_functions())
