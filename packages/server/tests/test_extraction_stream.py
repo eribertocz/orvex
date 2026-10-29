@@ -10,10 +10,11 @@ transaction through the store's `Transaction.load_arrow`, as a run does inside t
 from __future__ import annotations
 
 import os
+import signal
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -31,6 +32,7 @@ from orvex.transform.clickhouse import (
     SourceError,
     load_columns,
     since_type,
+    since_value,
 )
 from orvex.transform.incremental import Check
 from orvex.transform.models import Model, discover_models
@@ -346,6 +348,145 @@ def test_a_cancelled_load_stops_the_clickhouse_query(reader: dict[str, str]) -> 
     cursor.rollback()
 
 
+# ClickHouse writes nothing for about 2.6 s per block of 65,536 rows (sleepEachRow stays under
+# its 3 s per-block limit): the stream sits in a gap with no output.
+SLOW = "SELECT number AS {mark} FROM system.numbers WHERE sleepEachRow(0.00004) = 0"
+
+
+def interrupted_in_a_gap(
+    reader: dict[str, str], interrupt: Callable[[Transaction], None]
+) -> tuple[BaseException, float, str]:
+    """Load the slow query and interrupt it 1 s later, while no output arrives: what was raised,
+    how long it took, and the query's mark."""
+    mark = f"gap_{uuid.uuid4().hex[:8]}"
+    sql = SLOW.format(mark=mark)
+    cursor, handle = transaction()
+    client = source(reader)
+    columns = client.describe(sql, None).columns
+    stream = client.stream(sql, columns, None, 120)
+    timer = threading.Timer(1.0, interrupt, [handle])
+    started = time.monotonic()
+    timer.start()
+    try:
+        handle.load_arrow(
+            "_extract", "t", stream.reader, load_columns(columns), on_interrupt=stream.close
+        )
+    except BaseException as error:  # noqa: BLE001 (the test inspects what was raised)
+        raised = error
+    else:
+        pytest.fail("the load was not interrupted")
+    finally:
+        timer.cancel()
+        stream.close()
+        client.close()
+    elapsed = time.monotonic() - started
+    cursor.rollback()
+    return raised, elapsed, mark
+
+
+def stopped_within(mark: str, seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while processes(mark) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    return processes(mark) == 0
+
+
+@live
+def test_a_cancel_while_no_output_arrives_stops_the_query(reader: dict[str, str]) -> None:
+    raised, elapsed, mark = interrupted_in_a_gap(reader, lambda handle: handle.cancel())
+    assert isinstance(raised, StoreError)
+    assert raised.code == "STORE_CANCELLED"
+    assert elapsed < 5  # not after the gap: closing the socket ends the wait
+    assert stopped_within(mark, 5)
+
+
+@live
+def test_ctrl_c_while_no_output_arrives_stops_the_query(reader: dict[str, str]) -> None:
+    raised, elapsed, mark = interrupted_in_a_gap(
+        reader, lambda _: os.kill(os.getpid(), signal.SIGINT)
+    )
+    assert isinstance(raised, KeyboardInterrupt)
+    assert elapsed < 5
+    assert stopped_within(mark, 5)  # the caller's `finally` closed the stream
+
+
+def profiled(reader: dict[str, str], profile: str) -> dict[str, str]:
+    """A second SELECT-only user of the same database, with a settings profile."""
+    suffix = uuid.uuid4().hex[:12]
+    user = f"profiled_{suffix}"
+    client = admin()
+    try:
+        for statement in [
+            f"CREATE SETTINGS PROFILE profile_{suffix} SETTINGS {profile}",
+            f"CREATE USER {user} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}' "
+            f"SETTINGS PROFILE 'profile_{suffix}'",
+            f"GRANT SELECT ON {reader['database']}.* TO {user}",
+            f"GRANT SELECT ON system.numbers TO {user}",
+        ]:
+            client.command(statement)
+    finally:
+        client.close()
+    return {"database": reader["database"], "user": user, "profile": f"profile_{suffix}"}
+
+
+def drop(user: dict[str, str]) -> None:
+    client = admin()
+    try:
+        client.command(f"DROP USER IF EXISTS {user['user']}")
+        client.command(f"DROP SETTINGS PROFILE IF EXISTS {user['profile']}")
+    finally:
+        client.close()
+
+
+@live
+def test_a_profile_limit_fails_the_run_instead_of_shortening_it(reader: dict[str, str]) -> None:
+    # The profile asks ClickHouse to stop quietly after 100 rows (`break`): a run must not
+    # take 100 rows for the whole result.
+    user = profiled(reader, "max_result_rows = 100, result_overflow_mode = 'break'")
+    try:
+        with pytest.raises(SourceError) as failed:
+            extract(user, "SELECT number AS n FROM numbers(1000)", transaction())
+    finally:
+        drop(user)
+    assert failed.value.code == "SOURCE_QUERY_FAILED"
+    assert "(ClickHouse code 396)" in failed.value.message  # TOO_MANY_ROWS_OR_BYTES
+
+
+@live
+def test_a_profile_limit_clause_does_not_trim_the_result(reader: dict[str, str]) -> None:
+    user = profiled(reader, "limit = 10")
+    try:
+        cursor, rows, _ = extract(user, "SELECT number AS n FROM numbers(1000)", transaction())
+    finally:
+        drop(user)
+    assert rows == 1000
+    assert cursor.execute("SELECT min(n), max(n) FROM _extract.t").fetchone() == (0, 999)
+
+
+@live
+@pytest.mark.parametrize(
+    ("profile", "named"),
+    [
+        # Fixed by the profile: the driver sees it in `system.settings`.
+        ("result_overflow_mode = 'break' CONST", "result_overflow_mode"),
+        # A bound only ClickHouse checks (a run asks for blocks of 65,536 rows).
+        ("max_block_size = 1000 MAX 10000", ""),
+    ],
+)
+def test_a_profile_that_constrains_a_run_setting_is_refused(
+    reader: dict[str, str], profile: str, named: str
+) -> None:
+    user = profiled(reader, profile)
+    try:
+        with pytest.raises(SourceError) as refused:
+            extract(user, "SELECT number AS n FROM numbers(1000)", transaction())
+    finally:
+        drop(user)
+    assert refused.value.code == "SOURCE_LIMITS_REFUSED", refused.value.message
+    assert named in refused.value.message
+    assert "needs" in refused.value.message  # refused by the run, not the connection check
+
+
 @live
 def test_a_clickhouse_error_mid_stream_fails_the_load(reader: dict[str, str]) -> None:
     sql = "SELECT number AS n, throwIf(number = 300000, 'stop here') AS boom FROM numbers(1000000)"
@@ -402,6 +543,32 @@ def test_queries_are_read_only_with_since_bound_on_the_server(reader: dict[str, 
         # (`_CAST(…, 'DateTime64(6, \'UTC\')')`), never the value written into the SQL text.
         assert "_CAST('" in query
         assert since not in query
+
+
+@live
+@pytest.mark.parametrize(("operator", "expected"), [(">", 6), (">=", 7)])
+def test_since_from_a_watermark_bounds_the_rows_read(
+    reader: dict[str, str], operator: str, expected: int
+) -> None:
+    # Rows at 00:00:00 … 00:00:09 UTC. Watermark 00:00:05.000000 minus a 2s lookback is
+    # 00:00:03, written by `since_value` in the server's zone for a zoneless DateTime64(6).
+    sql = (
+        "SELECT number AS n, toDateTime64('2024-01-01 00:00:00', 6, 'UTC') + number AS t "
+        f"FROM numbers(10) WHERE t {operator} {{since:DateTime64(6)}}"
+    )
+    declared = since_type("DateTime64(6)")
+    assert declared is not None
+    _, handle = transaction()
+    client = source(reader)
+    try:
+        since = since_value(declared, "2024-01-01T00:00:05+00:00", "2s", client.server_zone)
+        columns = client.describe(sql, declared).columns
+        stream = client.stream(sql, columns, since, 60)
+        rows = handle.load_arrow("_extract", "t", stream.reader, load_columns(columns))
+        stream.close()
+    finally:
+        client.close()
+    assert rows == expected  # `>` leaves out the row exactly at `since`; `>=` keeps it
 
 
 @live

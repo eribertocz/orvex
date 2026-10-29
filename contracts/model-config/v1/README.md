@@ -54,7 +54,7 @@ New cross-field rules are added by the issues that implement those behaviors, as
 | `SOURCE_QUERY_FAILED` | An extraction model's ClickHouse query failed while it ran, before or after its first rows (for example `throwIf`, a time limit, a broken connection); the message gives ClickHouse's own message and code (`(ClickHouse code N)`) when ClickHouse wrote one, never a credential. The run rolls back |
 | `UNSUPPORTED_SOURCE_VALUE` | An extraction model sent text that is not valid UTF-8; the message names the column and the row's position in the stream. The value is never stored altered or dropped: the run rolls back |
 | `SOURCE_NOT_READ_ONLY` | An extraction model's ClickHouse user whose profile fixes `readonly` to `0` or `2`: its queries cannot be made read-only (`readonly = 1`) |
-| `SOURCE_LIMITS_REFUSED` | An extraction model's ClickHouse user that does not accept the validation limits (`max_execution_time`, `max_rows_to_read`, `read_overflow_mode`), or whose queries could lift them; the message gives the configuration (decision #114) |
+| `SOURCE_LIMITS_REFUSED` | An extraction model's ClickHouse user that does not accept the validation limits (`max_execution_time`, `max_rows_to_read`, `read_overflow_mode`), or whose queries could lift them; the message gives the configuration (decision #114). At run time: a profile that does not let the run set its own settings (below) |
 
 ## Extraction models (ClickHouse)
 
@@ -100,7 +100,7 @@ Refused, for example: `Int256`, `UInt256`, `Decimal` with `p > 38`, `DateTime64`
 ### Running an extraction model (#98)
 
 `orvex run` sends the model's SQL to ClickHouse unchanged, as a subquery under a projection that only makes each value travel exactly as Arrow:
-- `Int128`, `UInt128`, `Enum8`/`Enum16` and `FixedString` are sent as text, which DuckDB casts back exactly;
+- `Int128`, `UInt128`, `Enum8`/`Enum16` and `FixedString` are sent as text, which DuckDB casts back exactly. A `FixedString(n)` value arrives without its trailing zero bytes, ClickHouse's padding (`toString`), so `'ab'` in a `FixedString(4)` loads as `'ab'`;
 - `DateTime` is sent as `DateTime64(0)` with its zone;
 - each row's position in the stream is added, and text is checked to be UTF-8.
 
@@ -108,7 +108,10 @@ Every run query carries:
 - `readonly = 1`;
 - `max_execution_time`;
 - `cancel_http_readonly_queries_on_client_close = 1`;
-- `max_block_size = 65536`.
+- `max_block_size = 65536` and `preferred_block_size_bytes = 16777216`;
+- every `*_overflow_mode` setting `'throw'`, `limit = 0` and `offset = 0`, so a limit in the user's profile fails the run (`SOURCE_QUERY_FAILED`) instead of shortening its result.
+
+A profile that fixes any of these to another value, or constrains it so ClickHouse refuses it, is refused (`SOURCE_LIMITS_REFUSED`, naming the setting when the server lists it as fixed).
 
 `{since:…}` is bound by ClickHouse, never written into the SQL. Its value:
 - **First run, full refresh, or no stored watermark:** the lowest value of the declared type: `1970-01-01` for `Date`/`DateTime`, `1900-01-01` for `Date32`/`DateTime64`.
@@ -116,8 +119,9 @@ Every run query carries:
 
 How the rows load and how the run ends:
 - **Into the run's transaction.** The result streams as Arrow record batches into a table of the run's DuckDB transaction (`Transaction.load_arrow`, `contracts/store/v1`), each column cast to its mapped type. No row is decoded in Python. The model's strategy, tests and watermark then apply as for any other model.
-- **Columns checked first.** Before reading, the output is described again; a type that changed since validation is `SCHEMA_CHANGED`.
-- **Failure and cancellation.** A failure, a time limit or a cancellation closes the response, so ClickHouse cancels the query, and the run rolls back. The run record keeps the rows read so far.
+- **Columns checked first.** Before reading, the output is described again, and the stream's Arrow types are compared with the validated columns; a type that changed since validation is `SCHEMA_CHANGED`.
+- **Failure and cancellation.** A failure, a time limit or a cancellation shuts the connection down, so ClickHouse cancels the query even while it sends nothing, and the run rolls back. The run record keeps the rows read so far.
+- **Ctrl-C.** The run rolls back, its records are written (`failed`, `STORE_CANCELLED`), and the command then stops as interrupted.
 - **Lineage.** The model's input dataset is `clickhouse://<host>:<port>`, named `<database>`.
 
 The ClickHouse user needs only `SELECT` on the model's tables; the functions the projection uses need no grant.

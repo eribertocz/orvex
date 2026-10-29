@@ -111,3 +111,54 @@ def test_the_query_wraps_the_sql_unchanged() -> None:
     ]
     clashing = (column("__row", "Int32"), column("__invalid_", "String"))
     assert [name for name, _ in load_columns(clashing)][2:] == ["__row_", "__invalid"]
+
+
+def test_the_lookback_is_subtracted_from_the_instant_across_daylight_saving() -> None:
+    found = since_type("DateTime64(0)")
+    assert found is not None
+    # Spring forward (New York, 2024-03-10 02:00 EST → 03:00 EDT). 07:15 UTC is 03:15 EDT; two
+    # hours earlier is 05:15 UTC, 00:15 EST. Wall-clock arithmetic would give 01:15 EST: a
+    # lookback of one hour instead of two.
+    assert since_value(found, "2024-03-10T07:15:00+00:00", "2h", "America/New_York") == (
+        "2024-03-10 00:15:00"
+    )
+    # Fall back (2024-11-03 02:00 EDT → 01:00 EST). 06:30 UTC is 01:30 EST; one hour earlier is
+    # 05:30 UTC, 01:30 EDT. The text is ambiguous; ClickHouse reads it as the earlier instant
+    # (measured on 26.9), so the window is never shorter than the lookback.
+    assert since_value(found, "2024-11-03T06:30:00+00:00", "1h", "America/New_York") == (
+        "2024-11-03 01:30:00"
+    )
+
+
+def test_the_stream_schema_must_be_the_validated_one() -> None:
+    import pyarrow as pa
+    from orvex.transform.clickhouse import _schema_problem, map_type
+
+    def column(name: str, text: str) -> Column:
+        mapped = map_type(text)
+        assert mapped is not None
+        return Column(name, text, mapped)
+
+    columns = (
+        column("a", "Int32"),
+        column("big", "Int128"),
+        column("t", "DateTime64(3, 'UTC')"),
+        column("d", "Decimal(18, 4)"),
+    )
+    sent = pa.schema(
+        [
+            ("a", pa.int32()),
+            ("big", pa.string()),
+            ("t", pa.timestamp("ms", tz="UTC")),
+            ("d", pa.decimal128(18, 4)),
+            ("__row", pa.uint64()),
+            ("__invalid", pa.string()),
+        ]
+    )
+    assert _schema_problem(sent, columns) is None
+    widened = sent.set(0, pa.field("a", pa.int64()))
+    assert _schema_problem(widened, columns) == "a arrives as int64, validated as Int32"
+    rescaled = sent.set(3, pa.field("d", pa.decimal128(18, 2)))
+    assert "d arrives as decimal128(18, 2)" in str(_schema_problem(rescaled, columns))
+    renamed = sent.set(1, pa.field("other", pa.string()))
+    assert _schema_problem(renamed, columns) == "columns a, other, t, d, __row, __invalid"

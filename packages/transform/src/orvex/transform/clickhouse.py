@@ -25,8 +25,9 @@ import datetime as dt
 import io
 import os
 import re
+import socket
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -677,6 +678,7 @@ class Source:
     def __init__(self, name: str, connection: ClickhouseConnection, password: str) -> None:
         self.name = name
         self._password = password
+        self._connection = connection
         try:
             self._client: Client = clickhouse_connect.get_client(
                 host=connection.host,
@@ -858,19 +860,66 @@ class Source:
             "max_execution_time": max(1, seconds),
             "cancel_http_readonly_queries_on_client_close": 1,
             "max_block_size": BLOCK_SIZE,
+            "preferred_block_size_bytes": BLOCK_BYTES,
             "output_format_arrow_string_as_string": 1,
+            # A user's profile must never shorten a run silently: a limit it sets fails the
+            # query instead of truncating it, and result-trimming settings are off.
+            **dict.fromkeys(OVERFLOW_MODES, "throw"),
+            "limit": 0,
+            "offset": 0,
         }
+        # Its own client: the receive timeout covers the run (a query may scan for minutes
+        # before its next rows), not the validation queries' 30 s.
         try:
-            response = self._client.raw_stream(
+            client: Client = clickhouse_connect.get_client(
+                host=self._connection.host,
+                port=self._connection.port,
+                database=self._connection.database,
+                username=self._connection.user,
+                password=self._password,
+                secure=self._connection.secure is not False,
+                connect_timeout=CONNECT_TIMEOUT,
+                send_receive_timeout=max(1, seconds) + RECEIVE_MARGIN,
+                autogenerate_session_id=False,
+            )
+        except ClickHouseError as error:
+            raise self._error(error, "SOURCE_CONNECTION_FAILED") from None
+        # A setting the user's profile fixes to another value: the driver would refuse it before
+        # sending (or ClickHouse would, below); either way the run cannot get its guarantees.
+        fixed = sorted(
+            key
+            for key, value in settings.items()
+            if (found := client.server_settings.get(key)) is not None
+            and found.readonly
+            and str(found.value) != str(value)
+        )
+        if fixed:
+            client.close()
+            raise self._limits_refused(fixed)
+        try:
+            response = client.raw_stream(
                 extraction_query(text, columns),
                 parameters={SINCE: since} if since is not None else None,
                 settings=settings,
                 fmt="ArrowStream",
             )
         except ClickHouseError as error:
+            client.close()
+            if getattr(error, "code", None) in _SETTING_REFUSED:
+                raise self._limits_refused([]) from None
             raise self.failure(error) from None
         assert isinstance(response, io.IOBase)  # `raw_stream` returns the HTTP response
-        return Stream(self, response)
+        return Stream(self, response, client, columns)
+
+    def _limits_refused(self, fixed: list[str]) -> SourceError:
+        named = f" ({', '.join(fixed)})" if fixed else ""
+        return SourceError(
+            "SOURCE_LIMITS_REFUSED",
+            f"ClickHouse connection {self.name}: the user's profile does not let a run set the "
+            f"settings it needs{named}: read-only, its time limit, its block size, every "
+            "overflow mode 'throw' (a limit fails the run, never shortens it) and limit = 0, "
+            "offset = 0; remove those constraints from the profile.",
+        )
 
     def failure(self, error: BaseException) -> SourceError:
         """A failure of a run query, worded like every other source error, with ClickHouse's
@@ -954,17 +1003,30 @@ class _Recorded(io.RawIOBase):
 
 class Stream:
     """A running extraction query: its Arrow record batches (`reader`), the rows read so far,
-    and `close`, callable from any thread, which closes the response so ClickHouse cancels the
-    query (`cancel_http_readonly_queries_on_client_close`).
+    and `close`, callable from any thread, which stops the query.
+
+    Closing shuts the connection's socket down first: a plain close would wait for a read that
+    is blocked while ClickHouse scans without sending rows, and the query would go on. ClickHouse
+    then cancels the query (`cancel_http_readonly_queries_on_client_close`). After a close, the
+    stream never ends as if it were complete.
 
     An error after the first bytes cannot change the HTTP status any more: ClickHouse writes it
     at the end of the body between `__exception__` markers with the response's exception tag.
     It is read from there, so a failure mid-stream reports ClickHouse's own code and message.
+    Before the first batch, the stream's Arrow types are compared with the validated columns
+    (`SCHEMA_CHANGED`), so a source changed after `check_columns` is never cast silently.
     """
 
-    def __init__(self, source: Source, response: io.IOBase) -> None:
+    def __init__(
+        self,
+        source: Source,
+        response: io.IOBase,
+        client: Client | None = None,
+        columns: tuple[Column, ...] = (),
+    ) -> None:
         self._source = source
         self._response = response
+        self._client = client
         headers = getattr(response, "headers", None)
         self._tag = headers.get("X-ClickHouse-Exception-Tag") if headers is not None else None
         self._file = _Recorded(response)
@@ -976,17 +1038,30 @@ class Stream:
             failure = self._failure(error)
             self.close()
             raise failure from None
+        changed = _schema_problem(self._batches.schema, columns) if columns else None
+        if changed is not None:
+            self.close()
+            raise SourceError(
+                "SCHEMA_CHANGED",
+                f"ClickHouse connection {source.name}: the model's columns changed while it ran "
+                f"({changed}); nothing is written.",
+            )
         self.reader = pa.RecordBatchReader.from_batches(self._batches.schema, self._read())
 
     def _read(self) -> Iterator[pa.RecordBatch]:
         try:
             for batch in self._batches:
+                if self._closed.is_set():
+                    break
                 self.rows += batch.num_rows
                 yield batch
-        except Exception as error:  # network or ClickHouse, mid-stream
+        except Exception as error:  # noqa: BLE001 (network or ClickHouse, mid-stream)
             if self._closed.is_set():
-                raise
+                raise _stopped() from None
             raise self._failure(error) from None
+        if self._closed.is_set():
+            # The end of a closed response is not the end of the result.
+            raise _stopped()
 
     def _failure(self, error: BaseException) -> SourceError:
         """ClickHouse's own error when the body ends with one, else the transport failure."""
@@ -1005,14 +1080,79 @@ class Stream:
         body = text[start + len(marker) :]
         end = body.rfind(f" {self._tag}\r\n__exception__")
         if end >= 0:
+            # The message, then a line with its length and the tag.
             body = body[:end]
-            body = body[: body.rfind("\r\n")] if "\r\n" in body else body
+            message, _, length = body.rstrip().rpartition("\n")
+            if length.strip().isdigit():
+                body = message
         return " ".join(body.split()) or None
 
     def close(self) -> None:
         self._closed.set()
+        connection = getattr(self._response, "connection", None)
+        sock = getattr(connection, "sock", None)
+        if sock is not None:
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
         with contextlib.suppress(Exception):
             self._response.close()
+        if self._client is not None:
+            with contextlib.suppress(Exception):
+                self._client.close()
+
+
+def _stopped() -> SourceError:
+    return SourceError("SOURCE_QUERY_FAILED", "the ClickHouse query was stopped before its end.")
+
+
+def _expected_arrow(column: Column) -> Callable[[pa.DataType], bool]:
+    """Whether an Arrow type is what the projection sends for this column."""
+    duck = column.mapped.duckdb
+    family = _base(column.clickhouse)
+    if family in _AS_TEXT or duck in {"VARCHAR", "HUGEINT", "UHUGEINT"}:
+        return lambda kind: pa.types.is_string(kind) or pa.types.is_large_string(kind)
+    if duck == "TIMESTAMPTZ":
+        return lambda kind: pa.types.is_timestamp(kind) and kind.tz is not None
+    if duck == "DATE":
+        return lambda kind: pa.types.is_date32(kind) or pa.types.is_date64(kind)
+    if duck.startswith("DECIMAL("):
+        precision, scale = (int(part) for part in duck[8:-1].split(","))
+        return lambda kind: (
+            pa.types.is_decimal(kind) and (kind.precision, kind.scale) == (precision, scale)
+        )
+    simple = {
+        "BOOLEAN": pa.bool_(),
+        "FLOAT": pa.float32(),
+        "DOUBLE": pa.float64(),
+        "TINYINT": pa.int8(),
+        "SMALLINT": pa.int16(),
+        "INTEGER": pa.int32(),
+        "BIGINT": pa.int64(),
+        "UTINYINT": pa.uint8(),
+        "USMALLINT": pa.uint16(),
+        "UINTEGER": pa.uint32(),
+        "UBIGINT": pa.uint64(),
+    }
+    if duck in simple:
+        expected = simple[duck]
+        return lambda kind: kind == expected
+    if duck == "UUID":
+        return lambda kind: (
+            str(kind).startswith("extension<arrow.uuid")
+            or (pa.types.is_fixed_size_binary(kind) and kind.byte_width == 16)
+        )
+    return lambda _: False
+
+
+def _schema_problem(schema: pa.Schema, columns: tuple[Column, ...]) -> str | None:
+    """Why the stream's schema is not the validated one, or None."""
+    names = [column.name for column in columns]
+    if schema.names[: len(names)] != names:
+        return "columns " + ", ".join(schema.names)
+    for column, field in zip(columns, schema, strict=False):
+        if not _expected_arrow(column)(field.type):
+            return f"{column.name} arrives as {field.type}, validated as {column.clickhouse}"
+    return None
 
 
 def describe_model(
@@ -1048,6 +1188,26 @@ def read_password(connection: ClickhouseConnection) -> str | None:
 
 # Rows per Arrow record batch: ClickHouse's block size, so memory does not grow with the result.
 BLOCK_SIZE = 65_536
+BLOCK_BYTES = 16 * 1024 * 1024  # ClickHouse's preferred block size in bytes, for wide rows
+RECEIVE_MARGIN = 30  # seconds the run's receive timeout exceeds its time limit
+# Every setting that decides what happens when a limit is reached: always `throw`, never a
+# partial result (`break`, `any`).
+OVERFLOW_MODES = (
+    "distinct_overflow_mode",
+    "group_by_overflow_mode",
+    "join_overflow_mode",
+    "read_overflow_mode",
+    "read_overflow_mode_leaf",
+    "result_overflow_mode",
+    "set_overflow_mode",
+    "sort_overflow_mode",
+    "timeout_overflow_mode",
+    "timeout_overflow_mode_leaf",
+    "transfer_overflow_mode",
+)
+# A setting the user's profile does not let the query change: READONLY (164),
+# SETTING_CONSTRAINT_VIOLATION (452).
+_SETTING_REFUSED = frozenset({164, 452})
 ROW = "__row"  # helper column: the row's position in the stream (0-based)
 INVALID = "__invalid"  # helper column: the first column whose text is not UTF-8, if any
 _TEXT_FAMILIES = frozenset({"String", "FixedString"})
@@ -1161,7 +1321,9 @@ def since_value(since: SinceType, watermark: str | None, lookback: str | None, s
         moment = dt.datetime.combine(dt.date.fromisoformat(watermark), dt.time(), zone)
     else:
         moment = dt.datetime.fromisoformat(watermark).astimezone(zone)
-    local = (moment - back).astimezone(zone).replace(tzinfo=None)
+    # The lookback is subtracted from the instant (UTC), never from wall-clock time, so a
+    # daylight-saving change inside it cannot shorten it.
+    local = (moment.astimezone(dt.UTC) - back).astimezone(zone).replace(tzinfo=None)
     if local < _LOWEST[since.family]:
         return since.lowest()
     if since.family in {"Date", "Date32"}:

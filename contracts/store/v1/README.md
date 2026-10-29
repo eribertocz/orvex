@@ -95,17 +95,17 @@ Other types (lists, structs, maps, unions, `TIME`, geometry, …) are refused wi
 
 ## Time limits, cancellation and admission
 
-`ReadRequest` and `StatementRequest` accept `timeout_ms` (1–3,600,000; default set by the lake). A lake runs a bounded number of statements at once (reads until their stream ends, transactions until they commit or roll back); further requests wait in arrival order in a bounded queue, and are refused with `STORE_BUSY` when it is full. Waiting counts against the timeout. A statement past its time limit is interrupted (`STORE_TIMEOUT`); a read or a transaction can be cancelled from another thread (`STORE_CANCELLED`); an interrupted or cancelled transaction rolls back.
+`ReadRequest` and `StatementRequest` accept `timeout_ms` (1–3,600,000; default set by the lake). A lake runs a bounded number of statements at once (reads until their stream ends, transactions until they commit or roll back); further requests wait in arrival order in a bounded queue, and are refused with `STORE_BUSY` when it is full. Waiting counts against the timeout. A statement past its time limit is interrupted (`STORE_TIMEOUT`); a read or a transaction can be cancelled from another thread (`STORE_CANCELLED`); an interrupted or cancelled transaction rolls back. Ctrl-C during a statement of a transaction (`execute`, `value`, `load_arrow`) raises Python's `KeyboardInterrupt`, as in any Python program, and the transaction rolls back.
 
 ## Arrow loads (`Transaction.load_arrow`)
 
 `load_arrow(schema, table, reader, columns, on_interrupt=None, timeout_ms=None)` creates `schema.table` in the lake, inside the write transaction, from an Arrow record-batch stream (P1-17, #98):
-- `columns` are `(name, DuckDB type)` pairs. The stream's fields must be exactly those names, in order (`STORE_STATEMENT_INVALID` otherwise).
+- `columns` are `(name, DuckDB type)` pairs. The stream's fields must be exactly those names, in order, and no two names may differ only in letter case (`STORE_STATEMENT_INVALID` otherwise).
 - Each column is cast to its type (`CREATE TABLE … AS SELECT CAST(…) …`). The stream is read once, batch by batch, by DuckDB, and no row passes through Python.
 - It returns the number of rows.
 - A type name must be a DuckDB type name with optional numeric arguments (`DECIMAL(18,4)`); anything else is refused before the SQL is built.
 - Time limits and cancellation apply as for statements. `on_interrupt` is called from another thread when the statement times out or is cancelled, so the caller can close the stream's source (a remote query then stops).
-- An exception raised by the stream itself propagates unchanged.
+- An exception raised by the stream itself propagates unchanged; after a time limit or a cancellation, the store's error is raised instead, even if the statement ended.
 - The transaction rolls back on any failure.
 
 Like a Python method, this is part of the contract's Python protocol; it has no JSON message.

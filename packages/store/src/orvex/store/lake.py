@@ -1528,6 +1528,10 @@ class Transaction:
             result.fetchone()  # reaches the end of the result, so the cursor is free again
         except duckdb.Error as error:
             raise guard.error(error) from error
+        except RuntimeError as error:
+            if _user_interrupt(error):
+                raise KeyboardInterrupt from error
+            raise
         finally:
             guard.stop()
             self._guard = None
@@ -1565,6 +1569,10 @@ class Transaction:
             self._cursor.sql(typed, params=parameters)
         except duckdb.Error as error:
             raise guard.error(error) from error
+        except RuntimeError as error:
+            if _user_interrupt(error):
+                raise KeyboardInterrupt from error
+            raise
         finally:
             guard.stop()
             self._guard = None
@@ -1588,6 +1596,13 @@ class Transaction:
         the stream itself propagates unchanged; the caller decides what it means.
         """
         names = [name for name, _ in columns]
+        if len({name.lower() for name in names}) != len(names):
+            # DuckDB resolves names without case: `a` and `A` would read the same field.
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "Column names must differ in more than letter case.",
+                {"columns": ", ".join(names)},
+            )
         if not columns or reader.schema.names != names:
             raise StoreError(
                 "STORE_STATEMENT_INVALID",
@@ -1629,15 +1644,40 @@ class Transaction:
                 self._cursor.execute(f"CREATE TABLE {target} AS SELECT {selected} FROM {view}")
             finally:
                 self._cursor.unregister(view)
+            if guard.reason is not None:
+                # Interrupted, even if the statement ended: what it read is not the whole stream.
+                raise guard.error()
             counted = self._cursor.execute(f"SELECT count(*) FROM {target}").fetchone()
         except duckdb.Error as error:
             if failure and guard.reason is None:
                 raise failure[0] from None
             raise guard.error(error) from error
+        except StoreError:
+            raise
+        except Exception as error:
+            # The stream's own error: unchanged, unless the statement was interrupted, which is
+            # then the reason (closing the source on interrupt makes the stream fail).
+            if guard.reason is not None:
+                raise guard.error() from None
+            if isinstance(error, RuntimeError) and _user_interrupt(error):
+                raise KeyboardInterrupt from error
+            raise
         finally:
             guard.stop()
             self._guard = None
         return int(counted[0]) if counted else 0
+
+
+def _user_interrupt(error: RuntimeError) -> bool:
+    """Whether a `RuntimeError` from a statement is Ctrl-C.
+
+    DuckDB's Python client (measured on 2.0) answers Ctrl-C during a statement by interrupting
+    it and raising `RuntimeError("Query interrupted")`, consuming the signal. It is given back to
+    the caller as `KeyboardInterrupt`, so an interrupted program stops as Python programs do
+    (the transaction still rolls back on the way out). `test_ctrl_c_is_a_keyboard_interrupt`
+    pins the measured behavior.
+    """
+    return type(error) is RuntimeError and str(error) == "Query interrupted"
 
 
 def _inexact_column_read(

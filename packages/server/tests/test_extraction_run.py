@@ -8,6 +8,9 @@ administrator in `TRANSFORM_TEST_CLICKHOUSE_USER` / `_PASSWORD`. Each test gets 
 from __future__ import annotations
 
 import os
+import signal
+import threading
+import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -68,6 +71,7 @@ def source(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, str]]:
         "toDateTime64('2024-01-01 00:00:00', 6, 'UTC') + number, number / 8 FROM numbers(1000)",
         f"CREATE USER {reader} IDENTIFIED WITH sha256_password BY '{READER_PASSWORD}'",
         f"GRANT SELECT ON {database}.* TO {reader}",
+        f"GRANT SELECT ON system.numbers TO {reader}",
     ]:
         client.command(statement)
     try:
@@ -241,9 +245,10 @@ def test_a_clickhouse_error_mid_stream_rolls_back(
     assert "SOURCE_QUERY_FAILED" in out
     assert "(ClickHouse code 395)" in out
     assert READER_PASSWORD not in out
-    outcome, error_code, message, *_ = record(folder)
+    outcome, error_code, message, rows_read, *_ = record(folder)
     assert (outcome, error_code) == ("failed", "SOURCE_QUERY_FAILED")
     assert "stop here" in str(message)
+    assert str(rows_read).isdigit()  # the rows read before the failure are recorded
     assert lake_value(folder, EVENTS) == before  # nothing written
 
 
@@ -289,3 +294,66 @@ def test_a_wrong_password_never_shows_it(
     assert "SOURCE_CONNECTION_FAILED" in out
     assert wrong not in out
     assert READER_PASSWORD not in out
+
+
+def test_ctrl_c_records_the_run_and_stops_the_clickhouse_query(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    table = "version: 1\nconnection: analytics_ch\n"
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": "SELECT event_id, meter_id FROM events",
+            "models/raw/ch_events.yaml": table,
+        },
+    )
+    assert run(capsys, folder)[0] == 0
+    before = lake_value(folder, "SELECT count(*) FROM lake.raw.ch_events")
+    snapshots = lake_value(folder, "SELECT count(*) FROM ducklake_snapshots('lake')")
+    # About 2.6 s without output per block of 65,536 rows, for ever.
+    mark = f"interrupted_{uuid.uuid4().hex[:8]}"
+    project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                f"SELECT number AS event_id, toString(number) AS meter_id, 1 AS {mark} "
+                "FROM system.numbers WHERE sleepEachRow(0.00004) = 0"
+            ),
+        },
+    )
+    # Validation and the first block take about 3 s: by 6 s the rows are being loaded.
+    timer = threading.Timer(6.0, lambda: os.kill(os.getpid(), signal.SIGINT))
+    timer.start()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            main(["run", str(folder)])
+    finally:
+        timer.cancel()
+    out = capsys.readouterr().out
+    assert "STORE_CANCELLED" in out
+    outcome, error_code, _, rows_read, *_ = record(folder)
+    assert (outcome, error_code) == ("failed", "STORE_CANCELLED")
+    assert str(rows_read).isdigit()
+    assert lake_value(folder, "SELECT count(*) FROM lake.raw.ch_events") == before
+    # Only the run record was committed after the interruption.
+    after = lake_value(folder, "SELECT count(*) FROM ducklake_snapshots('lake')")
+    assert after == [(int(str(snapshots[0][0])) + 1,)]
+    deadline = time.monotonic() + 5
+    while running(mark) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert running(mark) == 0
+
+
+def running(mark: str) -> int:
+    client = admin()
+    try:
+        return int(
+            client.command(  # type: ignore[arg-type]  # a one-value SELECT returns its value
+                f"SELECT count() FROM system.processes WHERE query LIKE '%{mark}%' "
+                "AND query NOT LIKE '%system.processes%'"
+            )
+        )
+    finally:
+        client.close()

@@ -6,12 +6,16 @@ cursor (the lake's own transactions are exercised by the extraction runs in `ser
 
 from __future__ import annotations
 
+import os
+import signal
+import threading
 import time
 from collections.abc import Iterator
 
 import duckdb
 import pyarrow as pa
 import pytest
+from orvex.contracts.store.v1 import StatementRequest
 from orvex.store.errors import StoreError
 from orvex.store.lake import Transaction
 
@@ -100,3 +104,58 @@ def test_a_time_limit_interrupts_and_calls_back() -> None:
     assert stopped.value.code == "STORE_TIMEOUT"
     assert called == ["x"]
     assert time.monotonic() - started < 5
+
+
+def test_names_differing_only_in_case_are_refused() -> None:
+    # DuckDB resolves `a` and `A` to the same field, so one value would be read twice.
+    schema = pa.schema([("a", pa.int64()), ("A", pa.int64())])
+    stream = pa.RecordBatchReader.from_batches(
+        schema, [pa.record_batch([pa.array([1]), pa.array([2])], schema=schema)]
+    )
+    _, handle = transaction()
+    with pytest.raises(StoreError) as refused:
+        handle.load_arrow("_extract", "t", stream, [("a", "BIGINT"), ("A", "BIGINT")])
+    assert refused.value.code == "STORE_STATEMENT_INVALID"
+
+
+def ctrl_c_after(seconds: float) -> threading.Timer:
+    timer = threading.Timer(seconds, lambda: os.kill(os.getpid(), signal.SIGINT))
+    timer.start()
+    return timer
+
+
+def test_ctrl_c_during_a_load_is_a_keyboard_interrupt() -> None:
+    cursor, handle = transaction()
+    called: list[str] = []
+    ctrl_c_after(0.5)
+    with pytest.raises(KeyboardInterrupt):
+        handle.load_arrow(
+            "_extract",
+            "t",
+            reader(100, pause=0.1),
+            COLUMNS,
+            on_interrupt=lambda: called.append("x"),
+        )
+    assert called == []  # not a time limit: the caller closes its own source
+    cursor.rollback()
+    assert cursor.execute(
+        "SELECT count(*) FROM duckdb_tables() WHERE table_name = 't'"
+    ).fetchone() == (0,)
+
+
+def test_ctrl_c_is_a_keyboard_interrupt() -> None:
+    # DuckDB answers Ctrl-C during a statement with `RuntimeError("Query interrupted")`; the
+    # store gives it back as `KeyboardInterrupt`, which a run records before stopping.
+    cursor, handle = transaction()
+    cursor.execute("CREATE TABLE big AS SELECT * FROM range(200000) AS r(i)")
+    started = time.monotonic()
+    ctrl_c_after(0.5)
+    with pytest.raises(KeyboardInterrupt):
+        handle.execute(
+            StatementRequest(
+                kind="statement",
+                sql="CREATE TABLE pairs AS SELECT count(*) AS n FROM big a, big b",
+                parameters=[],
+            )
+        )
+    assert time.monotonic() - started < 10

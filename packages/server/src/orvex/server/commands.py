@@ -757,6 +757,7 @@ def _run_locked(
             for problem in failures or [_store_problem(error, ".", "")]:
                 print(problem, file=out)
             return 1
+    interrupted = False
     try:
         current: _Outcome | None = None
         try:
@@ -777,11 +778,19 @@ def _run_locked(
                     raise _NothingToCommit
         except _NothingToCommit:
             pass
-        except (StoreError, _StepFailed) as error:
+        except (StoreError, _StepFailed, KeyboardInterrupt) as error:
             for item in outcomes:
                 if item.outcome == "ran":
                     item.outcome = "failed"  # rolled back with the run
-            if isinstance(error, _StepFailed):
+            if isinstance(error, KeyboardInterrupt):
+                # Ctrl-C: the transaction rolled back (a running extraction closed its query);
+                # the run is recorded, then the interruption goes on.
+                interrupted = True
+                reason = RunError(
+                    code="STORE_CANCELLED",
+                    message="The run was interrupted; it rolled back and nothing was written.",
+                )
+            elif isinstance(error, _StepFailed):
                 reason = RunError(code=error.code, message=error.message)
             else:
                 reason = RunError(code=error.code, message=_store_message(error))
@@ -866,6 +875,12 @@ def _run_locked(
             records_error = error
     finally:
         lake.close()
+    if interrupted:
+        for problem in failures:
+            print(problem, file=out)
+        if records_error is not None:
+            print(_store_problem(records_error, ".", "run records were not written"), file=out)
+        raise KeyboardInterrupt
     lineage_warning = lineage_failure or _publish_lineage(project, home, run_id, events)
     if records_error is not None:
         for problem in failures:
