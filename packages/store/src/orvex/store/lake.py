@@ -1254,7 +1254,7 @@ class Lake:
         data, expire, merge, rewrite, expire again (the snapshot merging replaced, when it is
         older than the cutoff), clean up, delete orphans. The current snapshot is never expired.
         Runs alone: one maintenance at a time, after every read and write of this lake ends
-        (every admission slot, then the writer lock). Counts are read in SQL; no row reaches
+        (the writer lock, then every admission slot). Counts are read in SQL; no row reaches
         Python.
         """
         for instant in (expire_before, orphans_before):
@@ -1266,30 +1266,32 @@ class Lake:
         orphans = orphans_before.astimezone(dt.UTC).isoformat()
         deadline = time.monotonic() + self._timeout_ms(None) / 1000
         # One maintenance at a time (two taking part of the slots each would wait for each
-        # other), then every admission slot, then the writer lock: no read or write of this lake
+        # other), then the writer lock, then every admission slot: no read or write of this lake
         # runs during maintenance (a read pinned to a snapshot being expired would lose its files).
+        # The writer lock comes before the slots, as for a transaction, so neither holds what the
+        # other waits for (#77).
         if not self._maintenance_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
             raise StoreError("STORE_TIMEOUT", "Another maintenance of this lake is running.", {})
-        taken = 0
         try:
-            for _ in range(int(self._limits.max_concurrent or 1)):
-                self._admission.acquire(deadline)
-                taken += 1
             if not self._write_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
                 raise StoreError(
                     "STORE_TIMEOUT", "Maintenance waited too long for the writer ahead.", {}
                 )
+            taken = 0
             try:
+                for _ in range(int(self._limits.max_concurrent or 1)):
+                    self._admission.acquire(deadline)
+                    taken += 1
                 cursor = self._cursor()
                 try:
                     report = self._maintain(cursor, cutoff, orphans)
                 finally:
                     cursor.close()
             finally:
+                for _ in range(taken):
+                    self._admission.release()
                 self._write_lock.release()
         finally:
-            for _ in range(taken):
-                self._admission.release()
             self._maintenance_lock.release()
         return report
 
@@ -1492,44 +1494,51 @@ class Lake:
                 {"statement": statement.type.name},
             )
         parameters = _bound(statement, request.parameters)
-        if self._snapshot(request.snapshot) is None:
-            raise self._missing_snapshot(request.snapshot)
-        sql = self._pinned(_typed(request.sql, request.parameters), request.snapshot)
+        typed = _typed(request.sql, request.parameters)
         deadline = time.monotonic() + self._timeout_ms(request.timeout_ms) / 1000
         self._admission.acquire(deadline)
         try:
-            # Checked again once admitted: maintenance may have expired the snapshot while this
-            # read waited behind it (maintenance runs alone, so it cannot expire it from now on).
+            # Every query on the lake runs inside the slot (#77). The snapshot is checked once
+            # admitted: maintenance may have expired it while this read waited behind it
+            # (maintenance runs alone, so it cannot expire it from now on).
             if self._snapshot(request.snapshot) is None:
                 raise self._missing_snapshot(request.snapshot)
+            sql = self._pinned(typed, request.snapshot)
             cursor = self._cursor()
         except BaseException:
             self._admission.release()
             raise
         guard = Guard(cursor, deadline)
-        # Who owns the cursor: the calling thread while it sets the read up, nobody while the
-        # stream waits for its first read, the reading thread while it streams. Only an idle
-        # read is closed by the timer (or by collection of a dropped reader); the owner closes
-        # it otherwise. The slot is released exactly once.
+        # Who owns the cursor: the calling thread while it sets the read up ("setup"), nobody
+        # while the stream waits for its first read ("idle") or while the consumer holds a batch
+        # ("paused"), the reading thread while DuckDB computes a batch ("computing"). A read
+        # nobody owns is closed by the guard when it fires (or by collection of a dropped
+        # reader); the owner closes it otherwise. The slot is released exactly once, and before
+        # anyone can see the read's error (#77).
         state = threading.Lock()
         phase = "setup"
+        released = threading.Event()
 
         def finish() -> None:
             nonlocal phase
             with state:
-                if phase == "finished":
-                    return
+                already = phase == "finished"
                 phase = "finished"
+            if already:
+                # Closed by another thread: its error is seen only once the slot is free.
+                released.wait()
+                return
             try:
                 guard.stop()
                 cursor.close()
             finally:
                 self._admission.release()
+                released.set()
 
         def release_if_idle() -> None:
             with state:
-                idle = phase == "idle"
-            if idle:
+                unowned = phase in {"idle", "paused"}
+            if unowned:
                 finish()
 
         guard.on_fire = release_if_idle
@@ -1566,20 +1575,41 @@ class Lake:
             # It fired between the check above and now, and found the read still being set up.
             release_if_idle()
 
+        def take() -> None:
+            """The reading thread takes the cursor back; a read closed meanwhile raises its
+            error, once its slot is free."""
+            nonlocal phase
+            with state:
+                closed = phase == "finished"
+                if not closed:
+                    phase = "computing"
+            if closed:
+                finish()  # waits until the slot is released
+                raise guard.error()
+
         def batches() -> Iterator[pa.RecordBatch]:
             # The cursor and the admission slot live as long as the stream.
             nonlocal phase
-            with state:
-                if phase == "finished":
-                    raise guard.error()
-                phase = "streaming"
+            take()
             try:
                 if guard.reason is not None:
                     raise guard.error()
-                for batch in relation.to_arrow_reader(request.batch_size):
+                stream = relation.to_arrow_reader(request.batch_size)
+                while True:
+                    try:
+                        batch = stream.read_next_batch()
+                    except StopIteration:
+                        return
                     if guard.reason is not None:
                         raise guard.error()
+                    with state:
+                        if phase == "computing":
+                            phase = "paused"
+                    # While the consumer holds this batch, the guard may close the read.
                     yield batch if batch.schema == schema else batch.cast(schema)
+                    take()
+                    if guard.reason is not None:
+                        raise guard.error()
             except (OSError, pa.ArrowException, duckdb.Error) as error:
                 if guard.reason is not None or isinstance(error, duckdb.InterruptException):
                     raise guard.error(error) from error
@@ -1611,74 +1641,86 @@ class Lake:
                 {},
             )
         deadline = time.monotonic() + self._timeout_ms(None) / 1000
-        self._admission.acquire(deadline)
-        try:
-            yield from self._transaction(deadline)
-        finally:
-            self._admission.release()
-
-    def _transaction(self, deadline: float) -> Iterator[Transaction]:
-        # Waiting for the writer ahead counts against the same time limit as the admission queue.
+        # The writer ahead first, then a slot, both under the same limit: a writer that only
+        # waits holds no slot, so reads are not blocked behind it (#77). Maintenance takes the
+        # writer lock before the slots too, so the two never wait for each other.
         if not self._write_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
             raise StoreError(
                 "STORE_TIMEOUT", "The transaction waited too long for the writer ahead.", {}
             )
         try:
-            self._local.writing = True
+            self._admission.acquire(deadline)
             try:
-                cursor = self._cursor()
-            except BaseException:
-                self._local.writing = False
-                raise
-            try:
-                before = self._snapshot(None)
-                outside = _outside_inventory(cursor)
-                cursor.begin()
-                handle = Transaction(
-                    cursor, self._table_functions, self._timeout_ms, frozenset(self._inexact)
-                )
-                try:
-                    yield handle
-                    if handle.cancelled:
-                        raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
-                    if _outside_inventory(cursor) != outside:
-                        raise StoreError(
-                            "STORE_STATEMENT_INVALID",
-                            "A transaction may change only tables and schemas of the lake.",
-                            {},
-                        )
-                    if _unpinnable_objects(cursor):
-                        raise StoreError(
-                            "STORE_STATEMENT_INVALID",
-                            "Views and macros are not allowed: a read could not pin the "
-                            "tables they use to a snapshot.",
-                            {},
-                        )
-                except BaseException:
-                    cursor.rollback()
-                    raise
-                try:
-                    cursor.commit()
-                except duckdb.TransactionException as error:
-                    raise StoreError(
-                        "STORE_TRANSACTION_CONFLICT",
-                        "Another writer changed the same data first; nothing was written.",
-                        {"duckdb": str(error)},
-                    ) from error
-                except duckdb.Error as error:
-                    raise StoreError(
-                        "STORE_QUERY_FAILED",
-                        "The transaction could not commit.",
-                        {"duckdb": str(error)},
-                    ) from error
-                after = self._snapshot(None)
+                yield from self._transaction(deadline)
             finally:
-                cursor.close()
-                self._local.writing = False
-            changed = after is not None and (before is None or after.id != before.id)
-            handle.result = CommitResult(kind="commit_result", snapshot=after if changed else None)
+                self._admission.release()
         finally:
             self._write_lock.release()
+
+    def _transaction(self, deadline: float) -> Iterator[Transaction]:
+        self._local.writing = True
+        try:
+            cursor = self._cursor()
+        except BaseException:
+            self._local.writing = False
+            raise
+        try:
+            before = self._snapshot(None)
+            outside = _outside_inventory(cursor)
+            cursor.begin()
+            handle = Transaction(
+                cursor, self._table_functions, self._timeout_ms, frozenset(self._inexact)
+            )
+            try:
+                yield handle
+                # A statement interrupted inside the block decides the outcome, even when
+                # the block caught its error (#77).
+                if handle.interrupted is not None:
+                    raise handle.interrupted
+                if handle.cancelled:
+                    raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
+                if _outside_inventory(cursor) != outside:
+                    raise StoreError(
+                        "STORE_STATEMENT_INVALID",
+                        "A transaction may change only tables and schemas of the lake.",
+                        {},
+                    )
+                if _unpinnable_objects(cursor):
+                    raise StoreError(
+                        "STORE_STATEMENT_INVALID",
+                        "Views and macros are not allowed: a read could not pin the "
+                        "tables they use to a snapshot.",
+                        {},
+                    )
+                # The commit runs inside the transaction's limit; once started it is one
+                # atomic catalog transaction and is not interrupted.
+                if time.monotonic() >= deadline:
+                    raise StoreError(
+                        "STORE_TIMEOUT", "The transaction exceeded its time limit.", {}
+                    )
+            except BaseException:
+                cursor.rollback()
+                raise
+            try:
+                cursor.commit()
+            except duckdb.TransactionException as error:
+                raise StoreError(
+                    "STORE_TRANSACTION_CONFLICT",
+                    "Another writer changed the same data first; nothing was written.",
+                    {"duckdb": str(error)},
+                ) from error
+            except duckdb.Error as error:
+                raise StoreError(
+                    "STORE_QUERY_FAILED",
+                    "The transaction could not commit.",
+                    {"duckdb": str(error)},
+                ) from error
+            after = self._snapshot(None)
+        finally:
+            cursor.close()
+            self._local.writing = False
+        changed = after is not None and (before is None or after.id != before.id)
+        handle.result = CommitResult(kind="commit_result", snapshot=after if changed else None)
 
 
 def _snapshot_of(row: Sequence[object]) -> Snapshot:
@@ -1772,7 +1814,15 @@ class Transaction:
         self._guard: Guard | None = None
         self._lock = threading.Lock()
         self.cancelled = False
+        # The first statement interrupted by its time limit or a cancel: the transaction's
+        # outcome, even if the block catches the error (#77).
+        self.interrupted: StoreError | None = None
         self.result: CommitResult | None = None
+
+    def _interrupted(self, error: StoreError) -> StoreError:
+        if error.code in {"STORE_TIMEOUT", "STORE_CANCELLED"} and self.interrupted is None:
+            self.interrupted = error
+        return error
 
     def cancel(self) -> None:
         """Cancel from any thread: a running statement is interrupted, and the block rolls back."""
@@ -1819,7 +1869,7 @@ class Transaction:
             row = result.fetchone()
             result.fetchone()  # reaches the end of the result, so the cursor is free again
         except duckdb.Error as error:
-            raise guard.error(error) from error
+            raise self._interrupted(guard.error(error)) from error
         except RuntimeError as error:
             if _user_interrupt(error):
                 raise KeyboardInterrupt from error
@@ -1860,7 +1910,7 @@ class Transaction:
                 )
             self._cursor.sql(typed, params=parameters)
         except duckdb.Error as error:
-            raise guard.error(error) from error
+            raise self._interrupted(guard.error(error)) from error
         except RuntimeError as error:
             if _user_interrupt(error):
                 raise KeyboardInterrupt from error
@@ -1942,7 +1992,7 @@ class Transaction:
                 self._cursor.unregister(view)
             if guard.reason is not None:
                 # Interrupted, even if the statement ended: what it read is not the whole stream.
-                raise guard.error()
+                raise self._interrupted(guard.error())
             counted = self._cursor.execute(f"SELECT count(*) FROM {target}").fetchone()
             if pressed:
                 raise KeyboardInterrupt
@@ -1951,7 +2001,7 @@ class Transaction:
                 raise KeyboardInterrupt from None
             if failure and guard.reason is None:
                 raise failure[0] from None
-            raise guard.error(error) from error
+            raise self._interrupted(guard.error(error)) from error
         except StoreError:
             raise
         except Exception as error:
@@ -1960,7 +2010,7 @@ class Transaction:
             if pressed:
                 raise KeyboardInterrupt from None
             if guard.reason is not None:
-                raise guard.error() from None
+                raise self._interrupted(guard.error()) from None
             if isinstance(error, RuntimeError) and _user_interrupt(error):
                 raise KeyboardInterrupt from error
             raise
