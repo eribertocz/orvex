@@ -18,7 +18,9 @@ from typing import Any
 import duckdb
 from orvex.contracts.model_config.v1 import ModelError, Relationship
 from orvex.contracts.store.v1 import StatementRequest
-from orvex.transform import incremental, model_tests, reconciliation
+from orvex.transform import extraction, incremental, model_tests, reconciliation
+from orvex.transform.clickhouse import Column
+from orvex.transform.extraction import Extract
 from orvex.transform.incremental import Columns, Step
 from orvex.transform.model_tests import ModelTest
 from orvex.transform.models import Model, problem
@@ -286,7 +288,8 @@ def plan_run(
     previous: Mapping[str, str | None] | None = None,
     differences: Mapping[str, Sequence[Comparison]] | None = None,
     filtered: Mapping[str, str] | None = None,
-) -> list[tuple[Model, list[Step | ModelTest | Reconcile]]]:
+    extracted: Mapping[str, tuple[Column, ...]] | None = None,
+) -> list[tuple[Model, list[Step | Extract | ModelTest | Reconcile]]]:
     """Steps that build every stored model, in run order (views are not stored).
 
     For incremental models only: `outputs` are the models' output columns, `existing` the
@@ -297,14 +300,14 @@ def plan_run(
     Each model's tests (P1-15), then its reconciliation checks (P1-16), follow its write; a
     view with checks gets an entry with only them, run on its SQL. Tests need `outputs`, and
     reconciliation how each check compares, from the binder (`differences`). `filtered` holds
-    the SQL of incremental models whose filter was proven and injected (P1-13).
+    the SQL of incremental models whose filter was proven and injected (P1-13), and
+    `extracted` the validated ClickHouse output of each extraction model (P1-17, #98).
     """
     by_name = {model.name: model for model in models}
     relations = test_relations(models)
-    plan: list[tuple[Model, list[Step | ModelTest | Reconcile]]] = []
+    plan: list[tuple[Model, list[Step | Extract | ModelTest | Reconcile]]] = []
     for name in graph.order:
         model = by_name[name]
-        # Extraction models have no relation (tests do not read them until they run, P1-17).
         tests: list[ModelTest | Reconcile] = []
         if name in relations:
             tests += model_tests.steps(
@@ -315,22 +318,43 @@ def plan_run(
             if tests:
                 plan.append((model, list(tests)))
             continue
+        if model.extraction:
+            plan.append(
+                (
+                    model,
+                    [
+                        *extraction.steps(
+                            model,
+                            (extracted or {}).get(name, ()),
+                            (outputs or {}).get(name, []),
+                            (existing or {}).get(name),
+                            (since or {}).get(name, incremental.LOWEST),
+                            name in full_refresh,
+                            (previous or {}).get(name),
+                        ),
+                        *tests,
+                    ],
+                )
+            )
+            continue
         sql = compiled_sql(model, by_name, (filtered or {}).get(name))
         if model.config.materialized == "incremental":
             output = (outputs or {}).get(name, [])
             plan.append(
                 (
                     model,
-                    incremental.steps(
-                        model,
-                        sql,
-                        output,
-                        (existing or {}).get(name),
-                        (since or {}).get(name, incremental.LOWEST),
-                        name in full_refresh,
-                        (previous or {}).get(name),
-                    )
-                    + tests,
+                    [
+                        *incremental.steps(
+                            model,
+                            sql,
+                            output,
+                            (existing or {}).get(name),
+                            (since or {}).get(name, incremental.LOWEST),
+                            name in full_refresh,
+                            (previous or {}).get(name),
+                        ),
+                        *tests,
+                    ],
                 )
             )
             continue
@@ -355,12 +379,12 @@ def plan_run(
 
 
 def test_relations(models: Sequence[Model]) -> dict[str, str]:
-    """What a test reads for each model: its table, or a view's SQL in parentheses."""
+    """What a test reads for each model: its table (an extraction model's too), or a view's SQL
+    in parentheses."""
     by_name = {model.name: model for model in models}
     return {
         model.name: f"({compiled_sql(model, by_name)})"
         if model.config.materialized == "view"
         else f"{_identifier(model.schema)}.{_identifier(model.table)}"
         for model in models
-        if not model.extraction
     }

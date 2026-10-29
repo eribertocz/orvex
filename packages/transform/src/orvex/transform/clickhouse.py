@@ -20,17 +20,26 @@ only by the time limit (documented in `contracts/model-config/v1`).
 
 from __future__ import annotations
 
+import contextlib
+import datetime as dt
+import io
 import os
 import re
-from collections.abc import Iterator
+import socket
+import threading
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import clickhouse_connect
+import pyarrow as pa
+import pyarrow.ipc as pa_ipc
 from clickhouse_connect.driver.client import Client
 from clickhouse_connect.driver.exceptions import ClickHouseError, OperationalError
 from orvex.contracts.model_config.v1 import ModelError
 from orvex.contracts.project.v1 import ClickhouseConnection
+from orvex.transform.incremental import lookback_microseconds
 from orvex.transform.models import Model, problem
 
 SINCE = "since"
@@ -254,6 +263,40 @@ def since_type(text: str) -> SinceType | None:
         zone = groups[-1] if groups and not groups[-1].isdigit() else None
         return SinceType(family, precision, zone, " ".join(text.split()))
     return None
+
+
+def since_column_problems(model: Model, columns: tuple[Column, ...]) -> list[ModelError]:
+    """`{since:Date}` or `{since:Date32}` cannot protect a `partition_overwrite` model whose
+    time column is a `DateTime`: ClickHouse compares the date at midnight in the zone of the
+    expression the SQL compares it with, which the run cannot see, so the run's partition check
+    (`PARTITION_INCOMPLETE`) cannot know which rows were reloaded. A date time column, or a
+    `{since:DateTime…}` parameter, has an exact boundary."""
+    incremental = model.config.incremental
+    since = declared_since(model)
+    if (
+        incremental is None
+        or incremental.strategy != "partition_overwrite"
+        or since is None
+        or since.family not in {"Date", "Date32"}
+    ):
+        return []
+    time_column = incremental.time_column.root.lower()
+    found = next((column for column in columns if column.name.lower() == time_column), None)
+    if found is None or found.mapped.duckdb != "TIMESTAMPTZ":
+        return []
+    return [
+        problem(
+            "INVALID_MODEL_SQL",
+            f"{model.sql_file}: {{since:{since.family}}} cannot protect a partition_overwrite "
+            f"model whose time_column {found.name} is a {found.clickhouse}: ClickHouse compares "
+            "a date with it at midnight in a zone the run cannot see, so the run cannot tell "
+            "which rows of a partition it reloaded. Declare {since:DateTime64(p, 'zone')} as "
+            "precise as the time column, or use a Date time column and compare {since:Date} "
+            "with it.",
+            model.sql_file,
+            model=model.name,
+        )
+    ]
 
 
 def since_problems(model: Model) -> list[ModelError]:
@@ -669,6 +712,7 @@ class Source:
     def __init__(self, name: str, connection: ClickhouseConnection, password: str) -> None:
         self.name = name
         self._password = password
+        self._connection = connection
         try:
             self._client: Client = clickhouse_connect.get_client(
                 host=connection.host,
@@ -740,6 +784,12 @@ class Source:
             return SourceError("INVALID_MODEL_SQL", self._rows_read_message())
         text = " ".join(_clean(str(error), self._password).split())
         return SourceError(code, f"ClickHouse connection {self.name}: {text}")
+
+    @property
+    def server_zone(self) -> str:
+        """The server's time zone: the zone of `DateTime` values and parameters that declare
+        none."""
+        return str(self._client.server_tz)
 
     def settings(self) -> dict[str, object]:
         """Settings for each validation query: the limits, then `readonly = 1`. They are sent with
@@ -819,8 +869,327 @@ class Source:
             )
         return Described(tuple(columns), str(self._client.server_tz))
 
+    def check_columns(
+        self, text: str, since: SinceType | None, expected: tuple[Column, ...]
+    ) -> None:
+        """The model's output, described again when it runs, must be what validation mapped: a
+        source that changed type since then fails before anything is read (`SCHEMA_CHANGED`)."""
+        now = self.describe(text, since).columns
+        if [(c.name, c.clickhouse) for c in now] != [(c.name, c.clickhouse) for c in expected]:
+            listed = ", ".join(f"{c.name} {c.clickhouse}" for c in now)
+            raise SourceError(
+                "SCHEMA_CHANGED",
+                f"ClickHouse connection {self.name}: the model's columns changed since it was "
+                f"validated (now {listed}); nothing is written.",
+            )
+
+    def stream(
+        self, text: str, columns: tuple[Column, ...], since: str | None, seconds: int
+    ) -> Stream:
+        """Run the model's SQL for its rows: read-only, `since` bound server-side, stopped by
+        ClickHouse after `seconds` and when the response is closed. The result is an Arrow
+        stream of bounded record batches; no row is decoded in Python."""
+        settings: dict[str, object] = {
+            "readonly": 1,
+            "max_execution_time": max(1, seconds),
+            "cancel_http_readonly_queries_on_client_close": 1,
+            "max_block_size": BLOCK_SIZE,
+            "preferred_block_size_bytes": BLOCK_BYTES,
+            "output_format_arrow_string_as_string": 1,
+            # A user's profile must never shorten a run silently: a limit it sets fails the
+            # query instead of truncating it, and result-trimming settings are off.
+            **dict.fromkeys(OVERFLOW_MODES, "throw"),
+            "limit": 0,
+            "offset": 0,
+            # Row filters a profile can add to every table or to the result.
+            "additional_table_filters": {},
+            "additional_result_filter": "",
+        }
+        # Its own client: the receive timeout covers the run (a query may scan for minutes
+        # before its next rows), not the validation queries' 30 s.
+        try:
+            client: Client = clickhouse_connect.get_client(
+                host=self._connection.host,
+                port=self._connection.port,
+                database=self._connection.database,
+                username=self._connection.user,
+                password=self._password,
+                secure=self._connection.secure is not False,
+                connect_timeout=CONNECT_TIMEOUT,
+                send_receive_timeout=max(1, seconds) + RECEIVE_MARGIN,
+                autogenerate_session_id=False,
+            )
+        except ClickHouseError as error:
+            raise self._error(error, "SOURCE_CONNECTION_FAILED") from None
+        # A setting the user's profile fixes to another value: the driver would refuse it before
+        # sending (or ClickHouse would, below); either way the run cannot get its guarantees.
+        fixed = sorted(
+            key
+            for key, value in settings.items()
+            if (found := client.server_settings.get(key)) is not None
+            and found.readonly
+            and str(found.value) != str(value)
+        )
+        if fixed:
+            client.close()
+            raise self._limits_refused(fixed)
+        try:
+            response = client.raw_stream(
+                extraction_query(text, columns),
+                parameters={SINCE: since} if since is not None else None,
+                settings=settings,
+                fmt="ArrowStream",
+            )
+        except ClickHouseError as error:
+            client.close()
+            if getattr(error, "code", None) in _SETTING_REFUSED:
+                raise self._limits_refused([]) from None
+            raise self.failure(error) from None
+        assert isinstance(response, io.IOBase)  # `raw_stream` returns the HTTP response
+        return Stream(self, response, client, columns)
+
+    def _limits_refused(self, fixed: list[str]) -> SourceError:
+        named = f" ({', '.join(fixed)})" if fixed else ""
+        return SourceError(
+            "SOURCE_LIMITS_REFUSED",
+            f"ClickHouse connection {self.name}: the user's profile does not let a run set the "
+            f"settings it needs{named}: read-only, its time limit, its block size, every "
+            "overflow mode 'throw' (a limit fails the run, never shortens it) and limit = 0, "
+            "offset = 0; remove those constraints from the profile.",
+        )
+
+    def failure(self, error: BaseException) -> SourceError:
+        """A failure of a run query, worded like every other source error, with ClickHouse's
+        own code when its message gives one."""
+        failure = self._error(error, "SOURCE_QUERY_FAILED")
+        found = _EXCEPTION_CODE.search(failure.message)
+        if found is None or failure.code != "SOURCE_QUERY_FAILED":
+            return failure
+        return SourceError(failure.code, f"{failure.message} (ClickHouse code {found.group(1)})")
+
     def close(self) -> None:
         self._client.close()
+
+
+_TAIL_BYTES = 65_536  # the end of the response kept, to find an exception written into it
+_DRAIN_BYTES = 1_048_576  # read after a failure, at most, to reach that exception
+_EXCEPTION_CODE = re.compile(r"Code: ([0-9]+)\.")
+
+
+def _partial_bytes(error: BaseException) -> bytes:
+    """The bytes a truncated HTTP read did receive (`http.client.IncompleteRead.partial`),
+    found in the error or the errors it wraps."""
+    seen: set[int] = set()
+    pending: list[BaseException] = [error]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        partial = getattr(current, "partial", None)
+        if isinstance(partial, bytes) and partial:
+            return partial
+        pending += [item for item in current.args if isinstance(item, BaseException)]
+        pending += [item for item in (current.__cause__, current.__context__) if item is not None]
+    return b""
+
+
+class _Recorded(io.RawIOBase):
+    """The HTTP response as a file for Arrow, keeping its last bytes."""
+
+    def __init__(self, response: io.IOBase) -> None:
+        self._response = response
+        self.tail = bytearray()
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: memoryview) -> int:  # type: ignore[override]
+        try:
+            data = self._response.read(len(buffer))
+        except Exception as error:
+            # ClickHouse ends a failed response with a broken chunk; its last bytes (where the
+            # exception is written) travel in the transport error.
+            self._keep(_partial_bytes(error))
+            raise
+        size = len(data)
+        buffer[:size] = data
+        self.tail += data
+        del self.tail[:-_TAIL_BYTES]
+        return size
+
+    def _keep(self, data: bytes) -> None:
+        self.tail += data
+        del self.tail[:-_TAIL_BYTES]
+
+    def drain(self) -> None:
+        """Read what is left of the response (bounded), so an exception at its end is seen."""
+        with contextlib.suppress(Exception):
+            left = _DRAIN_BYTES
+            while left > 0:
+                try:
+                    data = self._response.read(min(left, 65_536))
+                except Exception as error:  # noqa: BLE001 (the broken last chunk)
+                    self._keep(_partial_bytes(error))
+                    break
+                if not data:
+                    break
+                left -= len(data)
+                self._keep(data)
+
+
+class Stream:
+    """A running extraction query: its Arrow record batches (`reader`), the rows read so far,
+    and `close`, callable from any thread, which stops the query.
+
+    Closing shuts the connection's socket down first: a plain close would wait for a read that
+    is blocked while ClickHouse scans without sending rows, and the query would go on. ClickHouse
+    then cancels the query (`cancel_http_readonly_queries_on_client_close`). After a close, the
+    stream never ends as if it were complete.
+
+    An error after the first bytes cannot change the HTTP status any more: ClickHouse writes it
+    at the end of the body between `__exception__` markers with the response's exception tag.
+    It is read from there, so a failure mid-stream reports ClickHouse's own code and message.
+    Before the first batch, the stream's Arrow types are compared with the validated columns
+    (`SCHEMA_CHANGED`), so a source changed after `check_columns` is never cast silently.
+    """
+
+    def __init__(
+        self,
+        source: Source,
+        response: io.IOBase,
+        client: Client | None = None,
+        columns: tuple[Column, ...] = (),
+    ) -> None:
+        self._source = source
+        self._response = response
+        self._client = client
+        headers = getattr(response, "headers", None)
+        self._tag = headers.get("X-ClickHouse-Exception-Tag") if headers is not None else None
+        self._file = _Recorded(response)
+        self.rows = 0
+        self._closed = threading.Event()
+        try:
+            self._batches = pa_ipc.open_stream(io.BufferedReader(self._file))
+        except Exception as error:  # noqa: BLE001 (a ClickHouse error, or a broken connection)
+            failure = self._failure(error)
+            self.close()
+            raise failure from None
+        changed = _schema_problem(self._batches.schema, columns) if columns else None
+        if changed is not None:
+            self.close()
+            raise SourceError(
+                "SCHEMA_CHANGED",
+                f"ClickHouse connection {source.name}: the model's columns changed while it ran "
+                f"({changed}); nothing is written.",
+            )
+        self.reader = pa.RecordBatchReader.from_batches(self._batches.schema, self._read())
+
+    def _read(self) -> Iterator[pa.RecordBatch]:
+        try:
+            for batch in self._batches:
+                if self._closed.is_set():
+                    break
+                self.rows += batch.num_rows
+                yield batch
+        except Exception as error:  # noqa: BLE001 (network or ClickHouse, mid-stream)
+            if self._closed.is_set():
+                raise _stopped() from None
+            raise self._failure(error) from None
+        if self._closed.is_set():
+            # The end of a closed response is not the end of the result.
+            raise _stopped()
+
+    def _failure(self, error: BaseException) -> SourceError:
+        """ClickHouse's own error when the body ends with one, else the transport failure."""
+        self._file.drain()
+        message = self._exception()
+        return self._source.failure(error if message is None else RuntimeError(message))
+
+    def _exception(self) -> str | None:
+        if not self._tag:
+            return None
+        text = bytes(self._file.tail).decode("utf-8", "replace")
+        marker = f"__exception__\r\n{self._tag}\r\n"
+        start = text.rfind(marker)
+        if start < 0:
+            return None
+        body = text[start + len(marker) :]
+        end = body.rfind(f" {self._tag}\r\n__exception__")
+        if end >= 0:
+            # The message, then a line with its length and the tag.
+            body = body[:end]
+            message, _, length = body.rstrip().rpartition("\n")
+            if length.strip().isdigit():
+                body = message
+        return " ".join(body.split()) or None
+
+    def close(self) -> None:
+        self._closed.set()
+        connection = getattr(self._response, "connection", None)
+        sock = getattr(connection, "sock", None)
+        if sock is not None:
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
+        with contextlib.suppress(Exception):
+            self._response.close()
+        if self._client is not None:
+            with contextlib.suppress(Exception):
+                self._client.close()
+
+
+def _stopped() -> SourceError:
+    return SourceError("SOURCE_QUERY_FAILED", "the ClickHouse query was stopped before its end.")
+
+
+def _expected_arrow(column: Column) -> Callable[[pa.DataType], bool]:
+    """Whether an Arrow type is what the projection sends for this column."""
+    duck = column.mapped.duckdb
+    family = _base(column.clickhouse)
+    if family in _AS_TEXT or duck in {"VARCHAR", "HUGEINT", "UHUGEINT"}:
+        return lambda kind: pa.types.is_string(kind) or pa.types.is_large_string(kind)
+    if duck == "TIMESTAMPTZ":
+        return lambda kind: pa.types.is_timestamp(kind) and kind.tz is not None
+    if duck == "DATE":
+        return lambda kind: pa.types.is_date32(kind) or pa.types.is_date64(kind)
+    if duck.startswith("DECIMAL("):
+        precision, scale = (int(part) for part in duck[8:-1].split(","))
+        return lambda kind: (
+            pa.types.is_decimal(kind) and (kind.precision, kind.scale) == (precision, scale)
+        )
+    simple = {
+        "BOOLEAN": pa.bool_(),
+        "FLOAT": pa.float32(),
+        "DOUBLE": pa.float64(),
+        "TINYINT": pa.int8(),
+        "SMALLINT": pa.int16(),
+        "INTEGER": pa.int32(),
+        "BIGINT": pa.int64(),
+        "UTINYINT": pa.uint8(),
+        "USMALLINT": pa.uint16(),
+        "UINTEGER": pa.uint32(),
+        "UBIGINT": pa.uint64(),
+    }
+    if duck in simple:
+        expected = simple[duck]
+        return lambda kind: kind == expected
+    if duck == "UUID":
+        return lambda kind: (
+            str(kind).startswith("extension<arrow.uuid")
+            or (pa.types.is_fixed_size_binary(kind) and kind.byte_width == 16)
+        )
+    return lambda _: False
+
+
+def _schema_problem(schema: pa.Schema, columns: tuple[Column, ...]) -> str | None:
+    """Why the stream's schema is not the validated one, or None."""
+    names = [column.name for column in columns]
+    if schema.names[: len(names)] != names:
+        return "columns " + ", ".join(schema.names)
+    for column, field in zip(columns, schema, strict=False):
+        if not _expected_arrow(column)(field.type):
+            return f"{column.name} arrives as {field.type}, validated as {column.clickhouse}"
+    return None
 
 
 def describe_model(
@@ -850,3 +1219,189 @@ def describe_model(
 def read_password(connection: ClickhouseConnection) -> str | None:
     """The connection's password from its environment variable, or None when it is unset."""
     return os.environ.get(password_variable(connection))
+
+
+# --- running an extraction model (P1-17, #98) -----------------------------------------------
+
+# Rows per Arrow record batch: ClickHouse's block size, so memory does not grow with the result.
+BLOCK_SIZE = 65_536
+BLOCK_BYTES = 16 * 1024 * 1024  # ClickHouse's preferred block size in bytes, for wide rows
+RECEIVE_MARGIN = 30  # seconds the run's receive timeout exceeds its time limit
+# Every setting that decides what happens when a limit is reached: always `throw`, never a
+# partial result (`break`, `any`).
+OVERFLOW_MODES = (
+    "distinct_overflow_mode",
+    "group_by_overflow_mode",
+    "join_overflow_mode",
+    "read_overflow_mode",
+    "read_overflow_mode_leaf",
+    "result_overflow_mode",
+    "set_overflow_mode",
+    "sort_overflow_mode",
+    "timeout_overflow_mode",
+    "timeout_overflow_mode_leaf",
+    "transfer_overflow_mode",
+)
+# A setting the user's profile does not let the query change: READONLY (164),
+# SETTING_CONSTRAINT_VIOLATION (452).
+_SETTING_REFUSED = frozenset({164, 452})
+ROW = "__row"  # helper column: the row's position in the stream (0-based)
+INVALID = "__invalid"  # helper column: the first column whose text is not UTF-8, if any
+_TEXT_FAMILIES = frozenset({"String", "FixedString"})
+_AS_TEXT = frozenset({"Int128", "UInt128", "Enum8", "Enum16", "FixedString"})
+
+
+def _quoted(name: str) -> str:
+    """A ClickHouse identifier in backticks (backslash and backtick escaped)."""
+    return "`" + name.replace("\\", "\\\\").replace("`", "\\`") + "`"
+
+
+def _base(clickhouse: str) -> str:
+    """The family of a column type, without `Nullable`/`LowCardinality` wrappers."""
+    parsed = _parse_type(clickhouse)
+    while parsed.name in {"Nullable", "LowCardinality"} and parsed.arguments:
+        inner = parsed.arguments[0]
+        if not isinstance(inner, _Type):
+            break
+        parsed = inner
+    return parsed.name
+
+
+def helper_names(columns: tuple[Column, ...]) -> tuple[str, str]:
+    """Names for the two helper columns that no output column uses (compared without case)."""
+    taken = {column.name.lower() for column in columns}
+    row, invalid = ROW, INVALID
+    while row.lower() in taken:
+        row += "_"
+    while invalid.lower() in taken or invalid.lower() == row.lower():
+        invalid += "_"
+    return row, invalid
+
+
+def extraction_query(text: str, columns: tuple[Column, ...]) -> str:
+    """The query sent to ClickHouse: the model's SQL unchanged, as a subquery, under a projection
+    that only makes each value travel exactly as Arrow.
+
+    - `Int128`, `UInt128`, `Enum8`/`Enum16` and `FixedString` become text (Arrow has no exact
+      type for them; DuckDB casts the text back exactly), `DateTime` becomes `DateTime64(0)`
+      with its zone (Arrow would carry bare seconds).
+    - Text that is not valid UTF-8 is never sent: it becomes NULL, and the helper column names
+      the first such column of the row; the run then fails (`UNSUPPORTED_SOURCE_VALUE`).
+    - A helper column gives each row's position in the stream.
+    Source columns are qualified (`__source`.`name`), so no projected alias can shadow them.
+    """
+    row, invalid = helper_names(columns)
+    selected: list[str] = []
+    checks: list[str] = []
+    for column in columns:
+        source = f"`__source`.{_quoted(column.name)}"
+        family = _base(column.clickhouse)
+        value = f"toString({source})" if family in _AS_TEXT else source
+        if family == "DateTime":
+            value = f"toDateTime64({source}, 0)"
+        if family in _TEXT_FAMILIES:
+            checks.append(f"ifNull(NOT isValidUTF8({value}), 0), {_literal(column.name)}")
+            value = f"if(isValidUTF8({value}), {value}, NULL)"
+        selected.append(f"{value} AS {_quoted(column.name)}")
+    flagged = f"multiIf({', '.join(checks)}, NULL)" if checks else "CAST(NULL AS Nullable(String))"
+    selected.append(f"rowNumberInAllBlocks() AS {_quoted(row)}")
+    selected.append(f"{flagged} AS {_quoted(invalid)}")
+    return f"SELECT {', '.join(selected)}\nFROM (\n{text}\n) AS `__source`"
+
+
+def _literal(text: str) -> str:
+    """A ClickHouse string literal (backslash and quote escaped)."""
+    return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def load_columns(columns: tuple[Column, ...]) -> list[tuple[str, str]]:
+    """The DuckDB columns of the extraction stream: each output column with its mapped type,
+    then the two helper columns."""
+    row, invalid = helper_names(columns)
+    return [(column.name, column.mapped.duckdb) for column in columns] + [
+        (row, "UBIGINT"),
+        (invalid, "VARCHAR"),
+    ]
+
+
+# The lowest instant `$since` can take for each family, as a naive local date and time.
+_LOWEST = {
+    "Date": dt.datetime(1970, 1, 1),
+    "Date32": dt.datetime(1900, 1, 1),
+    "DateTime": dt.datetime(1970, 1, 1),
+    "DateTime64": dt.datetime(1900, 1, 1),
+}
+
+
+# A `{since:Date}` is compared at midnight in the zone of whatever expression the SQL compares
+# it with, which the run cannot see. Every zone lies between these two (tz database; measured on
+# ClickHouse 26.9), so both values below hold whichever zone ClickHouse used.
+_LATEST_MIDNIGHT = "Etc/GMT+12"  # UTC-12: a date's midnight comes last here
+_EARLIEST_MIDNIGHT = "Etc/GMT-14"  # UTC+14, fixed: a date's midnight comes first here
+
+
+def _since_zone(since: SinceType, server: str, *, earliest: bool = False) -> ZoneInfo:
+    """The zone of a `{since:…}` value. A time is in the zone its type declares, else the
+    server's. A date is taken where its midnight comes last (so no newer row is skipped), and
+    its boundary where midnight comes first (so a check never counts a row ClickHouse did not
+    read)."""
+    if since.family in {"Date", "Date32"}:
+        return ZoneInfo(_EARLIEST_MIDNIGHT if earliest else _LATEST_MIDNIGHT)
+    return ZoneInfo(since.zone or server)
+
+
+def since_bound(since: SinceType, text: str, server: str) -> tuple[str, str]:
+    """The boundary that `{since:…}` = `text` puts on the rows, for DuckDB: the instant (ISO 8601,
+    in UTC) and the date, `text` being in the parameter's zone (the server's when it declares
+    none). A date is midnight where midnight comes first (UTC+14): no earlier than ClickHouse's
+    own boundary, whatever zone it compared in. ClickHouse reads an ambiguous local time as the
+    earlier instant (measured on 26.9), as `fold=0` does here.
+
+    The partition check of `partition_overwrite` (the only check that uses it today) compares
+    with this value, not with the stored watermark: `since_value` truncates to the declared type,
+    so rows between the two are read again (#98). A date's instant is kept as its earliest
+    midnight, the value no row ClickHouse did not read is ever after."""
+    local = dt.datetime.fromisoformat(text)
+    zone = _since_zone(since, server, earliest=True)
+    instant = local.replace(tzinfo=zone).astimezone(dt.UTC)
+    return instant.isoformat(), local.date().isoformat()
+
+
+def since_value(since: SinceType, watermark: str | None, lookback: str | None, server: str) -> str:
+    """`{since:…}` for an incremental run, as ClickHouse reads a parameter of type `since`.
+
+    `watermark` is the model's previous watermark as stored (DuckDB text: `YYYY-MM-DD` for a
+    `Date` time column, an ISO instant with offset for a `DateTime` one; None on a first run or
+    a full refresh, which bind the lowest value of the type). `lookback` is subtracted from the
+    instant; the result is written in the parameter's zone (the server's when it declares none),
+    or for `Date`/`Date32` in UTC-12, where a date's midnight comes last, so no row newer than
+    the watermark is skipped whatever zone ClickHouse compares the date in (it may read up to
+    two days again): a date for `Date`/`Date32`, seconds for `DateTime`, `p` fraction digits
+    for `DateTime64(p)`. Every step truncates, never rounds up, so no row newer than the watermark
+    minus lookback is skipped. A value below the type's range is its lowest value.
+    """
+    if watermark is None or watermark == "-infinity":
+        return since.lowest()
+    if watermark == "infinity":
+        raise SourceError(
+            "UNSUPPORTED_SOURCE_VALUE",
+            "the stored watermark is infinity; run with --full-refresh to reload the model.",
+        )
+    zone = _since_zone(since, server)
+    back = dt.timedelta(microseconds=lookback_microseconds(lookback))
+    if "T" not in watermark and " " not in watermark:
+        # A date: midnight of that day in the parameter's zone.
+        moment = dt.datetime.combine(dt.date.fromisoformat(watermark), dt.time(), zone)
+    else:
+        moment = dt.datetime.fromisoformat(watermark).astimezone(zone)
+    # The lookback is subtracted from the instant (UTC), never from wall-clock time, so a
+    # daylight-saving change inside it cannot shorten it.
+    local = (moment.astimezone(dt.UTC) - back).astimezone(zone).replace(tzinfo=None)
+    if local < _LOWEST[since.family]:
+        return since.lowest()
+    if since.family in {"Date", "Date32"}:
+        return local.date().isoformat()
+    text = local.strftime("%Y-%m-%d %H:%M:%S")
+    if since.family == "DateTime64" and since.precision:
+        text += "." + f"{local.microsecond:06d}"[: since.precision].ljust(since.precision, "0")
+    return text

@@ -15,16 +15,21 @@ import json
 import math
 import os
 import re
+import select
 import shutil
+import signal
+import socket
 import sqlite3
 import tempfile
 import threading
 import time
+import uuid
 import weakref
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType
 from typing import NamedTuple
 
 import duckdb
@@ -241,6 +246,10 @@ class ReadHandle:
 
     def cancel(self) -> None:
         self._guard.cancel()
+
+
+# A DuckDB type name as `load_arrow` accepts it: a name, optionally with numeric arguments.
+_ARROW_LOAD_TYPE = re.compile(r"[A-Z][A-Z0-9_]*(?: [A-Z][A-Z0-9_]*)*(?:\([0-9]+(?:,[0-9]+)?\))?")
 
 
 def _quote(text: str) -> str:
@@ -1523,6 +1532,10 @@ class Transaction:
             result.fetchone()  # reaches the end of the result, so the cursor is free again
         except duckdb.Error as error:
             raise guard.error(error) from error
+        except RuntimeError as error:
+            if _user_interrupt(error):
+                raise KeyboardInterrupt from error
+            raise
         finally:
             guard.stop()
             self._guard = None
@@ -1560,9 +1573,195 @@ class Transaction:
             self._cursor.sql(typed, params=parameters)
         except duckdb.Error as error:
             raise guard.error(error) from error
+        except RuntimeError as error:
+            if _user_interrupt(error):
+                raise KeyboardInterrupt from error
+            raise
         finally:
             guard.stop()
             self._guard = None
+
+    def load_arrow(
+        self,
+        schema: str,
+        table: str,
+        reader: pa.RecordBatchReader,
+        columns: Sequence[tuple[str, str]],
+        on_interrupt: Callable[[], None] | None = None,
+        timeout_ms: int | None = None,
+    ) -> int:
+        """Create `schema.table` in the lake, inside this transaction, from an Arrow stream: each
+        column `(name, DuckDB type)` is the stream's field of that name cast to that type, in
+        order. The stream is read once, batch by batch, by DuckDB (no row passes through Python),
+        and the number of rows is returned.
+
+        `on_interrupt` is called from another thread when the statement times out or is
+        cancelled, and on Ctrl-C when the load runs in the main thread (to close the stream's
+        source, so a remote query stops at once even while it sends nothing). Ctrl-C then raises
+        `KeyboardInterrupt`. An exception raised by the stream itself propagates unchanged; the
+        caller decides what it means.
+        """
+        names = [name for name, _ in columns]
+        if len({name.lower() for name in names}) != len(names):
+            # DuckDB resolves names without case: `a` and `A` would read the same field.
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "Column names must differ in more than letter case.",
+                {"columns": ", ".join(names)},
+            )
+        if not columns or reader.schema.names != names:
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "The Arrow stream's fields must be exactly the declared columns, in order.",
+                {"fields": ", ".join(reader.schema.names), "columns": ", ".join(names)},
+            )
+        for _, kind in columns:
+            if _ARROW_LOAD_TYPE.fullmatch(kind) is None:
+                raise StoreError(
+                    "STORE_STATEMENT_INVALID", "Not a DuckDB type name.", {"type": kind}
+                )
+        failure: list[BaseException] = []
+
+        def batches() -> Iterator[pa.RecordBatch]:
+            try:
+                yield from reader
+            except BaseException as error:
+                failure.append(error)
+                raise
+
+        stream = pa.RecordBatchReader.from_batches(reader.schema, batches())
+        view = f"__arrow_{uuid.uuid4().hex}"
+        target = f"{_identifier(schema)}.{_identifier(table)}"
+        selected = ", ".join(
+            f"CAST({_identifier(name)} AS {kind}) AS {_identifier(name)}" for name, kind in columns
+        )
+        deadline = time.monotonic() + self._timeout_ms(timeout_ms) / 1000
+        guard = Guard(self._cursor, deadline)
+        guard.on_fire = on_interrupt
+        with self._lock:
+            if self.cancelled:
+                guard.stop()
+                raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
+            self._guard = guard
+        pressed: list[bool] = []
+        restore = _on_ctrl_c(on_interrupt, pressed)
+        try:
+            self._cursor.sql(f"CREATE SCHEMA IF NOT EXISTS {_identifier(schema)}")
+            self._cursor.register(view, stream)
+            try:
+                self._cursor.execute(f"CREATE TABLE {target} AS SELECT {selected} FROM {view}")
+            finally:
+                self._cursor.unregister(view)
+            if guard.reason is not None:
+                # Interrupted, even if the statement ended: what it read is not the whole stream.
+                raise guard.error()
+            counted = self._cursor.execute(f"SELECT count(*) FROM {target}").fetchone()
+            if pressed:
+                raise KeyboardInterrupt
+        except duckdb.Error as error:
+            if pressed:
+                raise KeyboardInterrupt from None
+            if failure and guard.reason is None:
+                raise failure[0] from None
+            raise guard.error(error) from error
+        except StoreError:
+            raise
+        except Exception as error:
+            # The stream's own error: unchanged, unless the statement was interrupted, which is
+            # then the reason (closing the source on interrupt makes the stream fail).
+            if pressed:
+                raise KeyboardInterrupt from None
+            if guard.reason is not None:
+                raise guard.error() from None
+            if isinstance(error, RuntimeError) and _user_interrupt(error):
+                raise KeyboardInterrupt from error
+            raise
+        finally:
+            restore()
+            guard.stop()
+            self._guard = None
+        if pressed:  # pressed while the load was finishing: never lost
+            raise KeyboardInterrupt
+        return int(counted[0]) if counted else 0
+
+
+def _on_ctrl_c(on_interrupt: Callable[[], None] | None, pressed: list[bool]) -> Callable[[], None]:
+    """While a load runs in the main thread, Ctrl-C calls `on_interrupt` at once and is noted in
+    `pressed`; the load then raises `KeyboardInterrupt` itself. Returns the restoring function.
+
+    Python runs signal handlers only in the main thread, and only when it gets control: DuckDB,
+    waiting for a stream blocked on a quiet network read, may not give it back until the next
+    rows arrive (7.9 s measured on CI). So the signal is also watched from another thread through
+    Python's wakeup file descriptor, which the C-level handler writes to as the signal arrives.
+    """
+    if on_interrupt is None or threading.current_thread() is not threading.main_thread():
+        return lambda: None
+    previous = signal.getsignal(signal.SIGINT)
+    if previous is signal.SIG_IGN or previous is None:  # Ctrl-C is ignored, or not Python's
+        return lambda: None
+
+    once = threading.Lock()
+
+    def interrupt() -> None:
+        # Both the handler and the watcher see the signal; the source is closed once.
+        with once:
+            first = not pressed
+            pressed.append(True)
+        if first:
+            with contextlib.suppress(Exception):
+                on_interrupt()
+
+    def handler(number: int, frame: FrameType | None) -> None:
+        interrupt()
+
+    receiver, sender = socket.socketpair()
+    sender.setblocking(False)
+    stop = threading.Event()
+    try:
+        signal.signal(signal.SIGINT, handler)
+        earlier = signal.set_wakeup_fd(sender.fileno(), warn_on_full_buffer=False)
+    except ValueError:  # not the main interpreter
+        signal.signal(signal.SIGINT, previous)
+        receiver.close()
+        sender.close()
+        return lambda: None
+
+    def watch() -> None:
+        while not stop.is_set():
+            ready, _, _ = select.select([receiver], [], [], 0.2)
+            if not ready:
+                continue
+            with contextlib.suppress(OSError):
+                received = receiver.recv(256)
+                if earlier != -1:
+                    os.write(earlier, received)  # whoever watched signals before still sees them
+                if signal.SIGINT in received:
+                    interrupt()
+
+    watcher = threading.Thread(target=watch, name="load-ctrl-c", daemon=True)
+    watcher.start()
+
+    def restore() -> None:
+        stop.set()
+        signal.set_wakeup_fd(earlier)
+        signal.signal(signal.SIGINT, previous)
+        watcher.join()
+        receiver.close()
+        sender.close()
+
+    return restore
+
+
+def _user_interrupt(error: RuntimeError) -> bool:
+    """Whether a `RuntimeError` from a statement is Ctrl-C.
+
+    DuckDB's Python client (measured on 2.0) answers Ctrl-C during a statement by interrupting
+    it and raising `RuntimeError("Query interrupted")`, consuming the signal. It is given back to
+    the caller as `KeyboardInterrupt`, so an interrupted program stops as Python programs do
+    (the transaction still rolls back on the way out). `test_ctrl_c_is_a_keyboard_interrupt`
+    pins the measured behavior.
+    """
+    return type(error) is RuntimeError and str(error) == "Query interrupted"
 
 
 def _inexact_column_read(

@@ -202,7 +202,9 @@ def problems(
             if body.to not in models:
                 continue  # MODEL_REFERENCE_UNKNOWN, from the dependency graph
             if body.to not in outputs:
-                invalid(f"{base}/to", f"{body.to} cannot be read by a test (an extraction model).")
+                invalid(
+                    f"{base}/to", f"{body.to} cannot be read by a test: its columns are unknown."
+                )
                 continue
             related = {name.lower() for name, _ in outputs[body.to]}
             if body.field.root.lower() not in related:

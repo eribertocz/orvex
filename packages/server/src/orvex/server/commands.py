@@ -45,7 +45,13 @@ from orvex.contracts.store.v1 import (
     StatementRequest,
 )
 from orvex.server.identity import Identity
-from orvex.server.project import Project, ProjectLoadError, load_project, resolve_secret
+from orvex.server.project import (
+    Connection,
+    Project,
+    ProjectLoadError,
+    load_project,
+    resolve_secret,
+)
 from orvex.server.versions import module_versions
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, Transaction, open_lake
@@ -58,6 +64,7 @@ from orvex.transform import (
     reconciliation,
     schedule,
 )
+from orvex.transform.extraction import Extract
 from orvex.transform.graph import Graph, build_graph, compiled_sql, plan_run, test_relations
 from orvex.transform.incremental import Columns, Count, Refuse, Step, Watermark
 from orvex.transform.model_tests import ModelTest
@@ -96,6 +103,8 @@ class Checked:
     differences: Mapping[str, list[Comparison]] = field(default_factory=dict)
     # Incremental models with `filter: auto`: their SQL with the proven filter (P1-13).
     filtered: Mapping[str, str] = field(default_factory=dict)
+    # Extraction models: their validated ClickHouse output columns (P1-17).
+    extracted: Mapping[str, tuple[clickhouse.Column, ...]] = field(default_factory=dict)
 
 
 class ProjectLocked(Exception):
@@ -130,6 +139,7 @@ def check_project(folder: Path) -> Checked:
     columns: dict[str, Columns] = {}
     differences: dict[str, list[Comparison]] = {}
     filtered: dict[str, str] = {}
+    extracted: dict[str, tuple[clickhouse.Column, ...]] = {}
     needs_binding = any(
         m.config.materialized == "incremental"
         or m.config.tests
@@ -138,17 +148,25 @@ def check_project(folder: Path) -> Checked:
         for m in discovery.models
     )
     if needs_binding and not problems:
-        columns, differences, filtered, bind_problems = _bind(project, discovery, graph)
+        columns, differences, filtered, extracted, bind_problems = _bind(project, discovery, graph)
         problems += bind_problems
         problems += [
             _from_model_error(item) for item in incremental.problems_for(discovery.models, columns)
         ]
-    return Checked(project, discovery, graph, tuple(problems), columns, differences, filtered)
+    return Checked(
+        project, discovery, graph, tuple(problems), columns, differences, filtered, extracted
+    )
 
 
 def _bind(
     project: Project, discovery: Discovery, graph: Graph
-) -> tuple[dict[str, Columns], dict[str, list[Comparison]], dict[str, str], list[Problem]]:
+) -> tuple[
+    dict[str, Columns],
+    dict[str, list[Comparison]],
+    dict[str, str],
+    dict[str, tuple[clickhouse.Column, ...]],
+    list[Problem],
+]:
     """Output columns of every model, from DuckDB's binder; nothing is executed.
 
     Binding happens in a scratch lake in a temporary folder (never the project's): upstream
@@ -160,6 +178,7 @@ def _bind(
     columns: dict[str, Columns] = {}
     differences: dict[str, list[Comparison]] = {}
     filtered: dict[str, str] = {}
+    extracted: dict[str, tuple[clickhouse.Column, ...]] = {}
     problems: list[Problem] = []
     failed: set[str] = set()
     scratch = Path(tempfile.mkdtemp(prefix="bind-"))
@@ -168,7 +187,7 @@ def _bind(
         try:
             lake = open_lake(location, _limits(), source_attachments(project.connections))
         except StoreError as error:
-            return {}, {}, {}, [_store_problem(error, ".", "")]
+            return {}, {}, {}, {}, [_store_problem(error, ".", "")]
         try:
             for name in graph.order:
                 model = by_name[name]
@@ -176,37 +195,44 @@ def _bind(
                     failed.add(name)
                     continue
                 if model.extraction:
-                    extracted = _describe_extraction(project, model)
-                    if isinstance(extracted, Problem):
+                    described = _describe_extraction(project, model)
+                    if isinstance(described, Problem):
                         failed.add(name)
-                        problems.append(extracted)
+                        problems.append(described)
                         continue
-                    _stand_in(lake, model, extracted)
+                    refused = clickhouse.since_column_problems(model, described)
+                    if refused:
+                        failed.add(name)
+                        problems += [_from_model_error(item) for item in refused]
+                        continue
+                    extracted[name] = described
+                    _stand_in(lake, model, [(c.name, c.mapped.duckdb) for c in described])
                     # DuckDB's own names for the mapped types, as for every other model.
                     columns[name] = lake.describe(_relation_sql(model))
-                    continue
-                try:
-                    output = _describe(lake, model, compiled_sql(model, by_name))
-                except StoreError as error:
-                    failed.add(name)
-                    problems.append(
-                        Problem(
-                            "INVALID_MODEL_SQL",
-                            model.sql_file,
-                            None,
-                            f"{name}: {_store_message(error)}",
+                else:
+                    try:
+                        output = _describe(lake, model, compiled_sql(model, by_name))
+                    except StoreError as error:
+                        failed.add(name)
+                        problems.append(
+                            Problem(
+                                "INVALID_MODEL_SQL",
+                                model.sql_file,
+                                None,
+                                f"{name}: {_store_message(error)}",
+                            )
                         )
-                    )
-                    continue
-                columns[name] = output
-                if _automatic(model):
-                    proven = _prove_filter(lake, model, output, by_name)
-                    if isinstance(proven, Problem):
-                        problems.append(proven)
-                    else:
-                        filtered[name] = proven
-                if model.config.materialized != "view":
-                    _stand_in(lake, model, output)
+                        continue
+                    columns[name] = output
+                    if _automatic(model):
+                        proven = _prove_filter(lake, model, output, by_name)
+                        if isinstance(proven, Problem):
+                            problems.append(proven)
+                        else:
+                            filtered[name] = proven
+                    if model.config.materialized != "view":
+                        _stand_in(lake, model, output)
+                # Tests and reconciliation check the stored table, whatever produced it.
                 if model.config.tests:
                     problems += _bind_tests(lake, model, columns, by_name, relations)
                 if model.config.reconciliation:
@@ -217,10 +243,10 @@ def _bind(
             lake.close()
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
-    return columns, differences, filtered, problems
+    return columns, differences, filtered, extracted, problems
 
 
-def _describe_extraction(project: Project, model: Model) -> Columns | Problem:
+def _describe_extraction(project: Project, model: Model) -> tuple[clickhouse.Column, ...] | Problem:
     """An extraction model's output columns, mapped to DuckDB types: ClickHouse parses and
     describes its SQL on the model's connection, read-only; no row is read (P1-17)."""
     name = model.config.connection
@@ -239,7 +265,7 @@ def _describe_extraction(project: Project, model: Model) -> Columns | Problem:
     described = clickhouse.describe_model(model, connection, password)
     if isinstance(described, ModelError):
         return _from_model_error(described)
-    return [(column.name, column.mapped.duckdb) for column in described.columns]
+    return described.columns
 
 
 def _relation_sql(model: Model) -> str:
@@ -507,17 +533,6 @@ def validate(folder: Path, out: IO[str], show_sql: str | None = None) -> int:
     return 0
 
 
-def _not_runnable(model: Model) -> Problem | None:
-    if model.extraction:
-        return Problem(
-            "UNSUPPORTED_MODEL_KIND",
-            model.sql_file,
-            None,
-            f"{model.name}: extraction models run from a later release (P1-17).",
-        )
-    return None
-
-
 @dataclass(frozen=True, slots=True)
 class Selection:
     """A scheduled run: the models to build (dependencies first) and how to record it."""
@@ -563,11 +578,6 @@ def run(
         refreshed = frozenset(full_refresh or incremental_names)
     if selection is not None:
         refreshed = selection.full_refresh & incremental_names
-    refused = [p for p in map(_not_runnable, checked.discovery.models) if p is not None]
-    if refused:
-        for problem in refused:
-            print(problem, file=out)
-        return 1
     home = project.folder / f".{identity.slug}"
     try:
         with project_lock(home):
@@ -665,6 +675,8 @@ class _Outcome:
     rows_written: str | None = None
     error: RunError | None = None
     since: str | None = None
+    # An extraction model's `{since:…}` as DuckDB values (instant, date): what its checks use.
+    bound: tuple[str, str] | None = None
     watermark: str | None = None
     tests: list[CheckResult] = field(default_factory=list)
     reconciliation: list[CheckResult] = field(default_factory=list)
@@ -723,6 +735,7 @@ def _run_locked(
         previous,
         checked.differences,
         checked.filtered,
+        checked.extracted,
     )
     if selection is not None:
         plan = [(model, steps) for model, steps in plan if model.name in selection.models]
@@ -750,6 +763,7 @@ def _run_locked(
             for problem in failures or [_store_problem(error, ".", "")]:
                 print(problem, file=out)
             return 1
+    interrupted = False
     try:
         current: _Outcome | None = None
         try:
@@ -761,7 +775,7 @@ def _run_locked(
                     item.started_at = _now()
                     item.started = True
                     for step in steps:
-                        _run_step(transaction, step, item)
+                        _run_step(transaction, step, item, project.connections)
                     _check_tests(item)
                     item.finished_at = _now()
                     item.outcome = "ran"
@@ -770,11 +784,19 @@ def _run_locked(
                     raise _NothingToCommit
         except _NothingToCommit:
             pass
-        except (StoreError, _StepFailed) as error:
+        except (StoreError, _StepFailed, KeyboardInterrupt) as error:
             for item in outcomes:
                 if item.outcome == "ran":
                     item.outcome = "failed"  # rolled back with the run
-            if isinstance(error, _StepFailed):
+            if isinstance(error, KeyboardInterrupt):
+                # Ctrl-C: the transaction rolled back (a running extraction closed its query);
+                # the run is recorded, then the interruption goes on.
+                interrupted = True
+                reason = RunError(
+                    code="STORE_CANCELLED",
+                    message="The run was interrupted; it rolled back and nothing was written.",
+                )
+            elif isinstance(error, _StepFailed):
                 reason = RunError(code=error.code, message=error.message)
             else:
                 reason = RunError(code=error.code, message=_store_message(error))
@@ -859,6 +881,12 @@ def _run_locked(
             records_error = error
     finally:
         lake.close()
+    if interrupted:
+        for problem in failures:
+            print(problem, file=out)
+        if records_error is not None:
+            print(_store_problem(records_error, ".", "run records were not written"), file=out)
+        raise KeyboardInterrupt
     lineage_warning = lineage_failure or _publish_lineage(project, home, run_id, events)
     if records_error is not None:
         for problem in failures:
@@ -1061,8 +1089,15 @@ def _check_tests(item: _Outcome) -> None:
         )
 
 
-def _run_step(transaction: Transaction, step: Step | ModelTest | Reconcile, item: _Outcome) -> None:
-    if isinstance(step, ModelTest | Reconcile):
+def _run_step(
+    transaction: Transaction,
+    step: Step | Extract | ModelTest | Reconcile,
+    item: _Outcome,
+    connections: Mapping[str, Connection],
+) -> None:
+    if isinstance(step, Extract):
+        _extract(transaction, step, item, connections)
+    elif isinstance(step, ModelTest | Reconcile):
         failing = transaction.value(step.request) or "0"
         results = item.tests if isinstance(step, ModelTest) else item.reconciliation
         results.append(
@@ -1087,11 +1122,85 @@ def _run_step(transaction: Transaction, step: Step | ModelTest | Reconcile, item
         item.rows_read = value or "0"
         item.rows_written = item.rows_read
     else:
+        parameters = [_bounded(parameter, item.bound) for parameter in step.parameters]
         value = transaction.value(
-            StatementRequest(kind="statement", sql=step.sql, parameters=list(step.parameters))
+            StatementRequest(kind="statement", sql=step.sql, parameters=parameters)
         )
         if value not in {None, "0"}:
             raise _StepFailed(step.code, step.failure(value))
+
+
+def _bounded(parameter: Parameter, bound: tuple[str, str] | None) -> Parameter:
+    """`$since` of an extraction model's check: the boundary ClickHouse actually filtered by,
+    which the declared `{since:…}` type may have truncated below the watermark (#98). Checking
+    against the watermark would count rows read again as reloaded."""
+    if bound is None or parameter.name != "since":
+        return parameter
+    instant, day = bound
+    value = day if parameter.type.root == "DATE" else instant
+    return parameter.model_copy(update={"value": value})
+
+
+def _extract(
+    transaction: Transaction,
+    step: Extract,
+    item: _Outcome,
+    connections: Mapping[str, Connection],
+) -> None:
+    """Stream an extraction model's rows from ClickHouse into the run's transaction (#98).
+
+    The connection is opened with its usual checks (read-only, limits), the output columns
+    must still be those validated, `{since:…}` is bound server-side, and the Arrow stream goes
+    straight into DuckDB. A timeout or cancellation closes the response, so ClickHouse cancels
+    the query; any failure rolls the run back. The rows read so far are recorded either way.
+    """
+    connection = connections.get(step.connection)
+    assert isinstance(connection, ClickhouseConnection)  # validated before the run
+    password = clickhouse.read_password(connection)
+    if password is None:
+        variable = clickhouse.password_variable(connection)
+        raise _StepFailed(
+            "PROJECT_SECRET_MISSING",
+            f"Environment variable {variable} is not set (the password of connection "
+            f"{step.connection}).",
+        )
+    try:
+        source = clickhouse.Source(step.connection, connection, password)
+    except clickhouse.SourceError as error:
+        raise _StepFailed(error.code, f"{step.model}: {error.message}") from None
+    stream: clickhouse.Stream | None = None
+    sent = False
+    try:
+        since = (
+            clickhouse.since_value(step.since, step.watermark, step.lookback, source.server_zone)
+            if step.since is not None
+            else None
+        )
+        item.since = since
+        if since is not None and step.since is not None:
+            item.bound = clickhouse.since_bound(step.since, since, source.server_zone)
+        source.check_columns(step.text, step.since, step.columns)
+        sent = True
+        stream = source.stream(step.text, step.columns, since, DEFAULT_TIMEOUT_MS // 1000)
+        rows = transaction.load_arrow(
+            step.schema,
+            step.table,
+            stream.reader,
+            clickhouse.load_columns(step.columns),
+            on_interrupt=stream.close,
+        )
+        item.rows_read = str(rows)
+        item.rows_written = item.rows_read
+    except clickhouse.SourceError as error:
+        raise _StepFailed(error.code, f"{step.model}: {error.message}") from None
+    finally:
+        if stream is not None:
+            if item.rows_read is None:
+                item.rows_read = str(stream.rows)
+            stream.close()
+        elif sent:
+            item.rows_read = "0"  # the query ran and failed before its first rows
+        source.close()
 
 
 def _since(
