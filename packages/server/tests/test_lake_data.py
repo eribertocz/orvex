@@ -329,7 +329,8 @@ def test_a_lake_on_object_storage(
     assert code == 0, out
     assert SECRET not in out
     chosen = commands.lake_location(load_project(tmp_path), home(tmp_path))
-    assert chosen.location.encrypted is encrypted  # the setting reached the store
+    # The setting reached the store (unset when false: the contract field is optional).
+    assert bool(chosen.location.encrypted) is encrypted
     if encrypted:
         # Encryption is fixed when the lake is created: turning it off is refused.
         (tmp_path / "project.yaml").write_text(PROJECT + s3_lake(endpoint), encoding="utf-8")
