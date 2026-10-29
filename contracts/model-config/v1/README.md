@@ -43,6 +43,7 @@ New cross-field rules are added by the issues that implement those behaviors, as
 | `UNIQUE_KEY_NULL` | Loaded rows of a `merge` or `delete_insert` with a `NULL` key part (the run rolls back) |
 | `UNIQUE_KEY_DUPLICATED` | Loaded rows of a `merge` with the same key twice (the run rolls back; `delete_insert` allows it) |
 | `MISSING_PARTITION_BY` | `partition_overwrite` without `partition_by` |
+| `PARTITION_INCOMPLETE` | A `partition_overwrite` run whose `$since` filter loaded only part of a partition: the table holds rows of a loaded partition at or before `$since` (or with a `NULL` time column) and the loaded rows of that partition have none. The run rolls back; the message names up to 5 such partitions (`NULL` written `NULL`) and their total, and suggests loading whole partitions (see below) |
 | `MISSING_SINCE_PARAMETER` | An incremental model with `filter: manual` whose SQL does not use `$since` |
 | `INCREMENTAL_FILTER_NOT_PROVABLE` | An incremental model with `filter: auto` whose filter cannot be proven safe (see below), or that is an extraction model; `line` is the time column's line when known, and the message names the reason (use `filter: manual` and place `$since`) |
 | `MODEL_TEST_FAILED` | A model test found failing rows after the model was written (the run rolls back; the run record lists every test with its failing-row count) |
@@ -113,6 +114,15 @@ The filter `<table>.<time_column> > $since` is added to the query that reads the
 | `extraction` | An extraction model (its SQL runs on the source) |
 
 `details` holds `file` (relative to the project folder), and when known `model`, `path` (a JSON pointer into the sidecar) and `line`. Discovery reports every problem of a project at once.
+
+## Partitions cut by `$since` (`partition_overwrite`)
+
+A `partition_overwrite` run deletes every table row of each partition it loads, then inserts the loaded rows. With a `$since` filter such as `WHERE read_at > $since`, a run can load only the newest rows of a partition; the delete would then lose its older rows. So an incremental run with `$since` (not a first run, not a full refresh) checks, inside its transaction and before the delete, each loaded partition (`partition_by` values compared with `IS NOT DISTINCT FROM`, so `NULL` is a partition):
+
+- the table has rows of it at or before `$since`, and the loaded rows of it have none; or
+- the table has rows of it with a `NULL` time column, and the loaded rows of it have none (a `$since` filter never reloads those).
+
+Either fails the run with `PARTITION_INCOMPLETE` and nothing is written. `$since` is bound with the time column's type. Load whole partitions instead, for example `WHERE read_at >= date_trunc('month', $since)` for monthly partitions. A model whose SQL does not use `$since` reloads everything it selects and is not checked.
 
 ## Compatibility
 

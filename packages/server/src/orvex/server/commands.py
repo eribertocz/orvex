@@ -1082,13 +1082,16 @@ def _run_step(transaction: Transaction, step: Step | ModelTest | Reconcile, item
         for statement in incremental.watermark_statements(step, value):
             transaction.execute(statement)
         item.watermark = value
-    else:
+    elif isinstance(step, Count):
         value = transaction.value(StatementRequest(kind="statement", sql=step.sql, parameters=[]))
-        if isinstance(step, Count):
-            item.rows_read = value or "0"
-            item.rows_written = item.rows_read
-        elif value not in {None, "0"}:
-            raise _StepFailed(step.code, step.message)
+        item.rows_read = value or "0"
+        item.rows_written = item.rows_read
+    else:
+        value = transaction.value(
+            StatementRequest(kind="statement", sql=step.sql, parameters=list(step.parameters))
+        )
+        if value not in {None, "0"}:
+            raise _StepFailed(step.code, step.failure(value))
 
 
 def _since(

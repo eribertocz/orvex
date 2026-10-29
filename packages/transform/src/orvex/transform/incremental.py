@@ -15,6 +15,10 @@ Every strategy is "delete the target rows the loaded rows replace, insert the lo
 - `partition_overwrite` deletes the rows whose partition is loaded (`NULL` is a partition).
 Rows are inserted by column name, so a target whose columns were added at the end still matches.
 
+A `partition_overwrite` run filtered by `$since` replaces whole partitions with rows newer than
+`$since`; when the table already holds older rows of a loaded partition that the run did not
+reload, the delete would lose them. The run then fails with `PARTITION_INCOMPLETE` (#109).
+
 Which rows are loaded (P1-14): the model's SQL uses `$since`, bound as a typed parameter to the
 previous watermark minus `lookback` (`-infinity` on a first run or a full refresh). The new
 watermark is the largest `time_column` of the loaded rows (never less than the previous one),
@@ -59,11 +63,21 @@ type Columns = Sequence[tuple[str, str]]
 
 @dataclass(frozen=True, slots=True)
 class Check:
-    """A count that must be zero; otherwise the run fails with `code`."""
+    """A value that must be zero; otherwise the run fails with `code`.
+
+    With `detail`, the SQL returns `'0'` or a text describing what failed, which replaces
+    `{detail}` in `message`. `parameters` are bound to the SQL (never formatted into it).
+    """
 
     sql: str
     code: str
     message: str
+    parameters: tuple[Parameter, ...] = ()
+    detail: bool = False
+
+    def failure(self, value: str) -> str:
+        """The message for a failing value."""
+        return self.message.replace("{detail}", value) if self.detail else self.message
 
 
 @dataclass(frozen=True, slots=True)
@@ -515,6 +529,8 @@ def steps(
                 "written.",
             )
         )
+        if strategy == "partition_overwrite" and parameters and since != LOWEST:
+            result.append(_cut_partitions(model, target, stage, kind, parameters[0]))
         replaced = _replaced(model, target)
         if replaced is not None:
             result.append(
@@ -529,6 +545,67 @@ def steps(
         _statement(f"DROP SCHEMA IF EXISTS {STAGE_SCHEMA}"),
     ]
     return result
+
+
+_CUT_SHOWN = 5  # partitions named in the PARTITION_INCOMPLETE message
+
+
+def _cut_partitions(model: Model, target: str, stage: str, kind: str, since: Parameter) -> Check:
+    """Fails when the `$since` filter cut a loaded partition (#109).
+
+    A loaded partition is cut when the table holds rows of it that this run did not reload:
+    rows at or before `$since` while the loaded rows of that partition have none, or rows with a
+    `NULL` time column while the loaded rows have none (a `$since` filter never reloads those).
+    Partitions compare with `IS NOT DISTINCT FROM`, as the delete does, so `NULL` is a partition.
+    One grouped pass over the loaded rows and one over the table's rows of loaded partitions;
+    `$since` is bound with the time column's type (`kind`). The result is `'0'`, or up to five
+    cut partitions, ordered by value, and their total.
+    """
+    incremental = model.config.incremental
+    assert incremental is not None
+    assert incremental.partition_by
+    assert kind in PARAMETER_TYPES
+    columns = [_identifier(column.root) for column in incremental.partition_by]
+    listed_columns = ", ".join(columns)
+    time = _identifier(incremental.time_column.root)
+
+    def matches(left: str, right: str) -> str:
+        return " AND ".join(f"{left}.{c} IS NOT DISTINCT FROM {right}.{c}" for c in columns)
+
+    counted = (
+        f"count(*) FILTER (WHERE {time} <= $since) AS older, "
+        f"count(*) FILTER (WHERE {time} IS NULL) AS undated"
+    )
+    labels = [f"coalesce(CAST(loaded.{c} AS VARCHAR), 'NULL')" for c in columns]
+    label = labels[0] if len(labels) == 1 else "'(' || " + " || ', ' || ".join(labels) + " || ')'"
+    order = ", ".join(f"loaded.{c} NULLS LAST" for c in columns)
+    sql = (
+        f"WITH loaded AS (SELECT {listed_columns}, {counted} FROM {stage} "
+        f"GROUP BY {listed_columns}), "
+        f"held AS (SELECT {listed_columns}, {counted} FROM {target} AS row_held "
+        f"WHERE EXISTS (SELECT 1 FROM loaded WHERE {matches('row_held', 'loaded')}) "
+        f"GROUP BY {listed_columns}), "
+        f"cut AS (SELECT {label} AS cut_label, row_number() OVER (ORDER BY {order}) AS cut_rank "
+        f"FROM loaded JOIN held ON {matches('held', 'loaded')} "
+        "WHERE (held.older > 0 AND loaded.older = 0) "
+        "OR (held.undated > 0 AND loaded.undated = 0)) "
+        "SELECT CASE WHEN count(*) = 0 THEN '0' ELSE "
+        f"string_agg(cut_label, ', ' ORDER BY cut_rank) FILTER (WHERE cut_rank <= {_CUT_SHOWN}) "
+        "|| ' (' || count(*) || ' in total)' END FROM cut"
+    )
+    name = incremental.time_column.root
+    partition_by = ", ".join(column.root for column in incremental.partition_by)
+    return Check(
+        sql,
+        "PARTITION_INCOMPLETE",
+        f"{model.name}: the $since filter loaded only part of these partitions ({partition_by}): "
+        "{detail}. The table holds rows of them that this run did not reload (at or before "
+        f"$since, or with a NULL {name}), and partition_overwrite would delete them; nothing is "
+        "written. Load whole partitions, for example "
+        f"WHERE {name} >= date_trunc('month', $since) for monthly partitions.",
+        (since,),
+        detail=True,
+    )
 
 
 def _replaced(model: Model, target: str) -> str | None:
