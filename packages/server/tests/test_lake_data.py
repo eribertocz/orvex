@@ -52,10 +52,12 @@ def project(folder: Path, lake: str = "") -> Path:
     return folder
 
 
-def bare(folder: Path, lake: str) -> Path:
+def bare(folder: Path, lake: str, connections: str | None = None) -> Path:
     """A project with no models: validating it opens no lake."""
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "project.yaml").write_text(PROJECT + lake, encoding="utf-8")
+    if connections is not None:
+        (folder / "connections.yaml").write_text(connections, encoding="utf-8")
     return folder
 
 
@@ -178,6 +180,81 @@ def test_an_unset_key_variable_is_named(tmp_path: Path, monkeypatch: pytest.Monk
     assert KEY_ENV in found[0]
 
 
+@pytest.mark.usefixtures("credentials")
+@pytest.mark.parametrize(
+    ("lake", "code"),
+    [
+        (s3_lake("storage.example.com"), "LAKE_TLS_REQUIRED"),
+        ("lake:\n  data:\n    path: gs://b/p/\n", "LAKE_LOCATION_INVALID"),
+        ("lake:\n  data:\n    path: https://h/p/\n", "LAKE_LOCATION_INVALID"),
+        ("lake:\n  data:\n    path: s3://b/p/\n", "LAKE_LOCATION_INVALID"),
+        (s3_lake("127.0.0.1:9000", secret="literal-secret"), "PROJECT_SCHEMA_INVALID"),
+    ],
+)
+def test_a_refused_location_exits_1_and_creates_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], lake: str, code: str
+) -> None:
+    folder = project(tmp_path, lake)
+    exit_code, out = run(capsys, "run", str(folder))
+    assert exit_code == 1, out
+    assert out.startswith(code), out
+    assert SECRET not in out
+    assert "literal-secret" not in out
+    assert not home(folder).exists()
+
+
+def test_an_unset_key_variable_exits_1_and_names_the_setting(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(KEY_ENV, raising=False)
+    monkeypatch.setenv(SECRET_ENV, SECRET)
+    folder = project(tmp_path, s3_lake("127.0.0.1:9000"))
+    exit_code, out = run(capsys, "run", str(folder))
+    assert exit_code == 1, out
+    assert out.startswith("PROJECT_SECRET_MISSING"), out
+    assert f"{KEY_ENV} is not set (lake.data.s3.key_id)" in out
+    assert not home(folder).exists()
+
+
+@pytest.mark.parametrize(
+    ("data", "overlap"),
+    [
+        ("data", "contains the file of connection feed"),
+        (".", "contains the project folder"),
+        ("..", "contains the project folder"),
+        (f".{SLUG}", "is inside"),
+        (f".{SLUG}/lake/other", "is inside"),
+    ],
+)
+def test_a_data_folder_must_hold_only_the_lakes_files(
+    tmp_path: Path, data: str, overlap: str
+) -> None:
+    # DuckLake's orphan cleanup deletes every untracked .parquet file under the data folder,
+    # so a folder shared with sources, the project or the lake's own files is refused.
+    folder = bare(tmp_path / "proj", f"lake:\n  data:\n    path: {data}\n", CONNECTIONS)
+    found = problems(folder)
+    assert len(found) == 1, found
+    assert found[0].startswith("LAKE_LOCATION_INVALID project.yaml"), found
+    assert overlap in found[0]
+    assert not home(folder).exists()
+
+
+def test_a_data_folder_inside_a_wildcard_source_is_refused(tmp_path: Path) -> None:
+    wildcard = (
+        "version: 1\nconnections:\n  feed:\n    type: parquet\n    path: readings/*.parquet\n"
+    )
+    folder = bare(tmp_path, "lake:\n  data:\n    path: readings/lake\n", wildcard)
+    found = problems(folder)
+    assert len(found) == 1, found
+    assert "overlaps the files connection feed reads" in found[0]
+
+
+def test_a_data_folder_of_its_own_is_accepted(tmp_path: Path) -> None:
+    for data in ["lake-files", "data/lake", str(tmp_path / "elsewhere")]:
+        folder = bare(tmp_path / "proj", f"lake:\n  data:\n    path: {data}\n", CONNECTIONS)
+        assert problems(folder) == []
+
+
 def test_changing_the_data_path_or_encryption_of_an_existing_lake_is_refused(
     tmp_path: Path,
 ) -> None:
@@ -185,13 +262,18 @@ def test_changing_the_data_path_or_encryption_of_an_existing_lake_is_refused(
     default = home(folder) / "lake" / "catalog.ducklake"
     default.parent.mkdir(parents=True)
     default.touch()  # an existing default lake
-    for lake in [
-        f"lake:\n  data:\n    path: {tmp_path / 'other'}\n",
-        "lake:\n  encrypted: true\n",
+    for lake, changed in [
+        (
+            f"lake:\n  data:\n    path: {tmp_path / 'other'}\n",
+            f"lake.data.path was the default folder, now {tmp_path.resolve() / 'other'}/",
+        ),
+        ("lake:\n  encrypted: true\n", "lake.encrypted was false, now true"),
     ]:
         bare(folder, lake)
         found = problems(folder)
         assert found[0].startswith("LAKE_LOCATION_CHANGED project.yaml"), found
+        assert changed in found[0]  # the setting that changed, not lake.catalog
+        assert "lake.catalog" not in found[0]
     bare(folder, f"lake:\n  data:\n    path: .{SLUG}/lake/data/\n")
     assert problems(folder) == []  # the default folder, named explicitly: the same lake
 
@@ -246,3 +328,11 @@ def test_a_lake_on_object_storage(
     code, out = run(capsys, "runs", str(tmp_path))
     assert code == 0, out
     assert SECRET not in out
+    chosen = commands.lake_location(load_project(tmp_path), home(tmp_path))
+    assert chosen.location.encrypted is encrypted  # the setting reached the store
+    if encrypted:
+        # Encryption is fixed when the lake is created: turning it off is refused.
+        (tmp_path / "project.yaml").write_text(PROJECT + s3_lake(endpoint), encoding="utf-8")
+        found = problems(tmp_path)
+        assert found[0].startswith("LAKE_LOCATION_CHANGED project.yaml"), found
+        assert "lake.encrypted was true, now false" in found[0]

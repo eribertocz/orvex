@@ -26,7 +26,7 @@ from orvex.contracts.store.v1 import (
     StatementRequest,
 )
 from orvex.store.errors import StoreError
-from orvex.store.lake import Lake, Limits, open_lake
+from orvex.store.lake import Lake, Limits, _guarded, open_lake
 
 LIMITS = Limits(
     memory_limit="512MB", threads=1, max_concurrent=4, queue_size=16, default_timeout_ms=600_000
@@ -215,6 +215,7 @@ def test_the_sandbox_allows_the_prefix_and_nothing_beside_it(
 
 @pytest.mark.xfail(
     strict=True,
+    raises=pytest.fail.Exception,
     reason=(
         "DuckDB 2.0.0 checks an s3:// path against the sandbox as text, then resolves `..` "
         "before the request (measured in CI; moto itself does not resolve it). Known limitation, "
@@ -311,6 +312,65 @@ def test_storage_and_path_must_match(
     assert refused.value.code == "STORE_STATEMENT_INVALID"
 
 
+# --- statements never name an object (#136 review) -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM 's3://lake/billing/../x.parquet'",
+        "SELECT * FROM 's3://lake/billing/**/*.parquet'",
+        "SELECT * FROM 'S3://lake/billing/x.parquet'",
+        'SELECT * FROM "s3://lake/billing/x.parquet"',
+        "CREATE TABLE leak AS SELECT * FROM 's3://lake/billing/../secret/*.csv'",
+        "SELECT * FROM t JOIN 'gs://lake/x.csv' AS g USING (id)",
+        "WITH w AS (SELECT * FROM 'az://c/p.parquet') SELECT * FROM w",
+        "SUMMARIZE 'r2://lake/x.parquet'",
+        "SELECT * FROM t WHERE id IN (SELECT id FROM 'abfss://c@a.dfs.core.windows.net/x')",
+        "SELECT * FROM 'hf://datasets/x/y.parquet'",
+    ],
+)
+def test_a_statement_naming_an_object_is_refused(sql: str) -> None:
+    # The first layer: the sandbox checks object paths as text only (#140), so a statement must
+    # never name one. Checked without opening a lake.
+    with pytest.raises(StoreError) as refused:
+        _guarded(sql, frozenset())
+    assert refused.value.code == "STORE_STATEMENT_INVALID"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 'https://example.com/' || id AS link FROM t",
+        "SELECT * FROM t WHERE note = 'see s3 docs'",
+        "SELECT 'bucket: s3' AS label",
+    ],
+)
+def test_ordinary_text_values_are_accepted(sql: str) -> None:
+    _guarded(sql, frozenset())
+
+
+@pytest.mark.parametrize(
+    "target", ["billing/../x.parquet", "billing/**/*.parquet", "other/x.parquet"]
+)
+def test_a_statement_cannot_name_an_object(
+    tmp_path: Path, endpoint: str, bucket: str, target: str
+) -> None:
+    # The same through a real lake on object storage, for reads and writes.
+    lake = s3_lake(tmp_path, endpoint, bucket)
+    try:
+        write(lake, READINGS)
+        named = f"SELECT * FROM 's3://{bucket}/{target}'"
+        with pytest.raises(StoreError) as refused:
+            read(lake, named)
+        assert refused.value.code == "STORE_STATEMENT_INVALID"
+        with pytest.raises(StoreError) as refused:
+            write(lake, f"CREATE TABLE leak AS {named}")
+        assert refused.value.code == "STORE_STATEMENT_INVALID"
+    finally:
+        lake.close()
+
+
 # --- encryption ------------------------------------------------------------------------------
 
 
@@ -325,6 +385,12 @@ def test_encrypted_files_cannot_be_read_without_the_catalog(
         lake.close()
     files = [key for key in keys(endpoint, bucket) if key.endswith(".parquet")]
     assert files
+    # A control object, not encrypted, through the same plain connection.
+    control = tmp_path / "control.parquet"
+    writer = duckdb.connect()
+    writer.execute(f"COPY (SELECT 7 AS v) TO '{control}' (FORMAT parquet)")
+    writer.close()
+    put(endpoint, bucket, "control/x.parquet", control.read_bytes())
     plain = duckdb.connect()
     try:
         plain.execute("INSTALL httpfs")
@@ -333,7 +399,13 @@ def test_encrypted_files_cannot_be_read_without_the_catalog(
             f"CREATE SECRET (TYPE s3, KEY_ID '{KEY_ID}', SECRET '{SECRET}', REGION 'us-east-1', "
             f"ENDPOINT '{endpoint}', URL_STYLE 'path', USE_SSL false)"
         )
-        with pytest.raises(duckdb.Error):
-            plain.execute(f"SELECT * FROM read_parquet('s3://{bucket}/{files[0]}')").fetchall()
+        # The connection reaches the bucket: a failure below is the encryption, not the setup.
+        control_rows = plain.execute(
+            f"SELECT * FROM read_parquet('s3://{bucket}/control/x.parquet')"
+        ).fetchall()
+        assert control_rows == [(7,)]
+        for key in files:
+            with pytest.raises(duckdb.Error):
+                plain.execute(f"SELECT * FROM read_parquet('s3://{bucket}/{key}')").fetchall()
     finally:
         plain.close()

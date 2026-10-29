@@ -86,6 +86,10 @@ _SUSPICIOUS = re.compile(r"[./\\*?:]")
 POSTGRES_CONNECT_TIMEOUT_S = 10
 RESERVED_SOURCE_NAMES = frozenset({LAKE, "main", "memory", "system", "temp"})
 _GLOB = re.compile(r"[*?\[]")
+# Object-storage addresses DuckDB opens as files (httpfs, azure, Hugging Face). A statement never
+# names one: only DuckLake reaches the lake's objects, and the sandbox checks these paths as text
+# only (`..` is resolved after the check, #140).
+_OBJECT_ADDRESS = re.compile(r"^\s*(s3|s3a|s3n|gs|gcs|r2|az|azure|abfs|abfss|hf)://", re.IGNORECASE)
 EXTENSIONS = ("icu", "ducklake")
 WRITE_STATEMENTS = frozenset(
     {
@@ -526,7 +530,8 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
 def _refuse_file_names(
     sql: str, tokens: list[tuple[int, duckdb.token_type]], positions: list[int]
 ) -> None:
-    """Refuse a quoted string or quoted name that names an existing file or matches files.
+    """Refuse a quoted string or quoted name that names an existing file, matches files, or is an
+    object-storage address (`s3://…`, `gs://…`, `az://…`, …).
 
     DuckDB reads such a string as a file in many places (`FROM '…'`, `MERGE … USING '…'`,
     `PIVOT '…'`, `SUMMARIZE '…'`, …); a model reaches a file only through its source name. Every
@@ -667,6 +672,8 @@ def _refuse_show_statements(
 
 def _names_a_file(token: str) -> bool:
     content = _string_content(token)
+    if _OBJECT_ADDRESS.match(content):
+        return True
     candidates = {content, content.removeprefix("file://")}
     for candidate in candidates:
         if not candidate:

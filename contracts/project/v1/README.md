@@ -72,6 +72,7 @@ lake:
 ```
 
 - **Where.** A local folder (a network file system mounted at the same path on every machine counts), or S3-compatible object storage. Default: `.<slug>/lake/data/`. `gs://`, `az://` and `http(s)://` paths are `LAKE_LOCATION_INVALID` (Google Cloud Storage and Azure: #127). So are an `s3://` path without `s3` and a local path with it.
+- **A folder of its own.** Maintenance deletes every `.parquet` file under the data folder that the lake does not list (DuckLake's orphan cleanup). A local data folder is therefore `LAKE_LOCATION_INVALID` when it is or contains the project folder, lies inside `.<slug>/` (other than the default), contains a file connection's file, or overlaps the folder a wildcard connection reads. An `s3://` prefix cannot be checked that way: give the lake a prefix that nothing else uses.
 - **Credentials** are `${env:NAME}` references only. They become a temporary DuckDB secret, scoped to the lake's prefix and never persisted. An unset variable is `PROJECT_SECRET_MISSING`.
 - **HTTPS.** `use_ssl: false` is refused (`LAKE_TLS_REQUIRED`) unless the endpoint is `localhost`, `127.0.0.1` or `::1`.
 - **Encryption** (`encrypted: true`) uses DuckLake's data-file encryption. Its keys are stored in the catalog, so it protects the files only from someone without access to the catalog. Deletion-vector files would be written unencrypted, so they stay off.
@@ -100,7 +101,7 @@ A `postgres` connection on a host other than the local machine (`localhost`, `12
 | `SOURCE_NOT_READ_ONLY` | a database connection declares `read_only: false` |
 | `SOURCE_TLS_REQUIRED` | a `postgres` connection on another machine without `ssl_mode: verify-full` |
 | `PROJECT_SECRET_MISSING` | a referenced environment variable is not set when the secret is resolved (for `lake.catalog`, when the project is validated) |
-| `LAKE_LOCATION_INVALID` | a `duckdb` or `sqlite` catalog `path` that is a URL, on a network or remote file system, or not the default where the file system cannot be read; an `ssl_root_cert` variable that does not name a file; a `lake.data.path` that is neither a local folder nor `s3://` with its `s3` settings |
+| `LAKE_LOCATION_INVALID` | a `duckdb` or `sqlite` catalog `path` that is a URL, on a network or remote file system, or not the default where the file system cannot be read; an `ssl_root_cert` variable that does not name a file; a `lake.data.path` that is neither a local folder nor `s3://` with its `s3` settings, or a local data folder shared with the project, `.<slug>/` or a file connection |
 | `LAKE_TLS_REQUIRED` | a `postgres` catalog on a host other than the local machine without `ssl_mode: verify-full`; object storage with `use_ssl: false` on an endpoint other than the local machine |
 | `LAKE_LOCATION_CHANGED` | the project's lake exists and `lake.catalog`, `lake.data` or `lake.encrypted` names another place than the one it was created with, or `.<slug>/lake.location` cannot be read |
 

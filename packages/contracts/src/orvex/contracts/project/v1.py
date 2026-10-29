@@ -334,7 +334,7 @@ class LakeCatalog(RootModel[DuckdbLakeCatalog | SqliteLakeCatalog | PostgresLake
 
 class LakeData(BaseModel):
     """
-    Where the lake's data files live: a local folder (relative to the project folder; a network file system mounted at the same path counts) or S3-compatible object storage (`s3://bucket/prefix/`, with `s3`). Default: `.<slug>/lake/data/`.
+    Where the lake's data files live: a local folder (relative to the project folder; a network file system mounted at the same path counts) or S3-compatible object storage (`s3://bucket/prefix/`, with `s3`). Default: `.<slug>/lake/data/`. It must hold only the lake's files: maintenance deletes Parquet files there that the lake does not list.
     """
 
     model_config = ConfigDict(
