@@ -219,9 +219,13 @@ def test_a_long_host_is_shown_shortened(client: TestClient) -> None:
     assert detail == {"name": "host", "value": host[:200]}
 
 
-def test_a_request_without_host_is_refused() -> None:
+@pytest.mark.parametrize("path", ["/api/v1/health", "/", "/api/v1/unknown", "/dashboards/x"])
+def test_a_request_without_host_is_refused(tmp_path: Path, path: str) -> None:
     # HTTP/1.0 allows no Host; the test client always sends one, so the app is called directly.
-    app = create_app(VERSIONS, None, PORT)
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "index.html").write_text("<html>app</html>")
+    app = create_app(VERSIONS, build, PORT)
     sent: list[MutableMapping[str, Any]] = []
 
     async def receive() -> dict[str, Any]:
@@ -236,8 +240,8 @@ def test_a_request_without_host_is_refused() -> None:
         "http_version": "1.0",
         "method": "GET",
         "scheme": "http",
-        "path": "/api/v1/health",
-        "raw_path": b"/api/v1/health",
+        "path": path,
+        "raw_path": path.encode(),
         "query_string": b"",
         "root_path": "",
         "headers": [],
@@ -246,9 +250,13 @@ def test_a_request_without_host_is_refused() -> None:
     }
     asyncio.run(app(scope, receive, send))
     assert sent[0]["status"] == 400
+    headers = {name.decode().lower(): value.decode() for name, value in sent[0]["headers"]}
     body = json.loads(b"".join(message.get("body", b"") for message in sent[1:]))
+    conforms(body, "ErrorEnvelope")
     assert body["error"]["code"] == "HOST_NOT_ALLOWED"
     assert body["error"]["details"] == [{"name": "host", "value": ""}]
+    assert body["error"]["request_id"] == headers["x-request-id"]
+    assert "access-control-allow-origin" not in headers
 
 
 @pytest.mark.parametrize(
@@ -273,13 +281,25 @@ def test_the_servers_own_origin_is_accepted(client: TestClient, origin: str) -> 
     assert "access-control-allow-origin" not in response.headers
 
 
+@pytest.mark.parametrize(
+    ("method", "header", "value", "status"),
+    [
+        ("GET", "Host", "rebind.example:" + "9" * 300, 400),
+        ("POST", "Origin", "http://" + "9" * 300, 403),
+    ],
+)
 def test_a_refusal_is_logged_with_its_status(
-    client: TestClient, caplog: pytest.LogCaptureFixture
+    client: TestClient,
+    caplog: pytest.LogCaptureFixture,
+    method: str,
+    header: str,
+    value: str,
+    status: int,
 ) -> None:
     caplog.set_level("INFO", logger="orvex.server.http")
-    host = "rebind.example:" + "9" * 300
-    response = client.get("/api/v1/health", headers={"Host": host})
+    response = client.request(method, "/api/v1/health", headers={header: value})
+    assert response.status_code == status
     record = next(r for r in caplog.records if r.getMessage() == "request")
-    assert record.__dict__["status"] == 400
+    assert record.__dict__["status"] == status
     assert record.__dict__["request_id"] == response.headers["X-Request-Id"]
     assert "9" * 201 not in json.dumps(record.__dict__, default=str)
