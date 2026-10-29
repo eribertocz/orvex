@@ -155,6 +155,16 @@ def test_a_lake_on_object_storage(tmp_path: Path, endpoint: str, bucket: str) ->
         ).fetchall()
         assert [(name, persistent) for name, persistent, _ in secrets] == [("lake_storage", False)]
         assert SECRET not in str(secrets)
+        # No secret can be persisted, and none is in DuckDB's secret folder.
+        setting = lake._connection.execute(
+            "SELECT current_setting('allow_persistent_secrets'), "
+            "current_setting('secret_directory')"
+        ).fetchone()
+        assert setting is not None
+        assert setting[0] is False
+        directory = Path(str(setting[1]))
+        stored = [path for path in directory.rglob("*") if path.is_file()]
+        assert not any(SECRET.encode() in path.read_bytes() for path in stored)
     finally:
         lake.close()
     found = keys(endpoint, bucket)
