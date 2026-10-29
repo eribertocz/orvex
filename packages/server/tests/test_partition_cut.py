@@ -112,10 +112,10 @@ def test_a_cut_partition_fails_and_keeps_the_table(
     code, out = run(capsys, tmp_path)
     assert code == 1
     assert out.splitlines()[-1].startswith("PARTITION_INCOMPLETE ")
-    assert "2026-10 (1 in total)" in out
+    assert "'2026-10' (1 in total)" in out
     outcome, error_code, message = last_record(tmp_path)
     assert (outcome, error_code) == ("failed", "PARTITION_INCOMPLETE")
-    assert "2026-10 (1 in total)" in str(message)
+    assert "'2026-10' (1 in total)" in str(message)
     # Nothing written: the table is exactly what the first run wrote.
     assert lake_value(tmp_path, ROWS) == before
 
@@ -179,7 +179,7 @@ def test_every_temporal_time_column(
     code, out = run(capsys, tmp_path)
     assert code == 1, kind
     assert "PARTITION_INCOMPLETE" in out
-    assert "2026-10 (1 in total)" in out
+    assert "'2026-10' (1 in total)" in out
     write(tmp_path, {"models/s/m.sql": WHOLE})
     code, out = run(capsys, tmp_path)
     assert code == 0, out
@@ -201,4 +201,4 @@ def test_the_message_names_five_partitions_and_the_total(
     )
     code, out = run(capsys, tmp_path)
     assert code == 1
-    assert ": a, b, c, d, e (7 in total)." in out
+    assert ": 'a', 'b', 'c', 'd', 'e' (7 in total)." in out

@@ -549,7 +549,7 @@ def test_a_since_filter_that_cuts_a_partition_fails_and_writes_nothing(tmp_path:
     assert code == "PARTITION_INCOMPLETE"
     assert message is not None
     assert "s.m: the $since filter loaded only part of these partitions (month): " in message
-    assert "2026-10 (1 in total)" in message
+    assert "'2026-10' (1 in total)" in message
     assert "date_trunc('month', $since)" in message
     # Rolled back: October 1 to 20 are untouched, nothing of the new rows was written.
     assert connection.execute("SELECT count(*), max(n) FROM s.m").fetchall() == [(20, 0)]
@@ -587,7 +587,7 @@ def test_every_temporal_type(tmp_path: Path) -> None:
         code, message = run_since(connection, chosen, LOADED, since)
         assert (code, kind) == ("PARTITION_INCOMPLETE", kind)
         assert message is not None
-        assert "2026-10 (1 in total)" in message
+        assert "'2026-10' (1 in total)" in message
         assert run_since(connection, chosen, WHOLE, since) == (None, None), kind
 
 
@@ -627,7 +627,7 @@ def test_undated_rows_the_filter_never_reloads_are_protected(tmp_path: Path) -> 
     code, message = run_since(connection, chosen, LOADED, "2026-10-02")
     assert code == "PARTITION_INCOMPLETE"
     assert message is not None
-    assert ": n (1 in total)." in message
+    assert ": 'n' (1 in total)." in message
     # A filter that also reloads undated rows passes.
     reloads = "SELECT * FROM src WHERE read_at > $since OR read_at IS NULL"
     connection.execute("INSERT INTO src VALUES ('n', 3, NULL)")
@@ -653,8 +653,8 @@ def test_the_message_names_five_partitions_and_the_total(tmp_path: Path) -> None
     assert code == "PARTITION_INCOMPLETE"
     assert message is not None
     assert (
-        ": (a, 2026-10), (b, 2026-10), (c, 2026-10), (d, 2026-10), (e, 2026-10) (7 in total)."
-        in message
+        "('a', '2026-10'), ('b', '2026-10'), ('c', '2026-10'), ('d', '2026-10'), "
+        "('e', '2026-10') (7 in total)." in message
     )
 
 
@@ -672,7 +672,8 @@ def test_first_runs_full_refreshes_and_unfiltered_models_skip_the_check(tmp_path
     assert "PARTITION_INCOMPLETE" not in codes("SELECT * FROM src", "2026-10-20")
     # Other strategies replace by key or delete nothing.
     for other in (MERGE, DELETE_INSERT, APPEND):
-        planned = steps(model(tmp_path / other[60:70].strip(), other), LOADED, existing, existing)
+        chosen_other = model(tmp_path / other[60:70].strip(), other)
+        planned = steps(chosen_other, LOADED, existing, existing, "2026-10-20")
         assert all(
             step.code != "PARTITION_INCOMPLETE" for step in planned if isinstance(step, Check)
         )
@@ -690,3 +691,43 @@ def test_since_reaches_the_check_only_as_a_bound_parameter(tmp_path: Path) -> No
     assert [(p.name, p.type.root, p.value) for p in check.parameters] == [
         ("since", "DATE", "2026-10-20")
     ]
+
+
+def test_partition_columns_cannot_collide_with_the_check_s_own_names(tmp_path: Path) -> None:
+    """Partition columns named like the query's internal names still compare as partitions."""
+    for number, name in enumerate(["older", "undated", "n_older", "p0", "cut_label", "loaded"]):
+        chosen = model(tmp_path / str(number), FILTERED.replace("[month]", f"[{name}]"))
+        connection = lake()
+        connection.execute("CREATE SCHEMA s")
+        connection.execute(
+            f"CREATE TABLE s.m AS SELECT 7 AS \"{name}\", 0 AS n, DATE '2026-10-01' AS read_at"
+        )
+        connection.execute(
+            f"CREATE TABLE src AS SELECT 7 AS \"{name}\", 1 AS n, DATE '2026-10-09' AS read_at"
+        )
+        code, message = run_since(connection, chosen, LOADED, "2026-10-05")
+        assert code == "PARTITION_INCOMPLETE", name
+        assert message is not None
+        assert ": 7 (1 in total)." in message, name
+        assert connection.execute("SELECT n FROM s.m").fetchall() == [(0,)], name
+
+
+def test_text_values_are_quoted_and_long_ones_shortened(tmp_path: Path) -> None:
+    by_region = FILTERED.replace("[month]", "[region]")
+    chosen = model(tmp_path, by_region)
+    connection = lake()
+    connection.execute("CREATE SCHEMA s")
+    long = "x" * 100
+    connection.execute(
+        "CREATE TABLE s.m AS SELECT * FROM (VALUES ('NULL', 1, DATE '2026-10-01'), "
+        f"(CAST(NULL AS VARCHAR), 2, DATE '2026-10-01'), ('{long}', 3, DATE '2026-10-01'), "
+        "('it''s', 4, DATE '2026-10-01')) AS t(region, n, read_at)"
+    )
+    connection.execute(
+        "CREATE TABLE src AS SELECT region, 9 AS n, DATE '2026-10-09' AS read_at FROM s.m"
+    )
+    code, message = run_since(connection, chosen, LOADED, "2026-10-05")
+    assert code == "PARTITION_INCOMPLETE"
+    assert message is not None
+    shown = "'" + "x" * 59 + "…"
+    assert f": 'NULL', '{'it' + chr(39) * 2 + 's'}', {shown}, NULL (4 in total)." in message
