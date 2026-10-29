@@ -61,7 +61,7 @@ The connection's values are always quoted for libpq, so no value can add a conne
 
 ## Verified TLS for PostgreSQL sources (#122)
 
-A `postgres` connection on a host other than the local machine (`localhost`, `127.0.0.1`, `::1`) must declare `ssl_mode: verify-full`: TLS that checks the server's certificate and that it belongs to the named host, so the password and the production rows never travel over a connection an impostor could answer. Without it the loader refuses the connection with `SOURCE_TLS_REQUIRED`, naming it, before anything connects. Only `verify-full` and `disable` (local machine only) are accepted; `require`, `verify-ca`, `prefer` and `allow` are schema errors. The store enforces the same rule again (`contracts/store/v1`).
+A `postgres` connection on a host other than the local machine (`localhost`, `127.0.0.1`, `::1`, or a Unix-socket directory starting with `/`) must declare `ssl_mode: verify-full`: TLS that checks the server's certificate and that it belongs to the named host, so the password and the production rows never travel over a connection an impostor could answer. Without it the loader refuses the connection with `SOURCE_TLS_REQUIRED`, naming it, before anything connects. Only `verify-full` and `disable` (local machine only) are accepted; `require`, `verify-ca`, `prefer` and `allow` are schema errors. The store enforces the same rule again (`contracts/store/v1`).
 
 ## Read-only sources
 

@@ -72,8 +72,34 @@ def test_a_remote_source_without_verify_full_is_refused(
     assert not (tmp_path / "lake").exists()  # refused before anything was opened
 
 
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [("PGHOSTADDR", "10.0.0.5"), ("PGHOSTADDR", "127.0.0.1,10.0.0.5"), ("PGSERVICE", "billing")],
+)
+def test_the_environment_can_make_localhost_another_machine(
+    variable: str, value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # libpq (and DuckDB's postgres extension) take the address or a whole service from the
+    # environment when the connection does not name them: the same rule as for a catalog.
+    monkeypatch.delenv("PGHOSTADDR", raising=False)
+    monkeypatch.delenv("PGSERVICE", raising=False)
+    monkeypatch.setenv(variable, value)
+    with pytest.raises(StoreError) as refused:
+        _require_source_tls(source("localhost"))
+    assert refused.value.code == "STORE_TLS_REQUIRED"
+    _require_source_tls(source("localhost", sslmode="verify-full"))
+
+
+def test_a_local_address_in_the_environment_stays_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PGSERVICE", raising=False)
+    monkeypatch.setenv("PGHOSTADDR", "127.0.0.1")
+    _require_source_tls(source("localhost"))
+
+
 @pytest.mark.parametrize("host", ["localhost", "LOCALHOST", "127.0.0.1", "::1"])
-def test_local_sources_need_no_tls(host: str) -> None:
+def test_local_sources_need_no_tls(host: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PGHOSTADDR", raising=False)
+    monkeypatch.delenv("PGSERVICE", raising=False)
     _require_source_tls(source(host))
     _require_source_tls(source(host, sslmode="disable"))
     assert _source_tls(source(host)) == ""
@@ -189,5 +215,6 @@ def test_verify_full_against_a_server_without_tls_fails_closed(tmp_path: Path) -
     with pytest.raises(StoreError) as refused:
         open_lake(lake_location(tmp_path), LIMITS, [attachment])
     assert refused.value.code == "STORE_CONNECTION_FAILED"
+    assert "SSL" in refused.value.details["duckdb"]  # refused for TLS, not unreachable
     assert os.environ[PASSWORD_ENV] not in str(refused.value)
     assert os.environ[PASSWORD_ENV] not in str(refused.value.details)

@@ -330,24 +330,31 @@ def _local_host(host: str) -> bool:
     return host == "" or host.startswith(("/", "@")) or host.lower() in _LOCAL_HOSTS
 
 
-def _require_tls(connection: str) -> None:
-    """Refuse a PostgreSQL catalog on another machine unless it is reached with
-    `sslmode=verify-full`, which encrypts and checks that the certificate is the named host's.
+def _hosts(pairs: dict[str, str]) -> str:
+    return pairs["host"] if "host" in pairs else os.environ.get("PGHOST", "")
 
-    Local means every host (and `hostaddr`) libpq could use is the local machine; the
-    environment's `PGHOST`/`PGHOSTADDR` count when the connection names none, and a service
-    (`service`, `PGSERVICE`), which can name any host, is never local.
-    """
-    pairs = _conninfo(connection)
-    hosts = pairs["host"] if "host" in pairs else os.environ.get("PGHOST", "")
+
+def _local_connection(pairs: dict[str, str]) -> bool:
+    """Whether every host (and `hostaddr`) libpq could use for these connection keywords is the
+    local machine. The environment's `PGHOST`/`PGHOSTADDR` count when the keywords name none
+    (libpq and DuckDB's postgres extension read them), and a service (`service`, `PGSERVICE`),
+    which can name any host, is never local. One rule for catalogs (#120) and sources (#122)."""
     addresses = pairs["hostaddr"] if "hostaddr" in pairs else os.environ.get("PGHOSTADDR", "")
-    local = (
+    return (
         "service" not in pairs
         and not os.environ.get("PGSERVICE")
-        and all(_local_host(host.strip()) for host in hosts.split(","))
+        and all(_local_host(host.strip()) for host in _hosts(pairs).split(","))
         and all(address.strip() in _LOCAL_ADDRESSES for address in addresses.split(",") if address)
     )
-    if local or pairs.get("sslmode") == "verify-full":
+
+
+def _require_tls(connection: str) -> None:
+    """Refuse a PostgreSQL catalog on another machine (`_local_connection`) unless it is reached
+    with `sslmode=verify-full`, which encrypts and checks that the certificate is the named
+    host's."""
+    pairs = _conninfo(connection)
+    hosts = _hosts(pairs)
+    if _local_connection(pairs) or pairs.get("sslmode") == "verify-full":
         return
     raise StoreError(
         "STORE_TLS_REQUIRED",
@@ -2081,8 +2088,9 @@ def _source_password(source: PostgresSourceAttachment) -> str:
 def _require_source_tls(source: PostgresSourceAttachment) -> None:
     """Refuse a PostgreSQL source on another machine unless it is reached with
     `sslmode=verify-full` (#122): the password and the production rows would otherwise travel
-    over a connection that does not prove the server is the named host."""
-    if source.host.lower() in _LOCAL_HOSTS or source.sslmode == "verify-full":
+    over a connection that does not prove the server is the named host. The same rule as a
+    catalog's (`_local_connection`), environment included."""
+    if _local_connection({"host": source.host}) or source.sslmode == "verify-full":
         return
     raise StoreError(
         "STORE_TLS_REQUIRED",

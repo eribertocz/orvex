@@ -36,6 +36,17 @@ SUPPORTED_VERSION = 1
 RESERVED_CONNECTION = "lake"
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})  # the local machine (#120, #122)
 
+
+def is_local_host(host: str) -> bool:
+    """Whether `host` is the local machine: `localhost`, `127.0.0.1`, `::1` or a Unix-socket
+    directory (a path starting with `/`). libpq reads `host` as a comma-separated list and tries
+    each entry, so every entry must be local."""
+    return all(
+        entry.strip().startswith("/") or entry.strip().lower() in LOCAL_HOSTS
+        for entry in host.split(",")
+    )
+
+
 type Connection = (
     ParquetConnection
     | CsvConnection
@@ -226,7 +237,7 @@ def _load_connections(document: ConfigFile, folder: Path) -> dict[str, Connectio
             )
         if (
             isinstance(connection, PostgresConnection)
-            and connection.host.lower() not in LOCAL_HOSTS
+            and not is_local_host(connection.host)
             and connection.ssl_mode != "verify-full"
         ):
             raise ProjectLoadError(

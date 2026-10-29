@@ -87,3 +87,31 @@ def test_home_is_expanded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     (attachment,) = source_attachments({"a": connection})
     assert not isinstance(attachment, PostgresSourceAttachment)
     assert attachment.path == str(tmp_path / "data" / "a.csv")
+
+
+def test_postgres_tls_settings_reach_the_attachment() -> None:
+    def attachment(**tls: str) -> PostgresSourceAttachment:
+        connection = PostgresConnection.model_validate(
+            {
+                "type": "postgres",
+                "host": "db.example.invalid",
+                "port": 5432,
+                "database": "billing",
+                "user": "reader",
+                "password": "${env:PRODUCTION_PASSWORD}",
+                "read_only": True,
+                **tls,
+            }
+        )
+        (found,) = source_attachments({"production": connection})
+        assert isinstance(found, PostgresSourceAttachment)
+        return found
+
+    verified = attachment(ssl_mode="verify-full", ssl_root_cert="${env:BILLING_CA}")
+    assert (verified.sslmode, verified.sslrootcert) == ("verify-full", "${env:BILLING_CA}")
+    system = attachment(ssl_mode="verify-full")
+    assert (system.sslmode, system.sslrootcert) == ("verify-full", "system")
+    plain = attachment()
+    assert (plain.sslmode, plain.sslrootcert) == (None, None)
+    disabled = attachment(ssl_mode="disable", ssl_root_cert="${env:BILLING_CA}")
+    assert (disabled.sslmode, disabled.sslrootcert) == ("disable", None)  # no TLS, no CA

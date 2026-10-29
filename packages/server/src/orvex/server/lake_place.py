@@ -24,7 +24,7 @@ from orvex.contracts.project.v1 import (
     SqliteLakeCatalog,
 )
 from orvex.contracts.store.v1 import LocalLakeLocation, PostgresLakeLocation, SqliteLakeLocation
-from orvex.server.project import LOCAL_HOSTS, PROJECT_FILE, Project, ProjectLoadError
+from orvex.server.project import PROJECT_FILE, Project, ProjectLoadError, is_local_host
 
 LAKE_FOLDER = "lake"
 RECORD_FILE = "lake.location"
@@ -191,11 +191,7 @@ def _unescape(text: str) -> str:
 
 def _postgres(catalog: PostgresLakeCatalog, data: str) -> Place:
     host = catalog.host
-    # libpq reads `host` as a list: every entry must be the local machine.
-    local = all(
-        entry.strip().startswith("/") or entry.strip().lower() in LOCAL_HOSTS
-        for entry in host.split(",")
-    )
+    local = is_local_host(host)
     if not local and catalog.ssl_mode != "verify-full":
         mode = catalog.ssl_mode or "not set"
         raise ProjectLoadError(

@@ -71,11 +71,12 @@ def test_other_ssl_modes_are_schema_errors(
     assert out.startswith("PROJECT_SCHEMA_INVALID connections.yaml")
 
 
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "::1", "/var/run/postgresql"])
 def test_a_local_source_with_verify_full_or_without_ssl_mode_is_accepted(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], host: str
 ) -> None:
     for extra in ["", "    ssl_mode: disable\n", "    ssl_mode: verify-full\n"]:
-        project(tmp_path, postgres("localhost", extra=extra))
+        project(tmp_path, postgres(f"'{host}'", extra=extra))
         code, out = validate(capsys, tmp_path)
         assert code == 0, out
 

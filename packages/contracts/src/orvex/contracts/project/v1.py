@@ -88,7 +88,7 @@ class SqliteConnection(BaseModel):
 
 class PostgresConnection(BaseModel):
     """
-    A PostgreSQL database. `schema`, when given, limits the connection to that schema. A host other than the local machine (`localhost`, `127.0.0.1`, `::1`) needs `ssl_mode: verify-full`; the loader refuses it otherwise with `SOURCE_TLS_REQUIRED`.
+    A PostgreSQL database. `schema`, when given, limits the connection to that schema. A host other than the local machine (`localhost`, `127.0.0.1`, `::1`, a Unix-socket directory) needs `ssl_mode: verify-full`; the loader refuses it otherwise with `SOURCE_TLS_REQUIRED`.
     """
 
     model_config = ConfigDict(
