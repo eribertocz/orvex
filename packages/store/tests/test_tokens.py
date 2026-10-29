@@ -12,7 +12,13 @@ import duckdb
 import pytest
 from orvex.contracts.store.v1 import Parameter, ParameterType
 from orvex.store.errors import StoreError
-from orvex.store.lake import _created_kind_allowed, _guarded, _tokens, _typed
+from orvex.store.lake import (
+    _created_kind_allowed,
+    _guarded,
+    _single_statement,
+    _tokens,
+    _typed,
+)
 
 
 def table_functions() -> frozenset[str]:
@@ -172,6 +178,13 @@ def test_summarize_describe_and_show_are_refused(sql: str) -> None:
         "SELECT * FROM t UNION ALL SELECT * FROM u ORDER BY 1 DESC",
         # Reviewer pass 2: a label is still a label after empty statements.
         ";CREATE TABLE x AS SELECT a AS desc FROM t",
+        # Reviewer pass 3: qualified names, and the FROM of IS DISTINCT FROM.
+        "SELECT t.desc FROM t",
+        "SELECT t.show, s.desc FROM t",
+        "SELECT x.summarize FROM (SELECT 1 AS summarize) x",
+        "CREATE TABLE y AS SELECT t . desc FROM t",
+        "SELECT a FROM t ORDER BY a IS DISTINCT FROM 1 DESC",
+        "SELECT a FROM t ORDER BY a IS NOT DISTINCT FROM 1 DESC",
     ],
 )
 def test_ordinary_statements_are_accepted(sql: str) -> None:
@@ -185,3 +198,11 @@ def test_a_file_named_with_e_string_escapes_is_refused(a_file: str, escape: str)
     with pytest.raises(StoreError) as refused:
         _guarded(f"SELECT E'{escaped}' AS name FROM t", table_functions())
     assert refused.value.code == "STORE_STATEMENT_INVALID"
+
+
+@pytest.mark.parametrize("sql", ["SELECT E'a\\'", "SELECT E'\\x00' AS a"])
+def test_a_malformed_e_string_fails_as_a_store_error(sql: str) -> None:
+    # Reviewer pass 3: decoding `E'…'` must not let a raw DuckDB error escape.
+    with pytest.raises(StoreError) as failed:
+        _single_statement(sql, table_functions())
+    assert failed.value.code == "STORE_QUERY_FAILED"

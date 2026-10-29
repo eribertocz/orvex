@@ -532,8 +532,13 @@ def _escape_string_value(token: str) -> str:
     tokens = duckdb.tokenize(token)
     if len(tokens) != 1 or tokens[0][1] != duckdb.token_type.string_const:
         return token[2:-1]
-    with duckdb.connect(config={"enable_external_access": False}) as connection:
-        row = connection.execute(f"SELECT {token}").fetchone()
+    try:
+        with duckdb.connect(config={"enable_external_access": False}) as connection:
+            row = connection.execute(f"SELECT {token}").fetchone()
+    except duckdb.Error:
+        # Not a valid constant (`E'a\\'`, `E'\\x00'`): the statement fails later, when it is
+        # parsed, with `STORE_QUERY_FAILED`.
+        return token[2:-1]
     return str(row[0]) if row is not None and row[0] is not None else ""
 
 
@@ -541,10 +546,11 @@ def _refuse_show_statements(
     sql: str, tokens: list[tuple[int, duckdb.token_type]], positions: list[int]
 ) -> None:
     """Refuse `SUMMARIZE`, `DESCRIBE`, `DESC` and `SHOW` everywhere except where DuckDB reads
-    them as something else: a column label after `AS` (`SELECT a AS desc`), and `DESC` as an
-    ordering inside an `ORDER BY` clause. DuckDB reads a quoted target of `SUMMARIZE` as a file,
-    and these statement forms are not pinned to a snapshot (#153). The rule lists what is allowed,
-    so a position not thought of is refused. Quoted names (`"describe"`) are ordinary names."""
+    them as something else: a column label after `AS` (`SELECT a AS desc`), a part of a qualified
+    name after `.` (`t.desc`), and `DESC` as an ordering inside an `ORDER BY` clause. DuckDB
+    reads a quoted target of `SUMMARIZE` as a file, and these statement forms are not pinned to a
+    snapshot (#153). The rule lists what is allowed, so a position not thought of is refused.
+    Quoted names (`"describe"`) are ordinary names."""
     words: list[tuple[str, duckdb.token_type]] = []
     for position, kind in tokens:
         end = next(later for later in positions if later > position)
@@ -576,13 +582,16 @@ def _refuse_show_statements(
             continue
         if kind != duckdb.token_type.keyword:
             continue
-        if word in _CLAUSES:
+        # The `FROM` of `IS [NOT] DISTINCT FROM` is a comparison, not a clause.
+        if word in _CLAUSES and not (word == "from" and words[index - 1][0] == "distinct"):
             clauses[-1] = word
         if word not in _SHOW_STATEMENTS:
             continue
         label = index > 0 and words[index - 1][0] == "as" and index - 1 not in query_as
+        # After `.`, the word is part of a qualified name (`t.desc`); DuckDB reads it as a name.
+        qualified = index > 0 and words[index - 1][0] == "."
         ordering = word == "desc" and clauses[-1] == "order"
-        if not (label or ordering):
+        if not (label or qualified or ordering):
             raise StoreError(
                 "STORE_STATEMENT_INVALID",
                 "SUMMARIZE, DESCRIBE and SHOW are not allowed in statements.",
