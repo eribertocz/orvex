@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "ORIGIN_NOT_ALLOWED",
+    "message": "This local server answers only its own pages",
+    "details": [{ "name": "origin", "value": "http://evil.example" }],
+    "request_id": "8f1c2a"
+  }
+}

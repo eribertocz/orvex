@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "HOST_NOT_ALLOWED",
+    "message": "This local server answers only requests addressed to it as 127.0.0.1 or localhost",
+    "details": [{ "name": "host", "value": "rebind.example:7878" }],
+    "request_id": "8f1c2a"
+  }
+}

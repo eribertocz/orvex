@@ -87,7 +87,8 @@ def test_cli_and_api_report_the_same_versions(capsys: pytest.CaptureFixture[str]
     assert main(["--version"]) == 0
     printed = capsys.readouterr().out.strip()
     versions = current_versions(IDENTITY)
-    body = TestClient(create_app(versions, None)).get("/api/v1/version").json()
+    app = create_app(versions, None, 7878)
+    body = TestClient(app, base_url="http://127.0.0.1:7878").get("/api/v1/version").json()
     from_api = describe_versions(
         IDENTITY,
         type(versions)(
