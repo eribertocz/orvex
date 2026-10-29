@@ -1,0 +1,1 @@
+{"version": 1, "connections": {"production": {"type": "postgres", "host": "db.example.com", "port": 5432, "database": "d", "user": "u", "password": "${env:P}", "read_only": true, "ssl_mode": "require"}}}

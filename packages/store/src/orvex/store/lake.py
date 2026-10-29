@@ -64,6 +64,7 @@ _SCHEMA_NAME = re.compile(r"[a-z_][a-z0-9_]*")
 # is a Unix-socket directory, and an empty host is libpq's default socket.
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 _LOCAL_ADDRESSES = frozenset({"127.0.0.1", "::1"})
+_VARIABLE = re.compile(r"\$\{env:([A-Z_][A-Z0-9_]*)\}")
 type AnyLakeLocation = LocalLakeLocation | SqliteLakeLocation | PostgresLakeLocation
 # Functions that run SQL or open connections outside the lake; never allowed in a statement.
 _EXTERNAL_SQL_FUNCTIONS = frozenset(
@@ -830,7 +831,7 @@ class Lake:
         )
         connection = (
             f"connect_timeout={POSTGRES_CONNECT_TIMEOUT_S} "
-            "options='-c default_transaction_read_only=on'"
+            "options='-c default_transaction_read_only=on'" + _source_tls(source)
         )
         options = ["TYPE postgres", f"SECRET {secret}", "READ_ONLY"]
         if source.schema_:
@@ -2064,6 +2065,8 @@ type AnySource = (
 
 
 def _source_password(source: PostgresSourceAttachment) -> str:
+    _require_source_tls(source)
+    _source_tls(source)  # an unset CA variable is refused before anything is opened
     password = os.environ.get(source.password_env, "")
     if not password:
         raise StoreError(
@@ -2073,6 +2076,47 @@ def _source_password(source: PostgresSourceAttachment) -> str:
         )
     register_secret(password)
     return password
+
+
+def _require_source_tls(source: PostgresSourceAttachment) -> None:
+    """Refuse a PostgreSQL source on another machine unless it is reached with
+    `sslmode=verify-full` (#122): the password and the production rows would otherwise travel
+    over a connection that does not prove the server is the named host."""
+    if source.host.lower() in _LOCAL_HOSTS or source.sslmode == "verify-full":
+        return
+    raise StoreError(
+        "STORE_TLS_REQUIRED",
+        f"Source {source.name} is on another machine and must be reached with "
+        "sslmode=verify-full (TLS that checks the server's certificate and name).",
+        {"source": source.name, "host": source.host, "sslmode": source.sslmode or "(none)"},
+    )
+
+
+def _source_tls(source: PostgresSourceAttachment) -> str:
+    """The source's TLS settings as libpq connection keywords (quoted values)."""
+    if source.sslmode is None:
+        return ""
+    settings = f" sslmode={_libpq_value(source.sslmode)}"
+    if source.sslmode == "verify-full":
+        root = source.sslrootcert or "system"
+        if root != "system":
+            match = _VARIABLE.fullmatch(root)
+            assert match is not None  # the contract's pattern
+            variable = match.group(1)
+            root = os.environ.get(variable, "")
+            if not root:
+                raise StoreError(
+                    "STORE_SECRET_MISSING",
+                    f"The environment variable {variable} is not set (the certificate "
+                    f"authorities of source {source.name}).",
+                    {"variable": variable, "source": source.name},
+                )
+        settings += f" sslrootcert={_libpq_value(root)}"
+    return settings
+
+
+def _libpq_value(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
 def _sqlite_snapshot(source: SqliteSourceAttachment, copy: Path) -> list[tuple[str, str, str]]:

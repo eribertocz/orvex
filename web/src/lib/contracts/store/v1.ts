@@ -200,7 +200,7 @@ export interface SqliteSourceAttachment {
 	path: string;
 }
 /**
- * A PostgreSQL database attached read-only (also `default_transaction_read_only` on its session): `<name>.<table>` when `schema` is given, otherwise `<name>.<schema>.<table>`. The password is read from the environment variable `password_env` and never appears in errors. Columns `numeric` without precision and `money` are refused when a write reads them (`UNSUPPORTED_SOURCE_TYPE`).
+ * A PostgreSQL database attached read-only (also `default_transaction_read_only` on its session): `<name>.<table>` when `schema` is given, otherwise `<name>.<schema>.<table>`. The password is read from the environment variable `password_env` and never appears in errors. Columns `numeric` without precision and `money` are refused when a write reads them (`UNSUPPORTED_SOURCE_TYPE`). A host other than the local machine (localhost, 127.0.0.1, ::1) needs sslmode verify-full (STORE_TLS_REQUIRED otherwise).
  */
 export interface PostgresSourceAttachment {
 	kind: 'source_attachment';
@@ -215,4 +215,12 @@ export interface PostgresSourceAttachment {
 	user: string;
 	password_env: string;
 	schema?: string;
+	/**
+	 * libpq sslmode: verify-full, or disable for the local machine only; absent, libpq's default (local machine only).
+	 */
+	sslmode?: 'verify-full' | 'disable';
+	/**
+	 * With verify-full: `system` (the default) or `${env:NAME}`, a variable holding the path of a CA file, read by the store when the lake opens.
+	 */
+	sslrootcert?: string;
 }

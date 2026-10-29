@@ -2,7 +2,8 @@
 
 The project loader (contract `project` v1) has already resolved relative paths against the
 project folder; `~` is expanded here for paths given directly. Passwords stay references: a
-`${env:NAME}` becomes `password_env: NAME`, and only the store reads the variable.
+`${env:NAME}` becomes `password_env: NAME`, and only the store reads the variable; so does a
+PostgreSQL source's `ssl_root_cert` (#122).
 """
 
 from __future__ import annotations
@@ -80,6 +81,12 @@ def source_attachments(connections: Mapping[str, Connection]) -> list[Attachment
                         "user": connection.user,
                         "password_env": reference.group(1),
                         **({"schema": connection.schema_} if connection.schema_ else {}),
+                        **({"sslmode": connection.ssl_mode} if connection.ssl_mode else {}),
+                        **(
+                            {"sslrootcert": connection.ssl_root_cert}
+                            if connection.ssl_mode == "verify-full" and connection.ssl_root_cert
+                            else {}
+                        ),
                     }
                 )
             )

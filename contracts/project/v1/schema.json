@@ -215,7 +215,7 @@
       }
     },
     "PostgresConnection": {
-      "description": "A PostgreSQL database. `schema`, when given, limits the connection to that schema.",
+      "description": "A PostgreSQL database. `schema`, when given, limits the connection to that schema. A host other than the local machine (`localhost`, `127.0.0.1`, `::1`) needs `ssl_mode: verify-full`; the loader refuses it otherwise with `SOURCE_TLS_REQUIRED`.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -261,6 +261,19 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128
+        },
+        "ssl_mode": {
+          "description": "libpq `sslmode`: `verify-full` (TLS that checks the server's certificate and name), or `disable` for the local machine only. Absent: libpq's default, accepted on the local machine only.",
+          "enum": [
+            "verify-full",
+            "disable"
+          ]
+        },
+        "ssl_root_cert": {
+          "description": "Certificate authorities that verify the server with `verify-full`: `system` (the operating system's store, the default) or `${env:NAME}`, a variable holding the path of a CA file.",
+          "type": "string",
+          "pattern": "^(system|\\$\\{env:[A-Z_][A-Z0-9_]*\\})$",
+          "default": "system"
         }
       }
     },
@@ -322,6 +335,7 @@
         "PROJECT_VERSION_UNSUPPORTED",
         "PROJECT_SECRET_MISSING",
         "SOURCE_NOT_READ_ONLY",
+        "SOURCE_TLS_REQUIRED",
         "LAKE_LOCATION_INVALID",
         "LAKE_TLS_REQUIRED",
         "LAKE_LOCATION_CHANGED"
