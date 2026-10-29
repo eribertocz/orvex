@@ -266,3 +266,21 @@ def test_a_nul_character_cannot_cut_a_file_name(a_file: str, named: str) -> None
     with pytest.raises(StoreError) as refused:
         _guarded(sql, table_functions())
     assert refused.value.code == "STORE_STATEMENT_INVALID"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "CREATE TABLE stolen AS SELECT json_serialize_plan('SELECT 1', optimize := true) AS p",
+        "SELECT json_serialize_plan('SELECT * FROM ''' || 'x.parquet' || '''') AS p",
+        "SELECT JSON_SERIALIZE_PLAN /* a comment */ ('SELECT 1') AS p",
+        "SELECT * FROM json_execute_serialized_sql('{}')",
+    ],
+    ids=["write", "concatenated", "comment-and-case", "execute"],
+)
+def test_functions_that_bind_sql_text_are_refused(sql: str) -> None:
+    # #136 Reviewer pass 9: json_serialize_plan binds its SQL text on the lake's connection,
+    # where a file named in that text is opened.
+    with pytest.raises(StoreError) as refused:
+        _guarded(sql, table_functions())
+    assert refused.value.code == "STORE_STATEMENT_INVALID"

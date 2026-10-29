@@ -80,6 +80,10 @@ _EXTERNAL_SQL_FUNCTIONS = frozenset(
         "sqlite_scan",
         "query",
         "query_table",
+        # Bind or run SQL given as text, on the lake's own connection: the text can name a file
+        # no check of the statement sees (#136, Reviewer pass 9).
+        "json_serialize_plan",
+        "json_execute_serialized_sql",
     }
 )
 _SUSPICIOUS = re.compile(r"[./\\*?:]")
@@ -1552,6 +1556,15 @@ class Lake:
         schemas = {schema for schema, _ in tables}
         ctes = _cte_names(tree)
         for node in _walk(tree):
+            if (
+                node.get("class") == "FUNCTION"
+                and str(node.get("function_name", "")).lower() in _EXTERNAL_SQL_FUNCTIONS
+            ):
+                raise StoreError(
+                    "STORE_STATEMENT_INVALID",
+                    "This function is not allowed in a read.",
+                    {"function": str(node.get("function_name"))},
+                )
             if node.get("type") == "SHOW_REF":
                 # SUMMARIZE / DESCRIBE / SHOW: unpinned, and a quoted target is read as a file.
                 raise StoreError(

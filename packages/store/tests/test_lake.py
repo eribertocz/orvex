@@ -584,3 +584,26 @@ def test_a_read_with_summarize_is_refused_by_the_tree_too(
     monkeypatch.setattr(store_lake, "_refuse_show_statements", lambda *arguments: None)
     sql = "SELECT * FROM m UNION ALL BY NAME SUMMARIZE m"
     assert code_of(lambda: read(lake, sql)) == "STORE_STATEMENT_INVALID"
+
+
+def test_a_read_that_binds_sql_text_is_refused_by_the_tree_too(
+    lake: Lake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #136 Reviewer pass 9: with the statement check's function list emptied, the read's tree
+    # check still refuses json_serialize_plan, which would bind its text on the lake.
+    import orvex.store.lake as store_lake
+
+    write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(3)"))
+    assert code_of(lambda: read(lake, "SELECT json_serialize_plan('SELECT 1') AS p")) == (
+        "STORE_STATEMENT_INVALID"
+    )
+    guarded = store_lake._guarded
+
+    def without_the_function_rule(sql: str, table_functions: frozenset[str]) -> None:
+        with monkeypatch.context() as patched:
+            patched.setattr(store_lake, "_EXTERNAL_SQL_FUNCTIONS", frozenset())
+            guarded(sql, table_functions)
+
+    monkeypatch.setattr(store_lake, "_guarded", without_the_function_rule)
+    sql = "SELECT a, json_serialize_plan('SELECT 1') AS p FROM m"
+    assert code_of(lambda: read(lake, sql)) == "STORE_STATEMENT_INVALID"
