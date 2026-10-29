@@ -230,3 +230,24 @@ def test_a_file_in_the_working_folder_named_by_a_dotted_name_is_refused(
         _guarded("CREATE TABLE leak AS SELECT * FROM x.csv", table_functions())
     assert refused.value.code == "STORE_STATEMENT_INVALID"
     _guarded("CREATE TABLE ok AS SELECT * FROM s.t", table_functions())  # an ordinary name
+
+
+@pytest.mark.parametrize(
+    "named",
+    ["'{d}/**/*.parquet'", '"{d}/**/*".parquet', "'{d}/*/y.parquet'"],
+    ids=["recursive", "recursive-dotted", "hidden-folder"],
+)
+def test_a_glob_duckdb_expands_further_than_python_is_refused(tmp_path: Path, named: str) -> None:
+    # #136 Reviewer pass 7: DuckDB's `**` goes to any depth and its `*` matches hidden names.
+    deep = tmp_path / "data" / "main" / "t"
+    deep.mkdir(parents=True)
+    (deep / "x.parquet").write_bytes(b"PAR1")
+    hidden = tmp_path / "data" / ".h"
+    hidden.mkdir()
+    (hidden / "y.parquet").write_bytes(b"PAR1")
+    sql = "CREATE TABLE leak AS SELECT * FROM " + named.replace(
+        "{d}", (tmp_path / "data").as_posix()
+    )
+    with pytest.raises(StoreError) as refused:
+        _guarded(sql, table_functions())
+    assert refused.value.code == "STORE_STATEMENT_INVALID"

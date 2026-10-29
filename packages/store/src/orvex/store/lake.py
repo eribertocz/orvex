@@ -714,7 +714,12 @@ def _names_a_file(token: str) -> bool:
         if (
             looks_like_path
             and _GLOB.search(candidate)
-            and any(os.path.isfile(match) for match in globlib.iglob(path))
+            and any(
+                os.path.isfile(match)
+                # As DuckDB expands it: `**` at any depth, hidden names included (#136, Reviewer
+                # pass 7).
+                for match in globlib.iglob(path, recursive=True, include_hidden=True)
+            )
         ):
             return True
     return False
