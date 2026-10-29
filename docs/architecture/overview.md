@@ -11,7 +11,7 @@
 
 | Module | Distribution | Single responsibility | Receives | Returns | Owns state |
 |---|---|---|---|---|---|
-| **store** | `orvex-store` | Store and read analytical data | SQL plans, write batches, snapshot requests | Arrow results, snapshot identifiers | DuckLake catalog and Parquet files |
+| **store** | `orvex-store` | Store and read analytical data; execute queries on Direct Query engines (ADR-0027) | SQL plans, write batches, snapshot requests | Arrow results, snapshot identifiers | DuckLake catalog and Parquet files |
 | **transform** | `orvex-transform` | Turn sources into clean tables | Connections, SQL models, model configs | Tables in the store, run records, OpenLineage events, audit results | Run history, incremental watermarks |
 | **semantic** | `orvex-semantic` | Turn meaning into correct results | Ossie model, semantic query, security context | Typed results, receipts, stable errors, explanations, pre-aggregation definitions | Compiled-model cache, result cache, metric proposals, query statistics, evidence-verification results (own schema, §4.3) |
 | **access** | `orvex-access` | Know who the caller is and what they may do | Credentials, OIDC tokens, personal access tokens | Security context (user, roles, groups, attributes, permission fingerprint) | Users, sessions, memberships, personal access tokens (hashed), audit log |
@@ -67,9 +67,9 @@ orvex facturacion/       # opens or creates a persistent project
 ```
 
 - One process runs `server`, every module in-process, and serves the web UI.
-- DuckLake uses a **local DuckDB catalog** and local Parquet files inside the project.
+- DuckLake uses a **local DuckDB catalog** and local Parquet files inside the project by default. `project.yaml` can opt in to another location (ADR-0027 §2): a SQLite catalog, a PostgreSQL catalog on premises or in the cloud, and data files on a network file system or in object storage.
 - Module state uses local SQLite files under the instance directory (§4.3).
-- No login (a single implicit Builder), no Docker, no external services.
+- No login (a single implicit Builder), no Docker, and no external services by default.
 
 ### 4.2 Server mode
 
@@ -78,10 +78,10 @@ orvex facturacion/ --server     # or the official Docker image
 ```
 
 - Processes: `server` (HTTP API + web) with multiple workers, and `transform` worker(s) for scheduled loads.
-- DuckLake uses a **PostgreSQL catalog**, which supports concurrent readers and writers across processes. Data files live on local disk or object storage.
+- DuckLake uses a **PostgreSQL catalog** by default, on premises or in the cloud, which supports concurrent readers and writers across processes and machines. A SQLite catalog serves a server on one machine. Data files live on local disk (one machine), a network file system or object storage (ADR-0027 §2).
 - Module state uses PostgreSQL, **one schema and one database role per module**, so modules never read each other's tables.
 - Login is required (local users and/or OIDC).
-- Quack is an optional adapter of `store` for remote DuckDB access; never a startup requirement.
+- Direct Query on an existing DuckLake is an optional connection executed by `store`, never a startup requirement; Quack and ClickHouse Direct Query come after v1.0.0 (ADR-0027).
 
 Both modes run the same code; only the adapters selected at composition differ.
 
@@ -92,7 +92,7 @@ Both modes run the same code; only the adapters selected at composition differ.
 | Instance directory | `~/.<slug>/` (override with `<SLUG>_HOME`) | Configured data directory (a volume in Docker) |
 | Module state (users, sessions, run history, audit log, drafts, metric proposals, query statistics) | One SQLite file per module in the instance directory | PostgreSQL, one schema and role per module |
 | Project files | The project folder (a Git repository) | The project folder on the server |
-| Warehouse | `<project>/.<slug>/lake/` (DuckLake, local DuckDB catalog) | DuckLake with PostgreSQL catalog; data files on disk or object storage |
+| Warehouse | `<project>/.<slug>/lake/` (DuckLake, local DuckDB catalog) by default; any location of ADR-0027 §2 by opt-in | DuckLake with PostgreSQL catalog by default (SQLite on one machine); data files on disk, a network file system or object storage |
 | In-memory project (`orvex` with no folder) | A temporary directory deleted on exit; **Save as** turns it into a project folder | Not available |
 | Result cache | In-process | Per worker, invalidated across workers by PostgreSQL `LISTEN/NOTIFY` on each run record |
 | Secrets | Environment variables referenced from `connections.yaml` | Environment variables or the platform's secret store |
@@ -102,7 +102,7 @@ Both modes run the same code; only the adapters selected at composition differ.
 1. The browser requests page `billing/arrears`. `server` authenticates the session through `access`, which returns the security context.
 2. `server` asks `dashboards` whether the caller may see the page. Denied ⇒ `403` with code `PAGE_FORBIDDEN`.
 3. For each visual (charts, tables and the matrix), the browser sends `{page, visual_id, interaction_state}` — never SQL and never a free-form query. `server` asks `dashboards` to check the page again and to build the semantic or matrix query from the published visual and the interaction state (`security.md` §3.2), then passes it to `semantic`.
-4. `semantic` validates the query against the model, applies mandatory row and column policies from the security context, proves correctness, plans, checks the cache (key includes the permission fingerprint), generates DuckDB SQL with bound parameters and executes it through `store` on a fixed DuckLake snapshot.
+4. `semantic` validates the query against the model, applies mandatory row and column policies from the security context, proves correctness, plans, checks the cache (key includes the permission fingerprint), generates the SQL of the dataset's engine with bound parameters and executes it through `store`: on a fixed DuckLake snapshot, of the managed lake or of an existing DuckLake (ADR-0027).
 5. `semantic` returns a typed Arrow result, a receipt and freshness information.
 6. The browser renders with ECharts or the matrix component. Exact values stay strings until formatting.
 
@@ -165,8 +165,8 @@ Python packages share the `orvex` namespace through implicit namespace packages 
 
 | Concern | Choice |
 |---|---|
-| Analytical engine | DuckDB (latest stable, ADR-0022); data stays in DuckDB as lazy relations, results leave as Arrow (ADR-0025) |
-| Warehouse format | DuckLake (DuckDB catalog locally, PostgreSQL catalog in server mode) |
+| Analytical engine | DuckDB (latest stable, ADR-0022); data stays in DuckDB as lazy relations, results leave as Arrow (ADR-0025). Direct Query: an existing DuckLake in v1.0.0; remote DuckDB through Quack and ClickHouse after v1.0.0 (ADR-0027) |
+| Warehouse format | DuckLake (DuckDB-file, SQLite or PostgreSQL catalog; data files on disk, a network file system or object storage; ADR-0027 §2) |
 | Backend language | Python (latest stable) |
 | HTTP | FastAPI (Pydantic included) |
 | YAML | PyYAML |

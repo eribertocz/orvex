@@ -38,10 +38,10 @@ Rules:
 
 ## 4. Core flow (end to end)
 
-1. **Connect** to raw data: Parquet, CSV, DuckDB, SQLite, PostgreSQL, ClickHouse.
-2. **Transform** with SQL models (full or incremental) into clean facts and dimensions stored in **DuckLake**.
+1. **Connect** to data along two routes (ADR-0027): raw sources (Parquet, CSV, DuckDB, SQLite, PostgreSQL, and ClickHouse by extraction) to transform, or an existing DuckLake to query in place, without copying.
+2. **Transform** raw sources with SQL models (full or incremental) into clean facts and dimensions stored in **DuckLake**; data queried in place skips this step.
 3. **Model meaning** in Apache Ossie: datasets, dimensions, metrics, relationships, plus Orvex extensions (additivity, grain, units, time roles, policies, cache).
-4. **Ask**: the semantic engine receives a semantic query, applies security, proves correctness, plans, generates DuckDB SQL, executes it and returns typed results with a receipt.
+4. **Ask**: the semantic engine receives a semantic query, applies security, proves correctness, plans, generates the SQL of the dataset's engine, executes it there and returns typed results with a receipt.
 5. **Present**: dashboards (pages, charts, KPIs, tables, the matrix, filters) built by Builders and Authors.
 6. **Share**: a URL per dashboard; access by role, group (pages), row and column policies.
 7. **Explain**: any number can be traced to its definition, filters, policies, data version and source rows' lineage.
@@ -55,8 +55,8 @@ Everything below is **in scope**. Nothing is simplified to ship earlier; capabil
 | Area | In scope |
 |---|---|
 | Runtime | Local single-user mode (`orvex`, `orvex <project>`) and server mode (`orvex <project> --server`); official Docker image |
-| Sources | Parquet, CSV, DuckDB, SQLite, PostgreSQL, ClickHouse |
-| Warehouse | DuckLake with a local DuckDB catalog (local mode) or a PostgreSQL catalog (server mode); Quack as an optional adapter |
+| Sources | Route A (transformed into DuckLake): Parquet, CSV, DuckDB, SQLite, PostgreSQL, ClickHouse by extraction. Route B (Direct Query): an existing DuckLake |
+| Warehouse | DuckLake; catalog in a DuckDB file (local-mode default), SQLite, or PostgreSQL (server-mode default; on premises or in the cloud); data files on local disk, a network file system or object storage (ADR-0027 §2) |
 | Transformation | Pure SQL models with YAML sidecar; full, incremental (append, merge, delete+insert, partition overwrite); automatic incremental filter; lookback; scheduled full refresh; freshness-driven scheduling; audits with write-audit-publish; OpenLineage events |
 | Semantic engine | Full parity with SEF (all 21 corpus cases) plus capabilities S1–S6 (see [`../architecture/semantic-engine.md`](../architecture/semantic-engine.md)); verified evidence; receipts; caching |
 | Security | Local users and OIDC single sign-on; roles; groups; page-level, row-level and column-level security; audit log |
@@ -66,7 +66,7 @@ Everything below is **in scope**. Nothing is simplified to ship earlier; capabil
 | Operations | Structured JSON logs; OpenTelemetry metrics; configurable retention for DuckLake snapshots and audit log |
 | Experience | Spanish (default) and English UI; `es-BO` number and date formats; light and dark mode; keyboard-first; command palette (⌘K); WCAG 2.2 AA |
 
-**Out of scope for v1.0.0** (each is a candidate for a later version, decided by the Owner): SAML/SCIM, multi-tenant hosting, real-time streaming sources, write-back to sources, a hosted cloud service, and **Python models, machine-learning predictions and Python visuals** (Polars, Arrow, DuckDB, XGBoost, LightGBM, scikit-learn, Plotly, Matplotlib). The latter already has a design direction (ADR-0023) and reserved contract values, so adding it after v1.0.0 requires no redesign.
+**Out of scope for v1.0.0** (each is a candidate for a later version, decided by the Owner): SAML/SCIM, multi-tenant hosting, real-time streaming sources, write-back to sources, a hosted cloud service, Direct Query on ClickHouse and on a remote DuckDB through Quack (direction decided in ADR-0027; ClickHouse is reached by extraction in v1.0.0), and **Python models, machine-learning predictions and Python visuals** (Polars, Arrow, DuckDB, XGBoost, LightGBM, scikit-learn, Plotly, Matplotlib). The latter already has a design direction (ADR-0023) and reserved contract values, so adding it after v1.0.0 requires no redesign.
 
 ## 6. Non-functional requirements
 

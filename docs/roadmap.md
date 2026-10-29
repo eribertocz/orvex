@@ -7,8 +7,8 @@
 | Phase | Name | Main modules | Issues | Ends with version | Stage |
 |---|---|---|---|---|---|
 | P0 | Foundation | repo, web, contracts, server, conformance | 11 | `v0.1.0-alpha.1` | Alpha |
-| P1 | Storage and transformation | store, server, transform | 21 | `v0.2.0-alpha.1` | Alpha |
-| P2 | Semantic engine — parity with SEF | semantic, access, server | 28 | `v0.3.0-alpha.1` | Alpha |
+| P1 | Storage and transformation | store, server, transform | 22 | `v0.2.0-alpha.1` | Alpha |
+| P2 | Semantic engine — parity with SEF | semantic, store, access, server | 30 | `v0.3.0-alpha.1` | Alpha |
 | P3 | Access and security | conformance, access, semantic, server | 14 | `v0.4.0-alpha.1` | Alpha |
 | P4 | Semantic engine — S1, S3, S6 | conformance, semantic | 12 | `v0.5.0-alpha.1` | Alpha |
 | P5 | Semantic engine — S2, S4, S5 | conformance, semantic, server, transform | 12 | `v0.6.0-alpha.1` | Alpha |
@@ -20,7 +20,7 @@
 | RC | Release candidates | all | defects only | `v1.0.0-rc.1` … `rc.K` | Release candidate |
 | **GA** | **MVP** | all | — | **`v1.0.0`** | **Stable** |
 
-**Total: 158 medium issues**, plus defects found along the way.
+**Total: 161 medium issues**, plus defects found along the way.
 
 **What version is the finished MVP?** When all MVP scope is implemented (end of P9) the product enters **beta** (`v0.11.0-beta.1`) with pilot users. The MVP is ready when the beta has no open `p0`/`p1` defects and the ten release criteria of [`process/versioning.md`](process/versioning.md) §4 are evidenced and approved by the Owner. That release is **`v1.0.0` (stable)**.
 
@@ -87,8 +87,9 @@
 | P1-17 | ClickHouse extraction models: `clickhouse-connect`, ClickHouse SQL validated with `EXPLAIN SYNTAX`, server-side `{since:…}`, Arrow streaming, exact type mapping | transform |
 | P1-18 | OpenLineage events (start, complete, fail; datasets; column lineage where derivable) | transform |
 | P1-19 | Scheduler: freshness-driven planning (minimum 5 minutes, `FRESHNESS_TOO_SHORT`), `full_refresh` cron with time zone, no overlapping runs, retries with backoff | transform |
-| P1-20 | Snapshot retention (from `project.yaml`) and compaction as maintenance runs; optional Quack adapter | store |
+| P1-20 | Snapshot retention (from `project.yaml`) and compaction as maintenance runs | store |
 | P1-21 | Transformation worker process for server mode; load-performance baseline on the 100 M-row reference dataset | server |
+| P1-22 | Lake location in `project.yaml` (ADR-0027 §2): catalog (DuckDB file or SQLite on a local disk, or PostgreSQL local, networked or cloud with TLS `verify-full`; object storage over HTTPS only) and data files (project folder, local path, network file system, object storage), optional data-file encryption (mode fixed at creation, deletion vectors off), credentials by `${env:NAME}` as temporary DuckDB secrets; every supported combination tested, invalid ones rejected | store, server |
 
 **Exit criteria:** every strategy and every error code introduced in this phase tested; write–audit–publish proven with failing tests; incremental loads from PostgreSQL every 5 minutes on synthetic data without duplicates or gaps; valid lineage events; Owner demo.
 
@@ -108,7 +109,7 @@
 | P2-05 | `semantic-query` contract v1 (aggregate and detail-row modes); query binding and canonicalization | semantic |
 | P2-06 | `semantic-result` contract v1 and result envelope (Arrow schema, exact values as strings, masked columns) | semantic |
 | P2-07 | `receipt` contract v1 and receipt builder; every result from P2-12 on carries one, later issues extend its fields | semantic |
-| P2-08 | `security-policies` contract v1 and policy model parsing (`security.yaml`) | semantic |
+| P2-08 | `security-policies` contract v1 and policy model parsing (`security.yaml`), including the explicit registration of deny-list callers with nothing blocked (ADR-0027 §6) | semantic |
 | P2-09 | `security-context` contract v1 with a test provider (the real provider arrives in P3) | access |
 | P2-10 | `catalog` contract v1 (members visible to a caller) and Ossie export with loss report | semantic |
 | P2-11 | Correctness engine framework (facts, obligations, rejections) and grain algebra (C1) | semantic |
@@ -129,8 +130,10 @@
 | P2-26 | Evidence verification after runs (`declared` / `verified` / `violated`; `EVIDENCE_VIOLATED`) | semantic |
 | P2-27 | HTTP endpoints `query`, `explain`, `catalog`; corpus **21/21** becomes a required check; query performance baseline recorded | server |
 | P2-28 | Property-based tests for binder, correctness engine and planner | semantic |
+| P2-29 | Direct Query foundation (ADR-0027): engine per dataset, `CROSS_ENGINE_QUERY`, receipts naming every snapshot read, policy values from the managed lake bound as parameters with exact `NULL` semantics and a cap (`POLICY_NOT_SUPPORTED_ON_ENGINE`) | semantic, store |
+| P2-30 | Direct Query on an existing DuckLake: PostgreSQL or SQLite catalog attached `READ_ONLY` in a DuckDB instance of its own with a file sandbox, its data location separate from every lake and file source of any project in the instance (checked both ways), its SQLite catalog file a regular file outside them, its PostgreSQL catalog role dedicated and unable to read outside its schema, tables only, catalog version checked (`ENGINE_VERSION_UNTESTED`), served at its latest verified snapshot (evidence verified on each new snapshot); corpus green on it (development only until P3-13) | store, semantic |
 
-**Exit criteria:** corpus **21/21** (including CASE-008, which SEF does not execute); every error code introduced in this phase tested; receipts on every result; evidence verification proven by tests that corrupt data; performance baseline recorded; Owner demo.
+**Exit criteria:** corpus **21/21** (including CASE-008, which SEF does not execute) on the managed lake and on every enabled Direct Query engine; every error code introduced in this phase tested; receipts on every result; evidence verification proven by tests that corrupt data; performance baseline recorded; Owner demo.
 
 ---
 
@@ -141,7 +144,7 @@
 
 | ID | Issue | Module |
 |---|---|---|
-| P3-01 | Normative cases: security scenarios (`conformance/security/scenarios/`) for pages, page-bound queries, rows, columns, masking, cache, export, possible values, MCP and missing attributes *(Owner merges)* | conformance |
+| P3-01 | Normative cases: security scenarios (`conformance/security/scenarios/`) for pages, page-bound queries, rows, columns, masking, cache, export, possible values, MCP and missing attributes, plus the Direct Query cases of ADR-0027 §6 (callers with no mapping under allow- and deny-lists, registered deny-list callers with nothing blocked, cap, `NULL`, mapping tables outside the managed lake, views and macros, files, symbolic links and hard links reaching outside the data location, files of Route A file sources and of other projects in the instance, locations registered later inside an existing lake, catalog files replaced by links, catalog roles that read outside their schema, overlapping locations, reused snapshot ids, revoked mapping or registration in cache) *(Owner merges)* | conformance |
 | P3-02 | Users, project memberships, roles and the instance administrator (SQLite locally, PostgreSQL schema in server mode) | access |
 | P3-03 | `audit-event` contract v1; append-only audit log with hash chain; configurable retention | access |
 | P3-04 | Local authentication (`hashlib.scrypt`), server-side sessions, cookie and `Origin` rules | access |
@@ -150,10 +153,10 @@
 | P3-07 | Row policies: evaluation and placement before aggregation on every path | semantic |
 | P3-08 | Column policies: visible, masked, hidden, with the masking rules of `security.md` §3.3 | semantic |
 | P3-09 | Fail-closed on missing attributes: zero rows, `POLICY_ATTRIBUTE_MISSING` notice, audit event | semantic |
-| P3-10 | Result cache keyed by permission fingerprint; invalidation by run records across workers (PostgreSQL `LISTEN`/`NOTIFY` in server mode); per-dataset settings | semantic |
+| P3-10 | Result cache keyed by permission fingerprint; invalidation by run records across workers (PostgreSQL `LISTEN`/`NOTIFY` in server mode); per-dataset settings; for datasets outside the managed lake, the key of ADR-0027 §7 with mapping- and registration-table snapshots checked on every lookup | semantic |
 | P3-11 | Role enforcement on every HTTP route; per-role query limits and asynchronous queries | server |
 | P3-12 | Administration API and CLI: users (instance administrator), memberships and groups (project Builder) | server |
-| P3-13 | Security conformance runner over the scenarios, as a required check | conformance |
+| P3-13 | Security conformance runner over the scenarios, as a required check, on the managed lake and on every enabled Direct Query engine (ADR-0027 §6) | conformance |
 | P3-14 | Property-based non-broadening tests | semantic |
 
 **Exit criteria:** every security scenario passes, or is `expected-fail` linked to the later issue that implements it (pages P6, exports P6–P7, MCP P9); OIDC verified against a real identity provider in CI; threat models recorded; the cache never crosses permission fingerprints.
@@ -322,3 +325,11 @@
 
 - `v1.0.0-rc.1` is tagged when the beta has no open `priority:p0`/`p1` bugs and the release criteria are evidenced (Owner approval required). Only defect fixes between release candidates.
 - **`v1.0.0`** is tagged after the Owner comments `Approved for release v1.0.0` on the release issue. From then on, SemVer guarantees the public contracts.
+
+## After v1.0.0 (decided direction)
+
+| Item | Module | Decision |
+|---|---|---|
+| Direct Query on a remote DuckDB through Quack: server-side read-only access and limits, verified HTTPS, version check; corpus and security suite green | store | ADR-0027 §10 (#107) |
+| Direct Query on ClickHouse: ClickHouse dialect adapter (plan → ClickHouse SQL with bound parameters), execution with server-side limits, exact types, `EXPLAIN ESTIMATE`; corpus and security suite green with results identical to the reference | semantic, store | ADR-0027 §10 |
+| Python models, ML predictions and Python visuals | transform, semantic, web | ADR-0023 |

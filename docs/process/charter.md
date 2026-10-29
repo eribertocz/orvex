@@ -97,7 +97,7 @@ A syntactically correct query is never assumed to be analytically correct.
 
 - Keep stable connector interfaces.
 - Declare each engine's real capabilities. Never assume every engine supports the same SQL functions.
-- Respect dialects (ADR-0026: one dialect per engine, no transpilation).
+- Respect dialects (ADR-0026: one dialect per engine, no transpilation; ADR-0027: the semantic engine generates each engine's dialect from the plan, never by translation).
 - Push work down only when that preserves the semantics.
 - Control types and conversions.
 - Handle cancellation and resource limits.

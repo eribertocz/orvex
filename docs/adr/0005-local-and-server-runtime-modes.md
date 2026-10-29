@@ -1,6 +1,6 @@
 # 0005 — Local zero-configuration mode and opt-in server mode
 
-**Status:** Accepted (2026-10-26)
+**Status:** Accepted (2026-10-26); amended in part by [ADR-0027](0027-two-data-routes.md) (the catalog per mode becomes a default; other lake locations by opt-in)
 
 ## Context
 DuckDB's appeal is that typing `duckdb` gives a working database. The Owner wants Orvex to follow that principle while also supporting a shared server for managers and department heads.

@@ -24,7 +24,7 @@
 | All | `product/laws.md` | §1–§2 |
 
 ## ADRs
-0004, 0009, 0010, 0011, 0012, 0015, 0022, 0025.
+0004, 0009, 0010, 0011, 0012, 0015, 0022, 0025, 0026, 0027.
 
 ## Laws that are acceptance criteria
 1, 2, 3, 4, 5, 7, 11, 12 and anti-patterns A1, A2, A6, A11, A12. Every pull request in this module is risk tier A: an independent Reviewer pass reads the full diff (`process/review.md`).

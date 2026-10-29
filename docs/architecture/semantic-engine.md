@@ -52,7 +52,8 @@ SecurityContext (JSON) ─────────────┤
                               Planner ─► SemanticPlan (logical DAG)                  │
                                     │      └─ every obligation discharged ◄─────────┘
                                     ▼
-                     DuckDB adapter ─► PhysicalQuery (SQL + bound parameters + snapshot)
+              Dialect adapter ─► PhysicalQuery (SQL + bound parameters + data version)
+              (DuckDB in v1.0.0; ClickHouse after)
                                     ▼
                               Execution (store) ─► Arrow result
                                     ▼
@@ -65,14 +66,15 @@ SecurityContext (JSON) ─────────────┤
 | Query binding | `SemanticQuery` (canonical) | Bind names to model members, normalize filters, canonicalize ordering so equivalent queries have equal fingerprints |
 | Correctness engine | `CorrectnessReport` | Decide **whether** the question has one correct answer: derive semantic facts, emit obligations the plan must satisfy, or reject. Does not decide how to execute |
 | Planner | `SemanticPlan` | Decide **how**: per-fact aggregation, alignment, joins, recomputation, window steps, policy placement. Must discharge every obligation; an undischarged obligation is a planner error, never a silent result |
-| DuckDB adapter | `PhysicalQuery` | Translate the plan into DuckDB SQL with bound parameters only. The only stage that knows DuckDB |
-| Execution | Arrow | Run once on a fixed DuckLake snapshot through `store`, within time and memory budgets; data stays in DuckDB and is read once into Arrow (ADR-0025) |
+| Dialect adapter | `PhysicalQuery` | Generate the SQL of the dataset's engine from the plan, with bound parameters only: in v1.0.0, DuckDB SQL for the managed lake and an existing DuckLake; after v1.0.0, also for a remote DuckDB, and ClickHouse SQL for ClickHouse (ADR-0027). Never translates SQL between dialects. The only stage that knows a dialect |
+| Execution | Arrow | Run once through `store` on the dataset's engine, within time and memory budgets: on a fixed DuckLake snapshot for the managed lake, on its latest verified snapshot for an existing DuckLake (ADR-0027 §7), live on a remote DuckDB or ClickHouse after v1.0.0. Data stays in the engine and is read once into Arrow (ADR-0025) |
 
 Properties:
 
 - Every intermediate representation is immutable and typed, with a canonical fingerprint: SHA-256 over the JSON Canonicalization Scheme (RFC 8785).
-- Deterministic: same model fingerprint + same query fingerprint + same security fingerprint + same snapshot ⇒ same result.
-- Engine-independent up to the adapter: replacing DuckDB requires a new adapter only.
+- Deterministic: same model fingerprint + same query fingerprint + same security fingerprint + same snapshot ⇒ same result. On live engines (after v1.0.0) the data version is the read instant, so the result is explainable, not replayable (ADR-0027 §5).
+- Engine-independent up to the adapter: adding an engine requires a new adapter only, enabled once the whole corpus passes on it with results identical to the managed-lake reference, and offered in a release only once the security suite passes too (ADR-0027 §4).
+- **Two data routes (ADR-0027):** datasets come from the managed DuckLake (route A) or from an existing engine queried in place (route B: an existing DuckLake in v1.0.0; remote DuckDB through Quack and ClickHouse after v1.0.0). Each dataset belongs to one engine; a relationship or a query spanning two engines is rejected with `CROSS_ENGINE_QUERY`.
 
 ## 5. Correctness core (parity with SEF)
 
@@ -102,10 +104,10 @@ Every relationship cardinality, dataset uniqueness, temporal non-overlap and bri
 | Status | Meaning | Engine behavior |
 |---|---|---|
 | `declared` | Stated in the model, not yet checked | Usable; the receipt marks the result as relying on unverified evidence |
-| `verified` | Checked against the data of a specific DuckLake snapshot | Usable; the receipt references the verification run |
+| `verified` | Checked against the data of a specific DuckLake snapshot, or, on a live engine after v1.0.0, at a recorded instant (ADR-0027 §7) | Usable; the receipt references the verification run or instant |
 | `violated` | The check failed on the current snapshot | **Not usable.** Queries depending on it are rejected with `EVIDENCE_VIOLATED` and the reason (for example "consumer_id is not unique in dim_consumers: 37 duplicates") |
 
-Because `transform` and `semantic` live in the same product, the engine **re-verifies evidence after every successful transformation run** affecting the involved tables. A dashboard can never show numbers that silently depend on a relationship the data no longer satisfies.
+Because `transform` and `semantic` live in the same product, the engine **re-verifies evidence after every successful transformation run** affecting the involved tables. Datasets outside the managed lake have no runs (ADR-0027 §7). An existing DuckLake is served only at its latest **verified** snapshot: a new snapshot is verified first, then served. A live engine (after v1.0.0) is verified on a schedule declared per connection (default daily), and the receipt carries the verification instant. On the managed lake and on an existing DuckLake, a dashboard can never show numbers that silently depend on a relationship the data no longer satisfies; on a live engine, data changed since the last verification is not yet checked, and the receipt says so by showing that instant.
 
 ## 7. Security inside the engine
 
@@ -114,6 +116,7 @@ Because `transform` and `semantic` live in the same product, the engine **re-ver
 - **Column-level security** has three levels per field or metric: `visible`, `masked` (values replaced by a declared mask) and `hidden` (the member does not exist for that caller; referencing it yields `MEMBER_NOT_FOUND`, indistinguishable from a non-existent member).
 - **Non-broadening property:** no user filter, LOD expression, context modifier or comparison state can widen the rows a mandatory policy allows. Verified with property-based tests.
 - Missing required policy attributes ⇒ the caller sees **no rows** (fail closed), never all rows.
+- **Other engines (ADR-0027 §6).** Policies are placed in the plan, before the dialect adapter, so every engine receives the same placement. For a dataset outside the managed lake, a policy's subquery on a mapping table is evaluated first on the managed lake at a pinned snapshot (recorded in the receipt), and its values are bound as parameters of the engine's query, with their exact types and `NULL` semantics, within a per-project cap (ADR-0025 rule 6). A caller with no mapping sees zero rows under allow-list and deny-list policies alike (`security.md` §3.3); the predicate is never dropped. A value set above the cap, or a policy that cannot be placed safely, makes the dataset unusable for that query (`POLICY_NOT_SUPPORTED_ON_ENGINE`, without revealing the mapping's size).
 - Policies are declared in `security.yaml` (`contracts/security-policies/v1`) and evaluated by the engine's own evaluator; the contract is designed so a future Cedar-based evaluator can implement it (ADR-0011).
 
 ## 8. Capabilities beyond SEF (S1–S6)
@@ -151,6 +154,7 @@ Because `transform` and `semantic` live in the same product, the engine **re-ver
 - **Pre-aggregations** declared by the Builder or suggested by the engine from query statistics.
 - Used only with a **proof of equivalence** (C8): same grain or a legal roll-up, same metric semantics, same policy columns available so row-level security still applies.
 - Refreshed by `transform`; the receipt records that a pre-aggregation was used and its snapshot.
+- In v1.0.0 pre-aggregations apply only to datasets in the managed lake (ADR-0027 §7).
 - Never changes results (verified by the corpus case on materialization equivalence plus added cases).
 
 ### S6 — Explanation and comparison
@@ -161,9 +165,9 @@ Because `transform` and `semantic` live in the same product, the engine **re-ver
 
 ### Query budgets and cost estimation (law 7)
 
-- Before execution the planner estimates the cost of each `SemanticPlan` from DuckLake statistics (row counts, file sizes, column min/max) and DuckDB's `EXPLAIN` cardinalities: rows scanned, groups produced, cells returned.
+- Before execution the planner estimates the cost of each `SemanticPlan` from DuckLake statistics (row counts, file sizes, column min/max) and DuckDB's `EXPLAIN` cardinalities: rows scanned, groups produced, cells returned. On ClickHouse (after v1.0.0) the estimate comes from `EXPLAIN ESTIMATE` where the table engine supports it (ADR-0027 §7).
 - Budgets per query (rows scanned, result rows, matrix cells, time, memory) are configured per project with safe defaults. A plan whose estimate exceeds a budget is rejected **before** running with `QUERY_BUDGET_EXCEEDED` (or `MATRIX_TOO_WIDE`), stating which budget and the estimate, and suggesting a filter or a coarser grain.
-- The time and memory budgets are also enforced while running (DuckDB limits and cancellation), because estimates can be wrong.
+- The time and memory budgets are also enforced while running (the engine's own limits and cancellation), because estimates can be wrong.
 - The estimate and the actual figures are recorded in the receipt so wrong estimates can be measured and improved.
 
 ## 9. Matrix and totals support
@@ -177,7 +181,7 @@ The matrix (see `frontend.md`) sends a `MatrixQuery` (rows, columns, measures, t
 - applies row-level security before every aggregation level, so expanding a node never reveals unauthorized rows;
 - computes **"show value as"** options (% of row, column or grand total, % of parent, difference and % difference to the previous period) in the plan, never in the browser (law 1).
 
-**Detail-row queries.** `semantic-query` also has a detail mode for tables and drill-through: the caller names fields (no aggregation); the grain is the dataset's declared `grain`; column policies and masking apply (security §3.3); a row budget and a deterministic order (the declared unique key as final tie-breaker) are mandatory, and pagination never repeats or skips rows within one snapshot.
+**Detail-row queries.** `semantic-query` also has a detail mode for tables and drill-through: the caller names fields (no aggregation); the grain is the dataset's declared `grain`; column policies and masking apply (security §3.3); a row budget and a deterministic order (the declared unique key as final tie-breaker) are mandatory, and pagination never repeats or skips rows within one snapshot. On live engines (after v1.0.0) rows may move between pages when the data changes between requests; each page's receipt carries its read instant (ADR-0027 §5).
 
 ## 10. Caching
 
@@ -185,6 +189,7 @@ The matrix (see `frontend.md`) sends a `MatrixQuery` (rows, columns, measures, t
 - Key: query fingerprint + model fingerprint + data snapshot + **permission fingerprint**.
 - In server mode each worker keeps its own cache; a run record is broadcast to every worker through PostgreSQL `LISTEN/NOTIFY`, so no worker serves a result older than the latest committed run.
 - Invalidation: when `transform` commits a run affecting a dataset, every cached result depending on it is invalidated; additionally the per-dataset `cache.ttl` extension applies; `cache.enabled: false` disables caching for a dataset.
+- Datasets outside the managed lake (ADR-0027 §7): the key is query fingerprint + model fingerprint + permission fingerprint + engine data version (the verified snapshot of an existing DuckLake, identified by connection, id and commit time; the read instant on a live engine, matched while within `cache.ttl`) + the last-change snapshot of every managed-lake table read by their policies or by their registration check. Those snapshots are checked on every lookup, so a mapping or registration changed by a run or by the Builder is never served from cache. Live datasets (after v1.0.0) are cached only when they declare `cache.ttl`; an entry is served while its age is below the `ttl`, and the receipt shows its original read instant.
 - The receipt states whether a result came from cache.
 
 ## 11. Interfaces
@@ -197,7 +202,7 @@ The engine is usable in three ways, all over the same contracts:
 
 ## 12. Error codes (initial set)
 
-`MEMBER_NOT_FOUND`, `AMBIGUOUS_RELATIONSHIP_PATH`, `NO_RELATIONSHIP_PATH`, `INCOMPATIBLE_UNITS`, `ILLEGAL_TEMPORAL_REAGGREGATION`, `ILLEGAL_GRAIN_TRANSITION`, `FANOUT_NOT_ISOLATABLE`, `MISSING_ADDITIVITY_DECLARATION`, `MISSING_CARDINALITY_DECLARATION`, `EVIDENCE_VIOLATED`, `BRIDGE_WEIGHTS_INVALID`, `TEMPORAL_MATCH_NOT_UNIQUE`, `DIVISION_POLICY_VIOLATION`, `DEPRECATED_METRIC` (warning), `METRIC_IN_USE` (deleting or renaming a metric that other metrics reference; for dashboard references, `server` asks `dashboards` before the project writer saves and returns the same code), `MEMBER_MASKED`, `COVERAGE_POLICY_REQUIRED`, `OSSIE_INVALID`, `UNSUPPORTED_OSSIE_VERSION`, `MISSING_ORVEX_DECLARATION`, `POLICY_ATTRIBUTE_MISSING` (notice: the result has zero rows for that policy, never an error that reveals data; security §3.3), `QUERY_BUDGET_EXCEEDED`, `MATRIX_TOO_WIDE`, `UNSUPPORTED_OPERATION`.
+`MEMBER_NOT_FOUND`, `AMBIGUOUS_RELATIONSHIP_PATH`, `NO_RELATIONSHIP_PATH`, `INCOMPATIBLE_UNITS`, `ILLEGAL_TEMPORAL_REAGGREGATION`, `ILLEGAL_GRAIN_TRANSITION`, `FANOUT_NOT_ISOLATABLE`, `MISSING_ADDITIVITY_DECLARATION`, `MISSING_CARDINALITY_DECLARATION`, `EVIDENCE_VIOLATED`, `BRIDGE_WEIGHTS_INVALID`, `TEMPORAL_MATCH_NOT_UNIQUE`, `DIVISION_POLICY_VIOLATION`, `DEPRECATED_METRIC` (warning), `METRIC_IN_USE` (deleting or renaming a metric that other metrics reference; for dashboard references, `server` asks `dashboards` before the project writer saves and returns the same code), `MEMBER_MASKED`, `COVERAGE_POLICY_REQUIRED`, `OSSIE_INVALID`, `UNSUPPORTED_OSSIE_VERSION`, `MISSING_ORVEX_DECLARATION`, `POLICY_ATTRIBUTE_MISSING` (notice: the result has zero rows for that policy, never an error that reveals data; security §3.3), `QUERY_BUDGET_EXCEEDED`, `MATRIX_TOO_WIDE`, `UNSUPPORTED_OPERATION`, `CROSS_ENGINE_QUERY` (a relationship or query spanning two engines; ADR-0027), `POLICY_NOT_SUPPORTED_ON_ENGINE` (a row policy that cannot be placed safely on a dataset's engine, or a policy value set above its cap; the dataset is unusable, never visible without the policy), `ENGINE_VERSION_UNTESTED` (an existing DuckLake catalog, or after v1.0.0 a remote DuckDB, at a version the corpus has not run on or that would need migration).
 
 Each code has a stable identifier, a human message (i18n) and structured details. Codes are part of `contracts/semantic-error`; removing or changing the meaning of a code is a breaking change.
 
