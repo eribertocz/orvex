@@ -5,6 +5,8 @@ import { svelteTesting } from '@testing-library/svelte/vite';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+	// The licenses of every dependency bundled into the build, shipped with it (#47).
+	build: { license: { fileName: 'THIRD_PARTY_LICENSES.md' } },
 	plugins: [
 		tailwindcss(),
 		sveltekit({

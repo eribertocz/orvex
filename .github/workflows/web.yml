@@ -67,6 +67,8 @@ jobs:
           if find build -name '*.js' -path '*server*' | grep -q .; then
             echo "::error::server bundle found in the static build"; exit 1
           fi
+      - name: The build carries the licenses of the code bundled into it
+        run: python3 ../tools/licenses/web_notices.py build
 
   licenses:
     runs-on: ubuntu-latest

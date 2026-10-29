@@ -56,8 +56,8 @@ jobs:
           for package in packages/*/; do
             python -m pip wheel --no-deps --wheel-dir dist "$package"
           done
-      - name: Check the server wheel contains the web build
-        run: python -c "import glob, sys, zipfile; names = [n for w in glob.glob('dist/*.whl') for n in zipfile.ZipFile(w).namelist()]; sys.exit(0 if any(n.endswith('/server/web/index.html') for n in names) else 'web build missing from the server wheel')"
+      - name: Check the server wheel contains the web build and its license notices
+        run: python -c "import glob, sys, zipfile; names = [n for w in glob.glob('dist/*.whl') for n in zipfile.ZipFile(w).namelist()]; missing = [f for f in ('index.html', 'THIRD_PARTY_LICENSES.md') if not any(n.endswith('/server/web/' + f) for n in names)]; sys.exit('missing from the server wheel: ' + ', '.join(missing) if missing else 0)"
       - name: Checksums
         working-directory: dist
         run: sha256sum -- *.whl > SHA256SUMS && cat SHA256SUMS
