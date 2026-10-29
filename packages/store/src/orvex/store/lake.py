@@ -1157,6 +1157,9 @@ class Lake:
             options = [f"DATA_PATH {_quote(data_path)}"]
             if location.encrypted:
                 # Fixed when the lake is created; deletion vectors stay off (written unencrypted).
+                # DuckDB writes encrypted files only with httpfs's crypto module loaded (without
+                # it, its built-in one is read-only and every write fails, #127).
+                self._load_httpfs()
                 options.append("ENCRYPTED")
             if isinstance(location, LocalLakeLocation):
                 self._attach_local(Path(location.path), location.catalog_path, options)
@@ -1420,7 +1423,7 @@ class Lake:
                 f"SCOPE {_quote(data_path)}",
             ]
         else:
-            self._load_extension("httpfs")
+            self._load_httpfs()
             options = [
                 f"TYPE {settings.type}",
                 f"KEY_ID {_quote(storage.key_id)}",
@@ -1438,14 +1441,6 @@ class Lake:
                 # The endpoint is reached by path (`host/bucket/key`), as the S3 API of Cloud
                 # Storage and local test servers both accept.
                 options.append("URL_STYLE 'path'")
-        # httpfs also opens http:// and https:// addresses (and hf://) as files, and the
-        # statement check lets web addresses through as ordinary text. The lake needs only its
-        # object storage, so those file systems are turned off on its connection (#136, Reviewer
-        # passes 4 and 5). Set after the extension loads: it names its file systems.
-        if not isinstance(settings, AzureStorage):
-            self._connection.sql(
-                "SET disabled_filesystems = 'HTTPFileSystem,HuggingFaceFileSystem'"
-            )
         try:
             self._connection.sql(f"CREATE TEMPORARY SECRET lake_storage ({', '.join(options)})")
         except duckdb.Error as error:
@@ -1454,6 +1449,14 @@ class Lake:
                 "The lake's object storage settings were refused.",
                 {"duckdb": str(error)},
             ) from None
+
+    def _load_httpfs(self) -> None:
+        """httpfs, for S3 and Google Cloud Storage and for writing encrypted files, with its web
+        file systems turned off: it also opens http://, https:// and hf:// addresses as files,
+        and the statement check lets web addresses through as ordinary text (#136, Reviewer
+        passes 4 and 5). Set after the extension loads: it names its file systems."""
+        self._load_extension("httpfs")
+        self._connection.sql("SET disabled_filesystems = 'HTTPFileSystem,HuggingFaceFileSystem'")
 
     def _attach_sqlite_catalog(self, location: SqliteLakeLocation, options: Sequence[str]) -> None:
         """Attach a lake whose catalog is a SQLite file (several processes on one machine)."""

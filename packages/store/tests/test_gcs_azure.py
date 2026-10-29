@@ -296,7 +296,7 @@ def test_a_lake_in_google_cloud_storage(
         lake.close()
     if encrypted:
         # Plain DuckDB, with the same credentials, cannot read a data file.
-        data = next(key for key in bucket_keys(endpoint, bucket) if key.endswith(".parquet"))
+        data = next(key for key in bucket_keys(endpoint, bucket) if "ducklake-" in key)
         plain = duckdb.connect()
         plain.execute("INSTALL httpfs")
         plain.execute("LOAD httpfs")
@@ -365,12 +365,36 @@ def test_an_azure_error_never_shows_the_connection_string(
 ) -> None:
     connection = azurite.connection_string()
     account_key = connection.split("AccountKey=", 1)[1].split(";", 1)[0]
-    # A wrong key: the emulator refuses the requests; the error shows neither key.
+    # A wrong key: the emulator refuses the first write; the error shows neither key.
     wrong = connection.replace(account_key, "d3Jvbmcta2V5LWZvci10aGUtdGVzdA==")
     monkeypatch.setenv(AZURE_ENV, wrong)
-    error = code_of(
-        lambda: open_lake(location(tmp_path, f"az://{container}/billing/", azure()), LIMITS)
-    )
+    lake = open_lake(location(tmp_path, f"az://{container}/billing/", azure()), LIMITS)
+    try:
+        error = code_of(lambda: write(lake, READINGS))
+    finally:
+        lake.close()
     text = str(error.message) + str(error.details)
     assert "d3Jvbmcta2V5LWZvci10aGUtdGVzdA==" not in text
     assert account_key not in text
+    assert wrong not in text
+
+
+def test_an_encrypted_lake_on_a_local_disk_is_written_and_unreadable_alone(tmp_path: Path) -> None:
+    # Found with #127: DuckDB writes encrypted files only with httpfs's crypto module loaded;
+    # a local encrypted lake (#126) failed its first write.
+    lake_at = LocalLakeLocation(
+        kind="lake_location", catalog="local", path=str(tmp_path / "lake"), encrypted=True
+    )
+    flow(lake_at)
+    lake = open_lake(lake_at, LIMITS)
+    try:
+        # httpfs's web file systems stay off.
+        with pytest.raises(duckdb.Error):
+            lake._connection.execute("SELECT * FROM 'https://example.com/x.parquet'").fetchall()
+    finally:
+        lake.close()
+    data = next((tmp_path / "lake" / "data").rglob("ducklake-*.parquet"))
+    plain = duckdb.connect()
+    with pytest.raises(duckdb.Error):
+        plain.execute(f"SELECT * FROM '{data}'").fetchall()
+    plain.close()
