@@ -15,11 +15,11 @@ Every strategy is "delete the target rows the loaded rows replace, insert the lo
 - `partition_overwrite` deletes the rows whose partition is loaded (`NULL` is a partition).
 Rows are inserted by column name, so a target whose columns were added at the end still matches.
 
-A `partition_overwrite` run filtered by `$since` (for example `> $since`) can load only the newer
-rows of a partition, and the delete would then lose its older rows. When a loaded partition has
-older (or undated) rows in the table and none among the loaded rows, the run fails with
-`PARTITION_INCOMPLETE` (#109, decision #95). A filter that reloads only some older rows
-(`>= $since`, a hand-written lookback) is not detected; whole-partition filters are the rule.
+A `partition_overwrite` run filtered by `$since` can load only part of a partition, and the
+delete would then lose the rest. When the table holds rows of a loaded partition older than its
+oldest loaded row, or undated rows the run does not reload, the run fails with
+`PARTITION_INCOMPLETE` (#155, decision #128 option B). Its `$since` filter must compare
+`time_column` itself, as a lower bound, which validation checks (`since_is_a_lower_bound`).
 
 Which rows are loaded (P1-14): the model's SQL uses `$since`, bound as a typed parameter to the
 previous watermark minus `lookback` (`-infinity` on a first run or a full refresh). The new
@@ -31,8 +31,9 @@ it commits or rolls back with the rows — never the clock, and never a separate
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 import duckdb
@@ -132,6 +133,356 @@ def uses_since(sql: str) -> bool:
     )
 
 
+# `time_column > …`, `time_column >= …` (and the same written the other way round): the only
+# comparisons a `$since` may be in, in a partition_overwrite model (#155).
+_FROM_BELOW = {
+    "COMPARE_GREATERTHAN": "left",
+    "COMPARE_GREATERTHANOREQUALTO": "left",
+    "COMPARE_LESSTHAN": "right",
+    "COMPARE_LESSTHANOREQUALTO": "right",
+}
+
+
+# Functions whose value changes from row to row: a bound using one is not one bound.
+_PER_ROW_FUNCTIONS = frozenset({"random", "gen_random_uuid", "uuid", "uuidv4", "uuidv7"})
+
+
+# The lowercase column names of a table, from its parts as written (`feed.data` → ("feed",
+# "data")); None when unknown.
+type ColumnsOf = Callable[[tuple[str, ...]], frozenset[str] | None]
+
+
+def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | None = None) -> bool:
+    """Whether every `$since` of a DuckDB-SQL model is in a lower bound of the time column of
+    the rows the model returns (#155):
+
+    - the bound is `time_column > x` or `time_column >= x` (or `x < time_column`, `x <=
+      time_column`), where `x` uses `$since` and constants but no column; `OR time_column IS
+      NULL` may follow it, to reload undated rows too;
+    - it is a condition of the `WHERE` clause of a query whose rows are the model's rows: the
+      model's own query, or a query it reads whole as its only `FROM` (a subquery or a CTE read
+      nowhere else), never under a `UNION`; that query reads one table or subquery, not a join;
+    - every query on that path passes the time column through unchanged and keeps its rows as
+      they are: the column is in its select list as itself (`read_at`, `t.read_at`, `read_at AS
+      read_at`, or a plain `*`/`t.*`), nothing else is named like it, and the query has no
+      `GROUP BY`/`GROUP BY ALL`, `HAVING`, window function, `QUALIFY`, `LIMIT`/`OFFSET`,
+      `DISTINCT ON` or sample (plain `DISTINCT` and `ORDER BY` are allowed);
+    - the column is matched by name (any letter case); a qualifier, if any, must name that
+      query's table (its alias or name); nothing on the path renames columns by position (a
+      column list `AS t(a, b)` or `WITH c(a, b)`);
+    - one exception to "as itself": the query that holds the bound may compute the time column
+      (`CAST(read_at AS DATE) AS day`) when the bound names it without a qualifier and the table
+      it reads has no column of that name. DuckDB then reads the name as that alias, so the
+      bound bounds the output column. That needs the table's columns: `columns_of` gives them
+      (the server, from the bound tables); without it (`config_problems`, the sidecar rules) the
+      exception is assumed, and the server checks it again with the columns.
+
+    Such a filter loads every row of a partition from some time on, and the output's time
+    column is that same column, so the oldest-row check sees any partition it loads in part.
+    Anything else (an upper bound, `BETWEEN`, `OR`/`NOT` around the bound, a bound that reads a
+    column or a random value, a `$since` in an `IN`/`EXISTS`/scalar subquery, in
+    `EXCEPT`/`INTERSECT`, in a query that joins, an output time column computed from it (a
+    cast, an aggregate), or rows computed over the filtered rows) could drop rows the check
+    cannot see.
+    Read from DuckDB's parse tree; False when the SQL cannot be read."""
+    connection = duckdb.connect()  # parses only: no files, no extensions
+    try:
+        connection.execute("SET enable_external_access = false")
+        connection.execute("SET autoload_known_extensions = false")
+        row = connection.execute("SELECT json_serialize_sql($sql)", {"sql": sql}).fetchone()
+    except duckdb.Error:
+        return False
+    finally:
+        connection.close()
+    tree = json.loads(str(row[0])) if row else {"error": True}
+    statements = tree.get("statements")
+    if tree.get("error") or not isinstance(statements, list) or len(statements) != 1:
+        return False
+    wanted = time_column.lower()
+    type Node = dict[str, object]
+
+    def is_since(node: object) -> bool:
+        return (
+            isinstance(node, dict)
+            and node.get("class") == "PARAMETER"
+            and str(node.get("identifier", "")).lower() == SINCE
+        )
+
+    def nodes(node: object) -> list[Node]:
+        found: list[Node] = []
+        if isinstance(node, list):
+            for item in node:
+                found += nodes(item)
+        elif isinstance(node, dict):
+            found.append(node)
+            for value in node.values():
+                found += nodes(value)
+        return found
+
+    def ctes(node: Node) -> dict[str, object]:
+        found: dict[str, object] = {}
+        cte_map = node.get("cte_map")
+        entries = cte_map.get("map") if isinstance(cte_map, dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            value = entry.get("value") if isinstance(entry, dict) else None
+            if isinstance(value, dict) and isinstance(value.get("query_node"), dict):
+                # `WITH c(a, b) AS (…)` renames by position: not followed (refused).
+                found[str(entry.get("key", "")).lower()] = (
+                    None if value.get("aliases") else value["query_node"]
+                )
+        return found
+
+    def column_parts(node: Node) -> list[str]:
+        """A column reference's name parts in lowercase; [] for anything else."""
+        parts = node.get("column_names")
+        if node.get("class") != "COLUMN_REF" or not isinstance(parts, list):
+            return []
+        return [str(part).lower() for part in parts]
+
+    # The queries whose rows are the model's rows, each with the names of its one table.
+    row_queries: dict[int, set[str]] = {}
+    # Row queries whose time column is an alias of an expression, with that expression.
+    computed: dict[int, Node] = {}
+    everything = nodes(statements)
+    every_cte = {name for n in everything for name in ctes(n)}
+    reads = [
+        str(n.get("table_name", "")).lower()
+        for n in everything
+        if n.get("type") == "BASE_TABLE" and not n.get("schema_name")
+    ]
+
+    # `query('…')` and `query_table('…')` read relations by name at run time: their reads of a
+    # CTE cannot be counted, so no CTE is followed in a statement with them.
+    dynamic = any(
+        str(n.get("function_name", "")).lower() in {"query", "query_table"} for n in everything
+    )
+
+    def named(item: Node) -> str:
+        """The name a select-list item gives its column ("" when it is not a plain one)."""
+        alias = str(item.get("alias") or "")
+        if alias:
+            return alias.lower()
+        parts = item.get("column_names")
+        if item.get("class") == "COLUMN_REF" and isinstance(parts, list) and parts:
+            return str(parts[-1]).lower()
+        return ""
+
+    def passes_through(node: Node, names: set[str]) -> bool:
+        """The query returns the time column unchanged, one output row per input row."""
+        modifiers = node.get("modifiers")
+        for modifier in modifiers if isinstance(modifiers, list) else []:
+            kind = modifier.get("type") if isinstance(modifier, dict) else None
+            if kind == "ORDER_MODIFIER":
+                continue
+            if kind == "DISTINCT_MODIFIER" and not modifier.get("distinct_on_targets"):
+                continue  # identical rows, time included: all of them or none are reloaded
+            return False  # LIMIT, OFFSET, DISTINCT ON
+        source = node.get("from_table")
+        if (
+            node.get("group_expressions")
+            or node.get("aggregate_handling") != "STANDARD_HANDLING"
+            or node.get("having") is not None
+            or node.get("qualify") is not None
+            or node.get("sample") is not None
+            or (isinstance(source, dict) and source.get("sample") is not None)
+        ):
+            return False
+        items = node.get("select_list")
+        if not isinstance(items, list) or any(n.get("class") == "WINDOW" for n in nodes(items)):
+            return False
+        kept = 0
+        for item in items:
+            if not isinstance(item, dict):
+                return False
+            if item.get("class") == "STAR":
+                relation = str(item.get("relation_name") or "").lower()
+                replaced = item.get("replace_list")
+                if (
+                    item.get("columns")
+                    or item.get("expr") is not None
+                    or item.get("rename_list")
+                    or (relation and relation not in names)
+                    or wanted in {str(x).lower() for x in item.get("exclude_list") or []}
+                    or item.get("qualified_exclude_list")
+                    or any(
+                        str(entry.get("key", "")).lower() == wanted
+                        for entry in (replaced if isinstance(replaced, list) else [])
+                        if isinstance(entry, dict)
+                    )
+                ):
+                    return False
+                kept += 1
+            elif named(item) == wanted:
+                if not is_time_column(item, names):
+                    computed[id(node)] = item  # an alias: the bound must name it (see check)
+                kept += 1
+        stars = sum(1 for item in items if isinstance(item, dict) and item.get("class") == "STAR")
+        # `*, CAST(read_at AS DATE) AS day`: one column only if the table has no `day`, which
+        # the check of a computed time column requires.
+        return kept == 1 or (kept == 2 and stars == 1 and id(node) in computed)
+
+    def reads_no_such_column(node: Node) -> bool:
+        """The query's one table has no column named like the time column, so DuckDB reads an
+        unqualified name in its WHERE as the select list's alias."""
+        source = node.get("from_table")
+        if not isinstance(source, dict) or source.get("type") != "BASE_TABLE":
+            return False  # a subquery's columns are not looked at: refused
+        expression = computed.get(id(node))
+        if any(column_parts(n)[-1:] == [wanted] for n in nodes(expression)):
+            return False  # it reads a column of that name: the table has one
+        parts = tuple(
+            str(source.get(key) or "")
+            for key in ("catalog_name", "schema_name", "table_name")
+            if source.get(key)
+        )
+        if len(parts) == 1 and parts[0].lower() in every_cte:
+            return False  # a CTE's columns are not looked at: refused
+        if columns_of is None:
+            return True  # checked again with the columns (the server)
+        found = columns_of(parts)
+        return found is not None and wanted not in found
+
+    def is_time_column(node: object, names: set[str]) -> bool:
+        if not isinstance(node, dict) or node.get("class") != "COLUMN_REF":
+            return False
+        parts = node.get("column_names")
+        if not isinstance(parts, list) or not parts or str(parts[-1]).lower() != wanted:
+            return False
+        return len(parts) == 1 or str(parts[-2]).lower() in names
+
+    def follow(node: object, scope: dict[str, object]) -> None:
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "SET_OPERATION_NODE":
+            # Not followed: another branch can load an older row of a partition (another table,
+            # an older bound, no bound), which hides the cut from the oldest-row check.
+            return
+        if node.get("type") != "SELECT_NODE":
+            return
+        inner = scope | ctes(node)
+        source = node.get("from_table")
+        if not isinstance(source, dict) or source.get("type") not in {"BASE_TABLE", "SUBQUERY"}:
+            return  # a join, a table function, no FROM: not a query the rule follows
+        if source.get("column_name_alias"):
+            return  # `AS t(a, b)` renames by position: not followed (refused)
+        names = {str(source.get("alias") or "").lower()} - {""}
+        if source.get("type") == "BASE_TABLE":
+            names.add(str(source.get("table_name", "")).lower())
+        if not passes_through(node, names):
+            return
+        row_queries[id(node)] = names
+        if id(node) in computed:
+            # Its time column is computed: a bound below it would bound another column.
+            return
+        if source.get("type") == "SUBQUERY":
+            subquery = source.get("subquery")
+            follow(subquery.get("node") if isinstance(subquery, dict) else None, inner)
+        else:
+            name = str(source.get("table_name", "")).lower()
+            if (
+                not source.get("schema_name")
+                and inner.get(name) is not None
+                and reads.count(name) == 1
+                and not dynamic
+            ):
+                # A CTE read again elsewhere (a subquery, a join) computes over the loaded rows.
+                follow(inner[name], {key: value for key, value in inner.items() if key != name})
+
+    follow(statements[0].get("node") if isinstance(statements[0], dict) else None, {})
+
+    def bound(node: object) -> bool:
+        """`$since` and constants only: no column and no random value, so the bound is the same
+        for every row."""
+        inside = nodes(node)
+        return any(is_since(n) for n in inside) and not any(
+            n.get("class") in {"COLUMN_REF", "SUBQUERY"}
+            or str(n.get("function_name", "")).lower() in _PER_ROW_FUNCTIONS
+            for n in inside
+        )
+
+    def lower_bound(node: object, names: set[str]) -> bool:
+        if not isinstance(node, dict) or node.get("class") != "COMPARISON":
+            return False
+        side = _FROM_BELOW.get(str(node.get("type")))
+        if side is None:
+            return False
+        other = node.get("right" if side == "left" else "left")
+        return is_time_column(node.get(side), names) and bound(other)
+
+    def is_time_null(node: object, names: set[str]) -> bool:
+        if not isinstance(node, dict) or node.get("type") != "OPERATOR_IS_NULL":
+            return False
+        children = node.get("children")
+        return (
+            isinstance(children, list) and len(children) == 1 and is_time_column(children[0], names)
+        )
+
+    def unqualified(node: object) -> bool:
+        return any(column_parts(n) == [wanted] for n in nodes(node))
+
+    def check(node: object, names: set[str] | None, alias: bool = False) -> bool:
+        """`names`: the node is a condition of the WHERE clause of a row query, joined to it by
+        AND only, and these are the names of that query's table; None otherwise. `alias`: that
+        query computes its time column (a bound must then name it without a qualifier)."""
+        if isinstance(node, list):
+            return all(check(item, names, alias) for item in node)
+        if not isinstance(node, dict):
+            return True
+        if is_since(node):
+            return False  # reached outside an accepted lower bound
+        if names is not None and lower_bound(node, names):
+            return not alias or unqualified(node)
+        if names is not None and node.get("class") == "CONJUNCTION":
+            children = node.get("children")
+            if node.get("type") == "CONJUNCTION_OR":
+                # `time_column > $since OR time_column IS NULL`: the undated rows too.
+                return isinstance(children, list) and all(
+                    (lower_bound(child, names) or is_time_null(child, names))
+                    and (not alias or unqualified(child))
+                    for child in children
+                )
+            if node.get("type") == "CONJUNCTION_AND":
+                return check(children, names, alias)
+        where = row_queries.get(id(node))
+        aliased = id(node) in computed
+        if aliased and where is not None and not reads_no_such_column(node):
+            where = None  # the name in WHERE is the table's column, not the computed one
+        return all(
+            check(value, where if key == "where_clause" else None, aliased)
+            for key, value in node.items()
+        )
+
+    return check(statements, None)
+
+
+def since_bound_problem(model: Model, columns_of: ColumnsOf | None = None) -> ModelError | None:
+    """`INVALID_MODEL_SQL` when a manual `partition_overwrite` DuckDB-SQL model's `$since` is
+    not a lower bound of its time column (`since_is_a_lower_bound`); None otherwise, and for any
+    other model. `columns_of`: the tables' columns, when known (the server)."""
+    config = model.config
+    incremental = config.incremental
+    if (
+        config.materialized != "incremental"
+        or incremental is None
+        or incremental.strategy != "partition_overwrite"
+        or (incremental.filter or "auto") == "auto"
+        or model.extraction
+        or not uses_since(model.sql)
+        or since_is_a_lower_bound(model.sql, incremental.time_column.root, columns_of)
+    ):
+        return None
+    column = incremental.time_column.root
+    return problem(
+        "INVALID_MODEL_SQL",
+        f"{model.sql_file}: in a partition_overwrite model, $since may only set a lower bound of "
+        f"the time_column {column}, as a WHERE condition joined by AND, in queries that return "
+        f"{column} unchanged and keep their rows (for example WHERE {column} >= "
+        "date_trunc('month', $since)), so the run can see any partition it loads in part.",
+        model.sql_file,
+        model=model.name,
+    )
+
+
 def config_problems(model: Model) -> list[ModelError]:
     """Rules that need only the sidecar."""
     config = model.config
@@ -174,6 +525,8 @@ def config_problems(model: Model) -> list[ModelError]:
                 model=model.name,
             )
         )
+    elif (bounded := since_bound_problem(model)) is not None:
+        found.append(bounded)
     elif automatic and model.extraction:
         found.append(
             problem(
@@ -538,8 +891,7 @@ def steps(
         # no row is older, but undated rows the filter never reloads are still protected.
         by_since = bool(parameters) if filtered is None else filtered
         if strategy == "partition_overwrite" and by_since:
-            bound = Parameter(name=SINCE, type=ParameterType(PARAMETER_TYPES[kind]), value=since)
-            result.append(_cut_partitions(model, target, stage, output, bound))
+            result.append(_cut_partitions(model, target, stage, output))
         replaced = _replaced(model, target)
         if replaced is not None:
             result.append(
@@ -578,25 +930,27 @@ def _label(alias: str, kind: str) -> str:
     return f"coalesce({shown}, 'NULL')"
 
 
-def _cut_partitions(
-    model: Model, target: str, stage: str, output: Columns, since: Parameter
-) -> Check:
-    """Fails when the `$since` filter cut a loaded partition (#109, decision #95).
+def _cut_partitions(model: Model, target: str, stage: str, output: Columns) -> Check:
+    """Fails when the `$since` filter loaded only part of a loaded partition (#155, decision
+    #128 option B; #109 before it).
 
-    A loaded partition is cut when the table holds rows of it at or before `$since` while the
-    loaded rows of that partition have none, or holds rows of it with a `NULL` time column
-    while the loaded rows have none (a `$since` filter never reloads those). Partitions compare
-    with `IS NOT DISTINCT FROM`, as the delete does, so `NULL` is a partition.
+    A loaded partition is cut when the table holds dated rows of it older than the oldest dated
+    loaded row of it (or the loaded rows of it have no dated row), or holds rows of it with a
+    `NULL` time column while the loaded rows have none (a `$since` filter never reloads those).
+    With the filter a lower bound of `time_column` (validation, `since_is_a_lower_bound`), a
+    run loads every row of a partition from some time on, so a partition it loads in part has
+    older rows left in the table (`> $since`, `>= $since`, a lookback). Partitions compare with
+    `IS NOT DISTINCT FROM`, as the delete does, so `NULL` is a partition. Rows with the same
+    time as the oldest loaded row but not reloaded are not detected: with the filter a lower
+    bound, only another condition of the WHERE clause could leave them out.
 
-    This detects a filter that loads only rows newer than `$since`. It does not detect a filter
-    that reloads some but not all older rows of a partition (`>= $since`, or a hand-written
-    lookback), and it also fails when the source itself no longer has a partition's older rows
-    (then `--full-refresh` reloads it).
+    It also fails when the source itself no longer has a partition's oldest rows (then
+    `--full-refresh` reloads it).
 
     One grouped pass over the loaded rows and one over the table's rows of loaded partitions.
     Partition columns are renamed `p0`, `p1`, … inside the query, so no column name can collide
-    with the query's own names. `$since` is bound with the time column's type. The result is
-    `'0'`, or up to five cut partitions, ordered by value, and their total.
+    with the query's own names. The result is `'0'`, or up to five cut partitions, ordered by
+    value, and their total.
     """
     incremental = model.config.incremental
     assert incremental is not None
@@ -614,10 +968,8 @@ def _cut_partitions(
             for name, alias in zip(left_names, aliases, strict=True)
         )
 
-    counted = (
-        f"count(*) FILTER (WHERE {time} <= $since) AS n_older, "
-        f"count(*) FILTER (WHERE {time} IS NULL) AS n_undated"
-    )
+    # `min` skips NULL times: `oldest` is NULL when a partition has no dated row.
+    counted = f"min({time}) AS oldest, count(*) FILTER (WHERE {time} IS NULL) AS n_undated"
     labels = [
         _label(f"loaded.{alias}", types.get(column.root.lower(), ""))
         for column, alias in zip(incremental.partition_by, aliases, strict=True)
@@ -631,7 +983,8 @@ def _cut_partitions(
         "GROUP BY ALL), "
         f"cut AS (SELECT {label} AS cut_label, row_number() OVER (ORDER BY {order}) AS cut_rank "
         f"FROM loaded JOIN held ON {matches('held', aliases)} "
-        "WHERE (held.n_older > 0 AND loaded.n_older = 0) "
+        "WHERE (held.oldest IS NOT NULL "
+        "AND (loaded.oldest IS NULL OR held.oldest < loaded.oldest)) "
         "OR (held.n_undated > 0 AND loaded.n_undated = 0)) "
         "SELECT CASE WHEN count(*) = 0 THEN '0' ELSE "
         f"string_agg(cut_label, ', ' ORDER BY cut_rank) FILTER (WHERE cut_rank <= {_CUT_SHOWN}) "
@@ -643,12 +996,12 @@ def _cut_partitions(
         sql,
         "PARTITION_INCOMPLETE",
         f"{model.name}: the $since filter loaded only part of these partitions ({partition_by}): "
-        "{detail}. The table holds rows of them that this run did not reload (at or before "
-        f"$since, or with a NULL {name}), and partition_overwrite would delete them; nothing is "
+        "{detail}. The table holds rows of them older than the oldest row this run loaded of "
+        f"them, or with a NULL {name}, and partition_overwrite would delete them; nothing is "
         "written. Load whole partitions, for example "
         f"WHERE {name} >= date_trunc('month', $since) for monthly partitions; if the source "
         "itself no longer has those rows, use --full-refresh.",
-        (since,),
+        (),
         detail=True,
     )
 

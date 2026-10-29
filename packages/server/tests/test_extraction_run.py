@@ -427,7 +427,8 @@ def test_a_partition_overwrite_model_is_checked_against_the_since_clickhouse_use
 def test_a_whole_partition_filter_passes_the_check(
     tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # The same model reloading whole months: the check passes and nothing is lost.
+    # The same model reloading whole months: the check passes and nothing is lost. The filter
+    # compares read_at itself (#155: `toStartOfMonth(read_at) >= …` is refused).
     folder = project(
         tmp_path,
         source,
@@ -436,7 +437,7 @@ def test_a_whole_partition_filter_passes_the_check(
                 "SELECT event_id, month, read_at FROM (SELECT event_id, "
                 "toString(toStartOfMonth(event_time)) AS month, "
                 "addMilliseconds(event_time, 500) AS read_at FROM events) "
-                "WHERE toStartOfMonth(read_at) >= toStartOfMonth({since:DateTime64(0, 'UTC')})"
+                "WHERE read_at >= toStartOfMonth({since:DateTime64(0, 'UTC')})"
             ),
             "models/raw/ch_events.yaml": (
                 "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
@@ -450,6 +451,216 @@ def test_a_whole_partition_filter_passes_the_check(
     assert code == 0, out
     assert record(folder)[0:4] == ("success", None, None, "1000")
     assert lake_value(folder, "SELECT count(*) FROM lake.raw.ch_events") == [(1000,)]
+
+
+PARTIAL_SIDECAR = (
+    "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
+    "incremental:\n  strategy: partition_overwrite\n  time_column: read_at\n"
+    "  partition_by: [month]\n  filter: manual\n"
+)
+
+
+def test_a_partial_reload_fails_and_keeps_the_table(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #155: `>= {since:…}` reloads the last row of the month again; under the #95 rule that row
+    # counted as the partition's older rows and the overwrite deleted the other 999.
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "SELECT event_id, toString(toStartOfMonth(event_time)) AS month, "
+                "event_time AS read_at FROM events "
+                "WHERE read_at >= {since:DateTime64(6, 'UTC')}"
+            ),
+            "models/raw/ch_events.yaml": PARTIAL_SIDECAR,
+        },
+    )
+    assert run(capsys, folder)[0] == 0
+    count = "SELECT count(*) FROM lake.raw.ch_events"
+    assert lake_value(folder, count) == [(1000,)]
+    code, out = run(capsys, folder)  # nothing changed at the source
+    assert code == 1, out
+    assert "PARTITION_INCOMPLETE" in out
+    assert record(folder)[0:2] == ("failed", "PARTITION_INCOMPLETE")
+    assert lake_value(folder, count) == [(1000,)]  # nothing deleted
+
+
+def test_a_since_filter_on_another_column_is_refused_before_anything_runs(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #155: the filter compares event_time, but the time column is read_at.
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "SELECT event_id, toString(toStartOfMonth(event_time)) AS month, "
+                "addMilliseconds(event_time, 500) AS read_at FROM events "
+                "WHERE event_time > {since:DateTime64(6, 'UTC')}"
+            ),
+            "models/raw/ch_events.yaml": PARTIAL_SIDECAR,
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert "time_column read_at" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+
+
+def test_a_date_time_column_with_a_month_filter_is_accepted(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #155, accepted form: a Date time column, `{since:Date}` in its lower bound. The model's
+    # own `identity(1)` is not taken for the check's mark (#162 Reviewer passes 1 and 2).
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "SELECT event_id, toString(toStartOfMonth(event_time)) AS month, "
+                "toDate(event_time) AS day, identity(1) AS one FROM events "
+                "WHERE day >= toStartOfMonth({since:Date})"
+            ),
+            "models/raw/ch_events.yaml": PARTIAL_SIDECAR.replace(
+                "time_column: read_at", "time_column: day"
+            ),
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 0, out
+    code, out = run(capsys, folder)  # the whole month again: nothing lost
+    assert code == 0, out
+    assert lake_value(folder, "SELECT count(*) FROM lake.raw.ch_events") == [(1000,)]
+
+
+def test_a_since_bound_that_reads_another_column_is_refused(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #162 Reviewer pass 1: a forged mark, and a bound that depends on a finer column.
+    sidecar = PARTIAL_SIDECAR.replace("time_column: read_at", "time_column: day")
+    for number, where in enumerate(
+        (
+            "day >= identity(identity({since:Date}))",
+            "day >= identity(if(event_time > {since:DateTime64(3, 'UTC')}, "
+            "toDate('1970-01-01'), toDate('2200-01-01')))",
+        )
+    ):
+        folder = project(
+            tmp_path / str(number),
+            source,
+            {
+                "models/raw/ch_events.sql": (
+                    "SELECT event_id, toString(toStartOfMonth(event_time)) AS month, "
+                    f"toDate(event_time) AS day FROM events WHERE {where}"
+                ),
+                "models/raw/ch_events.yaml": sidecar,
+            },
+        )
+        code, out = run(capsys, folder)
+        assert code == 1, out
+        assert "INVALID_MODEL_SQL" in out
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # Reviewer pass 2: rows that depend on other rows or other data.
+        "SELECT * FROM events WHERE day >= toStartOfMonth({since:Date}) "
+        "AND event_id IN (SELECT event_id FROM events WHERE day >= {since:Date})",
+        "SELECT * FROM events WHERE day >= toStartOfMonth({since:Date}) "
+        "AND day NOT IN (SELECT day FROM events WHERE day >= {since:Date})",
+        "SELECT * FROM events WHERE day >= toStartOfMonth({since:Date}) "
+        "EXCEPT ALL SELECT * FROM events WHERE day >= {since:Date}",
+        "SELECT e.* FROM events AS e JOIN events AS c USING (event_id) WHERE c.day >= {since:Date}",
+        "SELECT * FROM events WHERE day >= toStartOfMonth({since:Date}) "
+        "AND day < (SELECT min(day) + 3 FROM events WHERE day >= {since:Date})",
+        "SELECT * FROM events WHERE EXISTS (SELECT 1 FROM events AS s WHERE s.day > {since:Date})",
+        "SELECT * FROM events WHERE day > {since:Date} INTERSECT SELECT * FROM events",
+        # Reviewer pass 3: a time column computed over the filtered rows, or rows dropped.
+        "SELECT month, max(e.day) AS day, count() AS n FROM events AS e "
+        "WHERE e.day >= {since:Date} GROUP BY month",
+        "SELECT event_id, month, toDate(event_time) AS day FROM events AS e "
+        "WHERE e.day >= {since:Date}",
+        "SELECT *, count() OVER (PARTITION BY month) AS n FROM events WHERE day >= {since:Date}",
+        "SELECT * FROM events WHERE day >= {since:Date} LIMIT 1 BY month",
+        "SELECT * FROM events WHERE day >= {since:Date} ORDER BY day LIMIT 10",
+        "SELECT * FROM events WHERE day >= {since:Date} - rand() % 30",
+        # Reviewer pass 4: a LIMIT whose value is a name; a UNION with the column elsewhere.
+        "WITH 25 AS n SELECT * FROM events WHERE day >= {since:Date} ORDER BY day LIMIT n",
+        "WITH 25 AS n SELECT * FROM (SELECT * FROM events WHERE day >= {since:Date}) LIMIT n",
+        "SELECT event_id, day, month FROM events WHERE day >= {since:Date} "
+        "UNION ALL SELECT event_id, month, day FROM events WHERE day >= {since:Date}",
+        "SELECT * FROM events PREWHERE event_id > 0 WHERE day >= {since:Date}",
+        # Reviewer pass 5: a UNION; a LIMIT written as a condition.
+        "SELECT * FROM events WHERE day >= {since:Date} UNION ALL SELECT * FROM events",
+        "SELECT * FROM events WHERE day >= {since:Date} LIMIT 1 > 0",
+        "SELECT * FROM (SELECT * FROM events WHERE day >= {since:Date}) LIMIT NOT 0",
+        # Reviewer pass 6: the select list's `day` read as an alias defined elsewhere.
+        "WITH toDate(event_time) AS day SELECT event_id, month, day FROM events AS e "
+        "WHERE e.day >= {since:Date}",
+        "SELECT event_id, month, day FROM events AS e WHERE e.day >= {since:Date} "
+        "ORDER BY toDate(event_time) AS day",
+        # Reviewer pass 7: a name with a space, read only up to it in `EXPLAIN AST`; a column
+        # that differs only in letter case (ClickHouse names are case-sensitive).
+        "SELECT event_id, month, day FROM (SELECT *, toDate(event_time) AS `day read` "
+        "FROM events) WHERE `day read` >= {since:Date}",
+        "SELECT event_id, month, Day AS day FROM (SELECT event_id, month, "
+        "toDate(event_time) AS Day, toDate('2026-10-01') AS day FROM events) AS cs "
+        "WHERE cs.day >= {since:Date}",
+    ],
+    ids=[
+        "in",
+        "not-in",
+        "except-all",
+        "join",
+        "scalar-subquery",
+        "exists",
+        "intersect",
+        "aggregate",
+        "computed-qualified",
+        "window",
+        "limit-by",
+        "limit",
+        "random-bound",
+        "limit-a-name",
+        "limit-a-name-outside",
+        "union-other-order",
+        "prewhere-and-where",
+        "union-all",
+        "limit-a-condition",
+        "limit-not-zero-outside",
+        "with-alias",
+        "order-by-alias",
+        "spaced-name",
+        "letter-case",
+    ],
+)
+def test_a_since_bound_the_oldest_row_check_cannot_follow_is_refused(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str], sql: str
+) -> None:
+    # The source's `events` has no `day` or `month`: a subquery adds them, so each form reads
+    # like a model over a dated table.
+    dated = (
+        "(SELECT event_id, event_time, toDate(event_time) AS day, "
+        "toString(toStartOfMonth(event_time)) AS month FROM events)"
+    )
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": sql.replace("FROM events", f"FROM {dated}"),
+            "models/raw/ch_events.yaml": PARTIAL_SIDECAR.replace(
+                "time_column: read_at", "time_column: day"
+            ),
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
 
 
 def zoned_events(tmp_path: Path, source: dict[str, str], declared: str) -> Path:

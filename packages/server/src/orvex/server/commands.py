@@ -69,7 +69,14 @@ from orvex.transform import (
 )
 from orvex.transform.extraction import Extract
 from orvex.transform.graph import Graph, build_graph, compiled_sql, plan_run, test_relations
-from orvex.transform.incremental import Columns, Count, Refuse, Step, Watermark
+from orvex.transform.incremental import (
+    Columns,
+    Count,
+    Refuse,
+    Step,
+    Watermark,
+    since_bound_problem,
+)
 from orvex.transform.model_tests import ModelTest
 from orvex.transform.models import Discovery, Model, discover_models
 from orvex.transform.reconciliation import Comparison, Reconcile
@@ -254,6 +261,13 @@ def _bind(
                         )
                         continue
                     columns[name] = output
+                    # A computed time column bounded by its alias: only now are the tables'
+                    # columns known (#162).
+                    bounded = since_bound_problem(model, lambda parts: _columns_of(lake, parts))
+                    if bounded is not None:
+                        failed.add(name)
+                        problems.append(_from_model_error(bounded))
+                        continue
                     if _automatic(model):
                         proven = _prove_filter(lake, model, output, by_name)
                         if isinstance(proven, Problem):
@@ -274,6 +288,16 @@ def _bind(
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     return columns, differences, filtered, extracted, problems
+
+
+def _columns_of(lake: Lake, parts: tuple[str, ...]) -> frozenset[str] | None:
+    """The lowercase column names of a table or source table, as the binder sees it in the
+    scratch lake; None when it cannot be described."""
+    quoted = ".".join('"' + part.replace('"', '""') + '"' for part in parts)
+    try:
+        return frozenset(name.lower() for name, _ in lake.describe(f"SELECT * FROM {quoted}"))
+    except StoreError:
+        return None
 
 
 def _describe_extraction(project: Project, model: Model) -> tuple[clickhouse.Column, ...] | Problem:

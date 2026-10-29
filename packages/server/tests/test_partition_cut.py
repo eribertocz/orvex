@@ -207,8 +207,8 @@ def test_the_message_names_five_partitions_and_the_total(
 def test_a_source_that_dropped_old_rows_fails_until_a_full_refresh(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The known limit (decision #95): the check cannot tell a cut from a source that no
-    longer has a partition's older rows; the run fails, and a full refresh rebuilds it."""
+    """The known limit (decisions #95 and #128): the check cannot tell a cut from a source that
+    no longer has a partition's older rows; the run fails, and a full refresh rebuilds it."""
     project(tmp_path, WHOLE)
     feed(tmp_path, october(1, 20))
     assert run(capsys, tmp_path)[0] == 0
@@ -241,3 +241,100 @@ def test_a_partition_column_with_a_non_ascii_name_is_checked(
     assert "PARTITION_INCOMPLETE" in out
     assert "'mañana 2026-10' (1 in total)" in out
     assert last_record(tmp_path)[0:2] == ("failed", "PARTITION_INCOMPLETE")
+
+
+# --- #155: the oldest-row rule and the same time column (decision #128, option B) ------------
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        CUTTING.replace("read_at > $since", "read_at >= $since"),
+        CUTTING.replace("read_at > $since", "read_at > $since - INTERVAL 3 DAY"),
+    ],
+    ids=["at-or-after-since", "hand-written-lookback"],
+)
+def test_a_partial_reload_fails_and_keeps_the_table(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], model: str
+) -> None:
+    # The #128 measurements: under the #95 rule these runs passed, reloading 6 and 8 rows of
+    # October and deleting the rest of its 20.
+    project(tmp_path, model)
+    feed(tmp_path, october(1, 20))
+    assert run(capsys, tmp_path)[0] == 0
+    before = lake_value(tmp_path, ROWS)
+    feed(tmp_path, october(1, 25))
+    code, out = run(capsys, tmp_path)
+    assert code == 1, out
+    assert "PARTITION_INCOMPLETE" in out
+    assert "older than the oldest row this run loaded" in out
+    assert lake_value(tmp_path, ROWS) == before  # all 20 rows kept, nothing written
+    outcome, error_code, _ = last_record(tmp_path)
+    assert (outcome, error_code) == ("failed", "PARTITION_INCOMPLETE")
+
+
+def test_a_source_that_dropped_its_oldest_row_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project(tmp_path, WHOLE)
+    feed(tmp_path, october(1, 20))
+    assert run(capsys, tmp_path)[0] == 0
+    feed(tmp_path, october(2, 25))  # the source no longer has October 1
+    code, out = run(capsys, tmp_path)
+    assert code == 1, out
+    assert "PARTITION_INCOMPLETE" in out
+    assert "--full-refresh" in out
+    code, out = run(capsys, tmp_path, "--full-refresh")
+    assert code == 0, out
+    assert days_by_month(tmp_path) == [("2026-10", 24, 2, 25)]
+
+
+BY_DAY = SIDECAR.replace("time_column: read_at", "time_column: day")
+FINER = (
+    "SELECT *, CAST(read_at AS DATE) AS day, strftime(read_at, '%Y-%m') AS month "
+    "FROM feed.data WHERE read_at > $since"
+)
+
+
+def test_a_filter_on_a_finer_column_is_refused_before_anything_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The #128 case of 72 rows becoming 67: the filter compares read_at, the time column is day.
+    project(tmp_path, FINER, BY_DAY)
+    feed(tmp_path, october(1, 20))
+    code = main(["validate", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert "time_column day" in out
+    code, out = run(capsys, tmp_path)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+
+
+def test_the_same_model_filtering_its_time_column_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project(tmp_path, FINER.replace("WHERE read_at > $since", "WHERE day >= $since"), BY_DAY)
+    feed(tmp_path, october(1, 20))
+    code, out = run(capsys, tmp_path)
+    assert code == 0, out
+
+
+def test_a_computed_time_column_over_a_table_with_that_column_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #162 Reviewer pass 3: the source has its own `day`, so DuckDB reads `day` in WHERE as the
+    # source's column, not the computed one the run checks. Only the bound tables tell (the
+    # sidecar rules accept it; validation looks the source's columns up).
+    sql = (
+        "SELECT id, region, read_at, CAST(read_at AS DATE) AS day, "
+        "strftime(read_at, '%Y-%m') AS month FROM feed.data WHERE day >= $since"
+    )
+    project(tmp_path, sql, BY_DAY)
+    feed(tmp_path, f"SELECT *, DATE '2026-10-01' AS day FROM ({october(1, 20)})")
+    code, out = run(capsys, tmp_path)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert "time_column day" in out
+    assert not (tmp_path / f".{SLUG}" / "lake").exists()
