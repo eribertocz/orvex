@@ -201,18 +201,39 @@ def test_the_sandbox_allows_the_prefix_and_nothing_beside_it(
             lake._connection.execute(
                 f"SELECT * FROM read_parquet('s3://{bucket}/other/x.parquet')"
             ).fetchall()
-        # DuckDB checks an `s3://` path as text: `billing/../x.parquet` starts with the prefix.
-        # S3 keys are literal (`..` is not resolved), so that key is a different, missing object
-        # under the prefix. What matters is that the file at the root is not read.
-        with pytest.raises(duckdb.Error) as escaped:
+        with pytest.raises(duckdb.PermissionException):
             lake._connection.execute(
-                f"SELECT * FROM read_parquet('s3://{bucket}/billing/../x.parquet')"
+                f"SELECT * FROM read_parquet('s3://{bucket}/x.parquet')"
             ).fetchall()
-        assert "404" in str(escaped.value) or isinstance(escaped.value, duckdb.PermissionException)
         # A statement still cannot name a file at all.
         with pytest.raises(StoreError) as refused:
             write(lake, f"CREATE TABLE x AS SELECT * FROM read_parquet('s3://{bucket}/{inside}')")
         assert refused.value.code == "STORE_STATEMENT_INVALID"
+    finally:
+        lake.close()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "DuckDB 2.0.0 checks an s3:// path against the sandbox as text, then resolves `..` "
+        "before the request (measured in CI; moto itself does not resolve it). Known limitation, "
+        "decision #140. Strict: this fails once DuckDB closes it, so the mark is removed then."
+    ),
+)
+def test_a_dot_dot_path_cannot_leave_the_prefix(tmp_path: Path, endpoint: str, bucket: str) -> None:
+    lake = s3_lake(tmp_path, endpoint, bucket)
+    try:
+        write(lake, READINGS)
+        local = tmp_path / "outside.parquet"
+        plain = duckdb.connect()
+        plain.execute(f"COPY (SELECT 42 AS secret_value) TO '{local}' (FORMAT parquet)")
+        plain.close()
+        put(endpoint, bucket, "x.parquet", local.read_bytes())
+        with pytest.raises(duckdb.Error):
+            lake._connection.execute(
+                f"SELECT * FROM read_parquet('s3://{bucket}/billing/../x.parquet')"
+            ).fetchall()
     finally:
         lake.close()
 

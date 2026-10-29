@@ -63,6 +63,7 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 - The credentials are read when the lake opens and registered so no error shows them. They become a **temporary** DuckDB secret (official `httpfs` extension) scoped to the prefix; persistent secrets are never loaded. An unset variable is `STORE_SECRET_MISSING`.
 - `use_ssl: false` is refused unless the endpoint is the local machine (`STORE_TLS_REQUIRED`), before anything is opened.
 - The file sandbox allows exactly the data prefix. DuckDB checks remote paths against it too: another prefix of the same bucket stays closed.
+- **Known limit (DuckDB 2.0.0, decision #140).** DuckDB checks an `s3://` path against the sandbox as text and resolves `..` afterwards, so `s3://bucket/prefix/../other` passes the check and reaches outside the prefix. No statement can name a file (`STORE_STATEMENT_INVALID`), so only DuckDB's own paths reach object storage. Give the lake credentials that grant access to its prefix only.
 - `encrypted: true` attaches with DuckLake's `ENCRYPTED`; the keys are stored in the catalog. Deletion vectors (`WRITE_DELETION_VECTORS`, written unencrypted) are never enabled.
 - Maintenance (expiration, merging, cleanup and orphan deletion) works the same on object storage.
 
