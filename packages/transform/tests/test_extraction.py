@@ -162,3 +162,34 @@ def test_the_stream_schema_must_be_the_validated_one() -> None:
     assert "d arrives as decimal128(18, 2)" in str(_schema_problem(rescaled, columns))
     renamed = sent.set(1, pa.field("other", pa.string()))
     assert _schema_problem(renamed, columns) == "columns a, other, t, d, __row, __invalid"
+
+
+def test_the_bound_is_the_value_clickhouse_filters_by() -> None:
+    from orvex.transform.clickhouse import since_bound
+
+    def bound(declared: str, text: str, server: str) -> tuple[str, str]:
+        found = since_type(declared)
+        assert found is not None
+        return since_bound(found, text, server)
+
+    # Truncated to whole seconds, as ClickHouse received it: not the watermark's .500.
+    assert bound("DateTime64(0, 'UTC')", "2024-01-20 10:00:00", "America/La_Paz") == (
+        "2024-01-20T10:00:00+00:00",
+        "2024-01-20",
+    )
+    # A parameter without a zone is in the server's; a date is midnight there.
+    assert bound("DateTime", "2024-03-01 07:50:00", "America/La_Paz") == (
+        "2024-03-01T11:50:00+00:00",
+        "2024-03-01",
+    )
+    assert bound("Date", "2024-03-01", "America/La_Paz") == (
+        "2024-03-01T04:00:00+00:00",
+        "2024-03-01",
+    )
+    assert bound("DateTime64(3)", "2024-03-01 07:50:00.123", "UTC")[0] == (
+        "2024-03-01T07:50:00.123000+00:00"
+    )
+    # An ambiguous autumn time is the earlier instant, as ClickHouse reads it (EDT, -04:00).
+    assert bound("DateTime", "2024-11-03 01:30:00", "America/New_York")[0] == (
+        "2024-11-03T05:30:00+00:00"
+    )

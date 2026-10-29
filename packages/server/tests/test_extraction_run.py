@@ -41,6 +41,12 @@ EXAMPLE = (
 DOWNSTREAM = (
     "SELECT meter_id, count(*) AS events, sum(value) AS value FROM raw.ch_events GROUP BY ALL"
 )
+# A downstream incremental DuckDB model with the automatic filter (P1-13) on the extracted table.
+AUTO = "SELECT event_id, meter_id, event_time, value FROM raw.ch_events"
+AUTO_SIDECAR = (
+    "version: 1\nmaterialized: incremental\nincremental:\n  strategy: merge\n"
+    "  unique_key: [event_id]\n  time_column: event_time\n"
+)
 
 
 def admin() -> Client:
@@ -103,6 +109,11 @@ def project(folder: Path, source: dict[str, str], models: dict[str, str]) -> Pat
     return folder
 
 
+def main_output(capsys: pytest.CaptureFixture[str], arguments: list[str]) -> tuple[int, str]:
+    code = main(arguments)
+    return code, capsys.readouterr().out
+
+
 def run(capsys: pytest.CaptureFixture[str], folder: Path, *extra: str) -> tuple[int, str]:
     code = main(["run", str(folder), *extra])
     return code, capsys.readouterr().out
@@ -145,8 +156,14 @@ def test_incremental_runs_merge_new_and_late_rows(
             "models/raw/ch_events.sql": EXAMPLE,
             "models/raw/ch_events.yaml": EXTRACTION,
             "models/marts/by_meter.sql": DOWNSTREAM,
+            "models/marts/events_auto.sql": AUTO,
+            "models/marts/events_auto.yaml": AUTO_SIDECAR,
         },
     )
+    # The downstream model keeps its automatic filter on the extracted table.
+    code, out = main_output(capsys, ["validate", str(folder), "--show-sql", "marts.events_auto"])
+    assert code == 0, out
+    assert "$since" in out
     code, out = run(capsys, folder)
     assert code == 0, out
     first = lake_value(folder, EVENTS)
@@ -188,6 +205,16 @@ def test_incremental_runs_merge_new_and_late_rows(
     assert rows == "603"
     assert watermark == "2024-01-01T00:20:02.000000+00:00"
     assert lake_value(folder, "SELECT sum(events) FROM lake.marts.by_meter") == [(1003,)]
+    # The automatic filter read only rows newer than its watermark: the 3 new rows, not the
+    # late change to event 995 (older than the watermark; no lookback declared).
+    auto = lake_value(
+        folder,
+        "SELECT count(*), max(CAST(value AS VARCHAR)) FILTER (WHERE event_id = 995) "
+        "FROM lake.marts.events_auto",
+    )
+    assert auto == [(1003, "124.3750")]
+    assert record(folder, "marts.events_auto")[0] == "success"
+    assert record(folder, "marts.events_auto")[4] is not None  # a real `$since`, not a rebuild
     # The run's ClickHouse query was read-only, with `since` bound by the server.
     logs = admin()
     try:
@@ -357,3 +384,40 @@ def running(mark: str) -> int:
         )
     finally:
         client.close()
+
+
+def test_a_partition_overwrite_model_is_checked_against_the_since_clickhouse_used(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # `{since:DateTime64(0, 'UTC')}` truncates the watermark 00:16:39.500 to 00:16:39, so the
+    # last row is read again. Checked against the watermark, that row would count as the
+    # partition's older rows reloaded, and the overwrite would delete the other 999 (#98).
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "SELECT event_id, month, read_at FROM (SELECT event_id, "
+                "toString(toStartOfMonth(event_time)) AS month, "
+                "addMilliseconds(event_time, 500) AS read_at FROM events) "
+                "WHERE read_at > {since:DateTime64(0, 'UTC')}"
+            ),
+            "models/raw/ch_events.yaml": (
+                "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
+                "incremental:\n  strategy: partition_overwrite\n  time_column: read_at\n"
+                "  partition_by: [month]\n  filter: manual\n"
+            ),
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 0, out
+    count = "SELECT count(*) FROM lake.raw.ch_events"
+    assert lake_value(folder, count) == [(1000,)]
+    code, out = run(capsys, folder)  # nothing changed at the source
+    assert code == 1, out
+    assert "PARTITION_INCOMPLETE" in out
+    assert "'2024-01-01'" in out
+    outcome, error_code, _, rows_read, since, _ = record(folder)
+    assert (outcome, error_code, rows_read) == ("failed", "PARTITION_INCOMPLETE", "1")
+    assert since == "2024-01-01 00:16:39"
+    assert lake_value(folder, count) == [(1000,)]  # nothing deleted

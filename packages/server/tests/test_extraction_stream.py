@@ -464,6 +464,25 @@ def test_a_profile_limit_clause_does_not_trim_the_result(reader: dict[str, str])
 
 
 @live
+def test_a_profile_row_filter_does_not_trim_the_result(reader: dict[str, str]) -> None:
+    # `additional_table_filters` in a profile would make a run read 10 of 1,000 rows.
+    table = f"{reader['database']}.filtered"
+    client = admin()
+    try:
+        client.command(f"CREATE TABLE {table} (n UInt64) ENGINE = MergeTree ORDER BY n")
+        client.command(f"INSERT INTO {table} SELECT number FROM numbers(1000)")
+    finally:
+        client.close()
+    user = profiled(reader, f"additional_table_filters = '{{\\'{table}\\': \\'n < 10\\'}}'")
+    try:
+        cursor, rows, _ = extract(user, f"SELECT n FROM {table}", transaction())
+    finally:
+        drop(user)
+    assert rows == 1000
+    assert cursor.execute("SELECT min(n), max(n) FROM _extract.t").fetchone() == (0, 999)
+
+
+@live
 @pytest.mark.parametrize(
     ("profile", "named"),
     [

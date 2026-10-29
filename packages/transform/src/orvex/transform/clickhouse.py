@@ -867,6 +867,9 @@ class Source:
             **dict.fromkeys(OVERFLOW_MODES, "throw"),
             "limit": 0,
             "offset": 0,
+            # Row filters a profile can add to every table or to the result.
+            "additional_table_filters": {},
+            "additional_result_filter": "",
         }
         # Its own client: the receive timeout covers the run (a query may scan for minutes
         # before its next rows), not the validation queries' 30 s.
@@ -1294,6 +1297,19 @@ _LOWEST = {
     "DateTime": dt.datetime(1970, 1, 1),
     "DateTime64": dt.datetime(1900, 1, 1),
 }
+
+
+def since_bound(since: SinceType, text: str, server: str) -> tuple[str, str]:
+    """The boundary that `{since:…}` = `text` puts on the rows, for DuckDB: the instant (ISO 8601,
+    in UTC) and the date, `text` being in the parameter's zone (the server's when it declares
+    none). A date is midnight. ClickHouse reads an ambiguous local time as the earlier instant
+    (measured on 26.9), as `fold=0` does here.
+
+    A run's own checks compare with this value, not with the stored watermark: `since_value`
+    truncates to the declared type, so rows between the two are read again (#98)."""
+    local = dt.datetime.fromisoformat(text)
+    instant = local.replace(tzinfo=ZoneInfo(since.zone or server)).astimezone(dt.UTC)
+    return instant.isoformat(), local.date().isoformat()
 
 
 def since_value(since: SinceType, watermark: str | None, lookback: str | None, server: str) -> str:

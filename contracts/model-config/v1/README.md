@@ -109,7 +109,8 @@ Every run query carries:
 - `max_execution_time`;
 - `cancel_http_readonly_queries_on_client_close = 1`;
 - `max_block_size = 65536` and `preferred_block_size_bytes = 16777216`;
-- every `*_overflow_mode` setting `'throw'`, `limit = 0` and `offset = 0`, so a limit in the user's profile fails the run (`SOURCE_QUERY_FAILED`) instead of shortening its result.
+- every `*_overflow_mode` setting `'throw'`, `limit = 0` and `offset = 0`, so a limit in the user's profile fails the run (`SOURCE_QUERY_FAILED`) instead of shortening its result;
+- `additional_table_filters = {}` and `additional_result_filter = ''`, so row filters in the user's profile do not apply to the run.
 
 A profile that fixes any of these to another value, or constrains it so ClickHouse refuses it, is refused (`SOURCE_LIMITS_REFUSED`, naming the setting when the server lists it as fixed).
 
@@ -119,6 +120,7 @@ A profile that fixes any of these to another value, or constrains it so ClickHou
 
 How the rows load and how the run ends:
 - **Into the run's transaction.** The result streams as Arrow record batches into a table of the run's DuckDB transaction (`Transaction.load_arrow`, `contracts/store/v1`), each column cast to its mapped type. No row is decoded in Python. The model's strategy, tests and watermark then apply as for any other model.
+- **Checks use the boundary ClickHouse used.** The declared `{since:…}` type may truncate the watermark, so rows between the two are read again. The run's own checks (the `partition_overwrite` cut check, `PARTITION_INCOMPLETE`) compare with the value ClickHouse received, as an instant (or a date for a `DATE` time column), never with the stored watermark.
 - **Columns checked first.** Before reading, the output is described again, and the stream's Arrow types are compared with the validated columns; a type that changed since validation is `SCHEMA_CHANGED`.
 - **Failure and cancellation.** A failure, a time limit or a cancellation shuts the connection down, so ClickHouse cancels the query even while it sends nothing, and the run rolls back. The run record keeps the rows read so far.
 - **Ctrl-C.** The run rolls back, its records are written (`failed`, `STORE_CANCELLED`), and the command then stops as interrupted.

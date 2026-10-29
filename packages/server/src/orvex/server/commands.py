@@ -671,6 +671,8 @@ class _Outcome:
     rows_written: str | None = None
     error: RunError | None = None
     since: str | None = None
+    # An extraction model's `{since:…}` as DuckDB values (instant, date): what its checks use.
+    bound: tuple[str, str] | None = None
     watermark: str | None = None
     tests: list[CheckResult] = field(default_factory=list)
     reconciliation: list[CheckResult] = field(default_factory=list)
@@ -1116,11 +1118,23 @@ def _run_step(
         item.rows_read = value or "0"
         item.rows_written = item.rows_read
     else:
+        parameters = [_bounded(parameter, item.bound) for parameter in step.parameters]
         value = transaction.value(
-            StatementRequest(kind="statement", sql=step.sql, parameters=list(step.parameters))
+            StatementRequest(kind="statement", sql=step.sql, parameters=parameters)
         )
         if value not in {None, "0"}:
             raise _StepFailed(step.code, step.failure(value))
+
+
+def _bounded(parameter: Parameter, bound: tuple[str, str] | None) -> Parameter:
+    """`$since` of an extraction model's check: the boundary ClickHouse actually filtered by,
+    which the declared `{since:…}` type may have truncated below the watermark (#98). Checking
+    against the watermark would count rows read again as reloaded."""
+    if bound is None or parameter.name != "since":
+        return parameter
+    instant, day = bound
+    value = day if parameter.type.root == "DATE" else instant
+    return parameter.model_copy(update={"value": value})
 
 
 def _extract(
@@ -1159,6 +1173,8 @@ def _extract(
             else None
         )
         item.since = since
+        if since is not None and step.since is not None:
+            item.bound = clickhouse.since_bound(step.since, since, source.server_zone)
         source.check_columns(step.text, step.since, step.columns)
         sent = True
         stream = source.stream(step.text, step.columns, since, DEFAULT_TIMEOUT_MS // 1000)
