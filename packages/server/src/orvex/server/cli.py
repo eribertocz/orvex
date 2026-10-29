@@ -205,14 +205,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 @contextmanager
 def stopping(server: uvicorn.Server) -> Iterator[list[int]]:
-    """While the server runs, `SIGTERM` (kill, process managers) and `SIGHUP` (the terminal
-    closed) shut it down gracefully, as Ctrl-C does; yields the signals received.
+    """While the server runs, Ctrl-C (`SIGINT`), `SIGTERM` (kill, process managers) and `SIGHUP`
+    (the terminal closed) shut it down gracefully; yields the signals received.
 
     uvicorn raises a signal it handled again once shut down, which by default would end the
     process before the caller's cleanup runs (the in-memory project folder, #43): these handlers
     take that signal instead, and the caller ends the process after cleaning up. They are in
     place before the server's address is announced, so a signal sent once it is printed is
-    handled too.
+    handled too. Handling `SIGINT` here also keeps asyncio's own handler, and a
+    `KeyboardInterrupt` raised at an arbitrary point, out of the way (#151).
     """
     received: list[int] = []
 
@@ -220,7 +221,11 @@ def stopping(server: uvicorn.Server) -> Iterator[list[int]]:
         received.append(signum)
         server.handle_exit(signum, frame)
 
-    numbers = [signal.SIGTERM, *([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])]
+    numbers = [
+        signal.SIGINT,
+        signal.SIGTERM,
+        *([signal.SIGHUP] if hasattr(signal, "SIGHUP") else []),
+    ]
     previous = {number: signal.signal(number, stop) for number in numbers}
     try:
         yield received

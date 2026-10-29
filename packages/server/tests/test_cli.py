@@ -96,13 +96,14 @@ def started(arguments: list[str], tmp_path: Path) -> subprocess.Popen[str]:
         home_variable(IDENTITY): str(tmp_path / "instance"),
         "TMPDIR": str(temporary),
     }
-    process = subprocess.Popen(
-        [sys.executable, "-m", "orvex.server", *arguments, "--no-browser", "--port", str(port)],
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
+    with (tmp_path / "stderr.txt").open("w", encoding="utf-8") as errors:  # read by the tests
+        process = subprocess.Popen(
+            [sys.executable, "-m", "orvex.server", *arguments, "--no-browser", "--port", str(port)],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=errors,
+            text=True,
+        )
     assert process.stdout is not None
     line = process.stdout.readline()  # the address line, printed once the project is open
     assert "-> http://" in line, line
@@ -125,18 +126,37 @@ def test_the_in_memory_project_is_deleted_however_the_server_stops(
     try:
         assert len(list((tmp_path / "temporary").iterdir())) == 1  # the project folder
         process.send_signal(number)
-        # It still ends as the signal asked; Ctrl-C ends as before (KeyboardInterrupt).
+        # It still ends as the signal asked, Ctrl-C included, with no traceback (#151).
         assert process.wait(timeout=10) == returncode
     finally:
         if process.poll() is None:
             process.kill()
             process.wait()
     assert list((tmp_path / "temporary").iterdir()) == []
+    assert "Traceback" not in (tmp_path / "stderr.txt").read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+@pytest.mark.parametrize("delay", [0.0, 0.05, 0.1, 0.2])
+def test_ctrl_c_during_start_up_stops_cleanly(tmp_path: Path, delay: float) -> None:
+    # #151: Ctrl-C right after the address line, while uvicorn may still be starting.
+    process = started([], tmp_path)
+    try:
+        time.sleep(delay)
+        process.send_signal(signal.SIGINT)
+        assert process.wait(timeout=10) == -signal.SIGINT
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+    assert list((tmp_path / "temporary").iterdir()) == []
+    assert "Traceback" not in (tmp_path / "stderr.txt").read_text(encoding="utf-8")
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
 @pytest.mark.parametrize(
-    "number", [signal.SIGTERM, *([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])]
+    "number",
+    [signal.SIGINT, signal.SIGTERM, *([signal.SIGHUP] if hasattr(signal, "SIGHUP") else [])],
 )
 def test_a_project_folder_is_never_deleted(tmp_path: Path, number: int) -> None:
     project = tmp_path / "billing"
