@@ -9,7 +9,7 @@ A project folder holds plain YAML files under version control (law 8). This cont
 | Message | File | Content |
 |---|---|---|
 | `ProjectFile` | `project.yaml` (required) | `version: 1`; `name` (1–100 characters); `time_zone`, an IANA name, required (no implicit zone); `locale` `es` or `en` (default `es`); `retention.snapshots` `<n>d`, at least `1d` (default `90d`, decision #70); optional `lineage` (`url`, `https://`, or `http://` only to `localhost`/`127.0.0.1`, never with a user or password; optional `api_key`, a `${env:NAME}` reference sent as a bearer token) where OpenLineage events are also sent (P1-18); optional `lake` (below) |
-| `ConnectionsFile` | `connections.yaml` (optional; absent = no connections) | `version: 1`; `connections`, a map from a name (`^[a-z][a-z0-9_]{0,62}$`, not `lake`) to one connection |
+| `ConnectionsFile` | `connections.yaml` (optional; absent, empty, only comments or white space, or an explicit `null`/`~` = no connections, decision #80) | `version: 1`; `connections`, a map from a name (`^[a-z][a-z0-9_]{0,62}$`, not `lake`) to one connection |
 | `ProjectError` | — | `code`, `message`, `details` (`file`, `path` as a JSON pointer into the file, `line`, `connection`, `variable`) |
 
 Connection types (`type`):
@@ -72,9 +72,9 @@ A `postgres` connection on a host other than the local machine (`localhost`, `12
 | Code | When |
 |---|---|
 | `PROJECT_NOT_FOUND` | the folder or its `project.yaml` does not exist, or a file is not a regular file or cannot be read |
-| `PROJECT_YAML_INVALID` | not UTF-8 text, not valid YAML, more than one document, a duplicate key, an anchor, alias or merge key (`&`, `*`, `<<`), a file over 1 MiB, or values nested more than 32 levels, with its line |
+| `PROJECT_YAML_INVALID` | not UTF-8 text, not valid YAML, more than one document, a duplicate key, an anchor, alias or merge key (`&`, `*`, `<<`), a file over 1 MiB, or values nested more than 32 levels, with its line; or a value Python cannot build (an integer over 4300 digits, a date that does not exist), with its line and path, described in words and never quoted |
 | `PROJECT_VERSION_UNSUPPORTED` | `version` is an integer other than 1 |
-| `PROJECT_SCHEMA_INVALID` | the file does not match its message, `time_zone` is not a zone of the bundled IANA database (system-only names such as `localtime` and the placeholder `Factory` are refused), or a connection name appears twice |
+| `PROJECT_SCHEMA_INVALID` | the file does not match its message, `time_zone` is not a zone of the bundled IANA database (system-only names such as `localtime` and the placeholder `Factory` are refused), or a connection name appears twice; a key YAML does not read as text (`null`, `1`, `true`) is named as written, with its line. An unknown top-level key is found before the document is built, so an oversized file of unknown keys is refused at once |
 | `SOURCE_NOT_READ_ONLY` | a database connection declares `read_only: false` |
 | `SOURCE_TLS_REQUIRED` | a `postgres` connection on another machine without `ssl_mode: verify-full` |
 | `PROJECT_SECRET_MISSING` | a referenced environment variable is not set when the secret is resolved (for `lake.catalog`, when the project is validated) |

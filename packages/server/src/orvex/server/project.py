@@ -35,6 +35,9 @@ CONNECTIONS_FILE = "connections.yaml"
 SUPPORTED_VERSION = 1
 RESERVED_CONNECTION = "lake"
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})  # the local machine (#120, #122)
+# The top-level keys each file may have, checked before the document is built (#79).
+_PROJECT_KEYS = frozenset(field.alias or name for name, field in ProjectFile.model_fields.items())
+_CONNECTIONS_KEYS = frozenset({"version", "connections"})
 
 
 def is_local_host(host: str) -> bool:
@@ -156,7 +159,7 @@ def _load_project(folder: Path) -> Project:
             f"{PROJECT_FILE} not found in {folder}.",
             file=PROJECT_FILE,
         )
-    document = ConfigFile(project_path, SUPPORTED_VERSION)
+    document = ConfigFile(project_path, SUPPORTED_VERSION, allowed_keys=_PROJECT_KEYS)
     settings = document.model(ProjectFile, document.data, "")
     zone = settings.time_zone
     if zone not in _iana_zones():
@@ -169,7 +172,9 @@ def _load_project(folder: Path) -> Project:
     connections: dict[str, Connection] = {}
     connections_path = folder / CONNECTIONS_FILE
     if connections_path.exists() or connections_path.is_symlink():  # a broken link is reported
-        connections = _load_connections(ConfigFile(connections_path, SUPPORTED_VERSION), folder)
+        connections = _load_connections(
+            ConfigFile(connections_path, SUPPORTED_VERSION, allowed_keys=_CONNECTIONS_KEYS), folder
+        )
     return Project(folder=folder, settings=settings, connections=connections)
 
 
@@ -194,6 +199,10 @@ def resolve_secret(reference: SecretReference | str) -> str:
 
 def _load_connections(document: ConfigFile, folder: Path) -> dict[str, Connection]:
     data = document.data
+    if data is None:
+        # Empty, only comments or white space, or an explicit `null`/`~`: no connections, as for
+        # a missing file (#80, option A).
+        return {}
     if not isinstance(data, dict):
         raise document.schema_error("The file must be a mapping.", "")
     unknown = sorted(set(data) - {"version", "connections"})

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from orvex.contracts.project.v1 import (
     PostgresConnection,
     SqliteConnection,
 )
+from orvex.server.cli import main
 from orvex.server.project import ProjectLoadError, load_project, resolve_secret
 
 PROJECT = """\
@@ -466,3 +468,76 @@ def test_merge_keys_are_refused(tmp_path: Path, connections: str) -> None:
     error = failure(project(tmp_path, connections=connections))
     assert error.code == "PROJECT_YAML_INVALID"
     assert error.error.details.line is not None
+
+
+# --- #79: lines and keys as written, oversized files, empty connections.yaml -------------------
+
+BASE = "version: 1\nname: Test\ntime_zone: UTC\n"  # three lines: the case under test is line 4
+
+
+def test_an_unbuildable_integer_is_named_with_its_line(tmp_path: Path) -> None:
+    digits = "9" * 5000
+    error = failure(project(tmp_path, BASE + f"x: {digits}\n"))
+    assert error.code == "PROJECT_YAML_INVALID"
+    details = error.error.details
+    assert (details.file, details.line, details.path) == ("project.yaml", 4, "/x")
+    assert "an integer with more than 4300 digits" in error.error.message
+    assert digits[:20] not in error.error.message
+
+
+def test_an_impossible_date_is_named_with_its_line(tmp_path: Path) -> None:
+    connections = (
+        "version: 1\nconnections:\n  f:\n    type: parquet\n    path: a.parquet\n"
+        "    since: 2024-02-30\n"
+    )
+    error = failure(project(tmp_path, connections=connections))
+    assert error.code == "PROJECT_YAML_INVALID"
+    details = error.error.details
+    assert (details.file, details.line, details.path) == (
+        "connections.yaml",
+        6,
+        "/connections/f/since",
+    )
+    assert "not a real date or time" in error.error.message
+    assert "2024-02-30" not in error.error.message
+
+
+def test_an_oversized_project_file_is_refused_quickly(tmp_path: Path) -> None:
+    settings = BASE + "".join(f"k{index}: 1\n" for index in range(60000))
+    folder = project(tmp_path, settings)
+    started = time.monotonic()
+    error = failure(folder)
+    elapsed = time.monotonic() - started
+    assert error.code == "PROJECT_SCHEMA_INVALID"
+    assert "Unknown key 'k0'" in error.error.message
+    assert (error.error.details.line, error.error.details.path) == (4, "/k0")
+    assert elapsed < 0.5, elapsed
+
+
+@pytest.mark.parametrize("key", ["null", "1", "true"])
+def test_a_key_that_is_not_text_is_named_as_written(tmp_path: Path, key: str) -> None:
+    error = failure(project(tmp_path, BASE + f"{key}: x\n"))
+    assert error.code == "PROJECT_SCHEMA_INVALID"
+    assert (error.error.details.line, error.error.details.path) == (4, f"/{key}")
+
+
+@pytest.mark.parametrize(
+    "connections",
+    ["", "# only a comment\n", "  \n\n", "null\n", "~\n"],
+    ids=["empty", "comments", "white-space", "null", "tilde"],
+)
+def test_an_empty_connections_file_means_no_connections(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], connections: str
+) -> None:
+    folder = project(tmp_path, connections=connections)
+    assert load_project(folder).connections == {}
+    assert main(["validate", str(folder)]) == 0, capsys.readouterr().out
+
+
+@pytest.mark.parametrize("connections", ["[a]\n", "x\n"], ids=["list", "scalar"])
+def test_a_connections_file_that_is_not_a_mapping_is_refused(
+    tmp_path: Path, connections: str
+) -> None:
+    error = failure(project(tmp_path, connections=connections))
+    assert error.code == "PROJECT_SCHEMA_INVALID"
+    assert "The file must be a mapping" in error.error.message

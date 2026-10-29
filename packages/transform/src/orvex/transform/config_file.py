@@ -22,8 +22,55 @@ from pydantic import BaseModel, ValidationError
 MAX_FILE_BYTES = 1024 * 1024
 MAX_DEPTH = 32
 MERGE_TAG = "tag:yaml.org,2002:merge"
+STR_TAG = "tag:yaml.org,2002:str"
+# What a scalar of each tag is, when Python cannot build it (#79): never the value itself.
+_UNBUILDABLE = {
+    "tag:yaml.org,2002:int": "an integer with more than 4300 digits",
+    "tag:yaml.org,2002:timestamp": "not a real date or time",
+    "tag:yaml.org,2002:float": "a number that cannot be read",
+}
+# The C parser when PyYAML has it: the first top-level keys are read without composing the
+# whole document, so an oversized file of unknown keys is refused at once (#79).
+_PARSER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 _FIELD = re.compile(r"[a-z_][a-z0-9_]*")
 _TYPE_NAMES = frozenset({"int", "str", "float", "bool", "list", "dict", "root"})
+
+
+_NULL_TEXTS = frozenset({"", "~", "null", "Null", "NULL"})
+
+
+def _is_null(event: yaml.ScalarEvent) -> bool:
+    return bool(event.implicit[0]) and event.value in _NULL_TEXTS
+
+
+def _key_not_text(event: yaml.ScalarEvent, resolver: yaml.resolver.Resolver) -> bool:
+    """Whether YAML reads a key as something other than text (`1`, `true`, `null`, `1.5`)."""
+    if not event.implicit[0]:
+        return False
+    first = event.value[:1]
+    if not (first.isdigit() or first in "+-.~nNyYoOtTfF" or not event.value):
+        return False
+    tag = str(resolver.resolve(yaml.ScalarNode, event.value, event.implicit))  # type: ignore[no-untyped-call]
+    return tag != STR_TAG
+
+
+def _maybe_unbuildable(event: yaml.ScalarEvent, resolver: yaml.resolver.Resolver) -> bool:
+    """Whether a plain scalar may be one Python cannot build: a very long integer, or a date
+    or time (which may not exist). Cheap tests first; only those are resolved and built."""
+    value = event.value
+    if not event.implicit[0] or not (len(value) > 4000 or value[4:5] == "-"):
+        return False
+    tag = str(resolver.resolve(yaml.ScalarNode, value, event.implicit))  # type: ignore[no-untyped-call]
+    if tag not in _UNBUILDABLE:
+        return False
+    loader = yaml.SafeLoader("")
+    try:
+        loader.construct_object(yaml.ScalarNode(tag, value))
+    except ValueError, OverflowError:
+        return True
+    finally:
+        loader.dispose()
+    return False
 
 
 class ConfigProblem(Exception):
@@ -110,7 +157,15 @@ def _data_path(data: object, location: tuple[object, ...]) -> list[object]:
 class ConfigFile:
     """One YAML file: its data, and where each value is in the text."""
 
-    def __init__(self, path: Path, supported_version: int, name: str | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        supported_version: int,
+        name: str | None = None,
+        allowed_keys: frozenset[str] | None = None,
+    ) -> None:
+        """`allowed_keys`, when given, are the only top-level keys the file may have; an unknown
+        one is refused before the document is built."""
         self.file = name or path.name
         failure: ConfigProblem | None = None
         data = b""
@@ -148,6 +203,8 @@ class ConfigFile:
             )
         if failure is not None:
             raise failure
+        if allowed_keys is not None:
+            self._refuse_unknown_top_keys(text, allowed_keys)
         try:
             self._root = yaml.compose(text, Loader=yaml.SafeLoader)
         except yaml.YAMLError as error:
@@ -159,18 +216,16 @@ class ConfigFile:
         self._check_nodes(self._root, "", set(), 0)
         loader = yaml.SafeLoader("")
         try:
-            self.data: object = (
-                None if self._root is None else loader.construct_document(self._root)
-            )
+            # Each scalar first, so one Python cannot build is named with its place (#79).
+            failure = self._unbuildable(loader, self._root, "")
+            if failure is None:
+                self.data: object = (
+                    None if self._root is None else loader.construct_document(self._root)
+                )
         except yaml.YAMLError as error:
             failure = self._yaml_failure(error)
         except RecursionError:
             failure = self._too_deep(None)
-        except (ValueError, OverflowError) as error:
-            # A scalar Python cannot build: an integer over 4300 digits, an impossible date.
-            failure = ConfigProblem(
-                "yaml", f"{self.file}: a value cannot be read ({type(error).__name__}).", self.file
-            )
         finally:
             loader.dispose()
         if failure is not None:
@@ -196,6 +251,101 @@ class ConfigFile:
                 "/version",
                 self.line("/version"),
             )
+
+    def _refuse_unknown_top_keys(self, text: str, allowed: frozenset[str]) -> None:
+        """The first top-level key that is not allowed, from the parser's events, before any
+        node or Python object is built (#79).
+
+        The whole event stream is read. When it holds a problem the full reading reports
+        first (a YAML error, an anchor or alias, a merge key, a duplicate key, nesting too deep,
+        a key that is not text, a null, a value Python cannot build), nothing is raised here, so
+        the order of problems is the same as without this check.
+        """
+        unknown: ConfigProblem | None = None
+        # One entry per open collection: the keys seen so far (None for a sequence) and whether
+        # the next node of a mapping is a key.
+        stack: list[tuple[set[str] | None, list[bool]]] = []
+        resolver = yaml.resolver.Resolver()
+        try:
+            for event in yaml.parse(text, Loader=_PARSER):
+                if isinstance(event, yaml.AliasEvent) or getattr(event, "anchor", None):
+                    return
+                is_key = bool(stack) and stack[-1][0] is not None and stack[-1][1][0]
+                if isinstance(event, (yaml.MappingEndEvent, yaml.SequenceEndEvent)):
+                    stack.pop()
+                    continue
+                if not isinstance(
+                    event, (yaml.ScalarEvent, yaml.MappingStartEvent, yaml.SequenceStartEvent)
+                ):
+                    continue
+                if stack and stack[-1][0] is not None:
+                    stack[-1][1][0] = not stack[-1][1][0]
+                if isinstance(event, (yaml.MappingStartEvent, yaml.SequenceStartEvent)):
+                    if is_key or len(stack) > MAX_DEPTH:
+                        return
+                    if not stack and not isinstance(event, yaml.MappingStartEvent):
+                        return  # not a mapping: the full reading reports it
+                    keys: set[str] | None = (
+                        set() if isinstance(event, yaml.MappingStartEvent) else None
+                    )
+                    stack.append((keys, [True]))
+                    continue
+                if _is_null(event) or (is_key and _key_not_text(event, resolver)):
+                    return  # the full reading reports it
+                if _maybe_unbuildable(event, resolver):
+                    return
+                if not is_key:
+                    continue
+                seen = stack[-1][0]
+                assert seen is not None
+                if event.value in seen or event.value == "<<":
+                    return  # duplicate or merge key
+                seen.add(event.value)
+                if len(stack) == 1 and unknown is None and event.value not in allowed:
+                    unknown = ConfigProblem(
+                        "schema",
+                        f"{self.file}: Unknown key '{event.value}'.",
+                        self.file,
+                        f"/{token(event.value)}",
+                        None if event.start_mark is None else event.start_mark.line + 1,
+                    )
+        except yaml.YAMLError:
+            return
+        if unknown is not None:
+            raise unknown
+
+    def _unbuildable(
+        self, loader: yaml.SafeLoader, node: yaml.Node | None, pointer: str
+    ) -> ConfigProblem | None:
+        """The first scalar (key or value) Python cannot build, with its place and line."""
+        if isinstance(node, yaml.ScalarNode):
+            if node.tag not in _UNBUILDABLE:
+                return None
+            try:
+                loader.construct_object(node)
+            except ValueError, OverflowError:
+                return ConfigProblem(
+                    "yaml",
+                    f"{self.file}: {pointer or '/'}: {_UNBUILDABLE[node.tag]}.",
+                    self.file,
+                    pointer,
+                    node.start_mark.line + 1,
+                )
+            return None
+        if isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                child = f"{pointer}/{token(key.value)}"
+                found = self._unbuildable(loader, key, child) or self._unbuildable(
+                    loader, value, child
+                )
+                if found is not None:
+                    return found
+        elif isinstance(node, yaml.SequenceNode):
+            for index, item in enumerate(node.value):
+                found = self._unbuildable(loader, item, f"{pointer}/{index}")
+                if found is not None:
+                    return found
+        return None
 
     def _yaml_failure(self, error: yaml.YAMLError) -> ConfigProblem:
         """The problem and its line, without the quoted text of the line."""
@@ -253,6 +403,16 @@ class ConfigFile:
                         key.start_mark.line + 1,
                     )
                 name = key.value if isinstance(key, yaml.ScalarNode) else None
+                if not isinstance(key, yaml.ScalarNode) or key.tag != STR_TAG:
+                    # `null`, `1`, `true` as keys: named as written, at the key's line (#79).
+                    written = name if name is not None else "?"
+                    raise ConfigProblem(
+                        "schema",
+                        f"{self.file}: the key '{written}' is not text; quote it if it is a name.",
+                        self.file,
+                        f"{pointer}/{token(written)}",
+                        key.start_mark.line + 1,
+                    )
                 if name in seen:
                     raise ConfigProblem(
                         "yaml",
