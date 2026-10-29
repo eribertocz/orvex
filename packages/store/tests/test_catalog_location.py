@@ -235,9 +235,10 @@ def closed(lake: Lake, path: Path) -> None:
 
 
 def only_listed_entries(lake: Lake, location: AnyLakeLocation) -> None:
-    """The connection may open exactly the store's own list, plus what DuckDB adds by itself:
-    the `.wal.checkpoint` and `.wal.recovery` files of each database it attached, and its
-    temporary folder (measured on DuckDB 2.0.0)."""
+    """The connection may open exactly the store's own list, plus what DuckDB adds by itself
+    (measured on DuckDB 2.0.0): for each database it attached, the path and its `.wal`,
+    `.wal.checkpoint` and `.wal.recovery`, with the path as listed, without a `type:` prefix
+    (`sqlite:/…`), and read relative to the working folder; and its temporary folder."""
     folders, files = _sandbox_entries(location, lake._spill)
     settings = lake._connection.execute(
         "SELECT current_setting('allowed_paths'), current_setting('allowed_directories'), "
@@ -251,7 +252,17 @@ def only_listed_entries(lake: Lake, location: AnyLakeLocation) -> None:
             "SELECT path FROM duckdb_databases() WHERE path IS NOT NULL"
         ).fetchall()
     ]
-    by_duckdb = {f"{path}.wal.{kind}" for path in attached for kind in ("checkpoint", "recovery")}
+    forms = set()
+    for path in attached:
+        forms.add(path)
+        if ":" in path:  # `sqlite:/…`: DuckDB also lists it bare and relative to the folder
+            forms.add(path.split(":", 1)[1])
+            forms.add(f"{Path.cwd().as_posix()}/{path}")
+    by_duckdb = {
+        f"{form}{suffix}"
+        for form in forms
+        for suffix in ("", ".wal", ".wal.checkpoint", ".wal.recovery")
+    }
     assert set(files) <= set(paths)
     assert set(paths) - set(files) <= by_duckdb, set(paths) - set(files)
     listed = {folder.rstrip("/") + "/" for folder in folders}
