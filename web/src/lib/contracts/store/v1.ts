@@ -15,7 +15,7 @@ export type StoreMessage =
 /**
  * Where the lake is.
  */
-export type LakeLocation = LocalLakeLocation | PostgresLakeLocation;
+export type LakeLocation = LocalLakeLocation | SqliteLakeLocation | PostgresLakeLocation;
 /**
  * DuckDB type of a parameter.
  */
@@ -32,6 +32,7 @@ export type ErrorCode =
 	| 'STORE_SECRET_MISSING'
 	| 'STORE_SECRET_INLINE'
 	| 'STORE_CATALOG_UNAVAILABLE'
+	| 'STORE_TLS_REQUIRED'
 	| 'STORE_TYPE_UNSUPPORTED'
 	| 'STORE_TIMEOUT'
 	| 'STORE_CANCELLED'
@@ -47,21 +48,34 @@ export type SourceAttachment =
 	FileSourceAttachment | SqliteSourceAttachment | PostgresSourceAttachment;
 
 /**
- * A DuckLake lake with a local DuckDB-file catalog at <path>/catalog.ducklake and data files under <path>/data/ (one process).
+ * A DuckLake lake with a DuckDB-file catalog (one process): the catalog at <catalog_path>, by default <path>/catalog.ducklake, and data files under <path>/data/.
  */
 export interface LocalLakeLocation {
 	kind: 'lake_location';
 	catalog: 'local';
 	path: string;
+	/**
+	 * Absolute path of the catalog file, when it is not <path>/catalog.ducklake. The file sandbox gains exactly that file and its write-ahead log.
+	 */
+	catalog_path?: string;
 }
 /**
- * A DuckLake lake whose catalog lives in PostgreSQL, so several processes can read and write it. The password is never part of the location: it is read from the environment variable named by password_env.
+ * A DuckLake lake with a SQLite-file catalog (several processes on one machine): the catalog at <path>, data files under <data_path>. The file sandbox gains exactly the catalog file and its -wal, -shm and -journal files.
+ */
+export interface SqliteLakeLocation {
+	kind: 'lake_location';
+	catalog: 'sqlite';
+	path: string;
+	data_path: string;
+}
+/**
+ * A DuckLake lake whose catalog lives in PostgreSQL, so several processes can read and write it. The password is never part of the location: it is read from the environment variable named by password_env. A host other than the local machine (localhost, 127.0.0.1, ::1, a Unix-socket directory) needs sslmode=verify-full (STORE_TLS_REQUIRED otherwise).
  */
 export interface PostgresLakeLocation {
 	kind: 'lake_location';
 	catalog: 'postgres';
 	/**
-	 * libpq key=value connection string without a password, e.g. host=db port=5432 dbname=lake user=analytics
+	 * libpq key=value connection string without a password, e.g. host=db port=5432 dbname=lake user=analytics sslmode=verify-full
 	 */
 	connection: string;
 	password_env: string;

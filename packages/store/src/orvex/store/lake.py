@@ -46,6 +46,7 @@ from orvex.contracts.store.v1 import (
     ReadRequest,
     Snapshot,
     SourceAttachment,
+    SqliteLakeLocation,
     SqliteSourceAttachment,
     StatementRequest,
 )
@@ -59,6 +60,11 @@ METADATA = f"{METADATA_PREFIX}_{LAKE}"
 # refused: the password may only come from `password_env`.
 _INLINE_SECRET = re.compile(r"password|://", re.IGNORECASE)
 _SCHEMA_NAME = re.compile(r"[a-z_][a-z0-9_]*")
+# Hosts that are the local machine; a host starting with `/` (or `@`, Linux's abstract namespace)
+# is a Unix-socket directory, and an empty host is libpq's default socket.
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_LOCAL_ADDRESSES = frozenset({"127.0.0.1", "::1"})
+type AnyLakeLocation = LocalLakeLocation | SqliteLakeLocation | PostgresLakeLocation
 # Functions that run SQL or open connections outside the lake; never allowed in a statement.
 _EXTERNAL_SQL_FUNCTIONS = frozenset(
     {
@@ -256,6 +262,95 @@ def _quote(text: str) -> str:
     return "'" + text.replace("'", "''") + "'"
 
 
+def _conninfo(text: str) -> dict[str, str]:
+    """The `keyword=value` pairs of a libpq connection string (values bare or single-quoted,
+    with backslash escapes), the last of a repeated keyword winning, as in libpq."""
+    pairs: dict[str, str] = {}
+    invalid = StoreError(
+        "STORE_STATEMENT_INVALID", "The connection must be libpq key=value pairs.", {}
+    )
+    index, length = 0, len(text)
+    while True:
+        while index < length and text[index].isspace():
+            index += 1
+        if index == length:
+            return pairs
+        start = index
+        while index < length and not text[index].isspace() and text[index] != "=":
+            index += 1
+        keyword = text[start:index]
+        while index < length and text[index].isspace():
+            index += 1
+        if not keyword or index == length or text[index] != "=":
+            raise invalid
+        index += 1
+        while index < length and text[index].isspace():
+            index += 1
+        value: list[str] = []
+        if index < length and text[index] == "'":
+            index += 1
+            while True:
+                if index == length:
+                    raise invalid  # unterminated quoted value
+                character = text[index]
+                if character == "\\" and index + 1 < length:
+                    value.append(text[index + 1])
+                    index += 2
+                elif character == "'":
+                    index += 1
+                    break
+                else:
+                    value.append(character)
+                    index += 1
+        else:
+            while index < length and not text[index].isspace():
+                if text[index] == "\\" and index + 1 < length:
+                    index += 1
+                value.append(text[index])
+                index += 1
+        pairs[keyword.lower()] = "".join(value)
+
+
+def _local_host(host: str) -> bool:
+    return host == "" or host.startswith(("/", "@")) or host.lower() in _LOCAL_HOSTS
+
+
+def _require_tls(connection: str) -> None:
+    """Refuse a PostgreSQL catalog on another machine unless it is reached with
+    `sslmode=verify-full`, which encrypts and checks that the certificate is the named host's.
+
+    Local means every host (and `hostaddr`) libpq could use is the local machine; the
+    environment's `PGHOST`/`PGHOSTADDR` count when the connection names none, and a service
+    (`service`, `PGSERVICE`), which can name any host, is never local.
+    """
+    pairs = _conninfo(connection)
+    hosts = pairs["host"] if "host" in pairs else os.environ.get("PGHOST", "")
+    addresses = pairs["hostaddr"] if "hostaddr" in pairs else os.environ.get("PGHOSTADDR", "")
+    local = (
+        "service" not in pairs
+        and not os.environ.get("PGSERVICE")
+        and all(_local_host(host.strip()) for host in hosts.split(","))
+        and all(address.strip() in _LOCAL_ADDRESSES for address in addresses.split(",") if address)
+    )
+    if local or pairs.get("sslmode") == "verify-full":
+        return
+    raise StoreError(
+        "STORE_TLS_REQUIRED",
+        "A PostgreSQL catalog on another machine must be reached with sslmode=verify-full "
+        "(TLS that checks the server's certificate and name).",
+        {"host": hosts or "(default)", "sslmode": pairs.get("sslmode", "(none)")},
+    )
+
+
+def _with_root_cert(connection: str) -> str:
+    """`sslrootcert=system` (the operating system's certificate authorities) unless the
+    connection names its own, when TLS is verified."""
+    pairs = _conninfo(connection)
+    if pairs.get("sslmode") == "verify-full" and "sslrootcert" not in pairs:
+        return f"{connection} sslrootcert=system"
+    return connection
+
+
 def _postgres_password(location: PostgresLakeLocation) -> str:
     """Refuse an unsafe PostgreSQL location, then read and register its password."""
     if _INLINE_SECRET.search(location.connection):
@@ -264,6 +359,7 @@ def _postgres_password(location: PostgresLakeLocation) -> str:
             "The connection must be key=value pairs without any password; use password_env.",
             {},
         )
+    _require_tls(location.connection)
     if location.metadata_schema is not None and not _SCHEMA_NAME.fullmatch(
         location.metadata_schema
     ):
@@ -533,7 +629,7 @@ class Lake:
 
     def __init__(
         self,
-        location: LakeLocation | LocalLakeLocation | PostgresLakeLocation,
+        location: LakeLocation | AnyLakeLocation,
         limits: Limits,
         sources: Sequence[AnySource] = (),
     ) -> None:
@@ -615,7 +711,9 @@ class Lake:
             if isinstance(location, PostgresLakeLocation) and location.metadata_schema:
                 self._metadata = f"{METADATA}.{location.metadata_schema}"
             if isinstance(location, LocalLakeLocation):
-                self._attach_local(Path(location.path))
+                self._attach_local(Path(location.path), location.catalog_path)
+            elif isinstance(location, SqliteLakeLocation):
+                self._attach_sqlite_catalog(location)
             else:
                 self._attach_postgres(location, password)
             # Nothing may load code or reach data the lake did not ask for after this point.
@@ -832,17 +930,23 @@ class Lake:
 
     def _sandbox(
         self,
-        location: LocalLakeLocation | PostgresLakeLocation,
+        location: AnyLakeLocation,
         readable: Sequence[str] = (),
     ) -> None:
-        """Limit file access to the lake's own folders and the declared source files, for good
-        (DuckDB cannot undo it)."""
+        """Limit file access to the lake's own folders, its catalog file and the declared source
+        files, for good (DuckDB cannot undo it)."""
         folders = [self._spill]
+        files = list(readable)
         if isinstance(location, LocalLakeLocation):
             folders.append(Path(location.path).resolve().as_posix())
+            if location.catalog_path is not None:
+                catalog = Path(location.catalog_path).resolve().as_posix()
+                files += [catalog, f"{catalog}.wal"]
         elif "://" not in location.data_path:
             folders.append(Path(location.data_path).resolve().as_posix())
-        files = list(readable)
+        if isinstance(location, SqliteLakeLocation):
+            catalog = Path(location.path).resolve().as_posix()
+            files += [catalog, *(f"{catalog}-{suffix}" for suffix in ("wal", "shm", "journal"))]
         listed = ", ".join(_quote(folder.rstrip("/") + "/") for folder in folders)
         self._connection.sql(f"SET temp_directory = {_quote(self._spill)}")
         self._connection.sql(f"SET allowed_directories = [{listed}]")
@@ -854,14 +958,37 @@ class Lake:
         for extension in EXTENSIONS:
             self._load_extension(extension)
 
-    def _attach_local(self, folder: Path) -> None:
+    def _attach_local(self, folder: Path, catalog_path: str | None = None) -> None:
         (folder / "data").mkdir(parents=True, exist_ok=True)
-        catalog = (folder / "catalog.ducklake").as_posix()
+        if catalog_path is None:
+            catalog = (folder / "catalog.ducklake").as_posix()
+        else:
+            Path(catalog_path).parent.mkdir(parents=True, exist_ok=True)
+            catalog = Path(catalog_path).as_posix()
         data = (folder / "data").as_posix() + "/"
         # Paths come from the project configuration, not from query input; quoted as literals.
         self._connection.sql(
             f"ATTACH {_quote('ducklake:' + catalog)} AS {LAKE} (DATA_PATH {_quote(data)})"
         )
+
+    def _attach_sqlite_catalog(self, location: SqliteLakeLocation) -> None:
+        """Attach a lake whose catalog is a SQLite file (several processes on one machine)."""
+        Path(location.path).parent.mkdir(parents=True, exist_ok=True)
+        if "://" not in location.data_path:
+            Path(location.data_path).mkdir(parents=True, exist_ok=True)
+        self._load_extension("sqlite")
+        data = location.data_path if location.data_path.endswith("/") else location.data_path + "/"
+        try:
+            self._connection.sql(
+                f"ATTACH {_quote('ducklake:sqlite:' + Path(location.path).as_posix())} AS {LAKE} "
+                f"(DATA_PATH {_quote(data)})"
+            )
+        except duckdb.Error as error:
+            raise StoreError(
+                "STORE_CATALOG_UNAVAILABLE",
+                "The SQLite catalog could not be opened.",
+                {"duckdb": str(error)},
+            ) from None
 
     def _attach_postgres(self, location: PostgresLakeLocation, password: str) -> None:
         """Attach a lake whose catalog is in PostgreSQL; the password comes from the environment."""
@@ -877,8 +1004,9 @@ class Lake:
             options = [f"DATA_PATH {_quote(location.data_path)}"]
             if location.metadata_schema:
                 options.append(f"METADATA_SCHEMA {_quote(location.metadata_schema)}")
+            connection = _with_root_cert(location.connection)
             self._connection.sql(
-                f"ATTACH {_quote('ducklake:postgres:' + location.connection)} AS {LAKE} "
+                f"ATTACH {_quote('ducklake:postgres:' + connection)} AS {LAKE} "
                 f"({', '.join(options)})"
             )
         except duckdb.Error as error:
@@ -1978,7 +2106,7 @@ def _source_not_found(source: FileSourceAttachment | SqliteSourceAttachment) -> 
 
 
 def open_lake(
-    location: LakeLocation | LocalLakeLocation | PostgresLakeLocation,
+    location: LakeLocation | AnyLakeLocation,
     limits: Limits,
     sources: Sequence[AnySource] = (),
 ) -> Lake:

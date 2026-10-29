@@ -15,6 +15,9 @@ from orvex.store.errors import StoreError
 from orvex.store.json_encoding import arrow_to_json
 from orvex.store.lake import Lake, Limits, open_lake
 
+# The shared contract tests run on every catalog, SQLite included (#120).
+EVERY_CATALOG = True
+
 LIMITS = Limits(
     memory_limit="1GB", threads=2, max_concurrent=8, queue_size=64, default_timeout_ms=600_000
 )

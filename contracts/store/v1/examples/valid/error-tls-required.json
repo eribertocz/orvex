@@ -1,0 +1,1 @@
+{"kind": "store_error", "code": "STORE_TLS_REQUIRED", "message": "A PostgreSQL catalog on another machine must be reached with sslmode=verify-full (TLS that checks the server's certificate and name).", "details": [{"name": "host", "value": "db.internal"}, {"name": "sslmode", "value": "require"}]}

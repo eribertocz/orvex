@@ -44,7 +44,9 @@ from orvex.contracts.store.v1 import (
     ReadRequest,
     StatementRequest,
 )
-from orvex.server.identity import Identity
+from orvex.server import lake_place
+from orvex.server.identity import Identity, load_identity
+from orvex.server.lake_place import Place
 from orvex.server.project import (
     Connection,
     Project,
@@ -74,7 +76,6 @@ from orvex.transform.run_records import history_request, record_statements
 from orvex.transform.sources import source_attachments
 
 LOCK_FILE = "lake.lock"
-LAKE_FOLDER = "lake"
 DEFAULT_MEMORY = "4GB"
 DEFAULT_TIMEOUT_MS = 3_600_000
 GIT_TIMEOUT_S = 10
@@ -105,6 +106,8 @@ class Checked:
     filtered: Mapping[str, str] = field(default_factory=dict)
     # Extraction models: their validated ClickHouse output columns (P1-17).
     extracted: Mapping[str, tuple[clickhouse.Column, ...]] = field(default_factory=dict)
+    # Where the project's lake is (#120); None when its configuration is refused.
+    place: Place | None = None
 
 
 class ProjectLocked(Exception):
@@ -116,18 +119,36 @@ def _from_model_error(error: ModelError) -> Problem:
     return Problem(error.code.root, details.file, details.line, error.message)
 
 
-def check_project(folder: Path) -> Checked:
+def _load_problem(error: ProjectLoadError) -> Problem:
+    details = error.error.details
+    return Problem(error.code, details.file or ".", details.line, error.error.message)
+
+
+def lake_location(project: Project, home: Path) -> Place:
+    """Where the project's lake is: the configured catalog, checked against the one the
+    existing lake was created with (#120). Nothing is opened or created."""
+    chosen = lake_place.place(project, home)
+    lake_place.check_unchanged(home, chosen)
+    return chosen
+
+
+def check_project(folder: Path, identity: Identity | None = None) -> Checked:
     """Load the project, discover its models and order them; every problem, nothing written."""
     try:
         project = load_project(folder)
     except ProjectLoadError as error:
-        details = error.error.details
-        problem = Problem(error.code, details.file or ".", details.line, error.error.message)
-        return Checked(None, Discovery((), ()), None, (problem,))
+        return Checked(None, Discovery((), ()), None, (_load_problem(error),))
+    home = project.folder / f".{(identity or load_identity()).slug}"
+    place: Place | None = None
+    problems: list[Problem] = []
+    try:
+        place = lake_location(project, home)
+    except ProjectLoadError as error:
+        problems.append(_load_problem(error))
     discovery = discover_models(project.folder, project.connections)
     sources = set(project.connections)
     graph = build_graph(discovery.models, sources)
-    problems = [_from_model_error(item) for item in (*discovery.problems, *graph.problems)]
+    problems += [_from_model_error(item) for item in (*discovery.problems, *graph.problems)]
     kinds = {name: connection.type for name, connection in project.connections.items()}
     zone = project.settings.time_zone
     for model in discovery.models:
@@ -154,7 +175,15 @@ def check_project(folder: Path) -> Checked:
             _from_model_error(item) for item in incremental.problems_for(discovery.models, columns)
         ]
     return Checked(
-        project, discovery, graph, tuple(problems), columns, differences, filtered, extracted
+        project,
+        discovery,
+        graph,
+        tuple(problems),
+        columns,
+        differences,
+        filtered,
+        extracted,
+        place,
     )
 
 
@@ -551,7 +580,7 @@ def run(
 ) -> int:
     """Build every model, or only the `selection` of a scheduled run. `full_refresh`:
     incremental models to rebuild from every row (all of them when empty; None: none)."""
-    checked = check_project(folder)
+    checked = check_project(folder, identity)
     if checked.problems or checked.project is None or checked.graph is None:
         for problem in checked.problems:
             print(problem, file=out)
@@ -611,10 +640,6 @@ def _limits() -> Limits:
         queue_size=16,
         default_timeout_ms=DEFAULT_TIMEOUT_MS,
     )
-
-
-def _location(home: Path) -> LocalLakeLocation:
-    return LocalLakeLocation(kind="lake_location", catalog="local", path=str(home / LAKE_FOLDER))
 
 
 def _git(folder: Path, *arguments: str) -> str | None:
@@ -703,8 +728,11 @@ def _run_locked(
     failures: list[Problem] = []
     lake = None
     open_error: StoreError | None = None
+    assert checked.place is not None  # a refused place is a problem: no run
+    place = checked.place
     try:
-        lake = open_lake(_location(home), _limits(), source_attachments(project.connections))
+        lake = open_lake(place.location, _limits(), source_attachments(project.connections))
+        lake_place.record(home, place)
     except StoreError as error:
         open_error = error
     existing: dict[str, Columns | None] = {}
@@ -758,7 +786,8 @@ def _run_locked(
         # The run could not start (a source is unreachable, say): it is still recorded, in a
         # lake opened without sources.
         try:
-            lake = open_lake(_location(home), _limits())
+            lake = open_lake(place.location, _limits())
+            lake_place.record(home, place)
         except StoreError as error:
             for problem in failures or [_store_problem(error, ".", "")]:
                 print(problem, file=out)
@@ -1286,17 +1315,17 @@ def runs(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
     """Recent runs of a project, newest first, with times in the project's time zone."""
     try:
         project = load_project(folder)
+        home = project.folder / f".{identity.slug}"
+        place = lake_location(project, home)
     except ProjectLoadError as error:
-        details = error.error.details
-        print(Problem(error.code, details.file or ".", details.line, error.error.message), file=out)
+        print(_load_problem(error), file=out)
         return 1
-    home = project.folder / f".{identity.slug}"
-    if not (home / LAKE_FOLDER).exists():
+    if not lake_place.exists(home):
         print("no runs yet", file=out)
         return 0
     try:
         with project_lock(home):
-            lake = open_lake(_location(home), _limits())
+            lake = open_lake(place.location, _limits())
             try:
                 snapshot = lake.current_snapshot().id
                 request = history_request(snapshot, project.settings.time_zone, limit)

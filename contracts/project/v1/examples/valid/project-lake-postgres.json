@@ -1,0 +1,1 @@
+{"version": 1, "name": "Facturación", "time_zone": "America/La_Paz", "lake": {"catalog": {"type": "postgres", "host": "db.example.com", "port": 5432, "database": "analytics", "user": "bi_lake", "password": "${env:BI_LAKE_PASSWORD}", "schema": "lake_billing", "ssl_mode": "verify-full", "ssl_root_cert": "${env:BI_LAKE_CA}"}}}
