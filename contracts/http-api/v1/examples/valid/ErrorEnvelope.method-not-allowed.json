@@ -1,0 +1,11 @@
+{
+  "error": {
+    "code": "METHOD_NOT_ALLOWED",
+    "message": "POST is not allowed on /api/v1/health",
+    "details": [
+      { "name": "method", "value": "POST" },
+      { "name": "path", "value": "/api/v1/health" }
+    ],
+    "request_id": "8f1c2a"
+  }
+}

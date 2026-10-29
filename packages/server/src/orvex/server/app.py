@@ -91,6 +91,21 @@ def create_app(versions: Versions, web_build: Path | None) -> FastAPI:
                 request_id_of(request),
                 [v1.ErrorDetail(name="path", value=request.url.path)],
             )
+        if error.status_code == 405:
+            response = error_response(
+                405,
+                "METHOD_NOT_ALLOWED",
+                f"{request.method} is not allowed on {request.url.path}",
+                request_id_of(request),
+                [
+                    v1.ErrorDetail(name="method", value=request.method),
+                    v1.ErrorDetail(name="path", value=request.url.path),
+                ],
+            )
+            allowed = (error.headers or {}).get("Allow")
+            if allowed is not None:  # RFC 9110 §15.5.6: a 405 lists the accepted methods
+                response.headers["Allow"] = allowed
+            return response
         return error_response(
             error.status_code, "INTERNAL_ERROR", str(error.detail), request_id_of(request)
         )
