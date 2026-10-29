@@ -106,6 +106,11 @@ def a_file(tmp_path: Path) -> str:
         "SELECT $${f}$$ AS name FROM t",
         "SELECT E'{f}' AS name FROM t",
         "SELECT * FROM '{f}'",
+        # Reviewer pass 1: a non-ASCII dollar-quote tag, and the positions of problem 1.
+        "SELECT $ñ${f}$ñ$ AS name FROM t",
+        "SELECT * FROM t UNION ALL BY NAME SUMMARIZE $ñ${f}$ñ$",
+        "INSERT INTO x SUMMARIZE $ñ${f}$ñ$",
+        "SELECT $tag_1${f}$tag_1$ AS name FROM t",
     ],
 )
 def test_a_file_named_in_any_quoting_form_is_refused(a_file: str, template: str) -> None:
@@ -125,6 +130,16 @@ def test_a_file_named_in_any_quoting_form_is_refused(a_file: str, template: str)
         "SELECT * FROM (DESCRIBE t)",
         "WITH w AS (SUMMARIZE t) SELECT * FROM w",
         "CREATE TABLE x AS DESCRIBE t",
+        # Reviewer pass 1: after a set operator, as an INSERT source, after a WITH list.
+        "SELECT * FROM t UNION ALL BY NAME SUMMARIZE t",
+        "SELECT * FROM t UNION SHOW TABLES",
+        "SELECT * FROM t INTERSECT DESCRIBE t",
+        "SELECT * FROM t EXCEPT DESC t",
+        "INSERT INTO x SUMMARIZE t",
+        "INSERT INTO x BY NAME SUMMARIZE t",
+        "INSERT INTO x (a, b) DESCRIBE t",
+        "WITH w AS (SELECT 1) SUMMARIZE w",
+        "CREATE OR REPLACE TABLE x AS SHOW TABLES",
     ],
 )
 def test_summarize_describe_and_show_are_refused(sql: str) -> None:
@@ -144,6 +159,13 @@ def test_summarize_describe_and_show_are_refused(sql: str) -> None:
         'CREATE TABLE "describe" AS SELECT 1 AS x',
         "SELECT a FROM t ORDER BY a DESC",
         "SELECT row_number() OVER (ORDER BY a DESC) AS n FROM t",
+        # Reviewer pass 1: labels after AS were accepted on main and stay accepted.
+        "SELECT a AS desc FROM t",
+        "SELECT 1 AS show, 2 AS summarize, 3 AS describe",
+        "CREATE TABLE x AS SELECT a AS desc FROM t ORDER BY a DESC",
+        "SELECT a FROM t ORDER BY (a) DESC NULLS LAST, b DESC",
+        "SELECT string_agg(a, ',' ORDER BY b DESC) AS s FROM t",
+        "SELECT * FROM t UNION ALL SELECT * FROM u ORDER BY 1 DESC",
     ],
 )
 def test_ordinary_statements_are_accepted(sql: str) -> None:

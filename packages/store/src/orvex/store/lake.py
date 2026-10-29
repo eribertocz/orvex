@@ -479,12 +479,35 @@ def _refuse_file_names(
             )
 
 
-_DOLLAR_QUOTED = re.compile(
-    r"\$(?P<tag>[A-Za-z_][A-Za-z0-9_]*)?\$(?P<body>.*)\$(?P=tag)?\$", re.DOTALL
-)
+# A dollar-quoted constant; DuckDB, like PostgreSQL, accepts any tag without `$` or white space
+# (non-ASCII letters included), so every such tag is read here (#153).
+_DOLLAR_QUOTED = re.compile(r"\$(?P<tag>[^$\s]*)\$(?P<body>.*)\$(?P=tag)\$", re.DOTALL)
 # Statement forms that read a table or file by name outside the lake's pinned reads (#153):
 # `SUMMARIZE <name or file>`, `DESCRIBE`/`DESC <name>`, `SHOW …`.
 _SHOW_STATEMENTS = frozenset({"summarize", "describe", "desc", "show"})
+# Keywords that start a clause; `DESC` is an ordering only inside an `ORDER BY` clause.
+_CLAUSES = frozenset(
+    {
+        "select",
+        "from",
+        "where",
+        "group",
+        "having",
+        "qualify",
+        "window",
+        "order",
+        "limit",
+        "offset",
+        "union",
+        "intersect",
+        "except",
+        "values",
+        "using",
+        "on",
+        "returning",
+        "set",
+    }
+)
 
 
 def _string_content(token: str) -> str:
@@ -503,25 +526,47 @@ def _string_content(token: str) -> str:
 def _refuse_show_statements(
     sql: str, tokens: list[tuple[int, duckdb.token_type]], positions: list[int]
 ) -> None:
-    """Refuse `SUMMARIZE`, `DESCRIBE`, `DESC` and `SHOW` where they start a statement or a
-    subquery (also after `AS`). DuckDB reads a quoted target of `SUMMARIZE` as a file, and a
-    read of these forms is not pinned to its snapshot (#153). Quoted names stay allowed."""
-    previous = ""
+    """Refuse `SUMMARIZE`, `DESCRIBE`, `DESC` and `SHOW` everywhere except where DuckDB reads
+    them as something else: a column label after `AS` (`SELECT a AS desc`), and `DESC` as an
+    ordering inside an `ORDER BY` clause. DuckDB reads a quoted target of `SUMMARIZE` as a file,
+    and these statement forms are not pinned to a snapshot (#153). The rule lists what is allowed,
+    so a position not thought of is refused. Quoted names (`"describe"`) are ordinary names."""
+    words: list[tuple[str, duckdb.token_type]] = []
     for position, kind in tokens:
         end = next(later for later in positions if later > position)
-        text = sql[position:end].strip()
-        word = text.lower()
-        if (
-            kind == duckdb.token_type.keyword
-            and word in _SHOW_STATEMENTS
-            and previous in {"", "(", "as"}
-        ):
+        words.append((sql[position:end].strip().lower(), kind))
+    # `CREATE TABLE x AS <query>`: that `AS` starts a query, it does not introduce a label.
+    query_as = -1
+    if words and words[0][0] == "create":
+        depth = 0
+        for index, (word, _) in enumerate(words):
+            depth += (word == "(") - (word == ")")
+            if word == "as" and depth == 0:
+                query_as = index
+                break
+    clauses = [""]  # the current clause at each parenthesis depth
+    for index, (word, kind) in enumerate(words):
+        if word == "(":
+            clauses.append("")
+            continue
+        if word == ")":
+            if len(clauses) > 1:
+                clauses.pop()
+            continue
+        if kind != duckdb.token_type.keyword:
+            continue
+        if word in _CLAUSES:
+            clauses[-1] = word
+        if word not in _SHOW_STATEMENTS:
+            continue
+        label = index > 0 and words[index - 1][0] == "as" and index - 1 != query_as
+        ordering = word == "desc" and clauses[-1] == "order"
+        if not (label or ordering):
             raise StoreError(
                 "STORE_STATEMENT_INVALID",
                 "SUMMARIZE, DESCRIBE and SHOW are not allowed in statements.",
                 {"statement": word.upper()},
             )
-        previous = word
 
 
 def _names_a_file(token: str) -> bool:
@@ -1317,6 +1362,13 @@ class Lake:
         schemas = {schema for schema, _ in tables}
         ctes = _cte_names(tree)
         for node in _walk(tree):
+            if node.get("type") == "SHOW_REF":
+                # SUMMARIZE / DESCRIBE / SHOW: unpinned, and a quoted target is read as a file.
+                raise StoreError(
+                    "STORE_STATEMENT_INVALID",
+                    "SUMMARIZE, DESCRIBE and SHOW are not allowed in statements.",
+                    {},
+                )
             if node.get("type") == "TABLE_FUNCTION":
                 function = node.get("function")
                 name = function.get("function_name") if isinstance(function, dict) else None
