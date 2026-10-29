@@ -302,7 +302,12 @@ PARTITION = (
     "incremental: {strategy: partition_overwrite, time_column: read_at, partition_by: [month], "
     "filter: manual}\n"
 )
-BY_MONTH = "SELECT id, region, kwh, strftime(read_at, '%Y-%m') AS month, read_at FROM feed.data"
+# Every row on each run, with `$since` compared to the time column itself (#155: a
+# partition_overwrite model's `$since` may appear only in such a comparison).
+BY_MONTH = (
+    "SELECT id, region, kwh, strftime(read_at, '%Y-%m') AS month, read_at FROM feed.data "
+    "WHERE read_at >= $since OR read_at < $since OR read_at IS NULL"
+)
 
 
 def test_delete_insert_replaces_every_row_of_a_loaded_key(
@@ -352,8 +357,9 @@ def test_partition_overwrite_replaces_only_loaded_partitions(
     )
     feed(tmp_path, first)
     assert command(capsys, "run", str(tmp_path))[0] == 0
-    # The new rows of 2024-02 include one at or before $since, so the partition is reloaded
-    # whole (a run that only had newer rows of it would fail with PARTITION_INCOMPLETE, #109).
+    # The new rows of 2024-02 include one older than every row of it in the table, so the
+    # partition is replaced (a run that only had newer rows of it would fail with
+    # PARTITION_INCOMPLETE, #155).
     feed(
         tmp_path,
         "(5, 'n', '5.0000', 1, '2024-02-05 10:00:00+00'), (6, 'n', '6.0000', 1, NULL)",
