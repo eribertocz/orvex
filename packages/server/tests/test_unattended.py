@@ -22,7 +22,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from orvex.server import commands, heartbeat
+from orvex.server import commands, heartbeat, lake_place, maintenance, scheduler
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.scheduler import SCHEDULER_LOCK, schedule
@@ -184,6 +184,139 @@ def test_runs_shows_the_scheduler(
     assert capsys.readouterr().out.splitlines()[0] == expected
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "{",
+        '{"pid": 1}',
+        '{"pid": 1, "started_at": "x", "updated_at": "y", "state": "running"}',
+        '{"pid": 1, "started_at": "2026-10-28T09:00:00", "updated_at": '
+        '"2026-10-28T09:00:00", "state": "running"}',
+    ],
+    ids=["not-json", "fields-missing", "not-instants", "no-offset"],
+)
+def test_runs_shows_an_unreadable_heartbeat_without_failing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], text: str
+) -> None:
+    write(tmp_path, {"project.yaml": PROJECT, f".{SLUG}/{heartbeat.HEARTBEAT_FILE}": text})
+    assert main(["runs", str(tmp_path)]) == 0
+    first = capsys.readouterr().out.splitlines()[0]
+    assert first == "scheduler: unknown (the scheduler.json heartbeat cannot be read)"
+
+
+def test_a_heartbeat_that_cannot_be_written_does_not_stop_the_scheduler(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write(tmp_path, {"project.yaml": PROJECT, "models/s/idle.sql": "SELECT 1 AS n"})
+
+    def full(_home: Path, _beat: heartbeat.Heartbeat) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(heartbeat, "write", full)
+    steps = itertools.count()
+    out = io.StringIO()
+    code = schedule(
+        tmp_path,
+        load_identity(),
+        out,
+        sleep=lambda _seconds: None,
+        should_stop=lambda: next(steps) > 200,
+    )
+    assert code == 0, out.getvalue()
+    assert out.getvalue().count("heartbeat not written: No space left on device") == 1
+    assert "stopped (stopped)" in out.getvalue()
+
+
+def test_the_heartbeat_says_a_run_started_and_is_renewed_during_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write(
+        tmp_path,
+        {
+            "project.yaml": PROJECT,
+            "models/s/m.sql": "SELECT 1 AS n",
+            "models/s/m.yaml": "version: 1\nfreshness: 5m\n",
+        },
+    )
+    monkeypatch.setattr(scheduler, "HEARTBEAT_EVERY", dt.timedelta(seconds=0.05))
+    seen: list[dict[str, object]] = []
+
+    def run(*_args: object, **_keywords: object) -> int:
+        # A long run: the heartbeat already names it, and keeps being renewed.
+        seen.append(beat(tmp_path))
+        deadline = time.monotonic() + WAIT
+        while beat(tmp_path)["updated_at"] == seen[0]["updated_at"]:
+            assert time.monotonic() < deadline, "not renewed during the run"
+            time.sleep(0.01)
+        seen.append(beat(tmp_path))
+        return 0
+
+    monkeypatch.setattr(commands, "run", run)
+    out = io.StringIO()
+    code = schedule(tmp_path, load_identity(), out, should_stop=lambda: len(seen) == 2)
+    assert code == 0, out.getvalue()
+    during, renewed = seen
+    # The decision lines printed when the run started; the last of them is in the heartbeat.
+    assert "running s.m (freshness)" in out.getvalue()
+    assert str(during["last_decision"]).startswith("due s.m"), during
+    assert during["next_at"] is None  # the earlier "next at" no longer holds
+    assert during["state"] == renewed["state"] == "running"
+    assert renewed["last_decision"] == during["last_decision"]
+
+
+# --- a stop during a cycle starts nothing --------------------------------------------------------
+
+
+def test_a_stop_while_checking_the_project_starts_no_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write(
+        tmp_path,
+        {
+            "project.yaml": PROJECT,
+            "models/s/m.sql": "SELECT 1 AS n",
+            "models/s/m.yaml": "version: 1\nfreshness: 5m\n",
+        },
+    )
+    stop: list[str] = []
+    check = commands.check_project
+
+    def checking(*args: object, **keywords: object) -> commands.Checked:
+        stop.append("SIGTERM")  # arrives while the project is being checked
+        return check(*args, **keywords)  # type: ignore[arg-type]
+
+    def run(*_args: object, **_keywords: object) -> int:
+        pytest.fail("a run started after the stop")
+
+    monkeypatch.setattr(commands, "check_project", checking)
+    monkeypatch.setattr(commands, "run", run)
+    out = io.StringIO()
+    assert schedule(tmp_path, load_identity(), out, should_stop=lambda: bool(stop)) == 0
+    assert "running" not in out.getvalue().replace("stopped", "")
+    assert beat(tmp_path)["state"] == "stopped"
+
+
+def test_a_stop_while_reading_the_records_starts_no_maintenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write(tmp_path, {"project.yaml": PROJECT, "models/s/idle.sql": "SELECT 1 AS n"})
+    stop: list[str] = []
+
+    def records(*_args: object) -> object:
+        stop.append("SIGTERM")  # arrives while the run records are read
+        return scheduler._Records({}, None, ())  # maintenance never ran: it is due
+
+    def maintain(*_args: object, **_keywords: object) -> int:
+        pytest.fail("maintenance started after the stop")
+
+    monkeypatch.setattr(scheduler, "_records", records)
+    monkeypatch.setattr(lake_place, "exists", lambda _home: True)
+    monkeypatch.setattr(maintenance, "maintain", maintain)
+    out = io.StringIO()
+    assert schedule(tmp_path, load_identity(), out, should_stop=lambda: bool(stop)) == 0
+    assert "lake maintenance" not in out.getvalue()
+
+
 # --- one scheduler per project ------------------------------------------------------------------
 
 
@@ -327,12 +460,18 @@ def slow_project(folder: Path, sql: str) -> None:
 
 
 def test_sigterm_during_a_run_that_finishes_commits_it(tmp_path: Path) -> None:
-    slow_project(tmp_path, "SELECT sum(hash(range)) AS n FROM range(20000000)")
+    # A few seconds of work (about 8 on two cores): still running when the signal arrives.
+    slow_project(
+        tmp_path,
+        "SELECT sum(hash(a.range + b.range)) AS n FROM range(200000000) AS a, range(5) AS b",
+    )
     process = started(tmp_path, "--stop-grace", "60")
     try:
         process.wait_for("running s.slow")
+        signal_sent = time.monotonic()
         process.signal(signal.SIGTERM)
         assert process.finish() == 0, process.seen
+        assert time.monotonic() - signal_sent > 1.0  # it waited for the run, then stopped
     finally:
         process.kill()
     assert lake_records(tmp_path) == ([("s.slow", "success", None)], 1)
@@ -451,8 +590,17 @@ def test_incremental_loads_from_postgres_every_five_minutes_without_duplicates_o
             monotonic=clock.monotonic,
         )
         assert code == 0, out.getvalue()
-        runs = out.getvalue().count("running s.readings")
-        assert runs >= 11, out.getvalue()  # every 5 minutes over the hour
+        # Every 5 minutes over the hour: the first at the start, then never more than a
+        # minute late, the last one in the hour's last ten minutes.
+        starts = [
+            dt.datetime.fromisoformat(line[:19]).replace(tzinfo=dt.UTC)
+            for line in out.getvalue().splitlines()
+            if line[20:].startswith("running s.readings")
+        ]
+        assert starts[0] == START, out.getvalue()
+        gaps = [(later - earlier).total_seconds() for earlier, later in itertools.pairwise(starts)]
+        assert all(300 <= gap <= 360 for gap in gaps), (gaps, out.getvalue())
+        assert starts[-1] >= START + dt.timedelta(minutes=50), out.getvalue()
 
         expected = admin.execute(
             f"SELECT reading_id FROM pg.{schema}.readings ORDER BY reading_id"

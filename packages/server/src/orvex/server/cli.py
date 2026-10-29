@@ -129,8 +129,9 @@ def command_parser(identity: Identity) -> argparse.ArgumentParser:
         type=float,
         default=STOP_GRACE_SECONDS,
         metavar="SECONDS",
-        help="after a stop, how long a run in progress may finish before it is cancelled "
-        f"(default {STOP_GRACE_SECONDS:g}); give the service manager a longer stop timeout",
+        help="after SIGTERM or Ctrl+C, how long a run in progress may finish before it is "
+        f"cancelled and rolled back (default {STOP_GRACE_SECONDS:g}); set the service "
+        "manager's stop timeout longer (docs/user/scheduler.md)",
     )
     history = commands.add_parser("runs", help="list recent runs of a project")
     history.add_argument("project", type=Path, help="project folder")

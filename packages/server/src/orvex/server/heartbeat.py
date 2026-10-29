@@ -1,8 +1,9 @@
 """The scheduler's heartbeat: what the `schedule` command is doing, for `runs` (P1-21, #69).
 
 One small JSON file in the project's `.<slug>/` folder, replaced atomically (written to a
-temporary file, then renamed), so a reader never sees half of it. It holds the process id, the
-start time, the last decision, when the scheduler looks again, and whether it stopped (and why).
+temporary file, flushed to disk, then renamed), so a reader never sees half of it. It holds the
+process id, the start time, the last decision, when the scheduler looks again, and whether it
+stopped (and why).
 It never holds a secret: decisions name models and times only.
 """
 
@@ -40,6 +41,8 @@ def write(home: Path, heartbeat: Heartbeat) -> None:
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(asdict(heartbeat), handle)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, home / HEARTBEAT_FILE)
     except BaseException:
         Path(temporary).unlink(missing_ok=True)
@@ -47,29 +50,45 @@ def write(home: Path, heartbeat: Heartbeat) -> None:
 
 
 def read(home: Path) -> Heartbeat | None:
-    """The heartbeat, or None when there is none or it cannot be read."""
+    """The heartbeat, or None when there is none or it cannot be read (or is malformed)."""
     try:
         data = json.loads((home / HEARTBEAT_FILE).read_text(encoding="utf-8"))
-        return Heartbeat(**data)
+        beat = Heartbeat(**data)
+        for text in (beat.started_at, beat.updated_at, beat.last_decision_at, beat.next_at):
+            if text is not None:
+                _instant(text)
+        if beat.stopped_at is not None:
+            _instant(beat.stopped_at)
     except OSError, ValueError, TypeError:
         return None
+    return beat
+
+
+def _instant(text: str) -> dt.datetime:
+    """An ISO 8601 instant with its offset; ValueError otherwise."""
+    moment = dt.datetime.fromisoformat(text)
+    if moment.tzinfo is None:
+        raise ValueError("an instant without offset")
+    return moment
 
 
 def describe(home: Path, zone: str, now: dt.datetime) -> str:
     """One line for the `runs` command, times in the project's zone."""
+    if not (home / HEARTBEAT_FILE).exists():
+        return "scheduler: has not run"
     beat = read(home)
     if beat is None:
-        return "scheduler: has not run"
+        return f"scheduler: unknown (the {HEARTBEAT_FILE} heartbeat cannot be read)"
 
     def local(text: str | None) -> str:
         if text is None:
             return "-"
-        moment = dt.datetime.fromisoformat(text).astimezone(ZoneInfo(zone))
+        moment = _instant(text).astimezone(ZoneInfo(zone))
         return moment.strftime("%Y-%m-%d %H:%M:%S")
 
     if beat.state == "stopped":
         return f"scheduler: stopped at {local(beat.stopped_at)} ({beat.stop_reason or 'stopped'})"
-    updated = dt.datetime.fromisoformat(beat.updated_at)
+    updated = _instant(beat.updated_at)
     if now - updated > NOT_RESPONDING:
         return (
             f"scheduler: not responding (process {beat.pid}, last heard at "

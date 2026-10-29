@@ -13,9 +13,10 @@ Lake maintenance (P1-20) runs when no model is due: once a day after a success, 
 failure. Model runs keep priority: maintenance only starts between runs.
 
 Unattended (P1-21, #69): one scheduler per project (an OS lock held for its lifetime);
-`SIGTERM` or Ctrl+C stops it at once between runs, and a run in progress may finish within the
-stop grace period, then is cancelled and rolls back (maintenance in progress finishes); a
-heartbeat in the project's folder says what it is doing.
+`SIGTERM` or Ctrl+C stops it at once between runs (no run or maintenance starts after a stop),
+and a run in progress may finish within the stop grace period, then is cancelled and rolls back
+(maintenance in progress finishes); a heartbeat in the project's folder says what it is doing,
+renewed every minute, during runs too.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ import signal
 import socket
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
@@ -142,6 +143,7 @@ class _State:
     maintenance_after: float | None = None  # monotonic: maintenance did not start, wait
     decision: tuple[dt.datetime, str] | None = None  # the last one printed (for the heartbeat)
     zone: str | None = None  # the project's, once it has been loaded
+    decided: Callable[[], None] = lambda: None  # called after each printed decision
 
 
 def schedule(
@@ -198,7 +200,8 @@ def _schedule(
     stop_reason: list[str] = []  # set once, by the first stop signal
     grace: list[threading.Timer] = []
 
-    once = threading.Lock()
+    # Reentrant: the main thread's handler may run again while the first call holds it.
+    once = threading.RLock()
 
     def stop(number: int, _frame: FrameType | None) -> None:
         # Called by the handler and by the watcher thread: the first call counts.
@@ -223,18 +226,61 @@ def _schedule(
         updated_at=state.started.isoformat(),
         state="running",
     )
+    writing = threading.Lock()  # the loop and the renewer during a run both write
+    failed_write: list[str] = []  # the last write problem printed, printed once until it changes
 
-    def report(next_at: dt.datetime | None = None) -> None:
+    def store(changed: heartbeat.Heartbeat) -> None:
         nonlocal beat
-        decision = state.decision
-        beat = dataclasses.replace(
-            beat,
-            updated_at=clock().isoformat(),
-            last_decision_at=decision[0].isoformat() if decision else None,
-            last_decision=decision[1] if decision else None,
-            next_at=next_at.isoformat() if next_at is not None else beat.next_at,
-        )
-        heartbeat.write(home, beat)
+        beat = changed
+        try:
+            heartbeat.write(home, beat)
+        except OSError as error:
+            # The heartbeat informs; it never stops the scheduler.
+            text = f"heartbeat not written: {error.strerror or error}"
+            if failed_write != [text]:
+                print(text, file=out, flush=True)
+                failed_write[:] = [text]
+        else:
+            failed_write.clear()
+
+    def report(next_at: dt.datetime | None = None, *, deciding: bool = False) -> None:
+        with writing:
+            decision = state.decision
+            store(
+                dataclasses.replace(
+                    beat,
+                    updated_at=clock().isoformat(),
+                    last_decision_at=decision[0].isoformat() if decision else None,
+                    last_decision=decision[1] if decision else None,
+                    # A new decision makes the previous "next at" stale.
+                    next_at=(
+                        next_at.isoformat()
+                        if next_at is not None
+                        else None
+                        if deciding
+                        else beat.next_at
+                    ),
+                )
+            )
+
+    state.decided = lambda: report(deciding=True)
+
+    @contextlib.contextmanager
+    def renewing() -> Iterator[None]:
+        """Renew the heartbeat every minute while a cycle works (a run may take hours)."""
+        done = threading.Event()
+
+        def renew() -> None:
+            while not done.wait(HEARTBEAT_EVERY.total_seconds()):
+                report()
+
+        renewer = threading.Thread(target=renew, name="schedule-heartbeat", daemon=True)
+        renewer.start()
+        try:
+            yield
+        finally:
+            done.set()
+            renewer.join()
 
     def pause(seconds: float) -> None:
         """Sleep in short steps, so a stop is noticed within a second; the heartbeat is renewed
@@ -254,7 +300,8 @@ def _schedule(
         report()
         while not stopped():
             try:
-                wait = _cycle(folder, identity, out, clock, monotonic, state, control)
+                with renewing():
+                    wait = _cycle(folder, identity, out, clock, monotonic, state, control, stopped)
             except KeyboardInterrupt:
                 # Ctrl+C during an extraction load: the run recorded it and rolled back.
                 if not stop_reason:
@@ -264,16 +311,21 @@ def _schedule(
             pause(wait)
         reason = stop_reason[0] if stop_reason else "stopped"
         moment = clock()
+        state.decided = lambda: None  # the final heartbeat below says it
         _say(state, out, "UTC" if state.zone is None else state.zone, moment, f"stopped ({reason})")
-        beat = dataclasses.replace(
-            beat,
-            updated_at=moment.isoformat(),
-            state="stopped",
-            stopped_at=moment.isoformat(),
-            stop_reason=reason,
-            next_at=None,
-        )
-        heartbeat.write(home, beat)
+        with writing:
+            store(
+                dataclasses.replace(
+                    beat,
+                    updated_at=moment.isoformat(),
+                    last_decision_at=moment.isoformat(),
+                    last_decision=f"stopped ({reason})",
+                    state="stopped",
+                    stopped_at=moment.isoformat(),
+                    stop_reason=reason,
+                    next_at=None,
+                )
+            )
         return 0
     finally:
         for timer in grace:
@@ -331,6 +383,7 @@ def _say(state: _State, out: IO[str], zone: str, moment: dt.datetime, text: str)
     local = moment.astimezone(ZoneInfo(zone)).strftime("%Y-%m-%d %H:%M:%S")
     print(f"{local} {text}", file=out, flush=True)
     state.decision = (moment, text)
+    state.decided()
 
 
 def _report(out: IO[str], state: _State, lines: tuple[str, ...]) -> float:
@@ -350,8 +403,13 @@ def _cycle(
     monotonic: Monotonic,
     state: _State,
     control: commands.RunControl | None = None,
+    stopped: Callable[[], bool] = lambda: False,
 ) -> float:
-    """One decision; returns how long to wait before the next one (seconds)."""
+    """One decision; returns how long to wait before the next one (seconds).
+
+    A stop that arrives during the cycle (while checking the project or reading the records)
+    is seen before a run or maintenance starts: none starts after it.
+    """
     now = clock()
     fingerprint = _fingerprint(folder)
     stale = (
@@ -421,8 +479,10 @@ def _cycle(
             return min(LOOK_AGAIN.total_seconds(), MINIMUM_INTERVAL.total_seconds() - waited)
     if not decided.models:
         return _maybe_maintain(
-            folder, identity, out, clock, monotonic, state, records, decided, zone
+            folder, identity, out, clock, monotonic, state, records, decided, zone, stopped
         )
+    if stopped():
+        return 0.0
     try:
         with project_lock(home):
             pass  # free now; a process taking it in between makes the run fail as locked
@@ -484,6 +544,7 @@ def _maybe_maintain(
     records: _Records,
     decided: Plan,
     zone: str,
+    stopped: Callable[[], bool] = lambda: False,
 ) -> float:
     """No model is due: run lake maintenance when it is due, else wait for whichever comes
     first."""
@@ -499,6 +560,8 @@ def _maybe_maintain(
     due = records.maintained.due_at()
     waiting = state.maintenance_after is not None and monotonic() < state.maintenance_after
     if (due is None or due <= now) and not waiting:
+        if stopped():
+            return 0.0
         _say(state, out, zone, now, "running lake maintenance")
         if maintenance.maintain(folder, identity, out, "schedule", clock) != 0:
             # Recorded failures wait an hour (the records say so); one that did not start (the
