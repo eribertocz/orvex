@@ -74,7 +74,8 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
 ### 3. Route B in v1.0.0: an existing DuckLake
 - **Connection.** An existing DuckLake is a lake owned and written by another system and declared in `connections.yaml`:
   - `read_only: true` is required, as for every database source;
-  - secrets are `${env:NAME}` references.
+  - secrets are `${env:NAME}` references, turned into temporary DuckDB secrets;
+  - object-storage data files follow the HTTPS rule of §2.
 - **Accepted catalogs:**
   - **PostgreSQL**, on any host. A remote host uses the TLS rule of §2.
   - **SQLite**, on a local disk.
@@ -89,6 +90,7 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
   - **File sandbox.**
     - After the catalog is attached, external access is disabled (`enable_external_access = false`). The instance can then read only an allow-list (DuckDB's `allowed_directories` / `allowed_paths`) of three things: the lake's declared data location, its SQLite catalog file if it has one, and the instance's own spill folder.
     - Every setting the instance needs is set globally before the configuration is locked (`lock_configuration`), and `allowed_configs` never lists a security setting. Per-cursor settings used by the managed lake (time zone, replacement scans) are therefore set once, globally.
+    - **No symbolic links out of the location.** A read never follows a link that resolves outside the declared location. The check happens when each file is read, not only when the snapshot is verified, because a writer can swap a verified file for a link later. On a network file system, links are resolved by any client, so the writer does not need access to the Orvex machine. P2-30 shows that such a read is refused. If it cannot, Route B accepts only object-storage data locations, which have no links.
     - P2-30 shows that a SQLite catalog still sees new snapshots under this sandbox. If it cannot, SQLite catalogs are refused for Route B.
     - Before a new snapshot is served, every data and delete file it references is checked to lie under that location. A snapshot that fails the check is never served.
   - **Separate locations.** Validation rejects a declared data location that equals, contains or lies inside the managed lake's data location, the project or instance folders, or another existing lake's location (`STORE_SOURCE_INVALID`). The comparison uses whole path components after resolving the paths, and for object storage also the bucket and endpoint. Otherwise a catalog could point at files inside its own location that belong to the managed lake, and serve them without that data's policies.
@@ -115,7 +117,10 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
 - **Existing DuckLake:**
   - the receipt names the snapshot read and, when row policies apply, the managed-lake snapshot of each mapping table read (§6);
   - it is `exact` while all of those snapshots are retained (the external one by the lake's owner), and `explainable` afterwards;
-  - an external snapshot is identified by the connection, its id and its commit time, never by the id alone. A restored or replaced catalog can reuse ids for different data, so a current snapshot id lower than the last verified one is treated as a new lake: every cache entry of that connection is purged, the indicator turns red, and receipts naming the old snapshots become `explainable`;
+  - an external snapshot is identified by the connection, its id and its commit time, never by the id alone.
+    - A restored or replaced catalog can reuse ids for different data.
+    - Each query's read transaction therefore confirms that the pinned snapshot still has its recorded commit time, and the schedule check confirms that the current id is not lower than the last verified one.
+    - If either check fails, the lake is treated as new: every cache entry of that connection is purged, nothing is served until a snapshot passes verification, the indicator turns red, and receipts naming the old snapshots become `explainable`;
   - freshness is the commit time of the snapshot read.
 - **Live engines (after v1.0.0):**
   - the receipt names the engine, connection and read instant, and is always `explainable`;
@@ -125,7 +130,7 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
 
 ### 6. Security (law 3)
 - The semantic engine stays the single enforcement point. Row and column policies are applied in the plan before the dialect adapter, so every engine receives the same policy placement.
-- **Mapping tables.** Mapping tables live in the managed lake (`security.md` §3.3). For a dataset on another engine:
+- **Mapping tables.** Mapping tables live in the managed lake (`security.md` §3.3). A policy whose subquery reads a table outside the managed lake is rejected at model validation (`POLICY_NOT_SUPPORTED_ON_ENGINE`), because that table's writer would then decide who sees which rows. For a dataset on another engine:
   1. the policy's subquery on the mapping table is evaluated first on the managed lake, at a pinned snapshot;
   2. its values are bound as parameters of the engine's query: never concatenated, and never by joining engines;
   3. the binding keeps the subquery's exact meaning, including its types and its `NULL`s. For example, `x NOT IN (…)` over a set that contains `NULL` still returns no rows;
@@ -134,18 +139,22 @@ Both routes end in the same semantic engine: the same Apache Ossie model, the sa
   These values are the only rows Orvex holds between two engines. They are small, bounded results under ADR-0025 rule 6. A per-project cap on their number is stated in the security contract.
 - **Fail closed.**
   - **A caller with no mapping sees zero rows** under every row policy that reads a mapping table, allow-list (`IN`, `EXISTS`) and deny-list (`NOT IN`, `NOT EXISTS`) alike, on the managed lake and on every engine (`security.md` §3.3; Owner decision 9). An administrator's omission never opens data.
-    - A deny-list caller with nothing blocked must therefore be registered explicitly in the mapping.
-    - The `security-policies` contract defines how that registration is written, without `NULL`, so it cannot change a `NOT IN` result.
+    - A deny-list caller with nothing blocked must therefore be registered explicitly.
+    - The registration adds no value to the policy's value set: neither `NULL` nor a placeholder that could match a real key.
+    - Registration is checked separately, on the managed lake at the same pinned snapshot, and that check (not the value set) decides the zero-rows rule. Item 3's exact meaning then applies to registered callers.
+    - The `security-policies` contract (P2-08) defines how a registration is written.
   - The predicate is never dropped.
   - A value set above the cap rejects the query, and the error does not reveal how many values the mapping has.
   - A policy that cannot be placed safely on a dataset's engine makes that dataset unusable, never visible without the policy. The error is `POLICY_NOT_SUPPORTED_ON_ENGINE`, raised at model validation, or at query time for the cap.
-- **Security suite cases on every enabled engine:**
+- **Security suite cases, on the managed lake and on every enabled engine:**
   - a caller with no mapping, under an allow-list and under a deny-list (zero rows in both);
   - a registered deny-list caller with nothing blocked;
   - a mapping above the cap;
   - a `NULL` in a deny-list mapping;
   - a view, and a macro, in an existing lake;
   - a data file outside an existing lake's declared data location;
+  - a symbolic link in an existing lake's data location that points outside it, including one swapped in after verification;
+  - a policy whose mapping subquery reads a table outside the managed lake;
   - an existing lake whose declared location contains the managed lake's data location;
   - a restored external catalog that reuses snapshot ids;
   - a mapping revoked while a result on that engine is cached.

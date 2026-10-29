@@ -83,7 +83,7 @@ column_policies:
 ```
 
 - `$user_id` and other attributes are bound parameters from the security context, never string-concatenated.
-- Mapping tables (for example `security.user_zone`) live in DuckLake and are maintained by the Builder or by a transformation model.
+- Mapping tables (for example `security.user_zone`) live in the managed DuckLake and are maintained by the Builder or by a transformation model; a policy reading a table elsewhere is rejected (ADR-0027 §6).
 - A dataset with a row policy and a caller with no mapping ⇒ zero rows.
 - **Missing attribute.** If a predicate references an attribute the security context lacks (for example `$zone_id` for a user without it), the policy evaluates to *no rows* (fail closed, never an error that reveals the predicate and never all rows). The result carries a visible notice with code `POLICY_ATTRIBUTE_MISSING` naming the policy, not the data, so the user knows to ask an administrator, and an audit event is recorded.
 - Only the policies in `security.yaml` exist; groups referenced there are the same groups used for pages.
