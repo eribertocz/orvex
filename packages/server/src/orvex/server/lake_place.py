@@ -196,9 +196,9 @@ def _postgres(catalog: PostgresLakeCatalog, data: str) -> Place:
     if catalog.ssl_mode is not None:
         pairs["sslmode"] = catalog.ssl_mode
     if catalog.ssl_mode == "verify-full":
-        root = catalog.ssl_root_cert
-        if isinstance(root, SecretReference):
-            variable = _variable(root, "/lake/catalog/ssl_root_cert")
+        root = catalog.ssl_root_cert or "system"
+        if root != "system":
+            variable = _variable(SecretReference(root), "/lake/catalog/ssl_root_cert")
             authority = os.environ[variable]
             if not Path(authority).is_file():
                 raise _invalid(

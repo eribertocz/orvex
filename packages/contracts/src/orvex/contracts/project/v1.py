@@ -247,7 +247,7 @@ class PostgresLakeCatalog(BaseModel):
     libpq `sslmode`. Required to be `verify-full` for any host other than the local machine.
     """
     ssl_root_cert: Annotated[
-        Literal["system"] | SecretReference | None, Field(validate_default=True)
+        str | None, Field(pattern="^(system|\\$\\{env:[A-Z_][A-Z0-9_]*\\})$")
     ] = "system"
     """
     Certificate authorities that verify the server: `system` (the operating system's store, the default) or `${env:NAME}`, a variable holding the path of a CA file.

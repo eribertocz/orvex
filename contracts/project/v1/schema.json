@@ -514,14 +514,8 @@
         },
         "ssl_root_cert": {
           "description": "Certificate authorities that verify the server: `system` (the operating system's store, the default) or `${env:NAME}`, a variable holding the path of a CA file.",
-          "anyOf": [
-            {
-              "const": "system"
-            },
-            {
-              "$ref": "#/$defs/SecretReference"
-            }
-          ],
+          "type": "string",
+          "pattern": "^(system|\\$\\{env:[A-Z_][A-Z0-9_]*\\})$",
           "default": "system"
         }
       }

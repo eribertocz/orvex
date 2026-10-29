@@ -120,7 +120,7 @@ export interface PostgresLakeCatalog {
 	/**
 	 * Certificate authorities that verify the server: `system` (the operating system's store, the default) or `${env:NAME}`, a variable holding the path of a CA file.
 	 */
-	ssl_root_cert?: 'system' | SecretReference;
+	ssl_root_cert?: string;
 }
 /**
  * `connections.yaml`: data sources by name. A name becomes a SQL schema, so it follows identifier rules and cannot be `lake`.
