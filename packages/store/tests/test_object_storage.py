@@ -437,10 +437,13 @@ def test_a_statement_cannot_name_a_web_address(
         named = f"SELECT * FROM '{address}'"
         with pytest.raises(StoreError):
             read(lake, named)
-        with pytest.raises(StoreError):
+        # Writes reach DuckDB, which refuses the web file system itself (not only the sandbox).
+        with pytest.raises(StoreError) as refused:
             write(lake, f"CREATE TABLE leak AS {named}")
-        with pytest.raises(StoreError):
+        assert "HTTPFileSystem" in str(refused.value.details), refused.value.details
+        with pytest.raises(StoreError) as refused:
             write(lake, f"INSERT INTO readings SELECT * FROM '{address}'")
+        assert "HTTPFileSystem" in str(refused.value.details), refused.value.details
         assert lake.current_snapshot().id == before  # nothing was written
         assert read(lake, TOTAL) == EXPECTED
     finally:

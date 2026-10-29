@@ -117,6 +117,12 @@ def a_file(tmp_path: Path) -> str:
         "SELECT * FROM t UNION ALL BY NAME SUMMARIZE $ñ${f}$ñ$",
         "INSERT INTO x SUMMARIZE $ñ${f}$ñ$",
         "SELECT $tag_1${f}$tag_1$ AS name FROM t",
+        # #136 Reviewer pass 5: file URIs, which DuckDB opens as local files.
+        "CREATE TABLE leak AS SELECT * FROM 'file:{f}'",
+        "CREATE TABLE leak AS SELECT * FROM 'file://{f}'",
+        "CREATE TABLE leak AS SELECT * FROM 'file://localhost{f}'",
+        "SELECT * FROM $$file:{f}$$",
+        "CREATE TABLE leak AS SELECT * FROM 'file://localhost{f}*'",
     ],
 )
 def test_a_file_named_in_any_quoting_form_is_refused(a_file: str, template: str) -> None:

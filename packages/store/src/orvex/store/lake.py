@@ -680,7 +680,11 @@ def _names_a_file(token: str) -> bool:
     content = _string_content(token)
     if _OBJECT_ADDRESS.match(content):
         return True
-    candidates = {content, content.removeprefix("file://")}
+    if content.startswith("file:/"):
+        # DuckDB opens `file:/p`, `file:///p` and `file://localhost/p` as the local file `/p`
+        # (measured on 2.0.0), whether or not it exists yet (#136, Reviewer pass 5).
+        return True
+    candidates = {content}
     for candidate in candidates:
         if not candidate:
             continue
@@ -1233,10 +1237,11 @@ class Lake:
     def _storage_secret(self, storage: _Storage, data_path: str) -> None:
         """A temporary S3 secret for the lake's prefix only; never persisted."""
         self._load_extension("httpfs")
-        # httpfs also opens http:// and https:// addresses as files, which the statement check
-        # lets through as ordinary text. The lake needs only s3://, so the web file system is
-        # turned off on its connection (#136, Reviewer pass 4).
-        self._connection.sql("SET disabled_filesystems = 'HTTPFileSystem'")
+        # httpfs also opens http:// and https:// addresses (and hf://) as files, and the
+        # statement check lets web addresses through as ordinary text. The lake needs only
+        # s3://, so those file systems are turned off on its connection (#136, Reviewer passes
+        # 4 and 5).
+        self._connection.sql("SET disabled_filesystems = 'HTTPFileSystem,HuggingFaceFileSystem'")
         settings = storage.settings
         options = [
             "TYPE s3",
