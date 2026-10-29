@@ -221,3 +221,23 @@ def test_a_source_that_dropped_old_rows_fails_until_a_full_refresh(
     code, out = run(capsys, tmp_path, "--full-refresh")
     assert code == 0, out
     assert days_by_month(tmp_path) == [("2026-10", 5, 21, 25)]
+
+
+def test_a_partition_column_with_a_non_ascii_name_is_checked(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #130: names and values after non-ASCII text bind correctly in the check's statements.
+    sidecar = SIDECAR.replace("[month]", '["año"]')
+    model = (
+        "SELECT *, 'mañana ' || strftime(read_at, '%Y-%m') AS \"año\" FROM feed.data "
+        "WHERE read_at > $since"
+    )
+    project(tmp_path, model, sidecar)
+    feed(tmp_path, october(1, 20))
+    assert run(capsys, tmp_path)[0] == 0
+    feed(tmp_path, october(1, 25))
+    code, out = run(capsys, tmp_path)
+    assert code == 1
+    assert "PARTITION_INCOMPLETE" in out
+    assert "'mañana 2026-10' (1 in total)" in out
+    assert last_record(tmp_path)[0:2] == ("failed", "PARTITION_INCOMPLETE")
