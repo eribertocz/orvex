@@ -79,7 +79,9 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("permissions:\n  contents: read", top)
         self.assertNotIn("write", top)
         self.assertIn("github.event.pull_request.user.login == 'dependabot[bot]'", self.text)
-        self.assertIn("github.repository == 'eribertocz/orvex'", self.text)
+        self.assertIn(
+            "github.event.pull_request.head.repo.full_name == github.repository", self.text
+        )
 
     def test_the_script_runs_from_the_base_commit(self) -> None:
         # The job holds a write token: it must not run code from the pull request's branch.

@@ -11,7 +11,8 @@ permissions:
 
 jobs:
   auto-merge:
-    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'eribertocz/orvex'
+    # Only Dependabot's own pull requests, opened from a branch of this repository (never a fork).
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: write
