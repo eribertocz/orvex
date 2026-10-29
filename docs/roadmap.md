@@ -88,7 +88,7 @@
 | P1-18 | OpenLineage events (start, complete, fail; datasets; column lineage where derivable) | transform |
 | P1-19 | Scheduler: freshness-driven planning (minimum 5 minutes, `FRESHNESS_TOO_SHORT`), `full_refresh` cron with time zone, no overlapping runs, retries with backoff | transform |
 | P1-20 | Snapshot retention (from `project.yaml`) and compaction as maintenance runs | store |
-| P1-21 | Transformation worker process for server mode; load-performance baseline on the 100 M-row reference dataset | server |
+| P1-21 | Scheduler fit to run unattended (clean stop on SIGTERM, heartbeat shown by `orvex runs`, one scheduler per project); load-performance baseline on the `large` reference dataset (decision #33) on the reference machine; end-to-end test of 5-minute incremental loads from PostgreSQL (decision #133) | server |
 | P1-22 | Lake location in `project.yaml` (ADR-0027 §2): catalog (DuckDB file or SQLite on a local disk, or PostgreSQL local, networked or cloud with TLS `verify-full`; object storage over HTTPS only) and data files (project folder, local path, network file system, object storage), optional data-file encryption (mode fixed at creation, deletion vectors off), credentials by `${env:NAME}` as temporary DuckDB secrets; every supported combination tested, invalid ones rejected | store, server |
 
 **Exit criteria:** every strategy and every error code introduced in this phase tested; write–audit–publish proven with failing tests; incremental loads from PostgreSQL every 5 minutes on synthetic data without duplicates or gaps; valid lineage events; Owner demo.
@@ -158,6 +158,7 @@
 | P3-12 | Administration API and CLI: users (instance administrator), memberships and groups (project Builder) | server |
 | P3-13 | Security conformance runner over the scenarios, as a required check, on the managed lake and on every enabled Direct Query engine (ADR-0027 §6) | conformance |
 | P3-14 | Property-based non-broadening tests | semantic |
+| P3-15 | Transformation worker started and supervised by the server in server mode (restart after a crash, stop with the server, status through the API), on the P1-21 scheduler (decision #133) | server |
 
 **Exit criteria:** every security scenario passes, or is `expected-fail` linked to the later issue that implements it (pages P6, exports P6–P7, MCP P9); OIDC verified against a real identity provider in CI; threat models recorded; the cache never crosses permission fingerprints.
 
