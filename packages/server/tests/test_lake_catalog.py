@@ -840,7 +840,8 @@ def test_a_default_lake_is_recorded_and_refused_when_its_catalog_is_lost(
     code, out = run(capsys, "run", str(tmp_path))
     assert code == 0, out
     record = record_text(tmp_path)
-    assert record["catalog"] == "duckdb" and "state" not in record  # confirmed
+    assert record["catalog"] == "duckdb"
+    assert "state" not in record
     catalog = home(tmp_path) / "lake" / "catalog.ducklake"
     kept = tmp_path / "kept"
     catalog.rename(kept)
@@ -871,7 +872,8 @@ def test_a_default_lake_made_before_204_is_recorded_on_its_next_open(
     code, out = run(capsys, command, str(tmp_path))
     assert code == 0, out
     record = record_text(tmp_path)
-    assert record["catalog"] == "duckdb" and "state" not in record
+    assert record["catalog"] == "duckdb"
+    assert "state" not in record
 
 
 def test_default_lake_data_without_catalog_or_record_is_refused(
