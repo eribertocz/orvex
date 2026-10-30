@@ -25,6 +25,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -83,6 +84,95 @@ class Step:
     peak_rss_bytes: int
     lake_bytes: int
     output_tail: str  # empty when the step succeeded
+    # The resident-memory curve, sampled every SAMPLE_SECONDS (#168): its median, when its peak
+    # came (seconds from the start), and the last line the command printed before the peak.
+    rss_median_bytes: int = 0
+    peak_at_seconds: float = 0.0
+    peak_after_line: str = ""
+    memory_limit: str = ""  # the lake's memory limit when the experiment set one (#168)
+    catalog: dict[str, int] | None = None  # the lake's files after the step (#168)
+
+
+SAMPLE_SECONDS = 0.25
+# Runs the real command with the lake's memory limit set for this process only: a seam of the
+# benchmark (#168), not reachable from the command line, the API or the project files.
+LIMITED = (
+    "import sys\n"
+    "import orvex.server.commands as commands\n"
+    "limit = sys.argv[1]\n"
+    "commands._memory_limit = lambda: limit\n"
+    "from orvex.server.cli import main\n"
+    "sys.exit(main(sys.argv[2:]))\n"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Sampled:
+    exit_code: int
+    seconds: float
+    peak_rss_bytes: int  # the process's own maximum resident set (`wait4`)
+    lines: list[tuple[float, str]]  # each printed line, with seconds from the start
+    samples: list[tuple[float, int]]  # resident memory (bytes), with seconds from the start
+
+
+def _resident(pid: int) -> int | None:
+    """The process's resident memory now (`VmRSS`), or None once it has gone."""
+    try:
+        with open(f"/proc/{pid}/status", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        return None
+    return None
+
+
+def sampled(command: list[str]) -> Sampled:
+    """Run `command`, timestamping each line it prints and sampling its resident memory."""
+    started = time.monotonic()
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    assert process.stdout is not None
+    stream = process.stdout
+    lines: list[tuple[float, str]] = []
+
+    def read() -> None:
+        for line in stream:
+            lines.append((time.monotonic() - started, line.rstrip("\n")))
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    samples: list[tuple[float, int]] = []
+    while True:
+        finished = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        if finished is not None:
+            break
+        resident = _resident(process.pid)
+        if resident is not None:
+            samples.append((time.monotonic() - started, resident))
+        time.sleep(SAMPLE_SECONDS)
+    _, status, usage = os.wait4(process.pid, 0)
+    seconds = time.monotonic() - started
+    process.returncode = os.waitstatus_to_exitcode(status)
+    reader.join()
+    stream.close()
+    return Sampled(
+        exit_code=process.returncode,
+        seconds=seconds,
+        peak_rss_bytes=usage.ru_maxrss * 1024,  # kilobytes on Linux
+        lines=lines,
+        samples=samples,
+    )
+
+
+def attribution(run: Sampled) -> tuple[int, float, str]:
+    """The memory curve's median, when its highest sample came, and the last line printed
+    before it ("" when nothing was printed yet)."""
+    if not run.samples:
+        return 0, 0.0, ""
+    peak_at, _ = max(run.samples, key=lambda sample: sample[1])
+    before = [line for moment, line in run.lines if moment <= peak_at]
+    median = int(statistics.median(value for _, value in run.samples))
+    return median, round(peak_at, 2), before[-1] if before else ""
 
 
 def project(folder: Path, data: Path) -> None:
@@ -137,29 +227,67 @@ def size(folder: Path) -> int:
     return sum(path.stat().st_size for path in folder.rglob("*") if path.is_file())
 
 
-def measure(name: str, arguments: list[str], lake: Path) -> Step:
-    """Run one command in its own process; its wall time and its own peak memory."""
-    started = time.monotonic()
-    process = subprocess.Popen(
-        [sys.executable, "-m", cli.__name__.rpartition(".")[0], *arguments],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    assert process.stdout is not None
-    lines = process.stdout.read().splitlines()
-    _, status, usage = os.wait4(process.pid, 0)
-    seconds = time.monotonic() - started
-    process.returncode = os.waitstatus_to_exitcode(status)
-    code = process.returncode
+def command_for(arguments: list[str], memory_limit: str = "") -> list[str]:
+    """The real command, in its own process; with the experiment's memory limit when set."""
+    if memory_limit:
+        return [sys.executable, "-c", LIMITED, memory_limit, *arguments]
+    return [sys.executable, "-m", cli.__name__.rpartition(".")[0], *arguments]
+
+
+def measure(name: str, arguments: list[str], lake: Path, memory_limit: str = "") -> Step:
+    """Run one command in its own process; its wall time, its own peak memory, and when that
+    peak came (#168)."""
+    run = sampled(command_for(arguments, memory_limit))
+    median, peak_at, after = attribution(run)
     return Step(
         name=name,
-        exit_code=code,
-        seconds=round(seconds, 3),
-        peak_rss_bytes=usage.ru_maxrss * 1024,  # kilobytes on Linux
+        exit_code=run.exit_code,
+        seconds=round(run.seconds, 3),
+        peak_rss_bytes=run.peak_rss_bytes,
         lake_bytes=size(lake) if lake.exists() else 0,
-        output_tail="" if code == 0 else "\n".join(lines[-OUTPUT_LINES:]),
+        output_tail=(
+            "" if run.exit_code == 0 else "\n".join(line for _, line in run.lines[-OUTPUT_LINES:])
+        ),
+        rss_median_bytes=median,
+        peak_at_seconds=peak_at,
+        peak_after_line=after,
+        memory_limit=memory_limit,
+        catalog=catalog_files(lake),
     )
+
+
+def catalog_files(lake: Path) -> dict[str, int] | None:
+    """What the default DuckDB catalog lists, against what is on disk (#168): the bytes of the
+    data and delete files the current snapshot uses, of every file the catalog lists, of the
+    files scheduled for deletion, and of the data folder. None without a catalog."""
+    catalog = lake / "lake" / "catalog.ducklake"
+    if not catalog.exists():
+        return None
+    connection = duckdb.connect()
+    try:
+        connection.execute(
+            f"ATTACH '{str(catalog).replace(chr(39), chr(39) * 2)}' AS c (READ_ONLY)"
+        )
+        row = connection.execute(
+            "SELECT "
+            "(SELECT coalesce(sum(file_size_bytes), 0) FROM c.ducklake_data_file "
+            " WHERE end_snapshot IS NULL) + "
+            "(SELECT coalesce(sum(file_size_bytes), 0) FROM c.ducklake_delete_file "
+            " WHERE end_snapshot IS NULL), "
+            "(SELECT coalesce(sum(file_size_bytes), 0) FROM c.ducklake_data_file) + "
+            "(SELECT coalesce(sum(file_size_bytes), 0) FROM c.ducklake_delete_file), "
+            "(SELECT count(*) FROM c.ducklake_files_scheduled_for_deletion)"
+        ).fetchone()
+    finally:
+        connection.close()
+    assert row is not None
+    data = lake / "lake" / "data"
+    return {
+        "current_snapshot_bytes": int(row[0]),
+        "listed_bytes": int(row[1]),
+        "scheduled_for_deletion": int(row[2]),
+        "on_disk_bytes": size(data) if data.exists() else 0,
+    }
 
 
 def versions() -> dict[str, str]:
@@ -224,6 +352,15 @@ def markdown(result: dict[str, object]) -> str:
         )
     steps = result["steps"]
     assert isinstance(steps, list)
+    peaks = [
+        f"- {step['name']}: peak {step['peak_rss_bytes'] / (1024 * 1024):.0f} MiB, highest sample "
+        f"at {step.get('peak_at_seconds', 0):.1f} s, after `{step.get('peak_after_line', '')}`"
+        + (f" (memory limit {step['memory_limit']})" if step.get("memory_limit") else "")
+        for step in steps
+        if isinstance(step, dict) and not step["exit_code"]
+    ]
+    if peaks:
+        rows += ["", "Peaks (#168):", "", *peaks]
     failed = [step for step in steps if isinstance(step, dict) and step["exit_code"]]
     if failed:
         rows += ["", "Failed steps:", ""]
@@ -237,7 +374,22 @@ def main() -> int:
     parser.add_argument("--work", type=Path, required=True, help="where the project is built")
     parser.add_argument("--out", type=Path, required=True, help="where the results are written")
     parser.add_argument("--runs", type=int, default=3)
+    parser.add_argument(
+        "--memory-limit",
+        action="append",
+        default=[],
+        metavar="STEP=LIMIT",
+        help="an experiment (#168): run STEP (full, incremental, maintenance) with the lake's "
+        "memory limit at LIMIT (for example incremental=4GB); repeatable",
+    )
     arguments = parser.parse_args()
+    limits: dict[str, str] = {}
+    for item in arguments.memory_limit:
+        step, _, limit = item.partition("=")
+        if step not in {"full", "incremental", "maintenance"} or not limit:
+            print(f"--memory-limit {item!r}: write STEP=LIMIT", file=sys.stderr)
+            return 2
+        limits[step] = limit
     if arguments.runs < 1:
         print("--runs must be at least 1", file=sys.stderr)
         return 2
@@ -251,14 +403,17 @@ def main() -> int:
         shutil.rmtree(folder, ignore_errors=True)
         (data / APPENDED).unlink(missing_ok=True)
         project(folder, data)
-        first = measure("full first load", ["run", str(folder)], lake)
+        first = measure("full first load", ["run", str(folder)], lake, limits.get("full", ""))
         steps.append(first)
         print(json.dumps(asdict(first)), flush=True)
         if first.exit_code != 0:
             continue  # nothing to add to or maintain: recorded as failed
         appended = append_day(data)
-        for name, command in (("incremental cycle", "run"), ("maintenance", "maintain")):
-            step = measure(name, [command, str(folder)], lake)
+        for name, command, key in (
+            ("incremental cycle", "run", "incremental"),
+            ("maintenance", "maintain", "maintenance"),
+        ):
+            step = measure(name, [command, str(folder)], lake, limits.get(key, ""))
             steps.append(step)
             print(json.dumps(asdict(step)), flush=True)
     (data / APPENDED).unlink(missing_ok=True)

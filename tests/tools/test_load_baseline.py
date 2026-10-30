@@ -11,7 +11,17 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from tools.benchmarks.load_baseline import APPENDED, Step, append_day, markdown, project, summary
+from tools.benchmarks.load_baseline import (
+    APPENDED,
+    Step,
+    append_day,
+    attribution,
+    command_for,
+    markdown,
+    project,
+    sampled,
+    summary,
+)
 from tools.synthetic.generate import generate
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -134,3 +144,56 @@ def test_the_baseline_runs_end_to_end_on_the_small_dataset(dataset: Path, tmp_pa
     assert loaded is not None
     assert generated is not None
     assert loaded[0] == generated[0] + result["appended_readings"]
+
+
+FAKE = (
+    "import sys, time\n"
+    "print('built small', flush=True)\n"
+    "time.sleep(0.6)\n"
+    "print('built big', flush=True)\n"
+    "block = bytearray(300 * 1024 * 1024)\n"
+    "block[::4096] = b'x' * len(block[::4096])\n"
+    "time.sleep(1.0)\n"
+    "del block\n"
+    "print('built after', flush=True)\n"
+    "time.sleep(0.6)\n"
+)
+
+
+def test_the_peak_is_attributed_to_the_line_printed_before_it() -> None:
+    # #168: a fake command allocates 300 MiB after printing "built big".
+    run = sampled([sys.executable, "-c", FAKE])
+    assert run.exit_code == 0
+    assert [line for _, line in run.lines] == ["built small", "built big", "built after"]
+    median, peak_at, after = attribution(run)
+    assert after == "built big"
+    assert run.peak_rss_bytes >= 300 * 1024 * 1024
+    assert max(value for _, value in run.samples) >= 300 * 1024 * 1024
+    assert 0 < median < run.peak_rss_bytes
+    assert run.lines[1][0] <= peak_at < run.lines[2][0]
+
+
+def test_the_memory_limit_is_set_only_by_the_experiment() -> None:
+    # #168: no seam set, the command is the plain one and the lake's limit is unchanged.
+    from orvex.server import commands
+
+    assert command_for(["run", "x"])[1:] == ["-m", "orvex.server", "run", "x"]
+    assert commands._limits().memory_limit == commands._memory_limit()
+    limited = command_for(["run", "x"], "4GB")
+    assert limited[1] == "-c"
+    assert limited[3:] == ["4GB", "run", "x"]
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            limited[2].replace(
+                "from orvex.server.cli import main\nsys.exit(main(sys.argv[2:]))\n",
+                "print(commands._limits().memory_limit)\n",
+            ),
+            "4GB",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert probe.stdout.strip() == "4GB"
