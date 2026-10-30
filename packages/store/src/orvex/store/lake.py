@@ -11,6 +11,7 @@ import collections
 import contextlib
 import datetime as dt
 import glob as globlib
+import itertools
 import json
 import math
 import os
@@ -643,14 +644,17 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
         )
     every = _tokens(sql)
     tokens = [token for token in every if token[1] != duckdb.token_type.comment]
+    # Each token ends where the next one starts (a comment included), or at the end of the
+    # statement: looked up by position, so the checks stay linear in the statement's length.
     positions = [position for position, _ in every] + [len(sql)]
-    _refuse_file_names(sql, tokens, positions)
-    _refuse_show_statements(sql, tokens, positions)
+    ends = dict(itertools.pairwise(positions))
+    _refuse_file_names(sql, tokens, ends)
+    _refuse_show_statements(sql, tokens, ends)
     first = ""
     for index, (position, kind) in enumerate(tokens):
         if kind not in {duckdb.token_type.identifier, duckdb.token_type.keyword}:
             continue
-        end = next(later for later in positions if later > position)
+        end = ends[position]
         name = sql[position:end].strip().strip('"').lower()
         following = tokens[index + 1][0] if index + 1 < len(tokens) else len(sql)
         first = first or name
@@ -668,7 +672,7 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
         if (
             sql[following : following + 1] == "("
             and name in DUCKLAKE_TABLE_MACROS
-            and not _names_a_table(sql, tokens, positions, index)
+            and not _names_a_table(sql, tokens, ends, index)
         ):
             raise StoreError(
                 "STORE_STATEMENT_INVALID",
@@ -691,7 +695,7 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
 
 
 def _names_a_table(
-    sql: str, tokens: list[tuple[int, duckdb.token_type]], positions: list[int], index: int
+    sql: str, tokens: list[tuple[int, duckdb.token_type]], ends: dict[int, int], index: int
 ) -> bool:
     """Whether the (possibly qualified) name at `index` follows `INTO`, `TABLE` or
     `REFERENCES`: a table with a column list (`INSERT INTO settings (a)`), not a call."""
@@ -701,13 +705,13 @@ def _names_a_table(
     if before < 0:
         return False
     position, kind = tokens[before]
-    end = next(later for later in positions if later > position)
+    end = ends[position]
     word = sql[position:end].strip().lower()
     return kind == duckdb.token_type.keyword and word in {"into", "table", "references"}
 
 
 def _refuse_file_names(
-    sql: str, tokens: list[tuple[int, duckdb.token_type]], positions: list[int]
+    sql: str, tokens: list[tuple[int, duckdb.token_type]], ends: dict[int, int]
 ) -> None:
     """Refuse a quoted string or quoted name that names an existing file, matches files, or is an
     object-storage address (`s3://…`, `gs://…`, `az://…`, …).
@@ -724,7 +728,7 @@ def _refuse_file_names(
     )
     texts: list[tuple[str, duckdb.token_type]] = []
     for position, kind in tokens:
-        end = next(later for later in positions if later > position)
+        end = ends[position]
         text = sql[position:end].strip()
         texts.append((text, kind))
         quoted = kind == duckdb.token_type.string_const or text.startswith('"')
@@ -812,7 +816,7 @@ def _escape_string_value(token: str) -> str:
 
 
 def _refuse_show_statements(
-    sql: str, tokens: list[tuple[int, duckdb.token_type]], positions: list[int]
+    sql: str, tokens: list[tuple[int, duckdb.token_type]], ends: dict[int, int]
 ) -> None:
     """Refuse `SUMMARIZE`, `DESCRIBE`, `DESC` and `SHOW` everywhere except where DuckDB reads
     them as something else: a column label after `AS` (`SELECT a AS desc`), a part of a qualified
@@ -822,7 +826,7 @@ def _refuse_show_statements(
     Quoted names (`"describe"`) are ordinary names."""
     words: list[tuple[str, duckdb.token_type]] = []
     for position, kind in tokens:
-        end = next(later for later in positions if later > position)
+        end = ends[position]
         words.append((sql[position:end].strip().lower(), kind))
     # `CREATE TABLE x AS <query>`: that `AS` starts a query, it does not introduce a label. It is
     # found in every statement, so empty statements before it (`;CREATE …`) do not hide it.
@@ -899,13 +903,15 @@ def _names_a_file(token: str) -> bool:
 
 
 def _single_statement(sql: str, table_functions: frozenset[str]) -> duckdb.Statement:
-    _guarded(sql, table_functions)
+    # Parsed first: SQL DuckDB cannot parse fails with the parser's own message, whatever the
+    # checks would say (#158). Parsing runs nothing.
     try:
         statements = duckdb.extract_statements(sql)
     except duckdb.Error as error:
         raise StoreError(
             "STORE_QUERY_FAILED", "The SQL could not be parsed.", {"duckdb": str(error)}
         ) from error
+    _guarded(sql, table_functions)
     if len(statements) != 1:
         raise StoreError(
             "STORE_STATEMENT_INVALID",
