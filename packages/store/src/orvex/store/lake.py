@@ -31,7 +31,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import duckdb
 import pyarrow as pa
@@ -1569,39 +1569,54 @@ class Lake:
         cursor.sql("SET python_enable_replacements = false")
         return cursor
 
-    def _one(self, sql: str, parameters: dict[str, object]) -> tuple[object, ...] | None:
-        """One metadata row on a short-lived cursor, so no unfinished result is left behind."""
-        cursor = self._cursor()
+    def _one(
+        self,
+        sql: str,
+        parameters: dict[str, object],
+        cursor: duckdb.DuckDBPyConnection | None = None,
+    ) -> tuple[object, ...] | None:
+        """One metadata row, on `cursor` (a request's, under its guard, #160) or on a
+        short-lived cursor; no unfinished result is left behind."""
+        if cursor is not None:
+            rows = cursor.execute(sql, parameters).fetchall()
+            return tuple(rows[0]) if rows else None
+        own = self._cursor()
         try:
-            row: tuple[object, ...] | None = cursor.execute(sql, parameters).fetchone()
+            row: tuple[object, ...] | None = own.execute(sql, parameters).fetchone()
         finally:
-            cursor.close()
+            own.close()
         return row
 
-    def _snapshot(self, snapshot_id: int | None) -> Snapshot | None:
+    def _snapshot(
+        self, snapshot_id: int | None, cursor: duckdb.DuckDBPyConnection | None = None
+    ) -> Snapshot | None:
         where = "" if snapshot_id is None else "WHERE snapshot_id = $id"
         parameters = {} if snapshot_id is None else {"id": snapshot_id}
         row = self._one(
             "SELECT snapshot_id, epoch_us(snapshot_time) FROM ducklake_snapshots($lake) "
             f"{where} ORDER BY snapshot_id DESC LIMIT 1",
             {"lake": LAKE, **parameters},
+            cursor,
         )
         return None if row is None else _snapshot_of(row)
 
-    def _oldest_snapshot(self) -> Snapshot | None:
+    def _oldest_snapshot(self, cursor: duckdb.DuckDBPyConnection | None = None) -> Snapshot | None:
         row = self._one(
             "SELECT snapshot_id, epoch_us(snapshot_time) FROM ducklake_snapshots($lake) "
             "ORDER BY snapshot_id LIMIT 1",
             {"lake": LAKE},
+            cursor,
         )
         return None if row is None else _snapshot_of(row)
 
-    def _missing_snapshot(self, snapshot_id: int) -> StoreError:
+    def _missing_snapshot(
+        self, snapshot_id: int, cursor: duckdb.DuckDBPyConnection | None = None
+    ) -> StoreError:
         """Why a snapshot cannot be read: expired by maintenance (ids are never reused and every
         id up to the current one was committed, so a missing one among them expired), or never
         existed."""
-        oldest = self._oldest_snapshot()
-        current = self._snapshot(None)
+        oldest = self._oldest_snapshot(cursor)
+        current = self._snapshot(None, cursor)
         if oldest is not None and current is not None and 0 <= snapshot_id <= current.id:
             return StoreError(
                 "STORE_SNAPSHOT_EXPIRED",
@@ -1730,7 +1745,9 @@ class Lake:
             raise StoreError("STORE_SNAPSHOT_NOT_FOUND", "The lake has no snapshot.", {})
         return snapshot
 
-    def _tables_at(self, snapshot: int) -> set[tuple[str, str]]:
+    def _tables_at(
+        self, snapshot: int, cursor: duckdb.DuckDBPyConnection | None = None
+    ) -> set[tuple[str, str]]:
         """(schema, table) of every lake table alive at `snapshot`, lower-cased."""
         row = self._one(
             f"SELECT string_agg(lower(s.schema_name) || '.' || lower(t.table_name), '|') "
@@ -1739,6 +1756,7 @@ class Lake:
             "WHERE t.begin_snapshot <= $n AND (t.end_snapshot IS NULL OR t.end_snapshot > $n) "
             "AND s.begin_snapshot <= $n AND (s.end_snapshot IS NULL OR s.end_snapshot > $n)",
             {"n": snapshot},
+            cursor,
         )
         text = str(row[0]) if row and row[0] is not None else ""
         found: set[tuple[str, str]] = set()
@@ -1748,51 +1766,19 @@ class Lake:
                 found.add((schema, table))
         return found
 
-    def _pinned(self, sql: str, snapshot: int) -> str:
-        """The same SELECT with `AT (VERSION => snapshot)` on every table it references.
+    def _pinned(
+        self, tree: dict[str, Any], snapshot: int, cursor: duckdb.DuckDBPyConnection
+    ) -> str:
+        """The read's SELECT (`_read_tree`) with `AT (VERSION => snapshot)` on every table it
+        references, on the read's cursor (under its guard, #160).
 
         Every base table is pinned, including CTE references (DuckDB binds a CTE with an AT
-        clause unchanged). Table functions other than generators are refused, because they could
-        read the lake or its files without a snapshot.
+        clause unchanged). A name that is not a lake table (or the read's own CTE) is refused.
         """
-        serialized = self._one("SELECT json_serialize_sql($sql)", {"sql": sql})
-        tree = json.loads(str(serialized[0])) if serialized else {"error": True}
-        if tree.get("error"):
-            raise StoreError(
-                "STORE_QUERY_FAILED",
-                "The SQL could not be parsed.",
-                {"duckdb": str(tree.get("error_message", ""))},
-            )
-        tables = self._tables_at(snapshot)
+        tables = self._tables_at(snapshot, cursor)
         schemas = {schema for schema, _ in tables}
         ctes = _cte_names(tree)
         for node in _walk(tree):
-            if (
-                node.get("class") == "FUNCTION"
-                and str(node.get("function_name", "")).lower() in _EXTERNAL_SQL_FUNCTIONS
-            ):
-                raise StoreError(
-                    "STORE_STATEMENT_INVALID",
-                    "This function is not allowed in a read.",
-                    {"function": str(node.get("function_name"))},
-                )
-            if node.get("type") == "SHOW_REF":
-                # SUMMARIZE / DESCRIBE / SHOW: unpinned, and a quoted target is read as a file.
-                raise StoreError(
-                    "STORE_STATEMENT_INVALID",
-                    "SUMMARIZE, DESCRIBE and SHOW are not allowed in statements.",
-                    {},
-                )
-            if node.get("type") == "TABLE_FUNCTION":
-                function = node.get("function")
-                name = function.get("function_name") if isinstance(function, dict) else None
-                if str(name).lower() not in READ_TABLE_FUNCTIONS:
-                    raise StoreError(
-                        "STORE_STATEMENT_INVALID",
-                        "A read may use only the table functions range, generate_series "
-                        "and unnest.",
-                        {"function": str(name)},
-                    )
             if node.get("type") != "BASE_TABLE":
                 continue
             qualified = node.get("qualified_name")
@@ -1817,8 +1803,10 @@ class Lake:
                     "literal": {"kind": "INTEGER", "text": str(int(snapshot))},
                 },
             }
-        rewritten = self._one("SELECT json_deserialize_sql($tree)", {"tree": json.dumps(tree)})
-        return str(rewritten[0]) if rewritten else sql
+        rewritten = self._one(
+            "SELECT json_deserialize_sql($tree)", {"tree": json.dumps(tree)}, cursor
+        )
+        return str(rewritten[0]) if rewritten else ""
 
     def describe(self, sql: str, parameters: Sequence[Parameter] = ()) -> list[tuple[str, str]]:
         """(name, DuckDB type) of each output column of one SELECT, from the binder only.
@@ -1877,20 +1865,30 @@ class Lake:
             )
         parameters = _bound(statement, request.parameters)
         typed = _typed(request.sql, request.parameters)
+        tree = _read_tree(typed)  # before admission: no catalog needed (#160)
         deadline = time.monotonic() + self._timeout_ms(request.timeout_ms) / 1000
         self._admission.acquire(deadline)
         try:
-            # Every query on the lake runs inside the slot (#77). The snapshot is checked once
-            # admitted: maintenance may have expired it while this read waited behind it
-            # (maintenance runs alone, so it cannot expire it from now on).
-            if self._snapshot(request.snapshot) is None:
-                raise self._missing_snapshot(request.snapshot)
-            sql = self._pinned(typed, request.snapshot)
             cursor = self._cursor()
         except BaseException:
             self._admission.release()
             raise
         guard = Guard(cursor, deadline)
+        try:
+            # Every query on the lake runs inside the slot (#77), and under the read's limit
+            # (#160). The snapshot is checked once admitted: maintenance may have expired it
+            # while this read waited behind it (maintenance runs alone, so it cannot expire it
+            # from now on).
+            if self._snapshot(request.snapshot, cursor) is None:
+                raise self._missing_snapshot(request.snapshot, cursor)
+            sql = self._pinned(tree, request.snapshot, cursor)
+        except BaseException as error:
+            guard.stop()
+            cursor.close()
+            self._admission.release()
+            if isinstance(error, duckdb.Error):
+                raise guard.error(error) from error
+            raise
         # Who owns the cursor: the calling thread while it sets the read up ("setup"), nobody
         # while the stream waits for its first read ("idle") or while the consumer holds a batch
         # ("paused"), the reading thread while DuckDB computes a batch ("computing"). A read
@@ -2060,11 +2058,19 @@ class Lake:
             self._local.writing = False
             raise
         try:
-            before = self._snapshot(None)
-            outside = _outside_inventory(cursor)
+            # The store's own catalog queries run under the transaction's limit too (#160).
+            before, outside = _bounded(
+                cursor,
+                deadline,
+                lambda: (self._snapshot(None, cursor), _outside_inventory(cursor)),
+            )
             cursor.begin()
             handle = Transaction(
-                cursor, self._table_functions, self._timeout_ms, frozenset(self._inexact)
+                cursor,
+                self._table_functions,
+                self._timeout_ms,
+                frozenset(self._inexact),
+                deadline,
             )
             try:
                 yield handle
@@ -2074,13 +2080,16 @@ class Lake:
                     raise handle.interrupted
                 if handle.cancelled:
                     raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
-                if _outside_inventory(cursor) != outside:
+                changed_outside, unpinnable = handle.bounded(
+                    lambda: (_outside_inventory(cursor) != outside, _unpinnable_objects(cursor))
+                )
+                if changed_outside:
                     raise StoreError(
                         "STORE_STATEMENT_INVALID",
                         "A transaction may change only tables and schemas of the lake.",
                         {},
                     )
-                if _unpinnable_objects(cursor):
+                if unpinnable:
                     raise StoreError(
                         "STORE_STATEMENT_INVALID",
                         "Views and macros are not allowed: a read could not pin the "
@@ -2097,7 +2106,9 @@ class Lake:
                 cursor.rollback()
                 raise
             try:
-                cursor.commit()
+                # The point of no return: the commit and the snapshot read after it are not
+                # interrupted, so a committed transaction is never reported as failed (#160).
+                _commit(cursor)
             except duckdb.TransactionException as error:
                 raise StoreError(
                     "STORE_TRANSACTION_CONFLICT",
@@ -2116,6 +2127,82 @@ class Lake:
             self._local.writing = False
         changed = after is not None and (before is None or after.id != before.id)
         handle.result = CommitResult(kind="commit_result", snapshot=after if changed else None)
+
+
+def _read_tree(sql: str) -> dict[str, Any]:
+    """A read's parse tree, checked for what needs no catalog: SQL that does not parse,
+    functions that run SQL given as text, `SUMMARIZE`/`DESCRIBE`/`SHOW`, and table functions
+    other than generators (which could read the lake or its files without a snapshot). Parsed
+    on a connection of its own, with no lake attached, so it runs before the read is admitted:
+    an invalid read gets its own error on a busy lake (#160)."""
+    parser = _parser()
+    serialized = parser.execute("SELECT json_serialize_sql($sql)", {"sql": sql}).fetchone()
+    tree: dict[str, Any] = json.loads(str(serialized[0])) if serialized else {"error": True}
+    if tree.get("error"):
+        raise StoreError(
+            "STORE_QUERY_FAILED",
+            "The SQL could not be parsed.",
+            {"duckdb": str(tree.get("error_message", ""))},
+        )
+    for node in _walk(tree):
+        if (
+            node.get("class") == "FUNCTION"
+            and str(node.get("function_name", "")).lower() in _EXTERNAL_SQL_FUNCTIONS
+        ):
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "This function is not allowed in a read.",
+                {"function": str(node.get("function_name"))},
+            )
+        if node.get("type") == "SHOW_REF":
+            # SUMMARIZE / DESCRIBE / SHOW: unpinned, and a quoted target is read as a file.
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "SUMMARIZE, DESCRIBE and SHOW are not allowed in statements.",
+                {},
+            )
+        if node.get("type") == "TABLE_FUNCTION":
+            function = node.get("function")
+            name = function.get("function_name") if isinstance(function, dict) else None
+            if str(name).lower() not in READ_TABLE_FUNCTIONS:
+                raise StoreError(
+                    "STORE_STATEMENT_INVALID",
+                    "A read may use only the table functions range, generate_series and unnest.",
+                    {"function": str(name)},
+                )
+    return tree
+
+
+_PARSER = threading.local()
+
+
+def _parser() -> duckdb.DuckDBPyConnection:
+    """This thread's in-memory DuckDB connection for parsing only: no lake, no extension, no
+    file access."""
+    found: duckdb.DuckDBPyConnection | None = getattr(_PARSER, "connection", None)
+    if found is None:
+        found = duckdb.connect(config={"enable_external_access": False})
+        found.execute("SET autoload_known_extensions = false")
+        _PARSER.connection = found
+    return found
+
+
+def _commit(cursor: duckdb.DuckDBPyConnection) -> None:
+    """Commit the write transaction (a function of its own, so tests can stand in a slow one)."""
+    cursor.commit()
+
+
+def _bounded[T](cursor: duckdb.DuckDBPyConnection, deadline: float, work: Callable[[], T]) -> T:
+    """`work`, a few queries on `cursor`, interrupted at `deadline` (`STORE_TIMEOUT`)."""
+    guard = Guard(cursor, deadline)
+    try:
+        if guard.reason is not None:
+            raise guard.error()
+        return work()
+    except duckdb.Error as error:
+        raise guard.error(error) from error
+    finally:
+        guard.stop()
 
 
 def _snapshot_of(row: Sequence[object]) -> Snapshot:
@@ -2201,8 +2288,11 @@ class Transaction:
         table_functions: frozenset[str],
         timeout_ms: Callable[[int | None], int],
         inexact: frozenset[Inexact] = frozenset(),
+        deadline: float = math.inf,
     ) -> None:
         self._cursor = cursor
+        # The transaction's own limit: no statement of it runs past it (#160).
+        self._deadline = deadline
         self._table_functions = table_functions
         self._inexact = inexact
         self._timeout_ms = timeout_ms
@@ -2218,6 +2308,29 @@ class Transaction:
         if error.code in {"STORE_TIMEOUT", "STORE_CANCELLED"} and self.interrupted is None:
             self.interrupted = error
         return error
+
+    def _statement_deadline(self, timeout_ms: int | None) -> float:
+        """A statement's deadline: its own limit, capped by the transaction's (#160)."""
+        return min(time.monotonic() + self._timeout_ms(timeout_ms) / 1000, self._deadline)
+
+    def bounded[T](self, work: Callable[[], T]) -> T:
+        """`work`, the store's own queries on this transaction's cursor, under the transaction's
+        limit and its cancel, like a statement (#160)."""
+        guard = Guard(self._cursor, self._deadline)
+        with self._lock:
+            if self.cancelled:
+                guard.stop()
+                raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
+            self._guard = guard
+        try:
+            if guard.reason is not None:
+                raise guard.error()
+            return work()
+        except duckdb.Error as error:
+            raise self._interrupted(guard.error(error)) from error
+        finally:
+            guard.stop()
+            self._guard = None
 
     def cancel(self) -> None:
         """Cancel from any thread: a running statement is interrupted, and the block rolls back."""
@@ -2241,7 +2354,7 @@ class Transaction:
                 {"statement": statement.type.name},
             )
         parameters = _bound(statement, request.parameters)
-        deadline = time.monotonic() + self._timeout_ms(request.timeout_ms) / 1000
+        deadline = self._statement_deadline(request.timeout_ms)
         guard = Guard(self._cursor, deadline)
         with self._lock:
             if self.cancelled:
@@ -2285,7 +2398,7 @@ class Transaction:
                 {"statement": statement.type.name},
             )
         parameters = _bound(statement, request.parameters)
-        deadline = time.monotonic() + self._timeout_ms(request.timeout_ms) / 1000
+        deadline = self._statement_deadline(request.timeout_ms)
         guard = Guard(self._cursor, deadline)
         # Checked and published together, so a cancel either sees this guard or is seen here.
         with self._lock:
@@ -2368,7 +2481,7 @@ class Transaction:
         selected = ", ".join(
             f"CAST({_identifier(name)} AS {kind}) AS {_identifier(name)}" for name, kind in columns
         )
-        deadline = time.monotonic() + self._timeout_ms(timeout_ms) / 1000
+        deadline = self._statement_deadline(timeout_ms)
         guard = Guard(self._cursor, deadline)
         guard.on_fire = on_interrupt
         with self._lock:
