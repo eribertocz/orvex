@@ -1,6 +1,6 @@
 # 0027 — Two data routes: managed DuckLake and Direct Query
 
-**Status:** Accepted (2026-10-28). Direct Query on ClickHouse and on a remote DuckDB through Quack is accepted as direction only, for after v1.0.0 (§10).
+**Status:** Accepted (2026-10-28); superseded in part by [ADR-0028](0028-clickhouse-by-direct-query-only.md) (ClickHouse: Direct Query only, in v1.0.0; extraction retired). Direct Query on a remote DuckDB through Quack is accepted as direction only, for after v1.0.0 (§10).
 
 This record changes earlier ADRs as follows:
 - **ADR-0005** is amended in part: the catalog listed for each runtime mode becomes that mode's default, and the other locations of §2 can be chosen. Opt-in, so local mode still needs no external service by default.

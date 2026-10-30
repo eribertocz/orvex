@@ -84,12 +84,13 @@
 | P1-14 | Manual filter with `$since`, watermark from loaded rows, `lookback`, full-refresh values per type | transform |
 | P1-15 | Model tests and write–audit–publish inside one DuckLake transaction | transform |
 | P1-16 | Reconciliation against sources (`RECONCILIATION_FAILED`) | transform |
-| P1-17 | ClickHouse extraction models: `clickhouse-connect`, ClickHouse SQL validated with `EXPLAIN SYNTAX`, server-side `{since:…}`, Arrow streaming, exact type mapping | transform |
+| P1-17 | ClickHouse extraction models: `clickhouse-connect`, ClickHouse SQL validated with `EXPLAIN SYNTAX`, server-side `{since:…}`, Arrow streaming, exact type mapping *(retired by ADR-0028, see P1-23)* | transform |
 | P1-18 | OpenLineage events (start, complete, fail; datasets; column lineage where derivable) | transform |
 | P1-19 | Scheduler: freshness-driven planning (minimum 5 minutes, `FRESHNESS_TOO_SHORT`), `full_refresh` cron with time zone, no overlapping runs, retries with backoff | transform |
 | P1-20 | Snapshot retention (from `project.yaml`) and compaction as maintenance runs | store |
 | P1-21 | Scheduler fit to run unattended (clean stop on SIGTERM, heartbeat shown by `orvex runs`, one scheduler per project); load-performance baseline on the `large` reference dataset (decision #33) on the reference machine; end-to-end test of 5-minute incremental loads from PostgreSQL (decision #133) | server |
 | P1-22 | Lake location in `project.yaml` (ADR-0027 §2): catalog (DuckDB file or SQLite on a local disk, or PostgreSQL local, networked or cloud with TLS `verify-full`; object storage over HTTPS only) and data files (project folder, local path, network file system, object storage), optional data-file encryption (mode fixed at creation, deletion vectors off), credentials by `${env:NAME}` as temporary DuckDB secrets; every supported combination tested, invalid ones rejected | store, server |
+| P1-23 | Retire the ClickHouse extraction models (ADR-0028, decision #222): remove the ClickHouse source, `{since:…}` binding and their validation from `transform`, their text from `contracts/model-config/v1` and `transformation.md` §3.5 | transform |
 
 **Exit criteria:** every strategy and every error code introduced in this phase tested; write–audit–publish proven with failing tests; incremental loads from PostgreSQL every 5 minutes on synthetic data without duplicates or gaps; valid lineage events; Owner demo.
 
@@ -132,6 +133,7 @@
 | P2-28 | Property-based tests for binder, correctness engine and planner | semantic |
 | P2-29 | Direct Query foundation (ADR-0027): engine per dataset, `CROSS_ENGINE_QUERY`, receipts naming every snapshot read, policy values from the managed lake bound as parameters with exact `NULL` semantics and a cap (`POLICY_NOT_SUPPORTED_ON_ENGINE`) | semantic, store |
 | P2-30 | Direct Query on an existing DuckLake: PostgreSQL or SQLite catalog attached `READ_ONLY` in a DuckDB instance of its own with a file sandbox, its data location separate from every lake and file source of any project in the instance (checked both ways), its SQLite catalog file a regular file outside them, its PostgreSQL catalog role dedicated and unable to read outside its schema, tables only, catalog version checked (`ENGINE_VERSION_UNTESTED`), served at its latest verified snapshot (evidence verified on each new snapshot); corpus green on it (development only until P3-13) | store, semantic |
+| P2-31 | Direct Query on ClickHouse (ADR-0028): dialect adapter (plan → ClickHouse SQL with bound parameters, no transpilation), read-only connection with server-side limits verified at connection, exact types, `EXPLAIN ESTIMATE` costs, row policies run in ClickHouse with values from the managed lake as parameters, receipts with the read instant, evidence verified on the connection's schedule; corpus green with results identical to the reference (security suite at P3-13) | semantic, store |
 
 **Exit criteria:** corpus **21/21** (including CASE-008, which SEF does not execute) on the managed lake and on every enabled Direct Query engine; every error code introduced in this phase tested; receipts on every result; evidence verification proven by tests that corrupt data; performance baseline recorded; Owner demo.
 
@@ -332,5 +334,6 @@
 | Item | Module | Decision |
 |---|---|---|
 | Direct Query on a remote DuckDB through Quack: server-side read-only access and limits, verified HTTPS, version check; corpus and security suite green | store | ADR-0027 §10 (#107) |
-| Direct Query on ClickHouse: ClickHouse dialect adapter (plan → ClickHouse SQL with bound parameters), execution with server-side limits, exact types, `EXPLAIN ESTIMATE`; corpus and security suite green with results identical to the reference | semantic, store | ADR-0027 §10 |
+| MySQL / MariaDB as a raw source, through DuckDB's `mysql_scanner`, read-only | transform | Decision #226 |
+| Spatial data as a first-class capability: DuckDB's `spatial` (GeoParquet, GeoJSON, Shapefile, GeoPackage), geometry types in the semantic model, map visuals; researched against the leaders and designed in its own ADR first | transform, semantic, web | Decision #226 |
 | Python models, ML predictions and Python visuals | transform, semantic, web | ADR-0023 |

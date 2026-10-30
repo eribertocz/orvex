@@ -1,6 +1,6 @@
 # 0006 — DuckDB as the only analytical engine; DuckLake as the warehouse
 
-**Status:** Accepted (2026-10-26); superseded in part by [ADR-0027](0027-two-data-routes.md) (Quack; the catalog per mode becomes a default); "only analytical engine" to be superseded when ClickHouse Direct Query is built, after v1.0.0
+**Status:** Accepted (2026-10-26); superseded in part by [ADR-0027](0027-two-data-routes.md) (Quack; the catalog per mode becomes a default); "only analytical engine" superseded by [ADR-0028](0028-clickhouse-by-direct-query-only.md) (ClickHouse queried in place in v1.0.0)
 
 ## Context
 DuckDB 2.0 LTS is fast, embeddable and standard-SQL friendly. A single DuckDB file allows only one read-write process. DuckLake adds ACID transactions with one snapshot per commit, time travel, and supports a PostgreSQL catalog for multi-user concurrent access. Quack (DuckDB's remote protocol) became a stable extension in DuckDB 2.0 while its documentation states it is still being refined toward full production readiness.
