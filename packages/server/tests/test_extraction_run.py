@@ -23,6 +23,7 @@ import pytest
 from clickhouse_connect.driver.client import Client
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
+from orvex.transform import clickhouse
 
 from tests.support.services import required_in_ci
 
@@ -1018,3 +1019,125 @@ def test_a_deeply_nested_extraction_model_is_refused(
         return
     assert code == 1, out
     assert "too deeply nested to check" in out
+
+
+# Three readings around the end of daylight saving time in New York (2024-11-03): 01:30 EDT,
+# then 01:10 and 01:40 EST, when the hour 01:00-02:00 repeats (#189).
+def dst_events(declared: str) -> str:
+    """An append model over three readings around the end of daylight saving time in New York
+    (2024-11-03): 01:30 EDT, then 01:10 and 01:40 EST, when the hour 01:00-02:00 repeats (#189).
+    The time column has the precision of `declared` (seconds, or milliseconds)."""
+    convert = "toDateTime({}, 'UTC')" if declared == "DateTime" else "toDateTime64({}, 3, 'UTC')"
+    times = ", ".join(
+        convert.format(f"'2024-11-03 {clock}'") for clock in ("05:30:00", "06:10:00", "06:40:00")
+    )
+    return (
+        f"SELECT n AS id, t FROM (SELECT number + 1 AS n, [{times}][number + 1] AS t "
+        f"FROM numbers(3)) WHERE t > {{since:{declared}}}"
+    )
+
+
+@pytest.mark.parametrize("declared", ["DateTime64(3, 'America/New_York')", "DateTime"])
+def test_an_append_since_in_a_zone_whose_clock_goes_back_is_refused(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    declared: str,
+) -> None:
+    # #189: ClickHouse reads a repeated local time as its earlier instant, so up to an hour of
+    # rows would be inserted twice. With no zone declared, the server's zone is used: here it
+    # is made New York's.
+    if declared == "DateTime":
+        monkeypatch.setattr(
+            clickhouse.Source, "server_zone", property(lambda self: "America/New_York")
+        )
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": dst_events(declared),
+            "models/raw/ch_events.yaml": APPEND_SIDECAR,
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "America/New_York" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+
+
+@pytest.mark.parametrize("declared", ["DateTime64(3, 'UTC')", "DateTime64(3, 'America/La_Paz')"])
+def test_an_append_since_in_a_fixed_zone_reads_each_row_once_across_dst(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    declared: str,
+) -> None:
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": dst_events(declared),
+            "models/raw/ch_events.yaml": APPEND_SIDECAR,
+        },
+    )
+    ids = "SELECT id FROM lake.raw.ch_events ORDER BY id"
+    for _ in range(2):
+        code, out = run(capsys, folder)
+        assert code == 0, out
+    assert lake_value(folder, ids) == [(1,), (2,), (3,)]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT o.id AS id, greatest(o.t, d.t) AS t FROM (SELECT number + 1 AS id, "
+        "toDateTime64('2024-01-01 00:00:00', 3, 'UTC') + number AS t FROM numbers(3)) AS o "
+        "LEFT JOIN (SELECT number + 1 AS id, toDateTime64('2024-01-02 00:00:00', 3, 'UTC') AS t "
+        "FROM numbers(1)) AS d ON o.id = d.id WHERE t > {since:DateTime64(3, 'UTC')}",
+        "SELECT id, t FROM (SELECT o.id AS id, o.t AS t FROM (SELECT number + 1 AS id, "
+        "toDateTime64('2024-01-01 00:00:00', 3, 'UTC') + number AS t FROM numbers(3)) AS o "
+        "INNER JOIN (SELECT number + 1 AS id FROM numbers(3)) AS d ON o.id = d.id) "
+        "WHERE t > {since:DateTime64(3, 'UTC')}",
+    ],
+    ids=["greatest-over-left-join", "inner-join"],
+)
+def test_an_append_extraction_model_that_joins_is_refused(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str], sql: str
+) -> None:
+    # #189: EXPLAIN AST does not show a join's kind; every join is refused for append.
+    folder = project(
+        tmp_path,
+        source,
+        {"models/raw/ch_events.sql": sql, "models/raw/ch_events.yaml": APPEND_SIDECAR},
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "cannot join" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+
+
+def test_a_merge_extraction_model_may_join_and_use_any_zone(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #189: the rules are for append only; merge replaces a row read again.
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "SELECT o.id AS id, o.t AS t FROM (SELECT number + 1 AS id, "
+                "toDateTime64('2024-11-03 05:30:00', 3, 'UTC') + number AS t FROM numbers(3)) "
+                "AS o INNER JOIN (SELECT number + 1 AS id FROM numbers(3)) AS d "
+                "ON o.id = d.id WHERE t > {since:DateTime64(3, 'America/New_York')}"
+            ),
+            "models/raw/ch_events.yaml": (
+                "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
+                "incremental:\n  strategy: merge\n  unique_key: [id]\n  time_column: t\n"
+                "  filter: manual\n"
+            ),
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 0, out
+    assert lake_value(folder, "SELECT count(*) FROM lake.raw.ch_events") == [(3,)]

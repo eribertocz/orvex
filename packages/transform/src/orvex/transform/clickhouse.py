@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import functools
 import io
 import os
 import re
@@ -1749,6 +1750,20 @@ def describe_model(
         )
         if checked and tree_depth(marked) > MAX_DEPTH:
             return _too_deep(model)
+        if append and since is not None:
+            zoned = since_zone_problem(model, since, source.server_zone)
+            if zoned is not None:
+                return zoned
+            if _refused(lambda: joins(marked)):
+                return problem(
+                    "INVALID_MODEL_SQL",
+                    f"{model.name}: an append model cannot join in ClickHouse SQL: a join can "
+                    "give a row another time when other rows arrive, and the row would be "
+                    "inserted twice. Use strategy merge, or load each table with its own model "
+                    "and join them in a DuckDB SQL model.",
+                    file,
+                    model=model.name,
+                )
         if (
             checked
             and incremental is not None
@@ -1796,6 +1811,66 @@ def describe_model(
         return _too_deep(model)  # nested below ClickHouse's own limit, beyond Python's (#183)
     finally:
         source.close()
+
+
+def joins(tree: str) -> bool:
+    """Whether an `EXPLAIN AST` has a join (`TableJoin`) anywhere; a tree that cannot be read
+    counts as yes. `EXPLAIN AST` does not show a join's kind, so an `append` model refuses them
+    all (#189)."""
+    root = _ast(tree)
+    return root is None or any(node.kind == "TableJoin" for node in _nodes(root))
+
+
+# The years in which a `{since:…}` zone must keep one offset (#189).
+_FIXED_FROM, _FIXED_TO = 1970, 2100
+
+
+@functools.cache
+def fixed_offset(zone: str) -> bool:
+    """Whether `zone` has one UTC offset from 1970 to 2100 (tz database, read with `zoneinfo`,
+    sampled every day): no daylight-saving or other clock change, so no local time repeats. An
+    unknown zone counts as no."""
+    try:
+        found = ZoneInfo(zone)
+    except KeyError, ValueError, OSError:  # ZoneInfoNotFoundError is a KeyError
+        return False
+    moment = dt.datetime(_FIXED_FROM, 1, 1, tzinfo=dt.UTC)
+    end = dt.datetime(_FIXED_TO + 1, 1, 1, tzinfo=dt.UTC)
+    first = moment.astimezone(found).utcoffset()
+    while moment < end:
+        if moment.astimezone(found).utcoffset() != first:
+            return False
+        moment += dt.timedelta(hours=12)
+    return True
+
+
+def since_zone_problem(model: Model, since: SinceType, server_zone: str) -> ModelError | None:
+    """`INVALID_MODEL_SQL` when an `append` model's `{since:DateTime…}` is read in a zone whose
+    clock goes back (#189): `since_value` writes the watermark as local time, and ClickHouse reads
+    a repeated local time as its earlier instant, so up to an hour of rows would be read, and
+    inserted, again. The zone is the one the type declares, else the server's. A date type is
+    taken in a fixed zone already."""
+    if since.family not in {"DateTime", "DateTime64"}:
+        return None
+    zone = since.zone or server_zone
+    if fixed_offset(zone):
+        return None
+    where = "declared" if since.zone else "the server's, as the type declares none"
+    return problem(
+        "INVALID_MODEL_SQL",
+        f"{model.name}: {{since:{since.text}}} is read in the zone {zone} ({where}), whose "
+        "clock changes (daylight saving time): when an hour repeats, an append model would read "
+        "and insert its rows twice. Declare a fixed zone, for example "
+        f"{{since:{_with_utc(since)}}}.",
+        model.sql_file,
+        model=model.name,
+    )
+
+
+def _with_utc(since: SinceType) -> str:
+    if since.family == "DateTime":
+        return "DateTime('UTC')"
+    return f"DateTime64({since.precision}, 'UTC')"
 
 
 def _too_deep(model: Model) -> ModelError:

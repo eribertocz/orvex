@@ -1511,3 +1511,63 @@ def test_a_select_list_subquery_in_the_filtering_query_is_refused(tmp_path: Path
     )
     found = config_problems(sql_model(tmp_path, MANUAL_APPEND, sql))
     assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+
+
+MANUAL_MERGE = (
+    "version: 1\nmaterialized: incremental\n"
+    "incremental: {strategy: merge, unique_key: [id], time_column: read_at, filter: manual}\n"
+)
+
+
+@pytest.mark.parametrize(
+    "inner",
+    [
+        "SELECT o.id, coalesce(o.read_at, d.read_at) AS read_at FROM o LEFT JOIN d USING (id)",
+        "SELECT o.id, greatest(o.read_at, d.read_at) AS read_at FROM o LEFT JOIN d USING (id)",
+        "SELECT o.id, CASE WHEN d.read_at IS NULL THEN o.read_at ELSE d.read_at END AS read_at "
+        "FROM o LEFT JOIN d USING (id)",
+        "SELECT o.id, o.read_at FROM o RIGHT JOIN d USING (id)",
+        "SELECT o.id, o.read_at FROM o FULL JOIN d USING (id)",
+        "SELECT o.id, o.read_at FROM o SEMI JOIN d USING (id)",
+        "SELECT o.id, o.read_at FROM o ANTI JOIN d USING (id)",
+        "SELECT o.id, d.read_at FROM o ASOF JOIN d ON o.id = d.id AND o.at >= d.at",
+        "SELECT o.id, d.read_at FROM o POSITIONAL JOIN d",
+    ],
+    ids=[
+        "coalesce-left",
+        "greatest-left",
+        "case-left",
+        "right",
+        "full",
+        "semi",
+        "anti",
+        "asof",
+        "positional",
+    ],
+)
+def test_an_append_time_column_traced_through_a_join_that_can_change_it_is_refused(
+    tmp_path: Path, inner: str
+) -> None:
+    # #189: a row's time can move above the watermark when a matching row arrives later.
+    sql = f"SELECT * FROM ({inner}) WHERE read_at > $since"
+    found = config_problems(sql_model(tmp_path / "append", MANUAL_APPEND, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+    # Out of the rule: merge replaces a row read again.
+    assert config_problems(sql_model(tmp_path / "merge", MANUAL_MERGE, sql)) == []
+
+
+@pytest.mark.parametrize(
+    "inner",
+    [
+        "SELECT o.id, o.read_at FROM o JOIN d USING (id)",
+        "SELECT o.id, o.read_at FROM o INNER JOIN d ON o.id = d.id",
+        "SELECT o.id, o.read_at FROM o CROSS JOIN d",
+        "SELECT o.id, o.read_at FROM o NATURAL JOIN d",
+    ],
+    ids=["join", "inner", "cross", "natural"],
+)
+def test_an_append_time_column_traced_through_an_inner_join_is_accepted(
+    tmp_path: Path, inner: str
+) -> None:
+    sql = f"SELECT * FROM ({inner}) WHERE read_at > $since"
+    assert config_problems(sql_model(tmp_path, MANUAL_APPEND, sql)) == []
