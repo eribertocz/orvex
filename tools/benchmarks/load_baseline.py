@@ -31,7 +31,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import duckdb
-import orvex.server.cli as cli
 from orvex.server.identity import load_identity
 
 # The source tables the project reads, and the column each incremental model is cut on.
@@ -94,13 +93,23 @@ class Step:
 
 
 SAMPLE_SECONDS = 0.25
-# Runs the real command with the lake's memory limit set for this process only: a seam of the
-# benchmark (#168), not reachable from the command line, the API or the project files.
-LIMITED = (
+# Runs the real command, printing a line as each run step starts so a memory peak can be placed
+# (#168), and with the lake's memory limit set for this process only when an experiment asks
+# (an empty limit leaves it as is). A seam of the benchmark: not reachable from the command
+# line, the API or the project files.
+TRACED = (
     "import sys\n"
     "import orvex.server.commands as commands\n"
     "limit = sys.argv[1]\n"
-    "commands._memory_limit = lambda: limit\n"
+    "if limit:\n"
+    "    commands._memory_limit = lambda: limit\n"
+    "step_of = commands._run_step\n"
+    "def traced(transaction, step, item, connections):\n"
+    "    text = str(getattr(getattr(step, 'request', step), 'sql', ''))[:60]\n"
+    "    kind = type(step).__name__\n"
+    "    print(f'step {item.model.name} {kind} {text}'.replace(chr(10), ' '), flush=True)\n"
+    "    return step_of(transaction, step, item, connections)\n"
+    "commands._run_step = traced\n"
     "from orvex.server.cli import main\n"
     "sys.exit(main(sys.argv[2:]))\n"
 )
@@ -232,10 +241,9 @@ def size(folder: Path) -> int:
 
 
 def command_for(arguments: list[str], memory_limit: str = "") -> list[str]:
-    """The real command, in its own process; with the experiment's memory limit when set."""
-    if memory_limit:
-        return [sys.executable, "-c", LIMITED, memory_limit, *arguments]
-    return [sys.executable, "-m", cli.__name__.rpartition(".")[0], *arguments]
+    """The real command, in its own process, traced; with the experiment's memory limit when
+    one is set."""
+    return [sys.executable, "-c", TRACED, memory_limit, *arguments]
 
 
 def measure(name: str, arguments: list[str], lake: Path, memory_limit: str = "") -> Step:
@@ -298,6 +306,16 @@ def catalog_files(lake: Path) -> dict[str, int] | None:
         "snapshots": int(row[5]),
         "on_disk_bytes": size(data) if data.exists() else 0,
     }
+
+
+def notice(step: Step) -> None:
+    """The step as a GitHub annotation of its own, when run in GitHub Actions: each stays under
+    the annotation's size limit, which the whole results file may not (#168)."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    compact = {key: value for key, value in asdict(step).items() if key != "output_tail"}
+    text = json.dumps(compact, separators=(",", ":"))
+    print(f"::notice title=load-baseline step::{text}", flush=True)
 
 
 def versions() -> dict[str, str]:
@@ -416,6 +434,7 @@ def main() -> int:
         first = measure("full first load", ["run", str(folder)], lake, limits.get("full", ""))
         steps.append(first)
         print(json.dumps(asdict(first)), flush=True)
+        notice(first)
         if first.exit_code != 0:
             continue  # nothing to add to or maintain: recorded as failed
         appended = append_day(data)
@@ -426,6 +445,7 @@ def main() -> int:
             step = measure(name, [command, str(folder)], lake, limits.get(key, ""))
             steps.append(step)
             print(json.dumps(asdict(step)), flush=True)
+            notice(step)
     (data / APPENDED).unlink(missing_ok=True)
     result: dict[str, object] = {
         "commit": os.environ.get("GITHUB_SHA", ""),

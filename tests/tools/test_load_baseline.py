@@ -174,26 +174,29 @@ def test_the_peak_is_attributed_to_the_line_printed_before_it() -> None:
 
 
 def test_the_memory_limit_is_set_only_by_the_experiment() -> None:
-    # #168: no seam set, the command is the plain one and the lake's limit is unchanged.
+    # #168: no seam set, the lake's limit is unchanged; the experiment's limit reaches only the
+    # traced process.
     from orvex.server import commands
 
-    assert command_for(["run", "x"])[1:] == ["-m", "orvex.server", "run", "x"]
     assert commands._limits().memory_limit == commands._memory_limit()
+    plain = command_for(["run", "x"])
+    assert plain[1] == "-c"
+    assert plain[3:] == ["", "run", "x"]
     limited = command_for(["run", "x"], "4GB")
-    assert limited[1] == "-c"
     assert limited[3:] == ["4GB", "run", "x"]
-    probe = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            limited[2].replace(
-                "from orvex.server.cli import main\nsys.exit(main(sys.argv[2:]))\n",
-                "print(commands._limits().memory_limit)\n",
-            ),
-            "4GB",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert probe.stdout.strip() == "4GB"
+    for command, expected in ((plain, commands._memory_limit()), (limited, "4GB")):
+        probe = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                command[2].replace(
+                    "from orvex.server.cli import main\nsys.exit(main(sys.argv[2:]))\n",
+                    "print(commands._limits().memory_limit)\n",
+                ),
+                command[3],
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert probe.stdout.strip() == expected
