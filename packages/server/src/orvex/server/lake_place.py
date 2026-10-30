@@ -13,6 +13,7 @@ of their own, or object storage (S3-compatible, Google Cloud Storage #127, Azure
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -686,15 +687,53 @@ def _default_identity(home: Path) -> dict[str, str | int]:
 
 
 def _write(home: Path, content: dict[str, str | int]) -> None:
-    """Write the record atomically: a reader sees the old file or the new one, never part."""
-    home.mkdir(parents=True, exist_ok=True)
+    """Write the record atomically: a reader sees the old file or the new one, never part. A
+    write that fails (a full disk, a read-only folder) is `LAKE_LOCATION_CHANGED` (#192)."""
     target = home / RECORD_FILE
     partial = target.with_name(f".{RECORD_FILE}.{os.getpid()}")
-    with partial.open("w", encoding="utf-8") as handle:
-        handle.write(json.dumps(content, sort_keys=True) + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())  # on disk before it replaces the record
-    os.replace(partial, target)
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+        with partial.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(content, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())  # on disk before it replaces the record
+        os.replace(partial, target)
+    except OSError as error:
+        with contextlib.suppress(OSError):
+            partial.unlink(missing_ok=True)  # no half-written file left behind
+        raise _unwritable(home, error) from None
+
+
+def _remove(home: Path) -> None:
+    """Remove the record; a removal that fails is `LAKE_LOCATION_CHANGED` (#192)."""
+    try:
+        (home / RECORD_FILE).unlink(missing_ok=True)
+    except OSError as error:
+        raise _unwritable(home, error) from None
+
+
+def _unwritable(home: Path, error: OSError) -> ProjectLoadError:
+    return ProjectLoadError(
+        "LAKE_LOCATION_CHANGED",
+        f"{RECORD_FILE} cannot be written ({type(error).__name__}); it records where this "
+        "project's lake is, so the lake was not opened.",
+        file=f"{home.name}/{RECORD_FILE}",
+    )
+
+
+def missing_catalog(home: Path) -> str | None:
+    """The catalog file of the project's confirmed lake when it is missing (#192): a DuckDB or
+    SQLite catalog holds the lake's history, and opening its place again would create a new,
+    empty one. None when the lake has no confirmed record, its catalog is PostgreSQL, or its file
+    is there. A `creating` record is not a lake yet (#146)."""
+    read = _read_record(home)
+    if read is None or read[1]:
+        return None
+    identity = read[0]
+    if identity.get("catalog") not in {"duckdb", "sqlite"}:
+        return None
+    path = Path(str(identity.get("path", "")))
+    return None if path.exists() else path.as_posix()
 
 
 def begin(home: Path, chosen: Place) -> None:
@@ -709,7 +748,7 @@ def begin(home: Path, chosen: Place) -> None:
         if stale:
             # An unfinished first open elsewhere that created nothing: the default lake needs
             # no record, and that one must not bind it later (#181, Reviewer pass 1).
-            (home / RECORD_FILE).unlink(missing_ok=True)
+            _remove(home)
         return
     if read is not None and not (stale and not _same(read[0], chosen.identity)):
         return
@@ -733,4 +772,4 @@ def abandon(home: Path, chosen: Place) -> None:
         and _same(read[0], chosen.identity)
         and _nothing_created(read[0])
     ):
-        (home / RECORD_FILE).unlink(missing_ok=True)
+        _remove(home)

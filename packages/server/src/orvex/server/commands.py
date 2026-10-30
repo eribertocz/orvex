@@ -758,12 +758,16 @@ def _open_recorded(home: Path, place: Place, attachments: Sequence[Attachment] =
     """Open the project's lake for a run, its record written first (`creating`) and confirmed
     once it opened, so no lake is ever left without a record (#146). A failed first open drops
     its record when nothing was created."""
+    _refuse_missing_catalog(home)
     lake_place.begin(home, place)
     try:
         lake = open_lake(place.location, _limits(), attachments)
     except BaseException:
-        # Ctrl-C or any error: the record goes only when nothing was created (#181).
-        lake_place.abandon(home, place)
+        # Ctrl-C or any error: the record goes only when nothing was created (#181). A record
+        # that cannot be removed stays `creating`, which binds nothing that was not created; the
+        # open's own error is the one reported (#192).
+        with contextlib.suppress(ProjectLoadError):
+            lake_place.abandon(home, place)
         raise
     try:
         lake_place.confirm(home, place)
@@ -778,7 +782,24 @@ def open_existing(home: Path, place: Place) -> Lake:
     checking again that its settings are the lake's own: another process may have created the
     lake since the project was checked (#181, Reviewer pass 2). `ProjectLoadError` otherwise."""
     lake_place.check_unchanged(home, place)
+    _refuse_missing_catalog(home)
     return open_lake(place.location, _limits())
+
+
+def _refuse_missing_catalog(home: Path) -> None:
+    """`STORE_CATALOG_UNAVAILABLE` when the project's confirmed lake has lost its DuckDB or
+    SQLite catalog file: opening the place again would create a new, empty lake there and hide
+    its history (#192). Nothing is opened or created."""
+    missing = lake_place.missing_catalog(home)
+    if missing is not None:
+        raise StoreError(
+            "STORE_CATALOG_UNAVAILABLE",
+            f"The lake's catalog file {missing} is missing. It holds the lake's history (runs, "
+            "watermarks, snapshots), so a new one is never created in its place: restore the "
+            f"file (or connect the disk it is on), or remove {home.name}/{lake_place.RECORD_FILE} "
+            "to start a new, empty lake.",
+            {"path": missing},
+        )
 
 
 def _limits() -> Limits:
@@ -890,6 +911,9 @@ def _run_locked(
         lake = _open_recorded(home, place, source_attachments(project.connections))
     except StoreError as error:
         open_error = error
+    except ProjectLoadError as error:  # the lake record cannot be written (#192)
+        print(_load_problem(error), file=out)
+        return 1
     existing: dict[str, Columns | None] = {}
     previous: dict[str, str | None] = {}
     since: dict[str, str] = {}
@@ -945,6 +969,9 @@ def _run_locked(
         except StoreError as error:
             for problem in failures or [_store_problem(error, ".", "")]:
                 print(problem, file=out)
+            return 1
+        except ProjectLoadError as error:  # the lake record cannot be written (#192)
+            print(_load_problem(error), file=out)
             return 1
     interrupted = False
     try:
