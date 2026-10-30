@@ -827,15 +827,50 @@ def time_column_functions(tree: str, time_column: str) -> frozenset[str] | None:
     if root is None:
         return None
     definitions: dict[str, list[_Node]] = {}
+    # The names a column may be qualified by: each table's name (whole and last part), each
+    # table's and subquery's alias. A dotted name with another prefix is a tuple's field.
+    relations: set[str] = set()
+    untraced = False
 
-    def collect(node: _Node) -> None:
+    def tables(node: _Node) -> None:
         alias = _aliased(node)
-        if alias and not (node.kind == "Identifier" and _identifier(node) == alias):
+        if node.kind == "TableIdentifier":
+            name = re.sub(r" \(alias [^)]+\)$", "", node.detail)
+            relations.update({name, name.rsplit(".", 1)[-1]})
+        if node.kind in {"TableIdentifier", "Subquery"} and alias:
+            relations.add(alias)
+        for child in node.children:
+            tables(child)
+
+    def field(node: _Node) -> bool:
+        """A dotted name whose prefix names no table or subquery: a tuple's field."""
+        if node.kind != "Identifier":
+            return False
+        text = re.sub(r" \(alias [^)]+\)$", "", node.detail)
+        return "." in text and text.rsplit(".", 1)[0] not in relations
+
+    def collect(node: _Node, in_table: bool = False) -> None:
+        nonlocal untraced
+        alias = _aliased(node)
+        if (
+            any(mark in node.kind for mark in ("Transformer", "Matcher", "ArrayJoin"))
+            or (in_table and node.kind == "Function" and _function_name(node) not in _GENERATORS)
+            or (node.kind == "Function" and _function_name(node).lower() == "untuple")
+        ):
+            # `* REPLACE (…)`, `COLUMNS(…)`, `ARRAY JOIN`, a table function, `untuple`: they can
+            # make a column the names below do not show (#135, Reviewer pass 2).
+            untraced = True
+        if alias and (
+            field(node) or not (node.kind == "Identifier" and _identifier(node) == alias)
+        ):
             definitions.setdefault(alias, []).append(node)
         for child in node.children:
-            collect(child)
+            collect(child, node.kind == "TableExpression")
 
+    tables(root)
     collect(root)
+    if untraced:
+        return None
     functions: set[str] = set()
     pending, seen = [time_column], {time_column}
     while pending:
@@ -853,12 +888,18 @@ def time_column_functions(tree: str, time_column: str) -> frozenset[str] | None:
                 if node.kind == "Function":
                     functions.add(_function_name(node))
                 if node.kind == "Identifier":
+                    if field(node):
+                        return None  # a tuple's field: the tuple is not followed by name
                     name = _identifier(node)
                     if name not in seen:
                         seen.add(name)
                         pending.append(name)
                 stack.extend(node.children)
     return frozenset(functions)
+
+
+# Table functions that generate rows from constants: they read nothing that changes.
+_GENERATORS = frozenset({"numbers", "numbers_mt", "zeros", "zeros_mt", "generate_series"})
 
 
 def _identifier(node: _Node) -> str:

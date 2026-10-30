@@ -1005,8 +1005,42 @@ def test_an_append_filter_that_reads_each_row_once_is_accepted(tmp_path: Path, s
         "WHERE read_at > $since",
         "SELECT * REPLACE (now() AS read_at) FROM (SELECT * FROM src) WHERE read_at > $since",
         "SELECT * FROM (SELECT id, max(t) OVER () AS read_at FROM src) WHERE read_at > $since",
+        # Reviewer pass 2: every way of naming the column, traced or refused.
+        "WITH c(id, read_at) AS (SELECT id, now() FROM src) SELECT * FROM c WHERE read_at > $since",
+        "SELECT * FROM (SELECT id, now() FROM src) AS q(id, read_at) WHERE read_at > $since",
+        "SELECT * FROM (SELECT * RENAME (x AS read_at) FROM (SELECT id, now() AS x FROM src)) "
+        "WHERE read_at > $since",
+        "SELECT * FROM (SELECT s.x AS read_at FROM (SELECT {'x': now()} AS s FROM src)) "
+        "WHERE read_at > $since",
+        "SELECT * FROM (SELECT s.* FROM (SELECT {'read_at': now()} AS s FROM src)) "
+        "WHERE read_at > $since",
+        "SELECT * FROM (SELECT unnest({'read_at': now()}) FROM src) WHERE read_at > $since",
+        "SELECT * FROM (SELECT COLUMNS('x') AS read_at FROM (SELECT now() AS x FROM src)) "
+        "WHERE read_at > $since",
+        "SELECT * FROM (SELECT id, current_localtimestamp() AS read_at FROM src) "
+        "WHERE read_at > $since",
+        "SELECT * FROM (VALUES (1, now())) v(id, read_at) WHERE read_at > $since",
+        "SELECT * FROM (SELECT id, read_at FROM src UNION ALL SELECT id, read_at FROM other) "
+        "WHERE read_at > $since",
     ],
-    ids=["computed-here", "computed-below", "current-timestamp", "renamed", "replace", "window"],
+    ids=[
+        "computed-here",
+        "computed-below",
+        "current-timestamp",
+        "renamed",
+        "replace",
+        "window",
+        "cte-column-list",
+        "subquery-column-list",
+        "star-rename",
+        "struct-field",
+        "struct-star",
+        "unnest",
+        "columns",
+        "current-localtimestamp",
+        "values",
+        "union-below",
+    ],
 )
 def test_an_append_time_column_that_changes_every_run_is_refused(tmp_path: Path, sql: str) -> None:
     # #135 Reviewer pass 1: two runs inserted ids [1, 1, 2, 2].
@@ -1021,8 +1055,11 @@ def test_an_append_time_column_that_changes_every_run_is_refused(tmp_path: Path,
         "SELECT * FROM (SELECT id, date_trunc('hour', t) AS read_at FROM src) "
         "WHERE read_at > $since",
         "SELECT * FROM (SELECT id, t AS read_at, now() AS seen FROM src) WHERE read_at > $since",
+        "WITH c AS (SELECT id, t AS read_at FROM src) SELECT * FROM c WHERE read_at > $since",
+        "SELECT * FROM (SELECT r.*, m.zone FROM src AS r JOIN m USING (id)) WHERE read_at > $since",
+        "SELECT e.id, e.read_at FROM src AS e WHERE e.read_at > $since",
     ],
-    ids=["cast", "date-trunc", "other-column-volatile"],
+    ids=["cast", "date-trunc", "other-column-volatile", "cte", "join-star", "qualified"],
 )
 def test_an_append_time_column_computed_the_same_way_every_run_is_accepted(
     tmp_path: Path, sql: str

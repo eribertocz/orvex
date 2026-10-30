@@ -888,8 +888,14 @@ def test_an_append_filter_that_reads_each_row_once_inserts_it_once(
         "WHERE t > {since:DateTime64(3, 'UTC')}",
         "SELECT * FROM (SELECT number + 1 AS id, now64(3, 'UTC') AS t FROM numbers(3)) "
         "WHERE t > {since:DateTime64(3, 'UTC')}",
+        # Reviewer pass 2: a tuple's field, and REPLACE, are not traced: refused.
+        "SELECT * FROM (SELECT id, tup.t AS t FROM (SELECT number + 1 AS id, "
+        "tuple(now64(3, 'UTC')) AS tup FROM numbers(3))) WHERE t > {since:DateTime64(3, 'UTC')}",
+        "SELECT * REPLACE (now64(3, 'UTC') AS t) FROM (SELECT number + 1 AS id, "
+        "toDateTime64('2024-01-01', 3, 'UTC') AS t FROM numbers(3)) "
+        "WHERE t > {since:DateTime64(3, 'UTC')}",
     ],
-    ids=["computed-here", "computed-below"],
+    ids=["computed-here", "computed-below", "tuple-field", "replace"],
 )
 def test_an_append_time_column_that_changes_every_run_is_refused(
     tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str], sql: str

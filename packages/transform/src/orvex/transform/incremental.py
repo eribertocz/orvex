@@ -471,48 +471,156 @@ def since_is_a_lower_bound(
             for key, value in node.items()
         )
 
+    # How a name was traced: to a table's own column (each row's value is fixed), not produced
+    # by this query, or refused (computed in a way the run cannot hold fixed, or not traceable).
+    accepted, absent, refused = "accepted", "absent", "refused"
+
+    def scope_of(node: Node, outer: dict[str, object]) -> dict[str, object] | None:
+        found = dict(outer)
+        cte_map = node.get("cte_map")
+        entries = cte_map.get("map") if isinstance(cte_map, dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            value = entry.get("value") if isinstance(entry, dict) else None
+            if not isinstance(value, dict) or not isinstance(value.get("query_node"), dict):
+                return None
+            if value.get("aliases"):
+                return None  # `WITH c(a, b) AS …` renames by position: not traced
+            found[str(entry.get("key", "")).lower()] = value["query_node"]
+        return found
+
+    def expression_state(expression: object, source: object, scope: dict[str, object]) -> str:
+        """A select item's expression: stable functions only, each column it reads traced."""
+        result = accepted
+        for node in nodes(expression):
+            kind = node.get("class")
+            if kind in {"WINDOW", "SUBQUERY", "STAR", "LAMBDA", "PARAMETER"}:
+                return refused
+            if kind == "FUNCTION":
+                name = str(node.get("function_name")).lower()
+                if not _consistent(name) or name in _UNSTABLE_FUNCTIONS:
+                    return refused
+            if kind == "COLUMN_REF":
+                parts = column_parts(node)
+                if not parts or parts[-1] in _SPECIAL_NAMES:
+                    return refused
+                if len(parts) == 1:
+                    state = from_state(source, parts[0], None, scope)
+                elif len(parts) == 2:
+                    state = from_state(source, parts[1], parts[0], scope)
+                else:
+                    return refused
+                if state != accepted:
+                    return refused  # absent here: a struct field, or an outer column
+        return result
+
+    def from_state(
+        source: object, name: str, relation: str | None, scope: dict[str, object]
+    ) -> str:
+        """Where a FROM clause gets the column `name` (of `relation`, when qualified)."""
+        if not isinstance(source, dict):
+            return absent
+        kind = source.get("type")
+        alias = str(source.get("alias") or "").lower()
+        if kind == "EMPTY":
+            return absent
+        if source.get("column_name_alias"):
+            return refused  # renamed by position: not traced
+        if kind == "JOIN":
+            states = [
+                from_state(source.get("left"), name, relation, scope),
+                from_state(source.get("right"), name, relation, scope),
+            ]
+            if refused in states:
+                return refused
+            return accepted if accepted in states else absent
+        if kind == "BASE_TABLE":
+            table = str(source.get("table_name") or "").lower()
+            if relation is not None and relation not in {alias or table}:
+                return absent
+            if not source.get("schema_name") and not source.get("catalog_name") and table in scope:
+                return node_state(scope[table], name, scope)
+            return accepted  # a source or model table: its column holds each row's value
+        if kind == "SUBQUERY":
+            if relation is not None and relation != alias:
+                return absent
+            subquery = source.get("subquery")
+            inner = subquery.get("node") if isinstance(subquery, dict) else None
+            return node_state(inner, name, scope)
+        return refused  # table functions, PIVOT, VALUES, …: not traced
+
+    def node_state(node: object, name: str, outer: dict[str, object]) -> str:
+        """How a query produces the output column `name`."""
+        if not isinstance(node, dict) or node.get("type") != "SELECT_NODE":
+            return refused  # set operations name columns by position: not traced
+        scope = scope_of(node, outer)
+        if scope is None:
+            return refused
+        source = node.get("from_table")
+        items = node.get("select_list")
+        if not isinstance(items, list):
+            return refused
+        found: list[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                return refused
+            if item.get("class") == "STAR":
+                if item.get("rename_list") or item.get("columns") or item.get("expr") is not None:
+                    return refused
+                replaced = item.get("replace_list")
+                replacements = {
+                    str(entry.get("key", "")).lower(): entry.get("value")
+                    for entry in (replaced if isinstance(replaced, list) else [])
+                    if isinstance(entry, dict)
+                }
+                excluded = {str(x).lower() for x in item.get("exclude_list") or []}
+                if item.get("qualified_exclude_list"):
+                    return refused
+                if name in replacements:
+                    found.append(expression_state(replacements[name], source, scope))
+                elif name not in excluded:
+                    relation = str(item.get("relation_name") or "").lower() or None
+                    state = from_state(source, name, relation, scope)
+                    if state != absent:
+                        found.append(state)
+                continue
+            parts = column_parts(item)
+            label = str(item.get("alias") or "").lower() or (parts[-1] if parts else "")
+            if label == name:
+                found.append(expression_state(item, source, scope))
+        if len(found) != 1:
+            return refused if found else absent
+        return found[0]
+
     def stable(tree: object) -> bool:
-        """Whether every expression that may compute the time column, followed by name through
-        every alias and `REPLACE` in the SQL, gives each row the same value in every run: only
-        functions DuckDB marks `CONSISTENT`, no window, subquery or special name such as
-        `current_timestamp` (#135, Reviewer pass 1). By name, so an unrelated alias with the
-        same name is also checked: it fails closed."""
-        definitions: dict[str, list[object]] = {}
-        for node in nodes(tree):
-            replaced = node.get("replace_list") if node.get("class") == "STAR" else None
-            if isinstance(replaced, list):
-                for entry in replaced:
-                    if isinstance(entry, dict):
-                        key = str(entry.get("key", "")).lower()
-                        definitions.setdefault(key, []).append(entry.get("value"))
-            items = node.get("select_list") if "select_list" in node else None
-            for item in items if isinstance(items, list) else []:
-                if not isinstance(item, dict) or item.get("class") == "STAR":
-                    continue
-                alias = str(item.get("alias") or "").lower()
-                parts = column_parts(item)
-                if alias and parts[-1:] != [alias]:
-                    definitions.setdefault(alias, []).append(item)
-        pending, seen = [wanted], {wanted}
-        while pending:
-            for expression in definitions.get(pending.pop(), []):
-                for node in nodes(expression):
-                    kind = node.get("class")
-                    if kind in {"WINDOW", "SUBQUERY", "STAR", "LAMBDA"}:
-                        return False
-                    if kind == "FUNCTION" and not _consistent(str(node.get("function_name"))):
-                        return False
-                    name = column_parts(node)[-1:]
-                    if name and name[0] in _SPECIAL_NAMES:
-                        return False
-                    if name and name[0] not in seen:
-                        seen.add(name[0])
-                        pending.append(name[0])
-        return True
+        """Whether the time column of the model's rows gets the same value for a row in every
+        run (#135, Reviewer passes 1 and 2): it is traced from the model's output down to table
+        columns, through aliases, `REPLACE`, stars, subqueries, CTEs and joins, and computed only
+        by functions DuckDB marks `CONSISTENT` (less a fixed list it marks wrongly). Anything
+        not traced is refused: column lists that rename by position, struct fields, `RENAME`,
+        `COLUMNS(…)`, table functions, `VALUES`, set operations below the model's query."""
+        if not isinstance(tree, list) or len(tree) != 1 or not isinstance(tree[0], dict):
+            return False
+        return node_state(tree[0].get("node"), wanted, {}) == accepted
 
     return check(statements, None) and (not strict or stable(statements))
 
 
+# Functions DuckDB marks `CONSISTENT` whose value still changes between runs (the session's
+# clock, the installed version) or depends on the order rows arrive in (#135, Reviewer pass 2).
+_UNSTABLE_FUNCTIONS = frozenset(
+    {
+        "current_localtime",
+        "current_localtimestamp",
+        "version",
+        "any_value",
+        "arbitrary",
+        "first",
+        "last",
+        "first_value",
+        "last_value",
+        "nth_value",
+    }
+)
 # Names DuckDB reads as functions of the moment although they parse as column references.
 _SPECIAL_NAMES = frozenset(
     {"current_timestamp", "current_date", "current_time", "localtimestamp", "localtime"}
