@@ -587,7 +587,37 @@ def exists(home: Path) -> bool:
         read = _read_record(home)
     except ProjectLoadError:
         return True  # a record that cannot be read: the commands that open the lake report it
-    return read is not None and not read[1]
+    if read is None or _unfinished_default(home, read):
+        return _orphan_data(home)  # a default lake made before #204 that lost its catalog
+    return not read[1]
+
+
+def _unfinished_default(home: Path, read: tuple[dict[str, str | int], bool]) -> bool:
+    """Whether a record is the default lake's, marked `creating`: the first open after #204 of
+    a default lake made before it, which did not finish (#204, Reviewer pass 1). Its data files
+    are the lake's as much as with no record."""
+    return read[1] and _same(read[0], _default_identity(home))
+
+
+def orphan_data(home: Path) -> str | None:
+    """The default data folder, when it holds the data files of a default lake whose catalog
+    file is gone and that has no confirmed record (#204)."""
+    try:
+        read = _read_record(home)
+    except ProjectLoadError:
+        return None
+    if read is not None and not _unfinished_default(home, read):
+        return None
+    return (lake_folder(home) / "data").as_posix() if _orphan_data(home) else None
+
+
+def _orphan_data(home: Path) -> bool:
+    """Whether the default data folder holds data files while there is neither a record nor
+    the default catalog: a default lake made before #204 whose catalog file is gone (#204)."""
+    if (lake_folder(home) / DEFAULT_CATALOG["duckdb"]).exists():
+        return False
+    data = lake_folder(home) / "data"
+    return data.is_dir() and next(data.rglob("*.parquet"), None) is not None
 
 
 def _nothing_created(identity: dict[str, str | int]) -> bool:
@@ -724,10 +754,16 @@ def _unwritable(home: Path, error: OSError) -> ProjectLoadError:
 def missing_catalog(home: Path) -> str | None:
     """The catalog file of the project's confirmed lake when it is missing (#192): a DuckDB or
     SQLite catalog holds the lake's history, and opening its place again would create a new,
-    empty one. None when the lake has no confirmed record, its catalog is PostgreSQL, or its file
-    is there. A `creating` record is not a lake yet (#146)."""
+    empty one. With no record, the default catalog when its data folder holds data files but the
+    catalog is gone (a default lake made before #204). None when there is no such lake, its
+    catalog is PostgreSQL, or its file is there. A `creating` record is not a lake yet
+    (#146), except the default lake's, which is read as no record (Reviewer pass 1)."""
     read = _read_record(home)
-    if read is None or read[1]:
+    if read is None or _unfinished_default(home, read):
+        if _orphan_data(home):
+            return (lake_folder(home) / DEFAULT_CATALOG["duckdb"]).as_posix()
+        return None
+    if read[1]:
         return None
     identity = read[0]
     if identity.get("catalog") not in {"duckdb", "sqlite"}:
@@ -739,20 +775,29 @@ def missing_catalog(home: Path) -> str | None:
 def begin(home: Path, chosen: Place) -> None:
     """Before the lake is opened for writing: record its identity, as `creating`, when it has
     no record yet (#146), so a stop between creating the lake and recording it cannot leave a
-    lake without one. The default DuckDB catalog without data or encryption settings needs no
-    record (its file identifies it, as before #120). A `creating` record of another identity is
-    replaced only when `check_unchanged` let it through (nothing was created there)."""
+    lake without one. The default DuckDB lake is recorded too (#204), so a lost catalog file is
+    refused, not recreated. A `creating` record of another identity is replaced only when
+    `check_unchanged` let it through (nothing was created there)."""
     read = _read_record(home)
     stale = read is not None and read[1] and _nothing_created(read[0])
-    if chosen.identity == _default_identity(home):
-        if stale:
-            # An unfinished first open elsewhere that created nothing: the default lake needs
-            # no record, and that one must not bind it later (#181, Reviewer pass 1).
-            _remove(home)
-        return
     if read is not None and not (stale and not _same(read[0], chosen.identity)):
         return
     _write(home, {**chosen.identity, "state": CREATING})
+
+
+def adopt(home: Path, chosen: Place) -> None:
+    """Record a default lake made before #204, which has its catalog file and no record, as
+    confirmed: from then on a lost catalog file is refused (#204). Called under the project
+    lock, by the commands that open an existing lake. A `creating` record of the default lake
+    (its first open after #204 failed) is confirmed the same way, since its catalog is there
+    (Reviewer pass 1); any other record is left as it is."""
+    read = _read_record(home)
+    if read is not None and not _unfinished_default(home, read):
+        return
+    if not (lake_folder(home) / DEFAULT_CATALOG["duckdb"]).exists():
+        return
+    if _same(_default_identity(home), chosen.identity):
+        _write(home, dict(chosen.identity))
 
 
 def confirm(home: Path, chosen: Place) -> None:

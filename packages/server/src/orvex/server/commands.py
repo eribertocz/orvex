@@ -784,6 +784,7 @@ def open_existing(home: Path, place: Place) -> Lake:
     lake since the project was checked (#181, Reviewer pass 2). `ProjectLoadError` otherwise."""
     lake_place.check_unchanged(home, place)
     _refuse_missing_catalog(home)
+    lake_place.adopt(home, place)  # a default lake made before #204 gets its record
     return open_lake(place.location, _limits())
 
 
@@ -792,12 +793,24 @@ def _refuse_missing_catalog(home: Path) -> None:
     SQLite catalog file: opening the place again would create a new, empty lake there and hide
     its history (#192). Nothing is opened or created."""
     missing = lake_place.missing_catalog(home)
+    data = lake_place.orphan_data(home)
+    if missing is not None and data is not None:
+        raise StoreError(
+            "STORE_CATALOG_UNAVAILABLE",
+            f"The lake's catalog file {missing} is missing, but the data folder {data} holds "
+            "data files of an earlier lake. The catalog holds the lake's history (runs, "
+            "watermarks, snapshots), so a new one is never created next to them: restore the "
+            f"file, or move {home.name}/{lake_place.LAKE_FOLDER} away (to keep the data files) "
+            "to start a new, empty lake.",
+            {"path": missing, "data": data},
+        )
     if missing is not None:
         raise StoreError(
             "STORE_CATALOG_UNAVAILABLE",
             f"The lake's catalog file {missing} is missing. It holds the lake's history (runs, "
             "watermarks, snapshots), so a new one is never created in its place: restore the "
             f"file (or connect the disk it is on), or remove {home.name}/{lake_place.RECORD_FILE} "
+            f"and {home.name}/{lake_place.LAKE_FOLDER} (move them away to keep the data files) "
             "to start a new, empty lake.",
             {"path": missing},
         )
