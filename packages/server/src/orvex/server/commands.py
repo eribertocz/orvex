@@ -259,6 +259,7 @@ def _bind(
                         clickhouse.since_column_problems(model, described)
                         + clickhouse.since_precision_problems(model, described)
                         + clickhouse.since_range_problems(model, described)
+                        + clickhouse.since_default_problems(model, described)
                     )
                     if refused:
                         failed.add(name)

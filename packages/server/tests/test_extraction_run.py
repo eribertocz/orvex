@@ -862,9 +862,10 @@ def test_an_append_filter_that_reads_rows_again_is_refused_before_anything_runs(
     [
         ("DateTime64(3, 'UTC')", "t > {since:DateTime64(3, 'UTC')}"),
         ("DateTime64(3, 'UTC')", "{since:DateTime64(6, 'UTC')} < t"),
-        ("Date", "t > {since:Date}"),
+        # #191: `{since:Date}` on a Date column is refused for append; Date32 starts earlier.
+        ("Date", "t > {since:Date32}"),
     ],
-    ids=["as-precise", "more-precise-reversed", "date-on-date"],
+    ids=["as-precise", "more-precise-reversed", "date32-on-date"],
 )
 def test_an_append_filter_that_reads_each_row_once_inserts_it_once(
     tmp_path: Path,
@@ -1246,4 +1247,83 @@ def test_a_connection_zone_python_cannot_read_is_refused_when_needed(
     assert code == 1, out
     assert "SOURCE_ZONE_UNKNOWN" in out
     assert "Mars/Olympus" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+
+
+@pytest.mark.parametrize(
+    ("times", "bound"),
+    [
+        ("[toDate('1970-01-01'), toDate('1970-01-01'), toDate('2024-01-01')]", "{since:Date32}"),
+        (
+            "[toDateTime(0, 'UTC'), toDateTime(0, 'UTC'), toDateTime('2024-01-01', 'UTC')]",
+            "{since:DateTime64(0, 'UTC')}",
+        ),
+    ],
+    ids=["date-1970-01-01", "datetime-epoch-0"],
+)
+def test_an_append_first_run_loads_rows_at_the_default_value(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    times: str,
+    bound: str,
+) -> None:
+    # #191 (decision #206): rows at 1970-01-01 or epoch 0, often a source's "no date".
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                f"SELECT n AS id, t FROM (SELECT number + 1 AS n, {times}[number + 1] AS t "
+                f"FROM numbers(3)) WHERE t > {bound}"
+            ),
+            "models/raw/ch_events.yaml": APPEND_SIDECAR,
+        },
+    )
+    ids = "SELECT id FROM lake.raw.ch_events ORDER BY id"
+    for _ in range(2):  # the second run loads nothing again
+        code, out = run(capsys, folder)
+        assert code == 0, out
+    assert lake_value(folder, ids) == [(1,), (2,), (3,)]
+
+
+@pytest.mark.parametrize(
+    ("times", "bound", "wider"),
+    [
+        (
+            "[toDate('1970-01-01'), toDate('2024-01-01'), toDate('2024-01-02')]",
+            "{since:Date}",
+            "{since:Date32}",
+        ),
+        (
+            "[toDateTime(0, 'UTC'), toDateTime(1, 'UTC'), toDateTime(2, 'UTC')]",
+            "{since:DateTime('UTC')}",
+            "{since:DateTime64(0, 'UTC')}",
+        ),
+    ],
+    ids=["date", "datetime"],
+)
+def test_an_append_since_starting_at_the_default_value_is_refused(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    times: str,
+    bound: str,
+    wider: str,
+) -> None:
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                f"SELECT n AS id, t FROM (SELECT number + 1 AS n, {times}[number + 1] AS t "
+                f"FROM numbers(3)) WHERE t > {bound}"
+            ),
+            "models/raw/ch_events.yaml": APPEND_SIDECAR,
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert wider in out
     assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
