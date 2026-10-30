@@ -797,3 +797,67 @@ def test_a_lone_surrogate_is_a_parse_failure() -> None:
     with pytest.raises(StoreError) as raised:
         _single_statement(_plain("SELECT 'a\ud800'"), table_functions())
     assert raised.value.code == "STORE_QUERY_FAILED"
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "CREATE TABLE x AS SELECT * FROM t AT (VERSION => 1)",
+        "CREATE TABLE x AS SELECT * FROM t AT (TIMESTAMP => now())",
+        "SELECT * FROM t at ( version => 3 )",
+        "INSERT INTO x SELECT * FROM main.t AT (VERSION => 2) AS o",
+    ],
+)
+def test_a_table_read_at_another_snapshot_is_refused(sql: str) -> None:
+    # #147 (decision #182, 2A): a model reads the current data; deleted rows never come back.
+    with pytest.raises(StoreError) as raised:
+        _guarded(sql, table_functions())
+    assert raised.value.code == "STORE_STATEMENT_INVALID"
+    assert raised.value.details == {"clause": "AT"}
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT x AS at FROM t",
+        "SELECT at FROM t",
+        'SELECT "at"(1) FROM t',
+        "CREATE TABLE at (a INT)",
+    ],
+)
+def test_a_name_at_is_still_allowed(sql: str) -> None:
+    _guarded(sql, table_functions())
+
+
+@pytest.mark.parametrize(
+    ("given", "used"),
+    [
+        ("s3://bucket/prefix", "s3://bucket/prefix/"),
+        ("s3://bucket/prefix/", "s3://bucket/prefix/"),
+        ("gs://bucket/p", "gs://bucket/p/"),
+        ("az://container/p", "az://container/p/"),
+    ],
+)
+def test_an_object_storage_data_path_is_a_folder(tmp_path: Path, given: str, used: str) -> None:
+    # #147: the secret's SCOPE is that folder, not every key that starts like it.
+    from orvex.contracts.store.v1 import LocalLakeLocation
+    from orvex.store.lake import _data_path
+
+    location = LocalLakeLocation(
+        kind="lake_location", catalog="local", path=str(tmp_path), data_path=given
+    )
+    assert _data_path(location) == used
+
+
+@pytest.mark.parametrize("space", list(PARSER_SPACES), ids=lambda c: f"U+{ord(c):04X}")
+def test_time_travel_after_a_unicode_space_is_refused(space: str) -> None:
+    # Reviewer pass 1 on #211: DuckDB reads `t<U+00A0>AT (VERSION => 1)` as time travel; the
+    # store rewrites the space as DuckDB does (#213) before the check.
+    for sql in (
+        f"CREATE TABLE x AS SELECT * FROM t{space}AT (VERSION => 1)",
+        f"CREATE TABLE x AS SELECT * FROM t AS o{space}AT{space}(VERSION{space}=> 1)",
+    ):
+        with pytest.raises(StoreError) as refused:
+            _single_statement(_plain(sql), table_functions())
+        assert refused.value.code == "STORE_STATEMENT_INVALID", sql
+        assert refused.value.details.get("clause") == "AT", sql

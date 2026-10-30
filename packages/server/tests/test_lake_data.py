@@ -8,6 +8,7 @@ free port of 127.0.0.1 with disposable credentials.
 
 from __future__ import annotations
 
+import json
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ElementTree
@@ -551,3 +552,172 @@ def test_the_gcs_record_holds_no_credential(tmp_path: Path) -> None:
     assert "gs://bi-lake/billing/" in text
     assert SECRET not in text
     assert "test-key-id" not in text
+
+
+# --- #147: the object-storage endpoint is part of the lake's identity ---------------------------
+
+
+def recorded_lake(folder: Path, lake: str) -> None:
+    """A lake recorded with `lake`, as its first open records and confirms it."""
+    bare(folder, lake)
+    place = lake_place.place(load_project(folder), home(folder))
+    lake_place.begin(home(folder), place)
+    lake_place.confirm(home(folder), place)
+
+
+@pytest.mark.usefixtures("credentials")
+def test_another_endpoint_for_an_existing_lake_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Decision #182 (1A): the same bucket and prefix on another service is another lake, which
+    # maintenance must not clean.
+    folder = tmp_path / "proj"
+    recorded_lake(folder, s3_lake("127.0.0.1:9000"))
+    record = (home(folder) / lake_place.RECORD_FILE).read_text(encoding="utf-8")
+    assert '"endpoint": "127.0.0.1:9000"' in record
+    bare(folder, s3_lake("localhost:9000"))
+    found = problems(folder)
+    assert found[0].startswith("LAKE_LOCATION_CHANGED project.yaml"), found
+    assert "endpoint was 127.0.0.1:9000, now localhost:9000" in found[0]
+    assert "lake.catalog" not in found[0]
+    code, out = run(capsys, "maintain", str(folder))  # nothing opened, nothing cleaned
+    assert code == 1, out
+    assert "LAKE_LOCATION_CHANGED" in out
+
+
+@pytest.mark.usefixtures("credentials")
+def test_an_endpoint_is_compared_without_case_scheme_or_trailing_slash(tmp_path: Path) -> None:
+    folder = tmp_path / "proj"
+    recorded_lake(folder, s3_lake("127.0.0.1:9000"))
+    for spelling in ("127.0.0.1:9000/", "HTTP://127.0.0.1:9000", "http://127.0.0.1:9000/"):
+        assert lake_place._normalized_endpoint(spelling) == "127.0.0.1:9000"
+
+
+@pytest.mark.usefixtures("credentials")
+def test_a_record_written_before_147_matches_and_gets_its_endpoint(tmp_path: Path) -> None:
+    folder = tmp_path / "proj"
+    recorded_lake(folder, s3_lake("127.0.0.1:9000"))
+    path = home(folder) / lake_place.RECORD_FILE
+    identity = json.loads(path.read_text(encoding="utf-8"))
+    del identity["endpoint"]  # the layout before #147
+    path.write_text(json.dumps(identity), encoding="utf-8")
+    bare(folder, s3_lake("localhost:9000"))
+    assert problems(folder) == []  # no endpoint recorded: any matches, once
+    place = lake_place.place(load_project(folder), home(folder))
+    lake_place.complete(home(folder), place)
+    assert json.loads(path.read_text(encoding="utf-8"))["endpoint"] == "localhost:9000"
+    bare(folder, s3_lake("127.0.0.1:9000"))
+    assert "endpoint was localhost:9000" in problems(folder)[0]  # recorded from then on
+
+
+def without_endpoint(folder: Path) -> Path:
+    """Rewrite the lake's record in its layout before #147 (no endpoint)."""
+    path = home(folder) / lake_place.RECORD_FILE
+    identity = json.loads(path.read_text(encoding="utf-8"))
+    del identity["endpoint"]
+    path.write_text(json.dumps(identity), encoding="utf-8")
+    return path
+
+
+@pytest.mark.usefixtures("credentials")
+@pytest.mark.parametrize("command", ["run", "runs", "maintain"])
+def test_opening_a_record_written_before_147_records_its_endpoint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], endpoint: str, command: str
+) -> None:
+    # Reviewer pass 1 on #211: through a real open, `run` (`_open_recorded`) and `runs` and
+    # `maintain` (`open_existing`), not `complete` alone.
+    request = urllib.request.Request(f"http://{endpoint}/bi-lake", method="PUT")
+    _HTTP.open(request, timeout=30).close()
+    project(tmp_path, s3_lake(endpoint))
+    feed(tmp_path, 10)
+    code, out = run(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    path = without_endpoint(tmp_path)
+    code, out = run(capsys, command, str(tmp_path))
+    assert code == 0, out
+    assert json.loads(path.read_text(encoding="utf-8"))["endpoint"] == endpoint
+
+
+@pytest.mark.parametrize(
+    ("blob", "recorded"),
+    [
+        (
+            "https://acct.blob.core.windows.net/?sv=2024&sig=" + ACCOUNT_KEY,
+            "acct.blob.core.windows.net",
+        ),
+        (
+            "http://127.0.0.1:10000/devstoreaccount1#" + ACCOUNT_KEY,
+            "127.0.0.1:10000/devstoreaccount1",
+        ),
+    ],
+)
+def test_the_azure_record_holds_no_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blob: str, recorded: str
+) -> None:
+    # Reviewer pass 1 on #211: a `BlobEndpoint` may carry a user, password or SAS token; the
+    # identity keeps host, port and path only, so the record and its messages never show them.
+    monkeypatch.setenv(AZURE_ENV, f"AccountName=acct;AccountKey={ACCOUNT_KEY};BlobEndpoint={blob}")
+    folder = bare(tmp_path / "proj", azure_lake())
+    assert problems(folder) == []
+    chosen = commands.lake_location(load_project(folder), home(folder))
+    lake_place.begin(home(folder), chosen)
+    lake_place.confirm(home(folder), chosen)
+    text = (home(folder) / lake_place.RECORD_FILE).read_text(encoding="utf-8")
+    assert json.loads(text)["endpoint"] == recorded
+    assert ACCOUNT_KEY not in text
+    monkeypatch.setenv(
+        AZURE_ENV,
+        f"AccountName=acct;AccountKey={ACCOUNT_KEY};BlobEndpoint=https://other.example.com/?sig={ACCOUNT_KEY}",
+    )
+    found = problems(folder)
+    assert found[0].startswith("LAKE_LOCATION_CHANGED project.yaml"), found
+    assert ACCOUNT_KEY not in found[0]
+    assert f"endpoint was {recorded}, now other.example.com" in found[0]
+
+
+@pytest.mark.parametrize(
+    "blob",
+    [
+        "https://u:" + ACCOUNT_KEY + "@Acct.Blob.Core.Windows.Net/",
+        "https://u:a/" + ACCOUNT_KEY + "@acct.blob.core.windows.net",
+        "https://u:ab?" + ACCOUNT_KEY + "@acct.blob.core.windows.net",
+        "https://u:ab#" + ACCOUNT_KEY + "@acct.blob.core.windows.net",
+        "https://" + ACCOUNT_KEY + "?x@acct.blob.core.windows.net",
+    ],
+)
+def test_an_endpoint_with_a_user_or_password_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blob: str
+) -> None:
+    # Reviewer pass 2 on #211: a `?` or `#` in a password cut the endpoint before its `@`, so a
+    # user and part of the password reached the record. An endpoint with `@` is refused before
+    # anything is recorded, and the refusal shows no part of it.
+    monkeypatch.setenv(AZURE_ENV, f"AccountName=acct;AccountKey={ACCOUNT_KEY};BlobEndpoint={blob}")
+    folder = bare(tmp_path / "proj", azure_lake())
+    found = problems(folder)
+    assert len(found) == 1
+    assert found[0].startswith("LAKE_LOCATION_INVALID project.yaml"), found
+    assert ACCOUNT_KEY not in found[0]
+    assert "u:" not in found[0]
+    assert not (home(folder) / lake_place.RECORD_FILE).exists()
+    assert lake_place._normalized_endpoint(blob) == "acct.blob.core.windows.net"
+
+
+@pytest.mark.usefixtures("credentials")
+def test_an_s3_endpoint_with_a_user_or_password_is_refused(tmp_path: Path) -> None:
+    # The schema allows only `host[:port]` for an S3 endpoint; its message shows no value.
+    folder = bare(tmp_path / "proj", s3_lake("u:" + SECRET + "@127.0.0.1:9000"))
+    found = problems(folder)
+    assert found[0].startswith("PROJECT_SCHEMA_INVALID project.yaml"), found
+    assert SECRET not in found[0]
+
+
+@pytest.mark.usefixtures("credentials")
+def test_moving_object_storage_data_to_a_local_folder_names_the_path_only(tmp_path: Path) -> None:
+    # Reviewer pass 2 on #211: "endpoint … now AWS S3" was printed for a move to a local folder.
+    folder = tmp_path / "proj"
+    recorded_lake(folder, s3_lake("127.0.0.1:9000"))
+    bare(folder, "")
+    found = problems(folder)
+    assert found[0].startswith("LAKE_LOCATION_CHANGED project.yaml"), found
+    assert "lake.data.path was" in found[0]
+    assert "endpoint" not in found[0]

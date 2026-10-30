@@ -152,6 +152,9 @@ def _with_data(chosen: Place, lake: Lake, project: Project, home: Path) -> Place
         identity["data"] = data_path
     if storage is not None:
         updates["storage"] = storage
+        # The service is part of the lake's identity (#147, decision #182): the same bucket
+        # and prefix on another service is another lake, which maintenance must not clean.
+        identity["endpoint"] = _endpoint(storage)
     if lake.encrypted:
         updates["encrypted"] = True
         identity["encrypted"] = "yes"
@@ -312,6 +315,9 @@ def _azure(settings: AzureStorage) -> StoreAzureStorage:
             file=PROJECT_FILE,
             path=pointer,
         )
+    blob = _connection_pairs(os.environ[variable]).get("BlobEndpoint")
+    if blob is not None:
+        _without_userinfo(blob, f"lake.data.azure: the BlobEndpoint in {variable}", pointer)
     return StoreAzureStorage(type="azure", connection_string_env=variable)
 
 
@@ -370,6 +376,57 @@ def _azure_over_https(connection_string: str) -> bool:
         if scheme != "https":
             return False
     return pairs.get("DefaultEndpointsProtocol", "https") == "https"
+
+
+def _endpoint(storage: ObjectStorage) -> str:
+    """The object-storage service a lake's data files are on, as the identity compares it:
+    lowercased, without scheme or trailing `/`. AWS S3 (no endpoint) is the empty string,
+    Google Cloud Storage its own endpoint, Azure the blob endpoint its connection string names
+    (`BlobEndpoint`, else `<AccountName>.blob.<EndpointSuffix>`)."""
+    settings = storage.root
+    if isinstance(settings, StoreAzureStorage):
+        pairs = _connection_pairs(os.environ.get(settings.connection_string_env, ""))
+        blob = pairs.get("BlobEndpoint")
+        if blob is None:
+            suffix = pairs.get("EndpointSuffix", "core.windows.net")
+            blob = f"{pairs.get('AccountName', '')}.blob.{suffix}"
+        return _normalized_endpoint(blob)
+    return _normalized_endpoint(settings.endpoint or "")
+
+
+def _connection_pairs(connection_string: str) -> dict[str, str]:
+    """An Azure connection string's `key=value` pairs (its shape is checked by
+    `_azure_over_https`)."""
+    return dict(part.partition("=")[::2] for part in connection_string.split(";") if part)
+
+
+def _normalized_endpoint(endpoint: str) -> str:
+    """`host[:port][/path]`, lowercased, without scheme, credentials, query, fragment or trailing
+    `/`: the record and its messages never hold a user, password or SAS token an Azure
+    `BlobEndpoint` may carry (#147, Reviewer pass 1)."""
+    text = endpoint.strip()
+    address = text.split("://", 1)[1] if "://" in text else text
+    # `user:password@host`: everything up to the last `@` goes first, even a `/`, `?` or `#`
+    # in a password (Reviewer pass 2). An endpoint with `@` is refused before it is recorded
+    # (`_without_userinfo`); this keeps the record clean whatever reaches it.
+    address = address.rpartition("@")[2]
+    for mark in ("?", "#"):
+        address = address.split(mark, 1)[0]
+    return address.lower().rstrip("/")
+
+
+def _without_userinfo(endpoint: str, where: str, pointer: str) -> None:
+    """Refuse an endpoint that carries a user or password (`user:password@host`): no object
+    store needs one there, and the lake's record and messages show the endpoint (#147,
+    Reviewer pass 2). Credentials belong in their own `${env:NAME}` fields."""
+    if "@" in endpoint:
+        raise ProjectLoadError(
+            "LAKE_LOCATION_INVALID",
+            f"{where}: the endpoint carries a user or password (an @); give only the host, "
+            "port and path, and the credentials in their own variables.",
+            file=PROJECT_FILE,
+            path=pointer,
+        )
 
 
 def endpoint_host(endpoint: str) -> str:
@@ -645,11 +702,22 @@ def check_unchanged(home: Path, chosen: Place) -> None:
     current = chosen.identity
     if existing is None or _same(existing, current):
         return
+    current = _as_recorded(existing, current)
     changes = []
     if _catalog_identity(existing) != _catalog_identity(current):
         changes.append(f"lake.catalog was {_describe(existing)}, now {_describe(current)}")
     if existing.get("data") != current.get("data"):
         changes.append(f"lake.data.path was {_data_text(existing)}, now {_data_text(current)}")
+    # Only between two object stores: a move to or from a local folder is the data path's line.
+    if (
+        "endpoint" in existing
+        and "endpoint" in current
+        and existing.get("endpoint") != current.get("endpoint")
+    ):
+        changes.append(
+            f"lake.data's object-storage endpoint was {existing.get('endpoint') or 'AWS S3'}, "
+            f"now {current.get('endpoint') or 'AWS S3'}"
+        )
     if existing.get("encrypted") != current.get("encrypted"):
         changes.append(
             f"lake.encrypted was {'true' if existing.get('encrypted') else 'false'}, "
@@ -676,8 +744,29 @@ def check_unchanged(home: Path, chosen: Place) -> None:
 
 
 def _same(existing: dict[str, str | int], current: dict[str, str | int]) -> bool:
-    """Equal identities, a PostgreSQL host compared without letter case (#146)."""
-    return _comparable(existing) == _comparable(current)
+    """Equal identities, a PostgreSQL host compared without letter case (#146). A record
+    written before #147 has no object-storage endpoint: it matches any, and `complete` adds the
+    configured one."""
+    return _comparable(existing) == _comparable(_as_recorded(existing, current))
+
+
+def _as_recorded(
+    existing: dict[str, str | int], current: dict[str, str | int]
+) -> dict[str, str | int]:
+    """`current` without the keys a record written before them does not have (#147)."""
+    if "endpoint" in existing:
+        return current
+    return {key: value for key, value in current.items() if key != "endpoint"}
+
+
+def complete(home: Path, chosen: Place) -> None:
+    """Add the object-storage endpoint to a confirmed record written before #147, once the lake
+    it names has opened with the configured endpoint. Called under the project lock."""
+    read = _read_record(home)
+    if read is None or read[1] or "endpoint" in read[0] or "endpoint" not in chosen.identity:
+        return
+    if _same(read[0], chosen.identity):
+        _write(home, dict(chosen.identity))
 
 
 def _comparable(identity: dict[str, str | int]) -> dict[str, str | int]:
@@ -693,7 +782,7 @@ def _catalog_identity(identity: dict[str, str | int]) -> dict[str, str | int]:
     return {
         key: value
         for key, value in _comparable(identity).items()
-        if key not in {"data", "encrypted"}
+        if key not in {"data", "encrypted", "endpoint"}
     }
 
 
