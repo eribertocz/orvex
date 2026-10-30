@@ -223,10 +223,8 @@ def test_a_project_that_does_not_check_is_the_last_decision_until_fixed(
     problem = out.splitlines()[0]
     assert problem.startswith("MODEL_REFERENCE_UNKNOWN models/s/m.sql"), out
     assert clock.decisions[0] == (START.isoformat(), problem), clock.decisions
-    # Fixed: the next decision (the run) replaces it.
-    assert any(str(text).startswith("running s.m") for _, text in clock.decisions[1:]), (
-        clock.decisions
-    )
+    # Fixed: the next decision (the run, whose last printed line is its reason) replaces it.
+    assert any(str(text).startswith("due s.m") for _, text in clock.decisions[1:]), clock.decisions
 
 
 @pytest.mark.parametrize(
