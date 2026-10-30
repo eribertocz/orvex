@@ -169,9 +169,14 @@ def check_project(folder: Path, identity: Identity | None = None) -> Checked:
     differences: dict[str, list[Comparison]] = {}
     filtered: dict[str, str] = {}
     extracted: dict[str, tuple[clickhouse.Column, ...]] = {}
-    # Every model is bound, so each one's output columns are known: a repeated column name is
-    # refused for any model (#113), not only for those whose rules need the columns.
-    if discovery.models and not problems:
+    needs_binding = any(
+        m.config.materialized == "incremental"
+        or m.config.tests
+        or m.config.reconciliation
+        or m.extraction  # validated on its ClickHouse connection (P1-17)
+        for m in discovery.models
+    )
+    if needs_binding and not problems:
         columns, differences, filtered, extracted, bind_problems = _bind(project, discovery, graph)
         problems += bind_problems
         problems += [
