@@ -30,6 +30,7 @@ import socket
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from importlib import resources
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -346,8 +347,8 @@ def since_precision_problems(model: Model, columns: tuple[Column, ...]) -> list[
     column = _precision(found.clickhouse)
     declared = _precision(since.text)
     # A date column takes a date parameter only: ClickHouse compares `Date32` with a time at
-    # midnight in the server's zone, whatever the parameter's zone, so the watermark's day could
-    # be read again (#135, Reviewer pass 1).
+    # midnight in the connection's zone, whatever the parameter's zone, so the watermark's day
+    # could be read again (#135, Reviewer pass 1).
     if column is None or declared is None or (declared >= column and (column > 0 or declared == 0)):
         return []
     return [
@@ -1969,8 +1970,21 @@ _FIXED_FROM, _FIXED_TO = 1970, 2100
 
 
 @functools.cache
+@functools.cache
+def _iana_zones() -> frozenset[str]:
+    """The IANA zone names of the bundled database (`tzdata`), the list the project's
+    `time_zone` is checked against: the same on every machine, without system-only entries
+    such as `localtime` or `posixrules`, which name the machine's own zone (#212)."""
+    text = resources.files("tzdata").joinpath("zones").read_text(encoding="utf-8")
+    return frozenset(text.split()) - {"Factory"}  # a placeholder of the database, not a place
+
+
 def known_zone(zone: str) -> bool:
-    """Whether `zone` is in the time zone database Python reads (`zoneinfo`)."""
+    """Whether `zone` is an IANA zone name of the bundled database that `zoneinfo` reads. A name
+    the engine's machine resolves on its own (`localtime`, `posixrules`) is not: ClickHouse would
+    resolve it on its machine, to another zone (#212)."""
+    if zone not in _iana_zones():
+        return False
     try:
         ZoneInfo(zone)
     except KeyError, ValueError, OSError:  # ZoneInfoNotFoundError is a KeyError

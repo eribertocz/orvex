@@ -1327,3 +1327,51 @@ def test_an_append_since_starting_at_the_default_value_is_refused(
     assert "INVALID_MODEL_SQL" in out
     assert wider in out
     assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+
+
+@pytest.mark.parametrize(
+    ("declared", "connection_zone", "strategy"),
+    [
+        ("DateTime('localtime')", None, "merge"),
+        ("DateTime64(3, 'posixrules')", None, "append"),
+        ("DateTime", "localtime", "append"),
+        ("DateTime", "Mars/Olympus", "append"),
+    ],
+    ids=["declared-localtime", "declared-posixrules", "connection-localtime", "connection-unknown"],
+)
+def test_a_zone_the_machine_resolves_on_its_own_is_refused_before_anything_runs(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    declared: str,
+    connection_zone: str | None,
+    strategy: str,
+) -> None:
+    # #212: ClickHouse resolves `localtime` and `posixrules` on its own machine, the engine on
+    # its own: a watermark written in one would be read at another instant.
+    if connection_zone is not None:
+        monkeypatch.setattr(
+            clickhouse.Source, "server_zone", property(lambda self: connection_zone)
+        )
+    unique = "  unique_key: [id]\n" if strategy == "merge" else ""
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "SELECT event_id AS id, t FROM (SELECT event_id, "
+                "toDateTime(event_time, 'UTC') AS t FROM events) "
+                f"WHERE t > {{since:{declared}}}"
+            ),
+            "models/raw/ch_events.yaml": (
+                "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
+                f"incremental:\n  strategy: {strategy}\n{unique}  time_column: t\n"
+                "  filter: manual\n"
+            ),
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "SOURCE_ZONE_UNKNOWN" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created

@@ -719,3 +719,35 @@ def test_every_suggestion_is_a_type_an_append_model_accepts(tmp_path: Path) -> N
     zone = refusal("DateTime", "DateTime", "zone")
     assert "{since:DateTime64(0, 'UTC')}" in zone
     assert "{since:DateTime('UTC')}" not in zone
+
+
+def test_a_zone_the_machine_resolves_on_its_own_is_unknown() -> None:
+    # #212: `localtime` and `posixrules` name the engine machine's zone; ClickHouse resolves them
+    # on its own machine, so a watermark written in them would be read at another instant.
+    from orvex.transform.clickhouse import Source, SourceError, known_zone
+
+    for name in ("localtime", "posixrules", "Factory", "Mars/Olympus"):
+        assert not known_zone(name), name
+    for name in ("UTC", "Etc/GMT+4", "America/La_Paz", "US/Eastern", "Asia/Calcutta"):
+        assert known_zone(name), name
+    source = Source.__new__(Source)
+    source.name = "ch"
+    for declared in ("DateTime('localtime')", "DateTime64(3, 'posixrules')"):
+        source._zone = "UTC"
+        since = since_type(declared)
+        assert since is not None
+        with pytest.raises(SourceError) as raised:
+            source.zone_of(since)
+        assert raised.value.code == "SOURCE_ZONE_UNKNOWN"
+    source._zone = "localtime"  # the connection's zone
+    for text in ("DateTime", "DateTime64(3)"):
+        since = since_type(text)
+        assert since is not None
+        with pytest.raises(SourceError) as raised:
+            source.zone_of(since)
+        assert raised.value.code == "SOURCE_ZONE_UNKNOWN"
+    for text, zone in (("DateTime('UTC')", "UTC"), ("Date", None), ("Date32", None)):
+        since = since_type(text)
+        assert since is not None
+        found = source.zone_of(since)
+        assert zone is None or found == zone
