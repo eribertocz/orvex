@@ -65,9 +65,17 @@ JOINED = (
 )
 
 
-@pytest.mark.parametrize("sql", ["SELECT * FROM feed.data", JOINED])
+# An append model may not join (#194, decision #217 A): the joined model is a merge model.
+MERGE = AUTO.replace("strategy: append", "strategy: merge, unique_key: [id]")
+
+
+@pytest.mark.parametrize(
+    ("sql", "sidecar"),
+    [("SELECT * FROM feed.data", AUTO), (JOINED, MERGE)],
+    ids=["append", "joined-merge"],
+)
 def test_a_proven_filter_loads_only_newer_rows(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], sql: str
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], sql: str, sidecar: str
 ) -> None:
     write(
         tmp_path,
@@ -75,14 +83,14 @@ def test_a_proven_filter_loads_only_newer_rows(
             "project.yaml": PROJECT,
             "connections.yaml": CONNECTIONS,
             "models/s/m.sql": sql,
-            "models/s/m.yaml": AUTO,
+            "models/s/m.yaml": sidecar,
         },
     )
     original = (tmp_path / "models" / "s" / "m.sql").read_bytes()
     feed(tmp_path, (1, "C1", "2024-01-01 10:00:00+00"), (2, "C2", "2024-01-02 10:00:00+00"))
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 0, out
-    # The same rows plus a newer one: only the newer one is appended (no duplicates).
+    # The same rows plus a newer one: only the newer one is loaded (no duplicates).
     feed(
         tmp_path,
         (1, "C1", "2024-01-01 10:00:00+00"),
@@ -97,6 +105,27 @@ def test_a_proven_filter_loads_only_newer_rows(
     assert code == 0
     assert "> $since" in out
     assert (tmp_path / "models" / "s" / "m.sql").read_bytes() == original
+
+
+def test_an_append_model_that_joins_is_refused_before_anything_is_created(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #194: a reading whose consumer arrives after the run would never be loaded.
+    feed(tmp_path, (1, "C1", "2024-01-01 10:00:00+00"))
+    write(
+        tmp_path,
+        {
+            "project.yaml": PROJECT,
+            "connections.yaml": CONNECTIONS,
+            "models/s/m.sql": JOINED,
+            "models/s/m.yaml": AUTO,
+        },
+    )
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 1
+    assert out.startswith("INVALID_MODEL_SQL models/s/m.sql ")
+    assert "no join of any kind" in out
+    assert not (tmp_path / f".{SLUG}").exists()
 
 
 def test_an_unprovable_filter_is_refused_with_its_line(
