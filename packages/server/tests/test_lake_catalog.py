@@ -385,7 +385,8 @@ def test_verify_full_against_a_server_without_tls_fails_closed(
     assert code == 1
     assert "STORE_CATALOG_UNAVAILABLE" in out
     assert os.environ[PASSWORD_ENV] not in out
-    assert not (home(tmp_path) / lake_place.RECORD_FILE).exists()
+    # A PostgreSQL catalog cannot be shown to be absent: its record stays unfinished (#146).
+    assert record_text(tmp_path)["state"] == "creating"
 
 
 def test_switching_catalogs_after_the_lake_exists_is_refused(
@@ -641,6 +642,7 @@ def test_schedule_on_a_sqlite_catalog(
     from orvex.server.scheduler import schedule
 
     project(tmp_path, SQLITE)
+    (tmp_path / "models" / "s" / "m.yaml").write_text(SIDECAR + "freshness: 5m\n")
     feed(tmp_path, 3)
     cycles: list[int] = []
 
