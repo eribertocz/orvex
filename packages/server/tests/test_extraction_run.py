@@ -174,7 +174,8 @@ def test_incremental_runs_merge_new_and_late_rows(
     assert len(first) == 1000
     assert first[999] == (999, "M5", "2024-01-01 00:16:39.000000", "124.8750")
     assert record(folder)[0:4] == ("success", None, None, "1000")
-    assert record(folder)[4] == "1900-01-01 00:00:00"  # the lowest DateTime64 value
+    # The first instant of DateTime64(6), in seconds since 1970 UTC (#179).
+    assert record(folder)[4] == "-62167219200"
     assert record(folder)[5] == "2024-01-01T00:16:39.000000+00:00"
     # Downstream DuckDB model, in the same run, after the extraction model.
     assert lake_value(folder, "SELECT sum(events) FROM lake.marts.by_meter") == [(1000,)]
@@ -1019,6 +1020,74 @@ def test_a_deeply_nested_extraction_model_is_refused(
         return
     assert code == 1, out
     assert "too deeply nested to check" in out
+
+
+@pytest.mark.parametrize(
+    ("oldest", "declared", "operator"),
+    [
+        # #179: a Date32 time column with {since:Date32}: the first run reads before 1900.
+        ("toDate32('1850-06-01')", "Date32", ">"),
+        # West of UTC, midnight of 1970-01-01 comes after the first DateTime value (Reviewer
+        # pass 1 on #187): a row half an hour after 1970-01-01 00:00 UTC is still read.
+        ("toDateTime(1800, 'America/Lima')", "DateTime('America/Lima')", ">="),
+        ("toDateTime(0, 'UTC')", "DateTime('America/Lima')", ">="),
+        ("toDateTime(1800, 'UTC')", "DateTime", ">"),
+        # A DateTime64 parameter is bound as an instant, the same in every zone.
+        ("toDateTime64('1850-01-01 00:00:00', 3, 'UTC')", "DateTime64(3, 'America/Lima')", ">"),
+        ("toDateTime64('1850-01-01 00:00:00', 6, 'UTC')", "DateTime64(0)", ">"),
+    ],
+    ids=["date32-1850", "lima-epoch", "lima-epoch-0", "server-zone", "lima-1850", "seconds-1850"],
+)
+def test_a_first_run_loads_the_oldest_rows(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    oldest: str,
+    declared: str,
+    operator: str,
+) -> None:
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                f"SELECT n AS id, d FROM (SELECT number + 1 AS n, if(number = 0, {oldest}, "
+                f"{oldest} + 1) AS d FROM numbers(2)) WHERE d {operator} {{since:{declared}}}"
+            ),
+            "models/raw/ch_events.yaml": (
+                "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
+                "incremental:\n  strategy: merge\n  unique_key: [id]\n  time_column: d\n"
+                "  filter: manual\n"
+            ),
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 0, out
+    assert lake_value(folder, "SELECT id FROM lake.raw.ch_events ORDER BY id") == [(1,), (2,)]
+
+
+def test_a_since_that_starts_after_the_columns_first_value_is_refused(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "SELECT number + 1 AS id, toDate32('1950-06-01') AS d FROM numbers(2) "
+                "WHERE d > {since:Date}"
+            ),
+            "models/raw/ch_events.yaml": (
+                "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
+                "incremental:\n  strategy: merge\n  unique_key: [id]\n  time_column: d\n"
+                "  filter: manual\n"
+            ),
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "cannot start a first run at the oldest value" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
 
 
 # Three readings around the end of daylight saving time in New York (2024-11-03): 01:30 EDT,

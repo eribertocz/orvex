@@ -16,6 +16,7 @@ from orvex.transform.clickhouse import (
     SourceError,
     extraction_query,
     load_columns,
+    since_bound,
     since_type,
     since_value,
 )
@@ -67,17 +68,39 @@ def test_since_truncates_and_never_rounds_up() -> None:
 
 
 def test_since_on_first_runs_and_below_the_range_is_the_lowest_value() -> None:
-    for declared, lowest in [
-        ("Date", "1970-01-01"),
-        ("Date32", "1900-01-01"),
-        ("DateTime", "1970-01-01 00:00:00"),
-        ("DateTime64(6)", "1900-01-01 00:00:00"),
+    for declared, lowest, below in [
+        ("Date", "1970-01-01", "1969-12-31T00:00:00+00:00"),
+        ("Date32", "0000-01-01", None),
+        ("DateTime", "1900-01-01 00:00:00", "1969-12-31T23:59:59+00:00"),
+        ("DateTime64(6)", "-62167219200", None),
+        ("DateTime64(9)", "-9223372036.854775808", "1677-09-21T00:12:43.145224+00:00"),
     ]:
         found = since_type(declared)
         assert found is not None
         assert since_value(found, None, "1h", "UTC") == lowest
         assert since_value(found, "-infinity", None, "UTC") == lowest
-        assert since_value(found, "1850-01-01T00:00:00+00:00", None, "UTC") == lowest
+        if below is not None:
+            assert since_value(found, below, None, "UTC") == lowest
+        # Before Python's year 1 (a lookback past it): every type's first value is earlier.
+        assert since_value(found, "0001-01-01T00:30:00+00:00", "1h", "UTC") == lowest
+        # A first run's boundary for the checks: every row was read.
+        assert since_bound(found, lowest, "UTC") == ("-infinity", "-infinity")
+
+
+def test_since_keeps_values_before_1970_and_before_1000() -> None:
+    # #179: a time west of UTC on 1970-01-01 is still in the DateTime range (epoch 0 is
+    # 1969-12-31 19:00 in Lima), and a year before 1000 is written in four digits.
+    seconds = since_type("DateTime('America/Lima')")
+    assert seconds is not None
+    assert since_value(seconds, "1970-01-01T01:00:00+00:00", None, "UTC") == "1969-12-31 20:00:00"
+    millis = since_type("DateTime64(3, 'UTC')")
+    assert millis is not None
+    assert since_value(millis, "0850-03-01T12:00:00+00:00", None, "UTC") == (
+        "0850-03-01 12:00:00.000"
+    )
+    days = since_type("Date32")
+    assert days is not None
+    assert since_value(days, "0850-03-01", None, "UTC") == "0850-03-01"
 
 
 def test_a_date_watermark_starts_at_midnight_in_the_parameter_zone() -> None:
@@ -351,6 +374,78 @@ def test_an_append_since_must_be_as_precise_as_the_time_column(
     assert [item.code.root for item in problems] == (["INVALID_MODEL_SQL"] if refused else [])
     if refused:
         assert "does not match the time_column t" in problems[0].message
+
+
+@pytest.mark.parametrize(
+    ("strategy", "declared", "column_type", "refused"),
+    [
+        ("merge", "Date", "Date32", True),
+        ("append", "Date", "Date32", True),
+        ("merge", "DateTime('UTC')", "DateTime64(3, 'UTC')", True),
+        ("append", "DateTime('UTC')", "DateTime64(3, 'UTC')", True),
+        ("merge", "DateTime('UTC')", "Date32", True),
+        ("merge", "Date", "Nullable(DateTime64(6, 'UTC'))", True),
+        # A date compared with a time at midnight in a zone west of UTC starts too late.
+        ("merge", "Date", "DateTime", True),
+        ("merge", "Date", "Nullable(DateTime('America/Lima'))", True),
+        ("merge", "Date32", "DateTime64(3, 'UTC')", True),
+        ("merge", "Date32", "DateTime64(6)", True),
+        # Nanoseconds and other precisions cannot be compared at year 0 (a time column holds
+        # at most microseconds, so a `{since:DateTime64(9)}` needs a date or seconds column).
+        ("merge", "DateTime64(9, 'UTC')", "DateTime64(6, 'UTC')", True),
+        ("merge", "Date32", "Date32", False),
+        ("merge", "DateTime64(3, 'UTC')", "DateTime64(3, 'UTC')", False),
+        ("merge", "DateTime64(6, 'America/Lima')", "DateTime64(3, 'Etc/GMT-14')", False),
+        ("merge", "Date", "Date", False),
+        ("merge", "DateTime('UTC')", "DateTime('UTC')", False),
+        ("merge", "DateTime('America/Lima')", "DateTime", False),
+        ("merge", "DateTime", "Date", False),
+        ("merge", "Date32", "DateTime('America/Lima')", False),
+        ("merge", "DateTime64(0, 'UTC')", "Date32", False),
+        ("merge", "DateTime64(9)", "Date32", True),  # 1677 is after year 0
+        ("merge", "DateTime64(9, 'UTC')", "DateTime('UTC')", False),
+        ("merge", "DateTime64(3)", "Nullable(DateTime)", False),
+    ],
+)
+def test_a_since_that_cannot_start_at_the_columns_first_value_is_refused(
+    tmp_path: Path, strategy: str, declared: str, column_type: str, refused: bool
+) -> None:
+    # #179: a first run binds the type's lowest value; where it is later than the column's
+    # first value in some zone, or cannot be compared with it, older rows would never be loaded.
+    # The table was measured on ClickHouse 26.9 (see `_FIRST_RUN_READS`).
+    from orvex.contracts.project.v1 import ClickhouseConnection
+    from orvex.transform.clickhouse import map_type, since_range_problems
+    from orvex.transform.models import discover_models
+
+    connection = ClickhouseConnection.model_validate(
+        {
+            "type": "clickhouse",
+            "host": "h",
+            "port": 8123,
+            "database": "d",
+            "user": "u",
+            "password": "${env:UNUSED}",
+            "read_only": True,
+        }
+    )
+    (tmp_path / "models" / "raw").mkdir(parents=True)
+    (tmp_path / "models" / "raw" / "e.sql").write_text(
+        f"SELECT id, t FROM events WHERE t > {{since:{declared}}}", encoding="utf-8"
+    )
+    unique = "  unique_key: [id]\n" if strategy == "merge" else ""
+    (tmp_path / "models" / "raw" / "e.yaml").write_text(
+        "version: 1\nconnection: ch\nmaterialized: incremental\nincremental:\n"
+        f"  strategy: {strategy}\n  time_column: t\n{unique}  filter: manual\n",
+        encoding="utf-8",
+    )
+    found = discover_models(tmp_path, {"ch": connection})
+    assert found.problems == ()
+    mapped = map_type(column_type)
+    assert mapped is not None
+    problems = since_range_problems(found.models[0], (Column("t", column_type, mapped),))
+    assert [item.code.root for item in problems] == (["INVALID_MODEL_SQL"] if refused else [])
+    if refused:
+        assert "cannot start a first run at the oldest value" in problems[0].message
 
 
 @pytest.mark.parametrize(
