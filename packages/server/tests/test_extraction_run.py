@@ -1388,6 +1388,13 @@ TUPLED = (
             f"({TUPLED})) AS s WHERE day >= {{since:Date}}",
             True,
         ),
+        # Reviewer pass 5 on #205: a field in an `IN (SELECT …)` is not on the row path.
+        (
+            f"SELECT event_id, month, day FROM ({DAILY}) AS s WHERE day >= {{since:Date}} "
+            f"AND event_id IN (SELECT event_id FROM (SELECT event_id, E.day AS day FROM "
+            f"({TUPLED})) WHERE day > '2000-01-01')",
+            True,
+        ),
     ],
     ids=[
         "tuple-field",
@@ -1399,6 +1406,7 @@ TUPLED = (
         "field-two-levels-above",
         "field-above-two-bounds",
         "field-flattened-below-the-bound",
+        "field-in-an-in-subquery",
     ],
 )
 def test_a_qualified_bound_that_reads_a_tuple_field_is_refused(

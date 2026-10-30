@@ -2197,14 +2197,6 @@ def _marks(lines: list[_TreeLine]) -> list[_TreeLine]:
     ]
 
 
-def _query_of(line: _TreeLine) -> _TreeLine | None:
-    """The nearest `QUERY` node above `line`."""
-    current = line.parent
-    while current is not None and not current.text.startswith("QUERY id:"):
-        current = current.parent
-    return current
-
-
 def projects_a_field(marked_query_tree: str, time_column: str) -> bool:
     """Whether a query returns its time column from a field of a `Tuple`, `JSON` or similar
     column (`E.day AS day`, `tupleElement(E, 'day') AS day`) while a `{since:…}` bound lies in a
