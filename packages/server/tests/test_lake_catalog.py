@@ -7,6 +7,8 @@ and, for TLS, `STORE_TEST_POSTGRES_TLS` and `STORE_TEST_POSTGRES_TLS_CA`; CI pro
 
 from __future__ import annotations
 
+import io
+import json
 import os
 import uuid
 from pathlib import Path
@@ -195,6 +197,7 @@ def test_a_remote_postgres_catalog_needs_verify_full(
     out = problem(capsys, tmp_path)
     assert out.startswith("LAKE_TLS_REQUIRED project.yaml")
     assert "secret-value" not in out
+    assert not home(tmp_path).exists()  # nothing created (#146)
 
 
 @pytest.mark.parametrize(
@@ -213,6 +216,7 @@ def test_unsupported_catalogs_and_literal_passwords_are_refused(
     out = problem(capsys, tmp_path)
     assert out.startswith("PROJECT_SCHEMA_INVALID project.yaml")
     assert "literal-secret" not in out
+    assert not home(tmp_path).exists()  # nothing created (#146)
 
 
 def test_an_unset_password_variable_is_named(
@@ -434,7 +438,8 @@ def test_a_symlinked_folder_is_the_same_lake(tmp_path: Path) -> None:
     (tmp_path / "link").symlink_to(folder)
     linked = tmp_path / "link"
     chosen = lake_place.place(load_project(linked), home(linked))
-    lake_place.record(home(linked), chosen)  # first opened through the link
+    lake_place.begin(home(linked), chosen)  # first opened through the link
+    lake_place.confirm(home(linked), chosen)
     assert problems(folder) == []
     assert problems(linked) == []
     assert chosen.identity["path"] == (folder / "c" / "l.sqlite").resolve().as_posix()
@@ -447,3 +452,213 @@ def test_the_default_path_is_recognized_through_a_dotted_name(
     bare(tmp_path / "proj", "lake:\n  catalog:\n    type: sqlite\n")
     (tmp_path / "other").mkdir()
     assert problems(tmp_path / "other" / ".." / "proj") == []
+
+
+# --- #146: the record is written before the first open and confirmed after it -------------------
+
+SQLITE = "lake:\n  catalog:\n    type: sqlite\n    path: c/l.sqlite\n"
+OTHER_SQLITE = "lake:\n  catalog:\n    type: sqlite\n    path: other/l.sqlite\n"
+POSTGRES = (
+    "lake:\n  catalog:\n    type: postgres\n    host: {host}\n    port: {port}\n"
+    "    database: d\n    user: u\n    password: ${{env:LAKE_TEST_PASSWORD}}\n"
+)
+
+
+def chosen(folder: Path) -> lake_place.Place:
+    return lake_place.place(load_project(folder), home(folder))
+
+
+def record_text(folder: Path) -> dict[str, object]:
+    found: dict[str, object] = json.loads((home(folder) / lake_place.RECORD_FILE).read_text())
+    return found
+
+
+def test_a_first_open_that_never_started_leaves_nothing_binding(tmp_path: Path) -> None:
+    folder = bare(tmp_path / "proj", SQLITE)
+    lake_place.begin(home(folder), chosen(folder))
+    assert record_text(folder)["state"] == "creating"
+    assert not lake_place.exists(home(folder))  # not a lake yet
+    # No catalog file: nothing was created there, so other settings are accepted ...
+    bare(folder, OTHER_SQLITE)
+    assert problems(folder) == []
+    # ... and replace the unfinished record.
+    lake_place.begin(home(folder), chosen(folder))
+    assert "other" in str(record_text(folder)["path"])
+
+
+def test_an_unfinished_first_open_binds_once_its_catalog_exists(tmp_path: Path) -> None:
+    folder = bare(tmp_path / "proj", SQLITE)
+    lake_place.begin(home(folder), chosen(folder))
+    catalog = folder / "c" / "l.sqlite"
+    catalog.parent.mkdir(parents=True)
+    catalog.touch()  # the open created the catalog, then stopped before confirming
+    assert problems(folder) == []  # the same settings: the run goes on and confirms
+    bare(folder, OTHER_SQLITE)
+    found = problems(folder)
+    assert found[0].startswith("LAKE_LOCATION_CHANGED project.yaml"), found
+    assert "did not finish" in found[0]
+    assert f".{SLUG}/{lake_place.RECORD_FILE}" in found[0]
+
+
+def test_confirm_makes_the_record_the_lakes(tmp_path: Path) -> None:
+    folder = bare(tmp_path / "proj", SQLITE)
+    place = chosen(folder)
+    lake_place.begin(home(folder), place)
+    lake_place.confirm(home(folder), place)
+    assert "state" not in record_text(folder)
+    assert lake_place.exists(home(folder))
+    bare(folder, OTHER_SQLITE)
+    found = problems(folder)
+    assert "was created with other settings" in found[0], found
+
+
+def test_abandon_drops_the_record_only_when_nothing_was_created(tmp_path: Path) -> None:
+    folder = bare(tmp_path / "proj", SQLITE)
+    place = chosen(folder)
+    lake_place.begin(home(folder), place)
+    lake_place.abandon(home(folder), place)
+    assert not (home(folder) / lake_place.RECORD_FILE).exists()
+    lake_place.begin(home(folder), place)
+    (folder / "c").mkdir()
+    (folder / "c" / "l.sqlite").touch()
+    lake_place.abandon(home(folder), place)
+    assert record_text(folder)["state"] == "creating"
+
+
+def test_an_unfinished_postgres_record_binds_other_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A PostgreSQL catalog cannot be checked from here: the unfinished record stays binding.
+    monkeypatch.setenv("LAKE_TEST_PASSWORD", "secret-value")
+    folder = bare(tmp_path / "proj", POSTGRES.format(host="localhost", port=1))
+    place = chosen(folder)
+    lake_place.begin(home(folder), place)
+    lake_place.abandon(home(folder), place)
+    assert record_text(folder)["state"] == "creating"
+    assert problems(folder) == []
+    bare(folder, POSTGRES.format(host="localhost", port=2))
+    found = problems(folder)
+    assert "did not finish" in found[0], found
+    assert "secret-value" not in found[0]
+
+
+def test_a_postgres_host_is_compared_without_letter_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LAKE_TEST_PASSWORD", "secret-value")
+    folder = bare(tmp_path / "proj", POSTGRES.format(host="localhost", port=5432))
+    place = chosen(folder)
+    lake_place.begin(home(folder), place)
+    lake_place.confirm(home(folder), place)
+    bare(folder, POSTGRES.format(host="LOCALHOST", port=5432))
+    assert problems(folder) == []
+
+
+@pytest.mark.parametrize(
+    "text", ['{"catalog": "sqlite", "path": "/x", "state": "other"}', "[]", "{"]
+)
+def test_a_record_that_is_not_one_is_refused(tmp_path: Path, text: str) -> None:
+    folder = bare(tmp_path / "proj", SQLITE)
+    home(folder).mkdir(parents=True)
+    (home(folder) / lake_place.RECORD_FILE).write_text(text)
+    found = problems(folder)
+    assert found[0].startswith(f"LAKE_LOCATION_CHANGED .{SLUG}/{lake_place.RECORD_FILE}"), found
+
+
+def test_a_record_written_before_146_keeps_its_meaning(tmp_path: Path) -> None:
+    folder = bare(tmp_path / "proj", SQLITE)
+    home(folder).mkdir(parents=True)
+    identity = dict(chosen(folder).identity)
+    (home(folder) / lake_place.RECORD_FILE).write_text(json.dumps(identity))
+    assert lake_place.exists(home(folder))
+    assert problems(folder) == []
+    bare(folder, OTHER_SQLITE)
+    assert "was created with other settings" in problems(folder)[0]
+
+
+def test_a_stop_after_the_first_open_leaves_a_record_the_next_run_confirms(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #146 / #147 item 2: the default catalog with lake.encrypted, stopped right after the
+    # open, before the record was confirmed.
+    project(tmp_path, "lake:\n  encrypted: true\n")
+    feed(tmp_path, 3)
+
+    def stopped(home_: Path, place: lake_place.Place) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(lake_place, "confirm", stopped)
+    with pytest.raises(KeyboardInterrupt):
+        main(["run", str(tmp_path)])
+    capsys.readouterr()
+    assert record_text(tmp_path)["state"] == "creating"
+    monkeypatch.undo()
+    code, out = run(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    assert "LAKE_LOCATION_CHANGED" not in out
+    assert "state" not in record_text(tmp_path)
+
+
+def test_a_stop_after_a_sqlite_first_open_binds_its_settings(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project(tmp_path, SQLITE)
+    feed(tmp_path, 3)
+
+    def stopped(home_: Path, place: lake_place.Place) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(lake_place, "confirm", stopped)
+    with pytest.raises(KeyboardInterrupt):
+        main(["run", str(tmp_path)])
+    capsys.readouterr()
+    monkeypatch.undo()
+    project(tmp_path, SQLITE + "  data:\n    path: elsewhere\n")
+    code, out = run(capsys, "run", str(tmp_path))
+    assert code == 1, out
+    assert "did not finish" in out
+    assert not (tmp_path / "elsewhere").exists()  # nothing opened
+
+
+def test_a_sqlite_first_open_that_fails_leaves_no_record(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project(tmp_path, SQLITE)
+    feed(tmp_path, 3)
+    (tmp_path / "c").write_text("a file where the catalog's folder goes")
+    code, out = run(capsys, "run", str(tmp_path))
+    assert code == 1, out
+    assert not (home(tmp_path) / lake_place.RECORD_FILE).exists()
+    (tmp_path / "c").unlink()
+    code, out = run(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    assert "state" not in record_text(tmp_path)
+
+
+def test_schedule_on_a_sqlite_catalog(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orvex.server.scheduler import schedule
+
+    project(tmp_path, SQLITE)
+    feed(tmp_path, 3)
+    cycles: list[int] = []
+
+    def sleep(seconds: float) -> None:
+        cycles.append(1)
+
+    assert (
+        schedule(
+            tmp_path,
+            load_identity(),
+            io.StringIO(),
+            sleep=sleep,
+            should_stop=lambda: len(cycles) > 0,
+        )
+        == 0
+    )
+    assert count(tmp_path) == 3
+    assert "state" not in record_text(tmp_path)
+    code, out = run(capsys, "runs", str(tmp_path))
+    assert code == 0, out
+    assert "success" in out
