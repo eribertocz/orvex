@@ -738,7 +738,9 @@ def _prepass_spaces(data: bytes) -> list[tuple[int, int]]:
                     data[position] == 0x24
                     and size - (position + 1) >= length + 1
                     and data[position + length + 1] == 0x24
-                    and data[position + 1 : position + 1 + length] == tag
+                    and data.startswith(
+                        tag, position + 1
+                    )  # stops at the first difference, as memcmp
                 ):
                     position += length + 1  # on the closing `$`, read again as regular
                     state = "regular"
