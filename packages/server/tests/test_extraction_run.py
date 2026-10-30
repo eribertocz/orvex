@@ -703,6 +703,50 @@ def test_a_date_since_on_a_zoned_column_is_refused_before_anything_runs(
     assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
 
 
+def test_without_the_refusal_a_date_since_on_a_zoned_column_fails_and_loses_nothing(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # #163: measured with the validation refusal bypassed (a seam in this test only). A
+    # `DateTime` column, which `{since:Date32}` may bound from its first value (#179). The
+    # second run binds the watermark's date, which ClickHouse compares at midnight in Tokyo:
+    # it reads part of February, and the oldest-row rule (#155) fails the run before anything
+    # is written. So the refusal saves a failure on every run, not rows.
+    monkeypatch.setattr(clickhouse, "since_column_problems", lambda model, columns: [])
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "SELECT n AS id, toString(toStartOfMonth(t)) AS month, t FROM (SELECT number AS n, "
+                "toTimeZone(toDateTime('2024-02-01 00:00:00', 'UTC') + "
+                "toIntervalHour(6 * number), 'Asia/Tokyo') AS t FROM numbers(111)) "
+                "WHERE t > {since:Date32}"
+            ),
+            "models/raw/ch_events.yaml": (
+                "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
+                "incremental:\n  strategy: partition_overwrite\n  time_column: t\n"
+                "  partition_by: [month]\n  filter: manual\n"
+            ),
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 0, out
+    rows = (
+        "SELECT count(*), sum(id), CAST(min(t) AS VARCHAR), CAST(max(t) AS VARCHAR) "
+        "FROM lake.raw.ch_events"
+    )
+    loaded = lake_value(folder, rows)
+    assert loaded[0][0:2] == (111, 111 * 110 // 2)
+    code, out = run(capsys, folder)  # nothing changed at the source
+    assert code == 1, out
+    assert "PARTITION_INCOMPLETE" in out
+    assert record(folder)[0:2] == ("failed", "PARTITION_INCOMPLETE")
+    assert lake_value(folder, rows) == loaded  # no row lost or changed
+
+
 def test_a_time_since_on_a_zoned_column_is_exact(
     tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
 ) -> None:
