@@ -461,3 +461,47 @@ def test_one_budget_covers_the_whole_statement(tmp_path: Path) -> None:
     with pytest.raises(StoreError) as raised:
         _guarded(together, table_functions())  # 50,000 entries together: past it
     assert raised.value.code == "STORE_STATEMENT_INVALID"
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "{folder}/" + "**/" * 900 + "zz",
+        "/" * 3000 + "zz*",
+        "/u*" + "/" * 3000 + "x",
+        "/zz_none/" + "**/" * 2000 + "x",
+    ],
+    ids=[
+        "many-double-stars",
+        "many-slashes",
+        "slashes-after-a-pattern",
+        "double-stars-below-nothing",
+    ],
+)
+def test_a_long_pattern_is_checked_quickly_without_error(tmp_path: Path, shape: str) -> None:
+    # #178 Reviewer pass 1: these took seconds, or raised RecursionError.
+    for index in range(10):
+        (tmp_path / f"s{index}").mkdir()
+    sql = "SELECT '" + shape.format(folder=tmp_path) + "' AS p"
+    started = time.monotonic()
+    _guarded(sql, table_functions())  # nothing matches: allowed, and no other error
+    assert time.monotonic() - started < 1.0
+
+
+def test_a_symbolic_link_loop_is_refused_not_crashed(tmp_path: Path) -> None:
+    (tmp_path / "loop").symlink_to(".")
+    with pytest.raises(StoreError) as raised:
+        _guarded(f"SELECT '{tmp_path}/**/zz*' AS p", table_functions())
+    assert raised.value.code == "STORE_STATEMENT_INVALID"
+
+
+def test_a_pattern_under_the_home_folder_is_expanded_as_before(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "x.csv").write_text("a\n1\n")
+    for named in ("~/data/x.csv", "~/data/*.csv", "~/**/x.csv"):
+        with pytest.raises(StoreError):
+            _guarded(f"SELECT '{named}' AS p", table_functions())
+    _guarded("SELECT '~/data/*.parquet' AS p", table_functions())  # nothing matches

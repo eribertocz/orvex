@@ -891,17 +891,23 @@ class _Unchecked(Exception):
     """A pattern could not be checked within the budget, or a folder could not be listed."""
 
 
-def _listed(folder: str, budget: _Budget) -> list[os.DirEntry[str]]:
-    """A folder's entries, each counted against the budget. A folder that does not exist (or is
-    not one) has none; one that cannot be listed cannot be checked."""
+def _spend(budget: _Budget, units: int = 1) -> None:
+    budget.entries -= units
+    if budget.entries < 0:
+        raise _Unchecked
+
+
+def _listed(folder: str, budget: _Budget) -> list[tuple[str, bool]]:
+    """A folder's entries as (name, is a folder), each read counted against the budget, the
+    read itself too. A folder that does not exist (or is not one) has none; one that cannot be
+    listed, or an entry whose kind cannot be told (a symbolic-link loop), cannot be checked."""
+    _spend(budget)
     try:
         with os.scandir(folder or ".") as found:
             entries = []
             for entry in found:
-                budget.entries -= 1
-                if budget.entries < 0:
-                    raise _Unchecked
-                entries.append(entry)
+                _spend(budget)
+                entries.append((entry.name, entry.is_dir()))
             return entries
     except FileNotFoundError, NotADirectoryError:
         return []
@@ -911,32 +917,36 @@ def _listed(folder: str, budget: _Budget) -> list[os.DirEntry[str]]:
 
 def _expanded(pattern: str, budget: _Budget) -> Iterator[str]:
     """The paths a glob pattern names, as DuckDB expands it (`**` at any depth, hidden names
-    included, like `glob.iglob(recursive=True, include_hidden=True)`), read within `budget`."""
-
-    def walk(base: str, parts: list[str]) -> Iterator[str]:
-        if not parts:
+    included, like `glob.iglob(recursive=True, include_hidden=True)`), read within `budget`.
+    The walk keeps its own stack (no recursion, whatever the pattern's length), merges a run of
+    `**` into one, drops empty parts, and spends the budget on every step as well as on every
+    entry it reads (#178, Reviewer pass 1)."""
+    parts: list[str] = []
+    for part in pattern.split(os.sep):
+        if part and not (part == "**" and parts[-1:] == ["**"]):
+            parts.append(part)
+    stack: list[tuple[str, int]] = [(os.sep if pattern.startswith(os.sep) else "", 0)]
+    while stack:
+        _spend(budget)
+        base, index = stack.pop()
+        if index == len(parts):
             yield base
-            return
-        head, rest = parts[0], parts[1:]
-        if head == "":
-            yield from walk(base, rest)
-        elif head == "**":
-            yield from walk(base, rest)  # no folder at all
-            for entry in _listed(base, budget):
-                below = os.path.join(base, entry.name)
-                if not rest:
+            continue
+        head = parts[index]
+        if head == "**":
+            stack.append((base, index + 1))  # no folder at all
+            for name, folder in _listed(base, budget):
+                below = os.path.join(base, name)
+                if index + 1 == len(parts):
                     yield below
-                if entry.is_dir():
-                    yield from walk(below, parts)
+                if folder:
+                    stack.append((below, index))
         elif _GLOB.search(head):
-            for entry in _listed(base, budget):
-                if fnmatch.fnmatchcase(entry.name, head):
-                    yield from walk(os.path.join(base, entry.name), rest)
+            for name, _ in _listed(base, budget):
+                if fnmatch.fnmatchcase(name, head):
+                    stack.append((os.path.join(base, name), index + 1))
         else:
-            yield from walk(os.path.join(base, head), rest)
-
-    root = os.sep if pattern.startswith(os.sep) else ""
-    yield from walk(root, pattern.split(os.sep))
+            stack.append((os.path.join(base, head), index + 1))
 
 
 def _names_a_file(token: str, budget: _Budget | None = None) -> bool:
