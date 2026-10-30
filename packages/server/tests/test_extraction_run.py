@@ -734,7 +734,10 @@ def test_without_the_refusal_a_date_since_on_a_zoned_column_fails_and_loses_noth
     )
     code, out = run(capsys, folder)
     assert code == 0, out
-    rows = "SELECT count(*), sum(id), min(t), max(t) FROM lake.raw.ch_events"
+    rows = (
+        "SELECT count(*), sum(id), CAST(min(t) AS VARCHAR), CAST(max(t) AS VARCHAR) "
+        "FROM lake.raw.ch_events"
+    )
     loaded = lake_value(folder, rows)
     assert loaded[0][0:2] == (111, 111 * 110 // 2)
     code, out = run(capsys, folder)  # nothing changed at the source
