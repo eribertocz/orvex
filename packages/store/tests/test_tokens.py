@@ -787,7 +787,7 @@ def test_a_long_dollar_quoted_string_is_rewritten_in_linear_time() -> None:
     # Reviewer pass 2 on #214: comparing the closing tag by slicing copied it at every `$`, so a
     # 1.6 MB statement took about 5 s; DuckDB parses it in a fraction of a second.
     size = 400_000
-    sql = "SELECT  $" + "a" * size + "$" + "$" * (2 * size) + "$" + "a" * size + "$"
+    sql = "SELECT \u00a0$" + "a" * size + "$" + "$" * (2 * size) + "$" + "a" * size + "$"
     started = time.monotonic()
     _plain(sql)
     assert time.monotonic() - started < 1.0
