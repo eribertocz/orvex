@@ -20,6 +20,7 @@ from orvex.server import commands, lake_place
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.project import ProjectLoadError, load_project
+from orvex.store.errors import StoreError
 from orvex.store.lake import Limits, open_lake
 
 SLUG = load_identity().slug
@@ -754,7 +755,6 @@ def test_a_lake_whose_catalog_file_is_missing_is_refused_everywhere(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], lake: str, file: str
 ) -> None:
     from orvex.server import maintenance, scheduler
-    from orvex.store.errors import StoreError
 
     project(tmp_path, lake)
     feed(tmp_path, 3)
@@ -835,7 +835,6 @@ def test_a_default_lake_is_recorded_and_refused_when_its_catalog_is_lost(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     from orvex.server import scheduler
-    from orvex.store.errors import StoreError
 
     project(tmp_path)  # no lake section: the default lake
     feed(tmp_path, 3)
@@ -860,6 +859,9 @@ def test_a_default_lake_is_recorded_and_refused_when_its_catalog_is_lost(
     code, out = run(capsys, "run", str(tmp_path))
     assert code == 0, out
     assert count(tmp_path) == 5
+    code, out = run(capsys, "runs", str(tmp_path))
+    assert code == 0, out
+    assert out.count("success") == 2  # the history before the loss is kept
 
 
 @pytest.mark.parametrize("command", ["runs", "run"])
@@ -897,7 +899,50 @@ def test_default_lake_data_without_catalog_or_record_is_refused(
         code, out = run(capsys, command, str(tmp_path))
         assert code == 1, (command, out)
         assert "STORE_CATALOG_UNAVAILABLE" in out, (command, out)
+        assert (home(tmp_path) / "lake" / "data").as_posix() in out, (command, out)
     assert not (home(tmp_path) / "lake" / "catalog.ducklake").exists()
+
+
+def orphaned(folder: Path) -> Path:
+    """A default lake made before #204: its catalog file and a data file, no record."""
+    default_lake(folder)
+    data = home(folder) / "lake" / "data" / "s" / "m"
+    data.mkdir(parents=True)
+    (data / "x.parquet").write_bytes(b"x")
+    return home(folder) / "lake" / "catalog.ducklake"
+
+
+def test_orphaned_data_is_named_in_the_refusal(tmp_path: Path) -> None:
+    folder = bare(tmp_path / "proj", "")
+    orphaned(folder).unlink()
+    with pytest.raises(StoreError) as raised:
+        commands._refuse_missing_catalog(home(folder))
+    data = (home(folder) / "lake" / "data").as_posix()
+    assert raised.value.code == "STORE_CATALOG_UNAVAILABLE"
+    assert data in str(raised.value)
+    assert raised.value.details["data"] == data
+    assert lake_place.RECORD_FILE not in str(raised.value)  # there is no record to remove
+
+
+def test_a_failed_first_open_after_204_still_protects_the_default_lake(tmp_path: Path) -> None:
+    # Reviewer pass 1 on #207: the first `run` after upgrading writes a `creating` record and
+    # fails; a later `runs` confirms it, and a lost catalog is refused either way.
+    folder = bare(tmp_path / "proj", "")
+    catalog = orphaned(folder)
+    place = chosen(folder)
+    lake_place.begin(home(folder), place)
+    lake_place.abandon(home(folder), place)  # the open failed; the catalog is there, so it stays
+    assert record_text(folder)["state"] == "creating"
+    catalog.unlink()  # lost before any other open
+    assert lake_place.exists(home(folder))
+    with pytest.raises(StoreError) as raised:
+        commands._refuse_missing_catalog(home(folder))
+    assert raised.value.code == "STORE_CATALOG_UNAVAILABLE"
+    default_lake(folder)  # restored
+    lake_place.adopt(home(folder), place)  # what `runs`, `maintain` and the scheduler do
+    assert "state" not in record_text(folder)
+    catalog.unlink()
+    assert lake_place.missing_catalog(home(folder)) == catalog.as_posix()
 
 
 def test_a_fresh_project_has_no_lake_and_no_orphan_data(tmp_path: Path) -> None:
