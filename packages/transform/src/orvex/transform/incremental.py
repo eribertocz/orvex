@@ -605,9 +605,10 @@ def since_is_a_lower_bound(
 
     def keeps_rows(node: Node) -> bool:
         """Whether a query on the time column's trace keeps every row it reads (#183): no
-        `LIMIT`/`OFFSET`, sample, `DISTINCT ON`, `QUALIFY`, nor a subquery in `WHERE` or `HAVING`
-        that chooses rows by reading others. An `append` model never reads again a row it left
-        out at or before the watermark."""
+        `LIMIT`/`OFFSET`, sample (on any table it reads, joined ones included), `DISTINCT ON`,
+        `QUALIFY`, window function, nor a subquery in its select list, `WHERE`, `HAVING` or a
+        join's `ON`: each lets this query, or one above it, choose rows by reading others. An
+        `append` model never reads again a row it left out at or before the watermark."""
         modifiers = node.get("modifiers")
         for modifier in modifiers if isinstance(modifiers, list) else []:
             if not isinstance(modifier, dict):
@@ -622,7 +623,11 @@ def since_is_a_lower_bound(
             return False
         # A window function lets a query above choose rows per key, as `QUALIFY` does
         # (`row_number() OVER (…) AS rn` … `WHERE rn = 1`; Reviewer pass 1 on #188).
-        if any(item.get("class") == "WINDOW" for item in nodes(node.get("select_list"))):
+        # A subquery in the select list does the same: `(SELECT max(read_at) … WHERE s2.id =
+        # s.id) AS m` … `WHERE read_at = m` (Reviewer pass 3 on #188).
+        if any(
+            item.get("class") in {"WINDOW", "SUBQUERY"} for item in nodes(node.get("select_list"))
+        ):
             return False
         # Conditions that read other rows: in `WHERE`, `HAVING`, or a join's `ON`.
         conditions: list[object] = [node.get("where_clause"), node.get("having")]

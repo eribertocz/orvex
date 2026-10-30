@@ -1352,6 +1352,9 @@ def test_a_clickhouse_name_explain_ast_cannot_delimit_is_seen(sql: str, spaced: 
         # Reviewer pass 2 on #188: a sample on either side of a join.
         "SELECT r.* FROM src AS r TABLESAMPLE 10% JOIN m USING (id)",
         "SELECT r.* FROM src AS r JOIN m TABLESAMPLE 10% USING (id)",
+        # Reviewer pass 3 on #188: a select-list subquery filtered by a query above.
+        "SELECT * FROM (SELECT s.*, (SELECT max(read_at) FROM src AS s2 WHERE s2.id = s.id) "
+        "AS m FROM src AS s) WHERE read_at = m",
     ],
     ids=[
         "limit",
@@ -1364,6 +1367,7 @@ def test_a_clickhouse_name_explain_ast_cannot_delimit_is_seen(sql: str, spaced: 
         "subquery-in-join-on",
         "sample-on-joined-left",
         "sample-on-joined-right",
+        "select-list-subquery-below",
     ],
 )
 def test_an_append_model_that_leaves_rows_out_below_its_filter_is_refused(
@@ -1497,3 +1501,13 @@ def test_a_clickhouse_relation_read_in_an_expression_is_seen() -> None:
 """
     assert _reads_a_relation_in_an_expression(in_table)
     assert not _reads_a_relation_in_an_expression(joined)
+
+
+def test_a_select_list_subquery_in_the_filtering_query_is_refused(tmp_path: Path) -> None:
+    # Reviewer pass 3 on #188: the same choice when the filter is in that query.
+    sql = (
+        "SELECT s.*, (SELECT max(read_at) FROM src AS s2 WHERE s2.id = s.id) AS m "
+        "FROM src AS s WHERE read_at > $since AND read_at = m"
+    )
+    found = config_problems(sql_model(tmp_path, MANUAL_APPEND, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
