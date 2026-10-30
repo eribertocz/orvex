@@ -219,11 +219,9 @@ def test_column_rules_are_checked_by_binding_without_running(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     feed(tmp_path, rows((1, "n", "1.0000")))
-    project(
-        tmp_path,
-        APPEND.replace("time_column: read_at", "time_column: region"),
-        "SELECT * FROM feed.data WHERE region > $since",
-    )
+    # merge, not append: an append model's `$since` must bound its time column (#135), which
+    # a VARCHAR column cannot be compared with.
+    project(tmp_path, MERGE.replace("time_column: read_at", "time_column: region"))
     code, out = command(capsys, "validate", str(tmp_path))
     assert code == 1
     assert out.startswith("TIME_COLUMN_NOT_TEMPORAL models/s/m.yaml")
