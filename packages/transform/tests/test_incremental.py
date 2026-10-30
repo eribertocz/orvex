@@ -1569,6 +1569,19 @@ def test_a_generator_keeps_todays_rules_in_an_append_model(tmp_path: Path) -> No
         ("auto", "SELECT *, random() AS r FROM src WHERE r < 0.5"),
         ("auto", "SELECT id, read_at FROM src GROUP BY ALL HAVING random() < 0.5"),
         ("auto", "SELECT * FROM src QUALIFY random() < 0.5"),
+        ("auto", "SELECT * FROM (SELECT *, {'a': random()} AS r FROM src) WHERE r.a < 0.5"),
+        (
+            "manual",
+            "SELECT * FROM (SELECT *, {'a': random()} AS r FROM src) "
+            "WHERE read_at > $since AND r.a < 0.5",
+        ),
+        ("auto", "SELECT * FROM (SELECT *, random() AS r FROM src) WHERE #4 < 0.5"),
+        ("auto", "SELECT * FROM (SELECT *, random() AS r FROM src) WHERE COLUMNS('^r$') < 0.5"),
+        (
+            "manual",
+            "SELECT * FROM (SELECT *, random() AS r FROM src) "
+            "WHERE read_at > $since AND COLUMNS('^r$') < 0.5",
+        ),
     ],
     ids=[
         "where",
@@ -1579,6 +1592,11 @@ def test_a_generator_keeps_todays_rules_in_an_append_model(tmp_path: Path) -> No
         "alias",
         "having",
         "qualify",
+        "struct-field",
+        "struct-field-manual",
+        "positional",
+        "columns",
+        "columns-manual",
     ],
 )
 def test_an_append_condition_that_changes_between_runs_is_refused(

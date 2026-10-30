@@ -850,7 +850,8 @@ def _walk(node: object) -> list[dict[str, object]]:
 def _changing_call(expression: object, changing: Mapping[str, str]) -> str | None:
     """The first function of an expression that can give another value in another run (not
     `CONSISTENT`, or in `_UNSTABLE_FUNCTIONS`), or the one computing a column it reads
-    (`changing`: output names → that function); None when there is none. A comparison with
+    (`changing`: output names → that function, read by name, through a struct field, by
+    position or with `COLUMNS`); None when there is none. A comparison with
     `$since` is left to the bound's own rule (`since_is_a_lower_bound`), which accepts only
     `time_column > $since` in an `append` model and names what to write instead."""
     nodes = _walk(expression)
@@ -877,8 +878,13 @@ def _changing_call(expression: object, changing: Mapping[str, str]) -> str | Non
             last = str(parts[-1]).lower()
             if last in _SPECIAL_NAMES:
                 return last
-            if last in changing:
-                return changing[last]
+            # Any part: `r.a` reads field `a` of a changing column `r` (#230, Reviewer pass 1).
+            for part in parts:
+                if str(part).lower() in changing:
+                    return changing[str(part).lower()]
+        if kind in {"POSITIONAL_REFERENCE", "STAR"} and changing:
+            # `#4` or `COLUMNS(…)` may read a changing column; which one cannot be told here.
+            return next(iter(changing.values()))
     return None
 
 
