@@ -11,7 +11,7 @@ Records 0001–0026 were approved by the Owner during the design session of 2026
 | [0003](0003-python-backend-and-svelte-web.md) | Python backend with FastAPI; SvelteKit web | Accepted |
 | [0004](0004-modules-contracts-and-independent-versions.md) | Modules with contracts, own state and independent versions | Accepted |
 | [0005](0005-local-and-server-runtime-modes.md) | Local zero-configuration mode and opt-in server mode | Accepted; amended in part by 0027 |
-| [0006](0006-duckdb-and-ducklake.md) | DuckDB as the only analytical engine; DuckLake as the warehouse | Accepted; superseded in part by 0027 (more after v1.0.0) |
+| [0006](0006-duckdb-and-ducklake.md) | DuckDB as the only analytical engine; DuckLake as the warehouse | Accepted; superseded in part by 0027 and 0028 |
 | [0007](0007-projects-as-files.md) | Projects as files in Git; module state separate | Accepted |
 | [0008](0008-sql-models-with-yaml-sidecar.md) | Transformation models: pure SQL plus YAML sidecar | Accepted |
 | [0009](0009-apache-ossie-native-format.md) | Apache Ossie as the native semantic format with `ORVEX` extensions | Accepted |
@@ -30,6 +30,7 @@ Records 0001–0026 were approved by the Owner during the design session of 2026
 | [0022](0022-latest-stable-dependencies.md) | Always the latest stable versions of dependencies | Accepted |
 | [0023](0023-python-models-and-ml-extension-path.md) | Extension path for Python models, ML predictions and Python visuals (after v1.0.0) | Accepted (direction only) |
 | [0024](0024-project-writer.md) | Project writer: code editors save text as typed; forms only for dashboards and metrics | Accepted |
-| [0025](0025-lazy-relations-no-python-materialization.md) | Data stays in DuckDB: lazy relations, no materialization in Python | Accepted; rule 6 applied to row-policy values by 0027; rule 1 to be amended in part after v1.0.0 |
-| [0026](0026-one-dialect-per-engine.md) | One SQL dialect per engine; no transpilation (no SQLGlot) | Accepted; rules 1, 3 and 4 to be superseded in part by 0027 after v1.0.0 |
-| [0027](0027-two-data-routes.md) | Two data routes: managed DuckLake and Direct Query, one semantic engine | Accepted (Direct Query on Quack and ClickHouse: direction only, after v1.0.0) |
+| [0025](0025-lazy-relations-no-python-materialization.md) | Data stays in DuckDB: lazy relations, no materialization in Python | Accepted; rule 6 applied to row-policy values by 0027; rule 1 amended in part by 0028 |
+| [0026](0026-one-dialect-per-engine.md) | One SQL dialect per engine; no transpilation (no SQLGlot) | Accepted; rules 1, 3 and 4 superseded in part by 0028 |
+| [0027](0027-two-data-routes.md) | Two data routes: managed DuckLake and Direct Query, one semantic engine | Accepted; superseded in part by 0028 (ClickHouse); Quack: direction only, after v1.0.0 |
+| [0028](0028-clickhouse-by-direct-query-only.md) | ClickHouse by Direct Query only; extraction retired | Accepted |

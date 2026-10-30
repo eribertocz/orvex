@@ -134,6 +134,8 @@ A watermark on `updated_at` cannot see rows deleted at the source. Orvex handles
 
 ### 3.5 Extraction models (ClickHouse)
 
+> **Retired by [ADR-0028](../adr/0028-clickhouse-by-direct-query-only.md) (decision #222).** ClickHouse is reached only by Direct Query. This section describes the extraction models still in the code until P1-23 removes them, together with this section.
+
 An extraction model brings data from a source that DuckDB cannot attach. It is a normal model pair whose sidecar names the connection:
 
 ```yaml
