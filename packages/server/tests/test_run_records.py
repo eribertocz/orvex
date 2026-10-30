@@ -271,6 +271,9 @@ class FakeLake:
         if first and self.fail == "commit":
             raise StoreError("STORE_TRANSACTION_CONFLICT", "Another writer changed it.", {})
 
+    def tables(self) -> set[tuple[str, str]]:
+        return set()  # no leftovers (#88)
+
     def current_snapshot(self) -> object:
         if self.fail == "count":
             raise StoreError("STORE_TIMEOUT", "The statement exceeded its time limit.", {})
