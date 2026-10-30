@@ -540,8 +540,11 @@ def test_a_named_file_and_an_unchecked_pattern_have_their_own_reason(tmp_path: P
     with pytest.raises(StoreError) as raised:
         _guarded(f"SELECT '{tmp_path}/x.csv' AS p", table_functions())
     assert raised.value.details == {"reason": "names_a_file"}
+    # 250 folders pass the budget (`/**` would meet an unreadable folder first when not root).
+    for index in range(250):
+        (tmp_path / "wide" / f"d{index}").mkdir(parents=True)
     with pytest.raises(StoreError) as raised:
-        _guarded("SELECT '/**/zz_none*' AS p", table_functions())
+        _guarded(f"SELECT '{tmp_path}/wide/*/zz*' AS p", table_functions())
     assert raised.value.details == {"reason": "pattern_too_broad"}
     hidden = tmp_path / "closed"
     hidden.mkdir()
