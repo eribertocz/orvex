@@ -419,3 +419,117 @@ def test_the_statement_checks_take_time_in_proportion_to_the_statement() -> None
     assert guard_seconds(wide(2_000)) < 0.5
     small, big = guard_seconds(wide(2_000)), guard_seconds(wide(8_000))
     assert big < 8 * small + 0.2, (small, big)
+
+
+# --- #178: the checks cost a bounded amount --------------------------------------------------
+
+
+def test_many_e_strings_are_checked_quickly() -> None:
+    sql = "SELECT " + ", ".join(f"E'v\\x{index % 10}a' AS c{index}" for index in range(2000))
+    started = time.monotonic()
+    _guarded(sql, table_functions())
+    assert time.monotonic() - started < 1.0
+
+
+@pytest.mark.parametrize("pattern", ["/**/zz_none*", "/usr/**/zz_none*"])
+def test_a_pattern_too_broad_to_check_is_refused_quickly(pattern: str) -> None:
+    started = time.monotonic()
+    with pytest.raises(StoreError) as raised:
+        _guarded(f"SELECT '{pattern}' AS p", table_functions())
+    assert raised.value.code == "STORE_STATEMENT_INVALID"
+    assert time.monotonic() - started < 1.0
+
+
+def test_a_pattern_in_a_small_folder_is_checked_as_before(tmp_path: Path) -> None:
+    (tmp_path / "data" / ".hidden").mkdir(parents=True)
+    (tmp_path / "data" / ".hidden" / "x.csv").write_text("a\n1\n")
+    (tmp_path / "empty").mkdir()
+    for pattern in (f"{tmp_path}/data/**/*.csv", f"{tmp_path}/data/*/x.csv"):
+        with pytest.raises(StoreError):
+            _guarded(f"SELECT '{pattern}' AS p", table_functions())
+    _guarded(f"SELECT '{tmp_path}/empty/**/*.csv' AS p", table_functions())  # nothing matches
+
+
+def test_one_budget_covers_the_whole_statement(tmp_path: Path) -> None:
+    folder = tmp_path / "many"
+    folder.mkdir()
+    for index in range(1000):
+        (folder / f"f{index}.txt").write_text("")
+    single = f"SELECT '{folder}/*.csv' AS p"
+    _guarded(single, table_functions())  # 1,000 entries: within the budget
+    together = "SELECT " + ", ".join(f"'{folder}/*.csv{index}' AS p{index}" for index in range(50))
+    with pytest.raises(StoreError) as raised:
+        _guarded(together, table_functions())  # 50,000 entries together: past it
+    assert raised.value.code == "STORE_STATEMENT_INVALID"
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "{folder}/" + "**/" * 900 + "zz",
+        "/" * 3000 + "zz*",
+        "/u*" + "/" * 3000 + "x",
+        "/zz_none/" + "**/" * 2000 + "x",
+    ],
+    ids=[
+        "many-double-stars",
+        "many-slashes",
+        "slashes-after-a-pattern",
+        "double-stars-below-nothing",
+    ],
+)
+def test_a_long_pattern_is_checked_quickly_without_error(tmp_path: Path, shape: str) -> None:
+    # #178 Reviewer pass 1: these took seconds, or raised RecursionError.
+    for index in range(10):
+        (tmp_path / f"s{index}").mkdir()
+    sql = "SELECT '" + shape.format(folder=tmp_path) + "' AS p"
+    started = time.monotonic()
+    _guarded(sql, table_functions())  # nothing matches: allowed, and no other error
+    assert time.monotonic() - started < 1.0
+
+
+def test_each_folder_read_costs_more_than_an_entry(tmp_path: Path) -> None:
+    # #178: a cold disk cache makes each folder read slow (about 2 ms on the CI runner), so
+    # folders are counted apart from the entries they hold: 250 empty folders pass the budget.
+    for index in range(250):
+        (tmp_path / f"d{index}").mkdir()
+    with pytest.raises(StoreError) as raised:
+        _guarded(f"SELECT '{tmp_path}/*/zz*' AS p", table_functions())
+    assert raised.value.code == "STORE_STATEMENT_INVALID"
+    for index in range(150, 250):
+        (tmp_path / f"d{index}").rmdir()
+    _guarded(f"SELECT '{tmp_path}/*/zz*' AS p", table_functions())  # 150 folders: within it
+
+
+def test_text_naming_missing_folders_costs_little() -> None:
+    # A missing folder costs one entry, so ordinary text such as 'N/A*' stays allowed.
+    sql = "SELECT " + ", ".join(f"'N/A*{index}' AS c{index}" for index in range(1000))
+    _guarded(sql, table_functions())
+
+
+@pytest.mark.parametrize("length", [280, 5000])
+def test_text_whose_folder_name_is_too_long_to_exist_is_allowed(length: int) -> None:
+    # #178 Reviewer pass 3: ordinary text with a `/` and a `?` was refused when a part before
+    # the `/` was longer than a file name can be.
+    words = "x" * length
+    sql = f"SELECT CASE WHEN a > 0 THEN '{words} and/or estimated?' END AS note FROM m"
+    _guarded(sql, table_functions())
+
+
+def test_a_symbolic_link_loop_is_refused_not_crashed(tmp_path: Path) -> None:
+    (tmp_path / "loop").symlink_to(".")
+    with pytest.raises(StoreError) as raised:
+        _guarded(f"SELECT '{tmp_path}/**/zz*' AS p", table_functions())
+    assert raised.value.code == "STORE_STATEMENT_INVALID"
+
+
+def test_a_pattern_under_the_home_folder_is_expanded_as_before(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "x.csv").write_text("a\n1\n")
+    for named in ("~/data/x.csv", "~/data/*.csv", "~/**/x.csv"):
+        with pytest.raises(StoreError):
+            _guarded(f"SELECT '{named}' AS p", table_functions())
+    _guarded("SELECT '~/data/*.parquet' AS p", table_functions())  # nothing matches

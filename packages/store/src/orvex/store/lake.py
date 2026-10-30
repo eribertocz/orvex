@@ -10,7 +10,8 @@ from __future__ import annotations
 import collections
 import contextlib
 import datetime as dt
-import glob as globlib
+import errno
+import fnmatch
 import itertools
 import json
 import math
@@ -726,13 +727,14 @@ def _refuse_file_names(
         "A file cannot be named in a statement; declare it as a source and use its name.",
         {},
     )
+    budget = _Budget()  # one for the whole statement, so many patterns cannot add up (#178)
     texts: list[tuple[str, duckdb.token_type]] = []
     for position, kind in tokens:
         end = ends[position]
         text = sql[position:end].strip()
         texts.append((text, kind))
         quoted = kind == duckdb.token_type.string_const or text.startswith('"')
-        if quoted and _names_a_file(text):
+        if quoted and _names_a_file(text, budget):
             raise refused
     # A dotted name: DuckDB joins its parts with `.` and reads the result as a file when no
     # table has that name (`"<dir>/x".parquet`, `x.parquet`, `"<dir>/*".csv`; measured on
@@ -748,7 +750,7 @@ def _refuse_file_names(
         while index + 1 < len(texts) and texts[index][0] == "." and texts[index + 1][1] in names:
             parts.append(_string_content(texts[index + 1][0]))
             index += 2
-        if len(parts) > 1 and _names_a_file(".".join(parts)):
+        if len(parts) > 1 and _names_a_file(".".join(parts), budget):
             raise refused
 
 
@@ -805,13 +807,15 @@ def _escape_string_value(token: str) -> str:
     tokens = duckdb.tokenize(token)
     if len(tokens) != 1 or tokens[0][1] != duckdb.token_type.string_const:
         return token[2:-1]
+    parser = _parser()  # one parser database for the process, not a connection each (#178)
     try:
-        with duckdb.connect(config={"enable_external_access": False}) as connection:
-            row = connection.execute(f"SELECT {token}").fetchone()
+        row = parser.execute(f"SELECT {token}").fetchone()
     except duckdb.Error:
         # Not a valid constant (`E'a\\'`, `E'\\x00'`): the statement fails later, when it is
         # parsed, with `STORE_QUERY_FAILED`.
         return token[2:-1]
+    finally:
+        parser.close()
     return str(row[0]) if row is not None and row[0] is not None else ""
 
 
@@ -872,7 +876,94 @@ def _refuse_show_statements(
             )
 
 
-def _names_a_file(token: str) -> bool:
+# How many directory entries the file checks of one statement may read (#178): a pattern too
+# broad to check within it counts as naming a file, so the statement is refused.
+PATTERN_BUDGET = 10_000
+
+# What reading one folder costs, in entries: far more than an entry when the disk cache is
+# cold (the CI runner took about 2 ms per folder of /usr, so 455 folders took 1 s), so at
+# most 200 folders are read for one statement whatever they hold.
+FOLDER_COST = 50
+
+
+class _Budget:
+    """The directory entries a statement's file checks may still read."""
+
+    def __init__(self, entries: int = PATTERN_BUDGET) -> None:
+        self.entries = entries
+
+
+class _Unchecked(Exception):
+    """A pattern could not be checked within the budget, or a folder could not be listed."""
+
+
+def _spend(budget: _Budget, units: int = 1) -> None:
+    budget.entries -= units
+    if budget.entries < 0:
+        raise _Unchecked
+
+
+def _listed(folder: str, budget: _Budget) -> list[tuple[str, bool]]:
+    """A folder's entries as (name, is a folder), each read counted against the budget, the
+    read itself as one entry, or as `FOLDER_COST` when the folder is there to be read. A folder
+    that does not exist, is not one, or whose name is too long to exist has none; one that
+    cannot be listed, or an entry whose kind cannot be told (a symbolic-link loop), cannot be
+    checked."""
+    _spend(budget)
+    try:
+        with os.scandir(folder or ".") as found:
+            _spend(budget, FOLDER_COST - 1)  # a folder that is there and is read
+            entries = []
+            for entry in found:
+                _spend(budget)
+                entries.append((entry.name, entry.is_dir()))
+            return entries
+    except FileNotFoundError, NotADirectoryError:
+        return []
+    except OSError as error:
+        # A name too long for the file system names no file DuckDB could open: ordinary text
+        # such as "… and/or estimated?" (#178, Reviewer pass 3).
+        if error.errno == errno.ENAMETOOLONG:
+            return []
+        raise _Unchecked from None
+
+
+def _expanded(pattern: str, budget: _Budget) -> Iterator[str]:
+    """The paths a glob pattern names, as DuckDB expands it (`**` at any depth, hidden names
+    included, like `glob.iglob(recursive=True, include_hidden=True)`), read within `budget`.
+    The walk keeps its own stack (no recursion, whatever the pattern's length), merges a run of
+    `**` into one, drops empty parts, and spends the budget on every step as well as on every
+    entry it reads (#178, Reviewer pass 1)."""
+    parts: list[str] = []
+    for part in pattern.split(os.sep):
+        if part and not (part == "**" and parts[-1:] == ["**"]):
+            parts.append(part)
+    stack: list[tuple[str, int]] = [(os.sep if pattern.startswith(os.sep) else "", 0)]
+    while stack:
+        _spend(budget)
+        base, index = stack.pop()
+        if index == len(parts):
+            yield base
+            continue
+        head = parts[index]
+        if head == "**":
+            stack.append((base, index + 1))  # no folder at all
+            for name, folder in _listed(base, budget):
+                below = os.path.join(base, name)
+                if index + 1 == len(parts):
+                    yield below
+                if folder:
+                    stack.append((below, index))
+        elif _GLOB.search(head):
+            for name, _ in _listed(base, budget):
+                if fnmatch.fnmatchcase(name, head):
+                    stack.append((os.path.join(base, name), index + 1))
+        else:
+            stack.append((os.path.join(base, head), index + 1))
+
+
+def _names_a_file(token: str, budget: _Budget | None = None) -> bool:
+    budget = budget if budget is not None else _Budget()
     content = _string_content(token)
     if _OBJECT_ADDRESS.match(content):
         return True
@@ -888,17 +979,14 @@ def _names_a_file(token: str) -> bool:
         if os.path.isfile(path):
             return True
         looks_like_path = any(mark in candidate for mark in ("/", "\\", "."))
-        if (
-            looks_like_path
-            and _GLOB.search(candidate)
-            and any(
-                os.path.isfile(match)
+        if looks_like_path and _GLOB.search(candidate):
+            try:
                 # As DuckDB expands it: `**` at any depth, hidden names included (#136, Reviewer
-                # pass 7).
-                for match in globlib.iglob(path, recursive=True, include_hidden=True)
-            )
-        ):
-            return True
+                # pass 7), within the statement's budget (#178).
+                if any(os.path.isfile(match) for match in _expanded(path, budget)):
+                    return True
+            except _Unchecked:
+                return True  # too broad to check, or a folder that cannot be listed: refused
     return False
 
 
