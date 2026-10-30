@@ -255,7 +255,9 @@ def _bind(
                         failed.add(name)
                         problems.append(described)
                         continue
-                    refused = clickhouse.since_column_problems(model, described)
+                    refused = clickhouse.since_column_problems(
+                        model, described
+                    ) + clickhouse.since_precision_problems(model, described)
                     if refused:
                         failed.add(name)
                         problems += [_from_model_error(item) for item in refused]

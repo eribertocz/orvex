@@ -31,6 +31,7 @@ it commits or rolls back with the rows — never the clock, and never a separate
 from __future__ import annotations
 
 import datetime as dt
+import functools
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -133,6 +134,9 @@ def uses_since(sql: str) -> bool:
     )
 
 
+# `time_column > $since` (or `$since < time_column`): the only bound an `append` model may use
+# (#135): it reads each row once.
+_STRICTLY_FROM_BELOW = frozenset({"COMPARE_GREATERTHAN", "COMPARE_LESSTHAN"})
 # `time_column > …`, `time_column >= …` (and the same written the other way round): the only
 # comparisons a `$since` may be in, in a partition_overwrite model (#155).
 _FROM_BELOW = {
@@ -152,7 +156,9 @@ _PER_ROW_FUNCTIONS = frozenset({"random", "gen_random_uuid", "uuid", "uuidv4", "
 type ColumnsOf = Callable[[tuple[str, ...]], frozenset[str] | None]
 
 
-def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | None = None) -> bool:
+def since_is_a_lower_bound(
+    sql: str, time_column: str, columns_of: ColumnsOf | None = None, strict: bool = False
+) -> bool:
     """Whether every `$since` of a DuckDB-SQL model is in a lower bound of the time column of
     the rows the model returns (#155):
 
@@ -403,10 +409,18 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
     def lower_bound(node: object, names: set[str]) -> bool:
         if not isinstance(node, dict) or node.get("class") != "COMPARISON":
             return False
-        side = _FROM_BELOW.get(str(node.get("type")))
+        kind = str(node.get("type"))
+        side = _FROM_BELOW.get(kind)
         if side is None:
             return False
         other = node.get("right" if side == "left" else "left")
+        if strict:
+            # `append` (#135): `time_column > $since` exactly, so no row is read twice.
+            return (
+                kind in _STRICTLY_FROM_BELOW
+                and is_time_column(node.get(side), names)
+                and is_since(other)
+            )
         return is_time_column(node.get(side), names) and bound(other)
 
     def is_time_null(node: object, names: set[str]) -> bool:
@@ -435,11 +449,16 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
         if names is not None and node.get("class") == "CONJUNCTION":
             children = node.get("children")
             if node.get("type") == "CONJUNCTION_OR":
-                # `time_column > $since OR time_column IS NULL`: the undated rows too.
-                return isinstance(children, list) and all(
-                    (lower_bound(child, names) or is_time_null(child, names))
-                    and (not alias or unqualified(child))
-                    for child in children
+                # `time_column > $since OR time_column IS NULL`: the undated rows too (not for
+                # `append`: it would insert them again in every run).
+                return (
+                    not strict
+                    and isinstance(children, list)
+                    and all(
+                        (lower_bound(child, names) or is_time_null(child, names))
+                        and (not alias or unqualified(child))
+                        for child in children
+                    )
                 )
             if node.get("type") == "CONJUNCTION_AND":
                 return check(children, names, alias)
@@ -452,7 +471,224 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
             for key, value in node.items()
         )
 
-    return check(statements, None)
+    # How a name was traced: to a table's own column (each row's value is fixed), not produced
+    # by this query, or refused (computed in a way the run cannot hold fixed, or not traceable).
+    accepted, absent, refused = "accepted", "absent", "refused"
+
+    def scope_of(node: Node, outer: dict[str, object]) -> dict[str, object] | None:
+        found = dict(outer)
+        cte_map = node.get("cte_map")
+        entries = cte_map.get("map") if isinstance(cte_map, dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            value = entry.get("value") if isinstance(entry, dict) else None
+            if not isinstance(value, dict) or not isinstance(value.get("query_node"), dict):
+                return None
+            if value.get("aliases"):
+                return None  # `WITH c(a, b) AS …` renames by position: not traced
+            found[str(entry.get("key", "")).lower()] = value["query_node"]
+        return found
+
+    def expression_state(expression: object, source: object, scope: dict[str, object]) -> str:
+        """A select item's expression: stable functions only, each column it reads traced."""
+        result = accepted
+        for node in nodes(expression):
+            kind = node.get("class")
+            if kind is not None and kind not in _TRACED_EXPRESSIONS:
+                return refused  # a window, a subquery, `#2`, a lambda, …: not traced
+            if kind == "FUNCTION":
+                name = str(node.get("function_name")).lower()
+                if not _consistent(name) or name in _UNSTABLE_FUNCTIONS or _aggregate(name):
+                    # An aggregate's value can change when rows join its group, or with the
+                    # order rows arrive in (`list(t)[1]`, `arg_max`): refused (pass 3).
+                    return refused
+            if kind == "COLUMN_REF":
+                parts = column_parts(node)
+                if not parts or parts[-1] in _SPECIAL_NAMES:
+                    return refused
+                if len(parts) == 1:
+                    state = from_state(source, parts[0], None, scope)
+                elif len(parts) == 2:
+                    state = from_state(source, parts[1], parts[0], scope)
+                else:
+                    return refused
+                if state != accepted:
+                    return refused  # absent here: a struct field, or an outer column
+        return result
+
+    def from_state(
+        source: object, name: str, relation: str | None, scope: dict[str, object]
+    ) -> str:
+        """Where a FROM clause gets the column `name` (of `relation`, when qualified)."""
+        if not isinstance(source, dict):
+            return absent
+        kind = source.get("type")
+        alias = str(source.get("alias") or "").lower()
+        if kind == "EMPTY":
+            return absent
+        if source.get("column_name_alias"):
+            return refused  # renamed by position: not traced
+        if kind == "JOIN":
+            states = [
+                from_state(source.get("left"), name, relation, scope),
+                from_state(source.get("right"), name, relation, scope),
+            ]
+            if refused in states:
+                return refused
+            return accepted if accepted in states else absent
+        if kind == "BASE_TABLE":
+            table = str(source.get("table_name") or "").lower()
+            if relation is not None and relation not in {alias or table}:
+                return absent
+            if not source.get("schema_name") and not source.get("catalog_name") and table in scope:
+                # The CTE's body does not see itself (`WITH m AS (SELECT * FROM m)` reads the
+                # table m), nor any CTE already being followed.
+                inner_scope = {key: value for key, value in scope.items() if key != table}
+                return node_state(scope[table], name, inner_scope)
+            return accepted  # a source or model table: its column holds each row's value
+        if kind == "SUBQUERY":
+            if relation is not None and relation != alias:
+                return absent
+            subquery = source.get("subquery")
+            inner = subquery.get("node") if isinstance(subquery, dict) else None
+            return node_state(inner, name, scope)
+        return refused  # table functions, PIVOT, VALUES, …: not traced
+
+    def node_state(node: object, name: str, outer: dict[str, object]) -> str:
+        """How a query produces the output column `name`."""
+        if not isinstance(node, dict) or node.get("type") != "SELECT_NODE":
+            return refused  # set operations name columns by position: not traced
+        scope = scope_of(node, outer)
+        if scope is None:
+            return refused
+        source = node.get("from_table")
+        items = node.get("select_list")
+        if not isinstance(items, list):
+            return refused
+        found: list[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                return refused
+            if item.get("class") == "STAR":
+                if item.get("rename_list") or item.get("columns") or item.get("expr") is not None:
+                    return refused
+                replaced = item.get("replace_list")
+                replacements = {
+                    str(entry.get("key", "")).lower(): entry.get("value")
+                    for entry in (replaced if isinstance(replaced, list) else [])
+                    if isinstance(entry, dict)
+                }
+                excluded = {str(x).lower() for x in item.get("exclude_list") or []}
+                if item.get("qualified_exclude_list"):
+                    return refused
+                if name in replacements:
+                    found.append(expression_state(replacements[name], source, scope))
+                elif name not in excluded:
+                    relation = str(item.get("relation_name") or "").lower() or None
+                    state = from_state(source, name, relation, scope)
+                    if state != absent:
+                        found.append(state)
+                continue
+            parts = column_parts(item)
+            label = str(item.get("alias") or "").lower() or (parts[-1] if parts else "")
+            if label == name:
+                found.append(expression_state(item, source, scope))
+        if len(found) != 1:
+            return refused if found else absent
+        return found[0]
+
+    def stable(tree: object) -> bool:
+        """Whether the time column of the model's rows gets the same value for a row in every
+        run (#135, Reviewer passes 1 and 2): it is traced from the model's output down to table
+        columns, through aliases, `REPLACE`, stars, subqueries, CTEs and joins, and computed only
+        by functions DuckDB marks `CONSISTENT` (less a fixed list it marks wrongly). Anything
+        not traced is refused: column lists that rename by position, struct fields, `RENAME`,
+        `COLUMNS(…)`, table functions, `VALUES`, set operations below the model's query."""
+        if not isinstance(tree, list) or len(tree) != 1 or not isinstance(tree[0], dict):
+            return False
+        try:
+            return node_state(tree[0].get("node"), wanted, {}) == accepted
+        except RecursionError:
+            return False  # too deep to follow: refused
+
+    return check(statements, None) and (not strict or stable(statements))
+
+
+# Functions DuckDB marks `CONSISTENT` whose value still changes between runs (the session's
+# clock, the installed version) or depends on the order rows arrive in (#135, Reviewer pass 2).
+_UNSTABLE_FUNCTIONS = frozenset(
+    {
+        "current_localtime",
+        "current_localtimestamp",
+        "version",
+        "any_value",
+        "arbitrary",
+        "first",
+        "last",
+        "first_value",
+        "last_value",
+        "nth_value",
+    }
+)
+# Names DuckDB reads as functions of the moment although they parse as column references.
+_SPECIAL_NAMES = frozenset(
+    {"current_timestamp", "current_date", "current_time", "localtimestamp", "localtime"}
+)
+
+
+@functools.cache
+def _consistent_functions() -> frozenset[str]:
+    """The functions whose every overload DuckDB marks `CONSISTENT`: the same arguments give the
+    same value in every query (not `now()`, `random()`, `nextval()`, …)."""
+    connection = duckdb.connect()
+    try:
+        row = connection.execute(
+            "SELECT string_agg(name, chr(10)) FROM (SELECT lower(function_name) AS name "
+            "FROM duckdb_functions() GROUP BY 1 "
+            "HAVING bool_and(coalesce(stability = 'CONSISTENT', false)))"
+        ).fetchone()
+    finally:
+        connection.close()
+    return frozenset(str(row[0]).split("\n")) if row and row[0] is not None else frozenset()
+
+
+def _consistent(name: str) -> bool:
+    return name.lower() in _consistent_functions()
+
+
+@functools.cache
+def _aggregate_functions() -> frozenset[str]:
+    """The names DuckDB lists as aggregate functions (some are window functions too)."""
+    connection = duckdb.connect()
+    try:
+        row = connection.execute(
+            "SELECT string_agg(DISTINCT lower(function_name), chr(10)) FROM duckdb_functions() "
+            "WHERE function_type = 'aggregate'"
+        ).fetchone()
+    finally:
+        connection.close()
+    return frozenset(str(row[0]).split("\n")) if row and row[0] is not None else frozenset()
+
+
+def _aggregate(name: str) -> bool:
+    return name.lower() in _aggregate_functions()
+
+
+# The expression kinds the time column's trace understands: anything else is refused (#135,
+# Reviewer pass 3: a positional reference `#2` was not).
+_TRACED_EXPRESSIONS = frozenset(
+    {
+        "COLUMN_REF",
+        "CONSTANT",
+        "FUNCTION",
+        "CAST",
+        "TYPE",  # the target type of a CAST
+        "OPERATOR",
+        "CASE",
+        "COMPARISON",
+        "CONJUNCTION",
+        "BETWEEN",
+    }
+)
 
 
 def since_bound_problem(model: Model, columns_of: ColumnsOf | None = None) -> ModelError | None:
@@ -464,14 +700,26 @@ def since_bound_problem(model: Model, columns_of: ColumnsOf | None = None) -> Mo
     if (
         config.materialized != "incremental"
         or incremental is None
-        or incremental.strategy != "partition_overwrite"
+        or incremental.strategy not in {"partition_overwrite", "append"}
         or (incremental.filter or "auto") == "auto"
         or model.extraction
         or not uses_since(model.sql)
-        or since_is_a_lower_bound(model.sql, incremental.time_column.root, columns_of)
     ):
         return None
+    append = incremental.strategy == "append"
     column = incremental.time_column.root
+    if since_is_a_lower_bound(model.sql, column, columns_of, strict=append):
+        return None
+    if append:
+        return problem(
+            "INVALID_MODEL_SQL",
+            f"{model.sql_file}: an append model inserts every row it reads, so its filter must "
+            f"read each row once: write WHERE {column} > $since (not >=, no expression around "
+            f"$since, no OR {column} IS NULL), in queries that return {column} unchanged and "
+            "keep their rows. Use strategy merge when rows can be read again.",
+            model.sql_file,
+            model=model.name,
+        )
     return problem(
         "INVALID_MODEL_SQL",
         f"{model.sql_file}: in a partition_overwrite model, $since may only set a lower bound of "

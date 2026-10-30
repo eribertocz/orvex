@@ -303,6 +303,53 @@ def since_column_problems(model: Model, columns: tuple[Column, ...]) -> list[Mod
     ]
 
 
+def _precision(clickhouse_type: str) -> int | None:
+    """How finely a date or time type tells instants apart, as a number that grows with it:
+    0 for a date, 1 for seconds, 2 + p for `DateTime64(p)`; None for anything else.
+    `Nullable(…)` and `LowCardinality(…)` wrappers are read through."""
+    text = clickhouse_type
+    while (inner := re.fullmatch(r"(?:Nullable|LowCardinality)\((.*)\)", text)) is not None:
+        text = inner.group(1)
+    if text in {"Date", "Date32"}:
+        return 0
+    if text == "DateTime" or text.startswith("DateTime("):
+        return 1
+    found = re.fullmatch(r"DateTime64\((\d+)(?:,.*)?\)", text)
+    return 2 + int(found.group(1)) if found is not None else None
+
+
+def since_precision_problems(model: Model, columns: tuple[Column, ...]) -> list[ModelError]:
+    """An `append` extraction model whose `{since:…}` type is coarser than its time column
+    reads again the rows between the truncated value and the watermark, and inserts them twice
+    (#135): its type must tell apart every instant the column does."""
+    incremental = model.config.incremental
+    since = declared_since(model)
+    if incremental is None or incremental.strategy != "append" or since is None:
+        return []
+    time_column = incremental.time_column.root.lower()
+    found = next((column for column in columns if column.name.lower() == time_column), None)
+    if found is None:
+        return []
+    column = _precision(found.clickhouse)
+    declared = _precision(since.text)
+    # A date column takes a date parameter only: ClickHouse compares `Date32` with a time at
+    # midnight in the server's zone, whatever the parameter's zone, so the watermark's day could
+    # be read again (#135, Reviewer pass 1).
+    if column is None or declared is None or (declared >= column and (column > 0 or declared == 0)):
+        return []
+    return [
+        problem(
+            "INVALID_MODEL_SQL",
+            f"{model.sql_file}: {{since:{since.text}}} does not match the time_column "
+            f"{found.name} ({found.clickhouse}): an append model would read again, and insert "
+            "twice, rows it already loaded. Declare {since:…} at least as precise as the "
+            "column ({since:Date} or {since:Date32} for a date column), or use strategy merge.",
+            model.sql_file,
+            model=model.name,
+        )
+    ]
+
+
 def since_problems(model: Model) -> list[ModelError]:
     """The rules of `{since:Type}` in an extraction model, from its text alone
     (transformation.md §3.5): incremental models need it, others must not use it, its type is a
@@ -770,7 +817,112 @@ def _aliased(node: _Node) -> str:
     return found.group(1) if found is not None else ""
 
 
-def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
+def time_column_functions(tree: str, time_column: str) -> frozenset[str] | None:
+    """The functions of every expression that may compute the time column, followed by name
+    through every alias in the `EXPLAIN AST` (an alias with the same name elsewhere is also
+    followed: it fails closed); None when such an expression has a subquery or cannot be read.
+    An append model needs them all deterministic, so a row's time is the same in every run
+    (#135, Reviewer pass 1)."""
+    root = _ast(tree)
+    if root is None:
+        return None
+    definitions: dict[str, list[_Node]] = {}
+    # The names a column may be qualified by: each table's name (whole and last part), each
+    # table's and subquery's alias. A dotted name with another prefix is a tuple's field.
+    relations: set[str] = set()
+    untraced = False
+
+    def tables(node: _Node) -> None:
+        alias = _aliased(node)
+        if node.kind == "TableIdentifier":
+            name = re.sub(r" \(alias [^)]+\)$", "", node.detail)
+            relations.update({name, name.rsplit(".", 1)[-1]})
+        if node.kind in {"TableIdentifier", "Subquery"} and alias:
+            relations.add(alias)
+        for child in node.children:
+            tables(child)
+
+    def field(node: _Node) -> bool:
+        """A dotted name whose prefix names no table or subquery, or also names a column (a
+        tuple named like its subquery, Reviewer pass 3): read as a tuple's field."""
+        if node.kind != "Identifier":
+            return False
+        text = re.sub(r" \(alias [^)]+\)$", "", node.detail)
+        if "." not in text:
+            return False
+        prefix = text.rsplit(".", 1)[0]
+        return prefix not in relations or prefix in column_aliases
+
+    def collect(node: _Node, in_table: bool = False) -> None:
+        nonlocal untraced
+        alias = _aliased(node)
+        if (
+            any(mark in node.kind for mark in ("Transformer", "Matcher", "ArrayJoin"))
+            or (in_table and node.kind == "Function" and _function_name(node) not in _GENERATORS)
+            or (node.kind == "Function" and _function_name(node).lower() == "untuple")
+        ):
+            # `* REPLACE (…)`, `COLUMNS(…)`, `ARRAY JOIN`, a table function, `untuple`: they can
+            # make a column the names below do not show (#135, Reviewer pass 2).
+            untraced = True
+        if alias and (
+            field(node) or not (node.kind == "Identifier" and _identifier(node) == alias)
+        ):
+            definitions.setdefault(alias, []).append(node)
+        for child in node.children:
+            collect(child, node.kind == "TableExpression")
+
+    tables(root)
+
+    def aliases(node: _Node) -> None:
+        alias = _aliased(node)
+        if alias and node.kind not in {"TableIdentifier", "Subquery"}:
+            column_aliases.add(alias)
+        for child in node.children:
+            aliases(child)
+
+    column_aliases: set[str] = set()
+    aliases(root)
+    collect(root)
+    if untraced:
+        return None
+    functions: set[str] = set()
+    pending, seen = [time_column], {time_column}
+    while pending:
+        for expression in definitions.get(pending.pop(), []):
+            stack = [expression]
+            while stack:
+                node = stack.pop()
+                if node.kind in {
+                    "Subquery",
+                    "Asterisk",
+                    "QualifiedAsterisk",
+                    "ColumnsRegexpMatcher",
+                }:
+                    return None
+                if node.kind == "Function":
+                    functions.add(_function_name(node))
+                if node.kind == "Identifier":
+                    if field(node):
+                        return None  # a tuple's field: the tuple is not followed by name
+                    name = _identifier(node)
+                    if name not in seen:
+                        seen.add(name)
+                        pending.append(name)
+                stack.extend(node.children)
+    return frozenset(functions)
+
+
+# Table functions that generate rows from constants: they read nothing that changes.
+_GENERATORS = frozenset({"numbers", "numbers_mt", "zeros", "zeros_mt", "generate_series"})
+
+
+def _identifier(node: _Node) -> str:
+    """The last part of an `Identifier` node's name (`t` for `s.t`), its alias left out."""
+    text = re.sub(r" \(alias [^)]+\)$", "", node.detail)
+    return text.rsplit(".", 1)[-1]
+
+
+def since_is_a_lower_bound(tree: str, time_column: str, strict: bool = False) -> bool:
     """Whether, in the `EXPLAIN AST` of `mark_since`'s SQL, every marked `{since:…}` is in a
     lower bound of the time column of the rows the model returns, as `incremental.
     since_is_a_lower_bound` requires of DuckDB SQL (#155):
@@ -935,6 +1087,15 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
     def lower_bound(node: _Node, names: set[str]) -> bool:
         position = _FROM_BELOW.get(_function_name(node))
         found = arguments(node)
+        if strict:
+            # `append` (#135): `time_column > {since:…}` exactly, so no row is read twice.
+            return (
+                _function_name(node) in {"greater", "less"}
+                and position is not None
+                and len(found) == 2
+                and is_time_column(found[position], names)
+                and _is_mark(found[1 - position])
+            )
         return (
             position is not None
             and len(found) == 2
@@ -966,8 +1127,9 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
         if names is not None and lower_bound(node, names):
             return not alias or unqualified(node)
         if names is not None and _function_name(node) == "or":
-            # `time_column > {since:…} OR time_column IS NULL`: the undated rows too.
-            return all(
+            # `time_column > {since:…} OR time_column IS NULL`: the undated rows too (not for
+            # `append`: it would insert them again in every run).
+            return not strict and all(
                 (lower_bound(child, names) and (not alias or unqualified(child)))
                 or (is_time_null(child, names) and (not alias or unqualified(child)))
                 for child in arguments(node)
@@ -1141,6 +1303,28 @@ class Source:
         except ClickHouseError as error:
             raise self._error(error, "INVALID_MODEL_SQL") from None
         return [tuple(row) for row in result.result_rows]
+
+    def deterministic(self, functions: frozenset[str]) -> bool:
+        """Whether ClickHouse marks every one of these functions deterministic (the same
+        arguments give the same value in every query); an unknown name is not."""
+        if not functions:
+            return True
+        try:
+            found = self._client.query(
+                "SELECT name, case_insensitive FROM system.functions WHERE deterministic = 1 "
+                "AND (has({names:Array(String)}, name) OR (case_insensitive AND "
+                "has({lowered:Array(String)}, lower(name))))",
+                parameters={
+                    "names": sorted(functions),
+                    "lowered": sorted({name.lower() for name in functions}),
+                },
+                settings=self.settings(),
+            ).result_rows
+        except ClickHouseError as error:
+            raise self._error(error, "INVALID_MODEL_SQL") from None
+        exact = {str(row[0]) for row in found}
+        lowered = {str(row[0]).lower() for row in found if row[1]}
+        return all(name in exact or name.lower() in lowered for name in functions)
 
     def explain(self, text: str, since: SinceType | None, kind: str = "AST") -> str:
         """ClickHouse's `EXPLAIN AST` (or `QUERY TREE`, which resolves names against the tables)
@@ -1550,20 +1734,38 @@ def describe_model(
     incremental = model.config.incremental
     try:
         plain = source.check_select(found.text, since)
+        append = incremental is not None and incremental.strategy == "append"
+        marked = (
+            source.explain(mark_since(found), since)
+            if incremental is not None
+            and incremental.strategy in {"partition_overwrite", "append"}
+            and since is not None
+            else ""
+        )
         if (
             incremental is not None
-            and incremental.strategy == "partition_overwrite"
+            and incremental.strategy in {"partition_overwrite", "append"}
             and since is not None
             and (
                 found.spaced_name
                 or writes_since_mark(plain)
-                or not since_is_a_lower_bound(
-                    source.explain(mark_since(found), since), incremental.time_column.root
-                )
+                or not since_is_a_lower_bound(marked, incremental.time_column.root, strict=append)
                 or limits_rows(source.explain(found.text, since, "QUERY TREE"))
+                or (append and not _stable(source, marked, incremental.time_column.root))
             )
         ):
             column = incremental.time_column.root
+            if append:
+                return problem(
+                    "INVALID_MODEL_SQL",
+                    f"{model.name}: an append model inserts every row it reads, so its filter "
+                    f"must read each row once: write WHERE {column} > {{since:…}} (not >=, no "
+                    f"expression around it, no OR {column} IS NULL), in queries that return "
+                    f"{column} unchanged and keep their rows. Use strategy merge when rows can "
+                    "be read again.",
+                    file,
+                    model=model.name,
+                )
             return problem(
                 "INVALID_MODEL_SQL",
                 f"{model.name}: in a partition_overwrite model, {{since:…}} may only set a "
@@ -1579,6 +1781,13 @@ def describe_model(
         return problem(error.code, f"{model.name}: {error.message}", file, model=model.name)
     finally:
         source.close()
+
+
+def _stable(source: Source, tree: str, time_column: str) -> bool:
+    """Whether the time column gets the same value for a row in every run: only deterministic
+    functions compute it (`time_column_functions`)."""
+    functions = time_column_functions(tree, time_column)
+    return functions is not None and source.deterministic(functions)
 
 
 def read_password(connection: ClickhouseConnection) -> str | None:

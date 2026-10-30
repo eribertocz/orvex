@@ -787,3 +787,130 @@ def test_a_failed_reconciliation_rolls_the_extraction_back(
         "SELECT count(*) FROM information_schema.tables "
         "WHERE table_catalog = 'lake' AND table_name = 'ch_events'",
     ) == [(0,)]
+
+
+APPEND_SIDECAR = (
+    "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
+    "incremental:\n  strategy: append\n  time_column: t\n  filter: manual\n"
+)
+
+
+def appended(tmp_path: Path, source: dict[str, str], column: str, bound: str) -> Path:
+    """Three readings 100 ms apart (ids 1 to 3, or one a day for a `Date` column), in an
+    `append` extraction model whose time column `t` is `column` and whose filter is `bound`."""
+    times = {
+        "DateTime64(3, 'UTC')": "toDateTime64('2024-01-01 00:00:00.100', 3, 'UTC') "
+        "+ toIntervalMillisecond(100 * number)",
+        "DateTime('UTC')": "toDateTime('2024-01-01 00:00:00', 'UTC') + toIntervalSecond(number)",
+        "Date": "toDate('2024-01-01') + number",
+    }[column]
+    return project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                f"SELECT n AS id, t FROM (SELECT number + 1 AS n, {times} AS t FROM numbers(3)) "
+                f"WHERE {bound}"
+            ),
+            "models/raw/ch_events.yaml": APPEND_SIDECAR,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("column", "bound"),
+    [
+        ("DateTime('UTC')", "t > {since:Date}"),
+        ("DateTime64(3, 'UTC')", "t > {since:DateTime64(0, 'UTC')}"),
+        ("DateTime64(3, 'UTC')", "t > {since:DateTime('UTC')}"),
+        ("DateTime64(3, 'UTC')", "t >= {since:DateTime64(3, 'UTC')}"),
+        ("DateTime64(3, 'UTC')", "t > {since:DateTime64(3, 'UTC')} OR t IS NULL"),
+        ("DateTime64(3, 'UTC')", "t > {since:DateTime64(3, 'UTC')} - INTERVAL 1 SECOND"),
+        ("Date", "t > {since:DateTime('UTC')}"),
+    ],
+    ids=[
+        "date-on-datetime",
+        "seconds-on-milliseconds",
+        "datetime-on-milliseconds",
+        "inclusive",
+        "or-null",
+        "widened",
+        "datetime-on-date",
+    ],
+)
+def test_an_append_filter_that_reads_rows_again_is_refused_before_anything_runs(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    column: str,
+    bound: str,
+) -> None:
+    # #135: an append model inserts every row it reads, so a filter that reads a row twice
+    # would insert it twice (Reviewer pass 4 on #129: ids [1, 1, 2, 2, 3]).
+    folder = appended(tmp_path, source, column, bound)
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert "ch_events" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+
+
+@pytest.mark.parametrize(
+    ("column", "bound"),
+    [
+        ("DateTime64(3, 'UTC')", "t > {since:DateTime64(3, 'UTC')}"),
+        ("DateTime64(3, 'UTC')", "{since:DateTime64(6, 'UTC')} < t"),
+        ("Date", "t > {since:Date}"),
+    ],
+    ids=["as-precise", "more-precise-reversed", "date-on-date"],
+)
+def test_an_append_filter_that_reads_each_row_once_inserts_it_once(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    column: str,
+    bound: str,
+) -> None:
+    folder = appended(tmp_path, source, column, bound)
+    ids = "SELECT id FROM lake.raw.ch_events ORDER BY id"
+    code, out = run(capsys, folder)
+    assert code == 0, out
+    assert lake_value(folder, ids) == [(1,), (2,), (3,)]
+    code, out = run(capsys, folder)  # nothing changed at the source: nothing read again
+    assert code == 0, out
+    assert lake_value(folder, ids) == [(1,), (2,), (3,)]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT n AS id, now64(3, 'UTC') AS t FROM (SELECT number + 1 AS n FROM numbers(3)) "
+        "WHERE t > {since:DateTime64(3, 'UTC')}",
+        "SELECT * FROM (SELECT number + 1 AS id, now64(3, 'UTC') AS t FROM numbers(3)) "
+        "WHERE t > {since:DateTime64(3, 'UTC')}",
+        # Reviewer pass 2: a tuple's field, and REPLACE, are not traced: refused.
+        "SELECT * FROM (SELECT id, tup.t AS t FROM (SELECT number + 1 AS id, "
+        "tuple(now64(3, 'UTC')) AS tup FROM numbers(3))) WHERE t > {since:DateTime64(3, 'UTC')}",
+        "SELECT * REPLACE (now64(3, 'UTC') AS t) FROM (SELECT number + 1 AS id, "
+        "toDateTime64('2024-01-01', 3, 'UTC') AS t FROM numbers(3)) "
+        "WHERE t > {since:DateTime64(3, 'UTC')}",
+        # Reviewer pass 3: a tuple named like its subquery.
+        "SELECT * FROM (SELECT id, x.t AS t FROM (SELECT number AS id, "
+        "CAST(tuple(now64(3, 'UTC')), 'Tuple(t DateTime64(3, \\'UTC\\'))') AS x "
+        "FROM numbers(3)) AS x) WHERE t > {since:DateTime64(3, 'UTC')}",
+    ],
+    ids=["computed-here", "computed-below", "tuple-field", "replace", "tuple-named-like-table"],
+)
+def test_an_append_time_column_that_changes_every_run_is_refused(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str], sql: str
+) -> None:
+    # #135 Reviewer pass 1: every row would come back with a later time and be inserted again.
+    folder = project(
+        tmp_path,
+        source,
+        {"models/raw/ch_events.sql": sql, "models/raw/ch_events.yaml": APPEND_SIDECAR},
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created

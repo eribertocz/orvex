@@ -31,7 +31,7 @@ New cross-field rules are added by the issues that implement those behaviors, as
 | `MODEL_SCHEMA_CONFLICT` | A model folder named like a connection, or `lake` |
 | `ORPHAN_MODEL_CONFIG` | A sidecar without its `.sql` |
 | `UNSUPPORTED_MODEL_KIND` | A `.py` model (reserved for after v1.0.0, ADR-0023) |
-| `INVALID_MODEL_SQL` | A DuckDB-SQL model that is not exactly one `SELECT` (or `WITH … SELECT`); a model whose output repeats a column name (names are compared without letter case, as DuckDB stores them; one problem per repeated name); for ClickHouse extraction models, SQL ClickHouse refuses or that breaks the rules of the extraction section (`{since:…}`, settings, subqueries); a `partition_overwrite` model whose `$since`/`{since:…}` is not only in a lower bound of its `time_column` (see "Partitions cut by `$since`") |
+| `INVALID_MODEL_SQL` | A DuckDB-SQL model that is not exactly one `SELECT` (or `WITH … SELECT`); a model whose output repeats a column name (names are compared without letter case, as DuckDB stores them; one problem per repeated name); for ClickHouse extraction models, SQL ClickHouse refuses or that breaks the rules of the extraction section (`{since:…}`, settings, subqueries); a `partition_overwrite` model whose `$since`/`{since:…}` is not only in a lower bound of its `time_column` (see "Partitions cut by `$since`"); an `append` model whose filter can read a row twice (see "Rows read once (`append`)") |
 | `MODEL_CONFIG_INVALID` | A sidecar that is not valid YAML or does not match `ModelConfig`, or whose `connection` is not a `clickhouse` connection of the project, or an incremental model with `filter: auto` whose SQL already uses `$since` (`path` `/incremental/filter`) |
 | `MODEL_REFERENCE_UNKNOWN` | A model reads a table that is neither a model (`<folder>.<name>`) nor a source (`<connection>.<table>`) |
 | `DEPENDENCY_CYCLE` | Models depend on each other in a cycle (the message lists it in order) |
@@ -118,11 +118,11 @@ A profile that fixes any of these to another value, or constrains it so ClickHou
 
 `{since:…}` is bound by ClickHouse, never written into the SQL. Its value:
 - **First run, full refresh, or no stored watermark:** the lowest value of the declared type: `1970-01-01` for `Date`/`DateTime`, `1900-01-01` for `Date32`/`DateTime64`.
-- **Otherwise:** the stored watermark minus `lookback`, written in the parameter's zone (the server's when it declares none), and truncated, never rounded up: a date for `Date`/`Date32`, whole seconds for `DateTime`, `p` digits for `DateTime64(p)`. A `Date`/`Date32` value is taken in UTC-12, where a date's midnight comes last. ClickHouse compares a date at midnight in the zone of the expression it meets (measured on 26.9), which the SQL decides. Taking it in UTC-12 means no row newer than the watermark is skipped, whatever that zone; up to two days may be read again. A `partition_overwrite` model whose `time_column` is a `DateTime`/`DateTime64` cannot declare `{since:Date}` or `{since:Date32}`: no boundary is exact for its partition check, so it is refused with `INVALID_MODEL_SQL` before anything runs. With a `Date`/`Date32` time column that the SQL compares `{since:…}` with, the partition check compares dates, which is exact. An `append` model re-inserts rows read again: give it a `{since:…}` type as precise as its time column.
+- **Otherwise:** the stored watermark minus `lookback`, written in the parameter's zone (the server's when it declares none), and truncated, never rounded up: a date for `Date`/`Date32`, whole seconds for `DateTime`, `p` digits for `DateTime64(p)`. A `Date`/`Date32` value is taken in UTC-12, where a date's midnight comes last. ClickHouse compares a date at midnight in the zone of the expression it meets (measured on 26.9), which the SQL decides. Taking it in UTC-12 means no row newer than the watermark is skipped, whatever that zone; up to two days may be read again. A `partition_overwrite` model whose `time_column` is a `DateTime`/`DateTime64` cannot declare `{since:Date}` or `{since:Date32}`: no boundary is exact for its partition check, so it is refused with `INVALID_MODEL_SQL` before anything runs. With a `Date`/`Date32` time column that the SQL compares `{since:…}` with, the partition check compares dates, which is exact. An `append` model must declare a `{since:…}` type as precise as its time column (see "Rows read once (`append`)").
 
 How the rows load and how the run ends:
 - **Into the run's transaction.** The result streams as Arrow record batches into a table of the run's DuckDB transaction (`Transaction.load_arrow`, `contracts/store/v1`), each column cast to its mapped type. No row is decoded in Python. The model's strategy, tests and watermark then apply as for any other model.
-- **Rows read again.** The declared `{since:…}` type may truncate the watermark, so rows between the two are read again. The `partition_overwrite` cut check (`PARTITION_INCOMPLETE`) compares the loaded rows with the table's rows, not with any boundary (#155).
+- **Rows read again.** The declared `{since:…}` type may truncate the watermark, so rows between the two are read again. The `partition_overwrite` cut check (`PARTITION_INCOMPLETE`) compares the loaded rows with the table's rows, not with any boundary (#155); `merge` and `delete_insert` replace them by key; an `append` model may not declare a coarser type (#135).
 - **Columns checked first.** Before reading, the output is described again, and the stream's Arrow types are compared with the validated columns; a type that changed since validation is `SCHEMA_CHANGED`.
 - **Failure and cancellation.** A failure, a time limit or a cancellation shuts the connection down, so ClickHouse cancels the query even while it sends nothing, and the run rolls back. The run record keeps the rows read so far.
 - **Ctrl-C.** The run rolls back, its records are written (`failed`, `STORE_CANCELLED`), and the command then stops as interrupted.
@@ -149,6 +149,30 @@ The filter `<table>.<time_column> > $since` is added to the query that reads the
 | `extraction` | An extraction model (its SQL runs on the source) |
 
 `details` holds `file` (relative to the project folder), and when known `model`, `path` (a JSON pointer into the sidecar) and `line`. Discovery reports every problem of a project at once.
+
+## Rows read once (`append`)
+
+An `append` model inserts every row it reads, and replaces nothing, so a filter that reads a row again inserts it twice (#135). In an `append` model with `filter: manual`, every `$since` (DuckDB SQL) or `{since:…}` (ClickHouse SQL) must be a **strict lower bound of the time column by the parameter alone**: `time_column > $since` (or `$since < time_column`), and in ClickHouse SQL `time_column > {since:T}`. The bound follows the row-path rules of "Partitions cut by `$since`" below (the query holding it returns the model's rows, joined to its `WHERE` by `AND` only; no `UNION`, join, grouping, window or limit on the path; the time column passed through unchanged), with three differences: `>=` is refused (it reads the rows at the watermark again), no expression may surround the parameter (`$since - INTERVAL 1 HOUR` is a hand-written lookback), and `OR time_column IS NULL` is refused (it reads every undated row in every run).
+
+In ClickHouse SQL, the declared type must also tell apart every instant the time column does, as ClickHouse describes the column at validation: the run truncates the watermark to the declared type, never rounding up, so a coarser type reads again the rows between the truncated value and the watermark.
+
+| `{since:…}` type | Allowed for a time column of type |
+|---|---|
+| `Date`, `Date32` | `Date`, `Date32` |
+| `DateTime` | `DateTime` |
+| `DateTime64(p)` | `DateTime`, `DateTime64(q)` with `p ≥ q` |
+
+A date column takes a date parameter only: ClickHouse compares a `Date32` with a time at midnight in the server's zone, whatever the parameter's zone, so the watermark's day could be read again.
+
+`Nullable(…)` and `LowCardinality(…)` are read through.
+
+The time column must also have the same value for a row in every run, or a row read once comes back with a later time and is inserted again. So it must be traced from the model's output to table columns, computed on the way only by functions the engine marks as giving the same value in every query (DuckDB's `CONSISTENT` functions, less `current_localtimestamp()`, `current_localtime()`, `version()` and the order-dependent `any_value`, `first`, `last`, `first_value`, `last_value`, `nth_value`; ClickHouse's `deterministic` ones): no window function, no subquery, none of `now()`, `random()`, `current_timestamp`, `now64()`, `rand()` and the like. Anything the check cannot trace is refused:
+- **DuckDB SQL** (traced through aliases, stars, `REPLACE`, subqueries, CTEs and joins): column lists that rename by position (`WITH c(a, b)`, `AS q(a, b)`), `RENAME`, `COLUMNS(…)`, positional references (`#2`), struct fields, `unnest`, aggregate functions (`max`, `list`, `arg_max`: a group's value changes as rows join it), table functions (`read_parquet` included), `VALUES`, set operations, three-part names (`feed.data.read_at`);
+- **ClickHouse SQL** (traced by name through every alias in the model, so an unrelated alias of the same name is checked too): a tuple's field (`tup.t`, also when the tuple is named like a table or subquery), `* REPLACE (…)`, `COLUMNS(…)`, `ARRAY JOIN`, `untuple`, and table functions other than `numbers` and `zeros`.
+
+The check reads the model's own SQL: a time column the source computes on each read (a `now()` in an upstream view or model, a source view, or a ClickHouse `ALIAS` column) is out of its reach. Anything else is `INVALID_MODEL_SQL` at the model's SQL file before anything runs; the message says what to write (`WHERE <time_column> > $since`, or a `{since:…}` type as precise as the column) and points to `strategy: merge` when rows can be read again. `filter: auto` already writes `time_column > $since`.
+
+Limit: a row that reaches the source later with a time equal to or older than the watermark (late data) is not read by an `append` model under any filter. Use `merge` with a `lookback` for such sources.
 
 ## Partitions cut by `$since` (`partition_overwrite`)
 
