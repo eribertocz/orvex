@@ -1571,3 +1571,54 @@ def test_an_append_time_column_traced_through_an_inner_join_is_accepted(
 ) -> None:
     sql = f"SELECT * FROM ({inner}) WHERE read_at > $since"
     assert config_problems(sql_model(tmp_path, MANUAL_APPEND, sql)) == []
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT CAST(day AS DATE) AS day, month FROM (SELECT read_at AS day, month FROM src) "
+        "WHERE day > $since",
+        "WITH c AS (SELECT read_at AS day, month FROM src) "
+        "SELECT CAST(day AS DATE) AS day, month FROM c WHERE day > $since",
+        "SELECT CAST(day AS DATE) AS day, month FROM (SELECT * FROM (SELECT read_at AS day, "
+        "month FROM src) WHERE day > $since)",
+        "SELECT CAST(s.day AS DATE) AS day, month FROM (SELECT read_at AS day, month FROM src) "
+        "AS s WHERE s.day > $since",
+    ],
+    ids=["subquery", "cte", "two-levels", "qualified"],
+)
+def test_a_finer_column_renamed_below_the_bound_is_refused(tmp_path: Path, sql: str) -> None:
+    # #164 (#128's 72 -> 67 cut): the bound reads `read_at` renamed `day`, while the model
+    # returns a date. Refused since #162's row path: a query that computes its time column does
+    # not pass on its subquery's, and its own bound must name the alias over a table.
+    found = config_problems(sql_model(tmp_path, BY_DAY, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+
+
+def test_a_qualified_clickhouse_bound_that_reads_a_field_is_seen() -> None:
+    # #164: `E.day` as a tuple's field, in EXPLAIN QUERY TREE.
+    from orvex.transform.clickhouse import reads_a_field
+
+    tree = """SelectWithUnionQuery (children 1)
+ ExpressionList (children 1)
+  SelectQuery (children 3)
+   ExpressionList (children 1)
+    Identifier day
+   TablesInSelectQuery (children 1)
+    TablesInSelectQueryElement (children 1)
+     TableExpression (children 1)
+      TableIdentifier ev (alias E)
+   Function greaterOrEquals (children 1)
+    ExpressionList (children 2)
+     Identifier E.day
+     Literal UInt64_1
+"""
+    plain = tree.replace("Identifier E.day", "Identifier day")
+    subcolumn = "          COLUMN id: 7, column_name: E.day, result_type: Date, source_id: 3"
+    function = "          FUNCTION id: 31, function_name: getSubcolumn, function_type: ordinary"
+    column = "          COLUMN id: 7, column_name: day, result_type: Date, source_id: 3"
+    assert reads_a_field(tree, subcolumn, "day")
+    assert reads_a_field(tree, function, "day")
+    assert not reads_a_field(tree, column, "day")
+    assert not reads_a_field(plain, subcolumn, "day")  # not qualified: the rule's own check
+    assert reads_a_field("not a tree", column, "day")

@@ -1250,6 +1250,7 @@ def test_a_connection_zone_python_cannot_read_is_refused_when_needed(
     assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
 
 
+<<<<<<< HEAD
 @pytest.mark.parametrize(
     ("times", "bound"),
     [
@@ -1269,10 +1270,36 @@ def test_an_append_first_run_loads_rows_at_the_default_value(
     bound: str,
 ) -> None:
     # #191 (decision #206): rows at 1970-01-01 or epoch 0, often a source's "no date".
+=======
+DAILY = (
+    "SELECT event_id, toString(toStartOfMonth(event_time)) AS month, toDate(event_time) AS day, "
+    "CAST(tuple(toDate('2020-01-01')), 'Tuple(day Date)') AS E FROM events"
+)
+
+
+@pytest.mark.parametrize(
+    ("sql", "accepted"),
+    [
+        # #164: `E.day` reads the field `day` of the tuple column `E` (2020-01-01 here), not the
+        # subquery's `day`: every row would be left out of a month it overwrites.
+        (f"SELECT event_id, month, day FROM ({DAILY}) AS E WHERE E.day >= {{since:Date}}", False),
+        (f"SELECT event_id, month, day FROM ({DAILY}) AS s WHERE s.day >= {{since:Date}}", True),
+    ],
+    ids=["tuple-field", "subquery-column"],
+)
+def test_a_qualified_bound_that_reads_a_tuple_field_is_refused(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    sql: str,
+    accepted: bool,
+) -> None:
+>>>>>>> 48ecafb (fix(transform): refuse a ClickHouse bound that reads a tuple field, and name spaced identifiers)
     folder = project(
         tmp_path,
         source,
         {
+<<<<<<< HEAD
             "models/raw/ch_events.sql": (
                 f"SELECT n AS id, t FROM (SELECT number + 1 AS n, {times}[number + 1] AS t "
                 f"FROM numbers(3)) WHERE t > {bound}"
@@ -1311,19 +1338,56 @@ def test_an_append_since_starting_at_the_default_value_is_refused(
     bound: str,
     wider: str,
 ) -> None:
+=======
+            "models/raw/ch_events.sql": sql,
+            "models/raw/ch_events.yaml": PARTIAL_SIDECAR.replace(
+                "time_column: read_at", "time_column: day"
+            ),
+        },
+    )
+    code, out = run(capsys, folder)
+    if accepted:
+        assert code == 0, out
+        assert lake_value(folder, "SELECT count(*) FROM lake.raw.ch_events") == [(1000,)]
+        return
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+
+
+def test_a_spaced_name_is_named_in_the_refusal(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #164: the message says which name the check could not read, and why.
+>>>>>>> 48ecafb (fix(transform): refuse a ClickHouse bound that reads a tuple field, and name spaced identifiers)
     folder = project(
         tmp_path,
         source,
         {
             "models/raw/ch_events.sql": (
+<<<<<<< HEAD
                 f"SELECT n AS id, t FROM (SELECT number + 1 AS n, {times}[number + 1] AS t "
                 f"FROM numbers(3)) WHERE t > {bound}"
             ),
             "models/raw/ch_events.yaml": APPEND_SIDECAR,
+=======
+                "SELECT event_id, toString(toStartOfMonth(event_time)) AS month, "
+                "toDate(event_time) AS day, 1 AS `nombre cliente` FROM events "
+                "WHERE day >= toStartOfMonth({since:Date})"
+            ),
+            "models/raw/ch_events.yaml": PARTIAL_SIDECAR.replace(
+                "time_column: read_at", "time_column: day"
+            ),
+>>>>>>> 48ecafb (fix(transform): refuse a ClickHouse bound that reads a tuple field, and name spaced identifiers)
         },
     )
     code, out = run(capsys, folder)
     assert code == 1, out
+<<<<<<< HEAD
     assert "INVALID_MODEL_SQL" in out
     assert wider in out
     assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+=======
+    assert "nombre cliente" in out
+    assert "EXPLAIN AST prints names unquoted" in out
+>>>>>>> 48ecafb (fix(transform): refuse a ClickHouse bound that reads a tuple field, and name spaced identifiers)

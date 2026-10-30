@@ -88,6 +88,7 @@ class Scan:
     # A quoted name with a space, a dot or a parenthesis: `EXPLAIN AST` prints it as is, so a
     # node's name could not be told from what follows it (`fecha lectura` read as `fecha`).
     spaced_name: bool = False
+    spaced_text: str = ""  # the first such name, for the message (#164)
 
 
 class ScanError(ValueError):
@@ -192,13 +193,15 @@ def scan(sql: str) -> Scan:
     # The SQL with strings, quoted identifiers and comments blanked out (same offsets).
     masked = list(sql)
     unsafe_name = spaced_name = False
+    spaced_text = ""
     for start, end, kind in _tokens(sql):
         if kind == "skipped":
             masked[start:end] = [" "] * (end - start)
             if sql[start] in '"`':
                 name = sql[start + 1 : end - 1]
                 unsafe_name = unsafe_name or "\\" in name or not name.isprintable()
-                spaced_name = spaced_name or any(char in name for char in " .()")
+                if not spaced_name and any(char in name for char in " .()"):
+                    spaced_name, spaced_text = True, name
     code = "".join(masked)
     parameters: list[Parameter] = []
     index = 0
@@ -218,7 +221,7 @@ def scan(sql: str) -> Scan:
     if len(segments) > 1 and not segments[-1].strip():
         last = code.rindex(";")
         text = sql[:last] + sql[last + 1 :]
-    return Scan(tuple(parameters), statements, text, unsafe_name, spaced_name)
+    return Scan(tuple(parameters), statements, text, unsafe_name, spaced_name, spaced_text)
 
 
 # --- the `since` parameter type -------------------------------------------------------------
@@ -1893,6 +1896,17 @@ def describe_model(
         )
         if checked and tree_depth(marked) > MAX_DEPTH:
             return _too_deep(model)
+        if checked and found.spaced_name:
+            return problem(
+                "INVALID_MODEL_SQL",
+                f"{model.name}: the quoted name `{found.spaced_text}` has a space, a dot or a "
+                "parenthesis. EXPLAIN AST prints names unquoted, so the check of where "
+                "{since:…} bounds the time column cannot read this model; rename it (for "
+                "example with an underscore) in this model, and in the DuckDB SQL models that "
+                "read it.",
+                file,
+                model=model.name,
+            )
         if append and since is not None:
             zoned = since_zone_problem(model, since, source.zone_of(since))
             if zoned is not None:
@@ -1912,12 +1926,12 @@ def describe_model(
             and incremental is not None
             and _refused(
                 lambda: (
-                    found.spaced_name
-                    or writes_since_mark(plain)
+                    writes_since_mark(plain)
                     or not since_is_a_lower_bound(
                         marked, incremental.time_column.root, strict=append
                     )
                     or limits_rows(query_tree := source.explain(found.text, since, "QUERY TREE"))
+                    or reads_a_field(marked, query_tree, incremental.time_column.root)
                     or (append and not keeps_rows(marked, query_tree))
                     or (append and not _stable(source, marked, incremental.time_column.root))
                 )
@@ -2077,6 +2091,31 @@ def tree_depth(tree: str) -> int:
             open_levels.append(indent)
             deepest = max(deepest, len(open_levels))
     return deepest
+
+
+def reads_a_field(tree: str, query_tree: str, time_column: str) -> bool:
+    """Whether a qualified time column (`E.day`) may be a field of a `Tuple` or `JSON` column
+    rather than the column of table `E` (#164): ClickHouse reads `X.day` as the subcolumn of a
+    column `X` before it reads it as table `X`'s column. `EXPLAIN QUERY TREE` shows such a read
+    as a column named `E.day` (a table's column) or as a `getSubcolumn`/`tupleElement` call (a
+    subquery's); when the model qualifies the time column, any of them counts. A tree that
+    cannot be read counts as yes."""
+    root = _ast(tree)
+    if root is None:
+        return True
+    qualified = any(
+        node.kind == "Identifier"
+        and node.detail.split(" ", 1)[0].rpartition(".")[2] == time_column
+        and "." in node.detail.split(" ", 1)[0]
+        for node in _nodes(root)
+    )
+    if not qualified:
+        return False
+    field = re.compile(
+        rf"column_name: \S+\.{re.escape(time_column)}(,|$)"
+        r"|function_name: (getSubcolumn|tupleElement)(,|$)"
+    )
+    return any(field.search(line) for line in query_tree.split("\n"))
 
 
 def keeps_rows(tree: str, query_tree: str) -> bool:
