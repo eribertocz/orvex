@@ -15,10 +15,12 @@ import pytest
 from orvex.contracts.store.v1 import Parameter, ParameterType
 from orvex.store.errors import StoreError
 from orvex.store.lake import (
+    PARSER_SPACES,
     SHARED_HARMLESS_FUNCTIONS,
     TABLE_FUNCTIONS_SQL,
     _created_kind_allowed,
     _guarded,
+    _plain,
     _single_statement,
     _tokens,
     _typed,
@@ -617,3 +619,79 @@ def test_a_pattern_under_the_home_folder_is_expanded_as_before(
         with pytest.raises(StoreError):
             _guarded(f"SELECT '{named}' AS p", table_functions())
     _guarded("SELECT '~/data/*.parquet' AS p", table_functions())  # nothing matches
+
+
+def test_parser_spaces_are_every_character_duckdb_reads_as_whitespace() -> None:
+    # #213: measured over every code point; a DuckDB upgrade that changes the set fails here.
+    found = set()
+    for point in range(0x80, 0x110000):
+        if 0xD800 <= point <= 0xDFFF:
+            continue
+        try:
+            duckdb.extract_statements(f"SELECT{chr(point)}1")
+        except duckdb.Error:
+            continue
+        found.add(chr(point))
+    assert found == set(PARSER_SPACES)
+
+
+_UNICODE_SPACE_BYPASSES = [
+    "CREATE TABLE x AS SELECT * FROM{c}read_text('x')",
+    "CREATE TABLE x AS SELECT * FROM read_text{c}('x')",
+    "CREATE TABLE x AS SELECT * FROM{c}query('SELECT 1')",
+    "SELECT * FROM{c}read_text('x')",
+]
+
+
+@pytest.mark.parametrize("space", list(PARSER_SPACES), ids=lambda c: f"U+{ord(c):04X}")
+def test_names_next_to_a_unicode_space_are_refused(space: str) -> None:
+    # #213: DuckDB reads these characters as spaces, `duckdb.tokenize` glued them to the name.
+    for template in _UNICODE_SPACE_BYPASSES:
+        sql = template.format(c=space)
+        with pytest.raises(StoreError) as refused:
+            _single_statement(sql, table_functions())
+        assert refused.value.code == "STORE_STATEMENT_INVALID", sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 'a\u00a0b' AS v",
+        "SELECT E'a\u00a0b\\t' AS v",
+        "SELECT $$a\u00a0b$$ AS v",
+        "SELECT $q$a\u3000b$q$ AS v",
+        'SELECT 1 AS "a\u00a0b"',
+        "SELECT 'x\u00a0' AS v",
+    ],
+)
+def test_strings_and_quoted_names_keep_their_unicode_spaces(sql: str) -> None:
+    # #213: only the spaces between tokens are rewritten; values and names stay as written.
+    spaced = sql.replace("SELECT ", "SELECT\u2003", 1).replace(" AS", "\ufeffAS", 1)
+    plain = _plain(spaced)
+    assert len(plain) == len(spaced)
+    connection = duckdb.connect()
+    expected = connection.execute(sql)
+    rows, names = expected.fetchall(), [column[0] for column in expected.description]
+    result = connection.execute(plain)
+    assert result.fetchall() == rows
+    assert [column[0] for column in result.description] == names
+    connection.close()
+
+
+def test_a_comment_or_unquoted_text_has_its_unicode_spaces_rewritten() -> None:
+    sql = "SELECT\u00a01 /*\u3000*/\u200bAS\u2060a"
+    assert _plain(sql) == "SELECT 1 /* */ AS a"
+    assert _plain("SELECT 1") == "SELECT 1"
+
+
+@pytest.mark.parametrize(
+    "sql", ["SELECT\u00a01 AS a", "CREATE TABLE t\u3000(a INTEGER)", "SELECT * FROM t\u200bAS u"]
+)
+def test_statements_with_unicode_spaces_are_still_accepted(sql: str) -> None:
+    _single_statement(sql, table_functions())
+
+
+def test_a_file_named_after_a_unicode_space_is_refused(a_file: str) -> None:
+    with pytest.raises(StoreError) as refused:
+        _single_statement(f"SELECT * FROM\u00a0'{a_file}'", table_functions())
+    assert refused.value.code == "STORE_STATEMENT_INVALID"

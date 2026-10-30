@@ -619,6 +619,42 @@ def _tokens(sql: str) -> list[tuple[int, duckdb.token_type]]:
     return [(characters[position], kind) for position, kind in tokens]
 
 
+# The characters DuckDB 2.0.0's parser reads as whitespace beyond ASCII (measured over every code
+# point); `duckdb.tokenize` keeps them inside the neighboring token (#213).
+PARSER_SPACES = (
+    "\u00a0\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u200b"
+    "\u202f\u205f\u2060\u3000\ufeff"
+)
+_AS_SPACE = str.maketrans(dict.fromkeys(PARSER_SPACES, " "))
+
+
+def _plain(sql: str) -> str:
+    """`sql` with every character in `PARSER_SPACES` written as a space, except inside string
+    constants and quoted names.
+
+    DuckDB already reads these characters as spaces, so the statement means the same; the
+    rewritten text is the one checked and the one run, so the checks see the tokens DuckDB sees
+    (#213). Strings and quoted names keep their characters, so values and file names reach the
+    checks as written.
+    """
+    if sql.isascii() or not any(character in sql for character in PARSER_SPACES):
+        return sql
+    spaced = sql.translate(_AS_SPACE)
+    every = _tokens(spaced)
+    positions = [position for position, _ in every] + [len(spaced)]
+    kept = list(spaced)
+    for (position, kind), end in zip(every, positions[1:], strict=True):
+        quoted = kind == duckdb.token_type.string_const or (
+            kind == duckdb.token_type.identifier and spaced[position] == '"'
+        )
+        if quoted:
+            # The token runs to the next one: the constant itself ends at its last non-space
+            # character (its closing quote).
+            stop = position + len(spaced[position:end].rstrip())
+            kept[position:stop] = sql[position:stop]
+    return "".join(kept)
+
+
 def _guarded(sql: str, table_functions: frozenset[str]) -> None:
     """Refuse SQL that names the catalog database or calls a table function other than generators.
 
@@ -631,6 +667,7 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
     The connection is also sandboxed to the lake's folders (`Lake._sandbox`), so these checks are
     a first layer.
     """
+    sql = _plain(sql)
     if "\x00" in sql:
         # DuckDB picks a reader from a whole string but opens the path only up to a NUL, which
         # Python's file checks refuse to look at (#136, Reviewer pass 8).
@@ -1950,6 +1987,7 @@ class Lake:
         writes apply (no file readers, no quoted file names, no catalog database). Parameters
         are bound as for a write (typically with a `null` value: only their type matters).
         """
+        sql = _plain(sql)
         statement = _single_statement(sql, self._table_functions)
         if statement.type != duckdb.StatementType.SELECT:
             raise StoreError(
@@ -1991,7 +2029,8 @@ class Lake:
         The read waits for an admission slot, holds it until its stream ends, and is interrupted
         when its timeout (counted from the call, waiting included) expires.
         """
-        statement = _single_statement(request.sql, self._table_functions)
+        sql = _plain(request.sql)
+        statement = _single_statement(sql, self._table_functions)
         if statement.type != duckdb.StatementType.SELECT:
             raise StoreError(
                 "STORE_STATEMENT_INVALID",
@@ -1999,7 +2038,7 @@ class Lake:
                 {"statement": statement.type.name},
             )
         parameters = _bound(statement, request.parameters)
-        typed = _typed(request.sql, request.parameters)
+        typed = _typed(sql, request.parameters)
         tree = _read_tree(typed)  # before admission: no catalog needed (#160)
         deadline = time.monotonic() + self._timeout_ms(request.timeout_ms) / 1000
         self._admission.acquire(deadline)
@@ -2489,7 +2528,8 @@ class Transaction:
         For small checks between statements (counts, existence): it sees the transaction's
         uncommitted changes. `None` when there is no row or the value is NULL.
         """
-        statement = _single_statement(request.sql, self._table_functions)
+        sql = _plain(request.sql)
+        statement = _single_statement(sql, self._table_functions)
         if statement.type != duckdb.StatementType.SELECT:
             raise StoreError(
                 "STORE_STATEMENT_INVALID",
@@ -2504,7 +2544,7 @@ class Transaction:
                 guard.stop()
                 raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
             self._guard = guard
-        typed = _typed(request.sql, request.parameters)
+        typed = _typed(sql, request.parameters)
         try:
             inexact = _inexact_column_read(self._cursor, typed, parameters, self._inexact)
             if inexact is not None:
@@ -2531,10 +2571,9 @@ class Transaction:
         return None if not row or row[0] is None else str(row[0])
 
     def execute(self, request: StatementRequest) -> None:
-        statement = _single_statement(request.sql, self._table_functions)
-        if statement.type not in WRITE_STATEMENTS or not _created_kind_allowed(
-            request.sql, statement
-        ):
+        sql = _plain(request.sql)
+        statement = _single_statement(sql, self._table_functions)
+        if statement.type not in WRITE_STATEMENTS or not _created_kind_allowed(sql, statement):
             raise StoreError(
                 "STORE_STATEMENT_INVALID",
                 "This statement kind is not allowed in a transaction.",
@@ -2549,7 +2588,7 @@ class Transaction:
                 guard.stop()
                 raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
             self._guard = guard
-        typed = _typed(request.sql, request.parameters)
+        typed = _typed(sql, request.parameters)
         try:
             inexact = _inexact_column_read(self._cursor, typed, parameters, self._inexact)
             if inexact is not None:
