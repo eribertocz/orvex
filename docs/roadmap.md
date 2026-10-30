@@ -334,4 +334,6 @@
 | Item | Module | Decision |
 |---|---|---|
 | Direct Query on a remote DuckDB through Quack: server-side read-only access and limits, verified HTTPS, version check; corpus and security suite green | store | ADR-0027 §10 (#107) |
+| MySQL / MariaDB as a raw source, through DuckDB's `mysql_scanner`, read-only | transform | Decision #226 |
+| Spatial data as a first-class capability: DuckDB's `spatial` (GeoParquet, GeoJSON, Shapefile, GeoPackage), geometry types in the semantic model, map visuals; researched against the leaders and designed in its own ADR first | transform, semantic, web | Decision #226 |
 | Python models, ML predictions and Python visuals | transform, semantic, web | ADR-0023 |
