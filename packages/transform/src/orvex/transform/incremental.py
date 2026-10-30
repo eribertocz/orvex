@@ -533,6 +533,15 @@ def since_is_a_lower_bound(
         if source.get("column_name_alias"):
             return refused  # renamed by position: not traced
         if kind == "JOIN":
+            # Only a plain inner join keeps each row's time fixed: an outer, semi, anti, ASOF or
+            # positional join can give a row another time when other rows arrive, so it is read,
+            # and inserted, again (#189).
+            if source.get("join_type") != "INNER" or source.get("ref_type") not in {
+                "REGULAR",
+                "CROSS",
+                "NATURAL",
+            }:
+                return refused
             states = [
                 from_state(source.get("left"), name, relation, scope),
                 from_state(source.get("right"), name, relation, scope),

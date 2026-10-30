@@ -351,3 +351,88 @@ def test_an_append_since_must_be_as_precise_as_the_time_column(
     assert [item.code.root for item in problems] == (["INVALID_MODEL_SQL"] if refused else [])
     if refused:
         assert "does not match the time_column t" in problems[0].message
+
+
+@pytest.mark.parametrize(
+    ("declared", "server", "refused"),
+    [
+        ("DateTime64(3, 'America/New_York')", "UTC", True),
+        ("DateTime", "America/New_York", True),  # no zone declared: the server's
+        ("DateTime('America/Lima')", "UTC", True),  # daylight saving time in 1986-1994
+        ("DateTime64(3, 'UTC')", "America/New_York", False),
+        ("DateTime64(3, 'America/La_Paz')", "UTC", False),
+        ("DateTime('Etc/GMT+4')", "UTC", False),
+        ("DateTime", "UTC", False),
+        ("Date", "America/New_York", False),  # a date is taken in a fixed zone already
+        ("Date32", "America/New_York", False),
+    ],
+)
+def test_an_append_since_zone_must_keep_one_offset(
+    tmp_path: Path, declared: str, server: str, refused: bool
+) -> None:
+    # #189: ClickHouse reads a repeated local time as its earlier instant.
+    from orvex.contracts.project.v1 import ClickhouseConnection
+    from orvex.transform.clickhouse import since_zone_problem
+    from orvex.transform.models import discover_models
+
+    connection = ClickhouseConnection.model_validate(
+        {
+            "type": "clickhouse",
+            "host": "h",
+            "port": 8123,
+            "database": "d",
+            "user": "u",
+            "password": "${env:UNUSED}",
+            "read_only": True,
+        }
+    )
+    (tmp_path / "models" / "raw").mkdir(parents=True)
+    (tmp_path / "models" / "raw" / "e.sql").write_text(
+        f"SELECT id, t FROM events WHERE t > {{since:{declared}}}", encoding="utf-8"
+    )
+    (tmp_path / "models" / "raw" / "e.yaml").write_text(
+        "version: 1\nconnection: ch\nmaterialized: incremental\nincremental:\n"
+        "  strategy: append\n  time_column: t\n  filter: manual\n",
+        encoding="utf-8",
+    )
+    found = discover_models(tmp_path, {"ch": connection})
+    assert found.problems == ()
+    since = since_type(declared)
+    assert since is not None
+    result = since_zone_problem(found.models[0], since, server)
+    assert (result is not None) is refused
+    if result is not None:
+        assert result.code.root == "INVALID_MODEL_SQL"
+        assert "UTC" in result.message
+
+
+def test_a_clickhouse_join_is_seen_in_the_tree() -> None:
+    from orvex.transform.clickhouse import joins
+
+    joined = """SelectWithUnionQuery (children 1)
+ ExpressionList (children 1)
+  SelectQuery (children 2)
+   ExpressionList (children 1)
+    Asterisk
+   TablesInSelectQuery (children 2)
+    TablesInSelectQueryElement (children 1)
+     TableExpression (children 1)
+      TableIdentifier a
+    TablesInSelectQueryElement (children 2)
+     TableExpression (children 1)
+      TableIdentifier b
+     TableJoin
+"""
+    plain = """SelectWithUnionQuery (children 1)
+ ExpressionList (children 1)
+  SelectQuery (children 2)
+   ExpressionList (children 1)
+    Asterisk
+   TablesInSelectQuery (children 1)
+    TablesInSelectQueryElement (children 1)
+     TableExpression (children 1)
+      TableIdentifier a
+"""
+    assert joins(joined)
+    assert not joins(plain)
+    assert joins("not a tree")  # unreadable: counts as a join
