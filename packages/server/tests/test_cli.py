@@ -27,6 +27,50 @@ def test_busy_port_moves_to_the_next_free_one() -> None:
         assert free_port(taken) > taken
 
 
+@pytest.mark.parametrize("value", ["0", "-1", "65536", "abc", "1.5"])
+def test_a_port_outside_1_to_65535_is_an_argument_error(
+    value: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #144 (decision #182, 3A): port 0 printed an address no server answered on.
+    with pytest.raises(SystemExit) as stopped:
+        main(["--port", value, "--no-browser"])
+    assert stopped.value.code == 2
+    assert "from 1 to 65535" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["1", "65535"])
+def test_the_ends_of_the_port_range_parse(value: str) -> None:
+    assert cli.parser_for(IDENTITY).parse_args(["--port", value]).port == int(value)
+
+
+def test_the_search_for_a_free_port_stops_at_65535(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    tried: list[int] = []
+
+    class Busy:
+        def __init__(self, *arguments: object) -> None:
+            pass
+
+        def __enter__(self) -> Busy:
+            return self
+
+        def __exit__(self, *arguments: object) -> None:
+            pass
+
+        def bind(self, address: tuple[str, int]) -> None:
+            tried.append(address[1])
+            raise OSError("busy")
+
+    monkeypatch.setattr(socket, "socket", Busy)
+    with pytest.raises(OSError, match="no free port from 65530 to 65535"):
+        free_port(65530)
+    assert tried == list(range(65530, 65536))  # never 65536
+    monkeypatch.setenv(home_variable(IDENTITY), str(tmp_path / "instance"))
+    assert main([str(tmp_path / "p"), "--no-browser", "--port", "65535"]) == 1
+    assert "choose another --port" in capsys.readouterr().err
+
+
 def test_local_mode_binds_to_loopback_only() -> None:
     config = server_config(7878, Versions("0.0.0", (), ()), None)
     assert config.host == "127.0.0.1"
