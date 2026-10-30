@@ -35,11 +35,14 @@ from typing import NamedTuple
 import duckdb
 import pyarrow as pa
 from orvex.contracts.store.v1 import (
+    AzureStorage,
     CommitResult,
     FileSourceAttachment,
+    GcsStorage,
     LakeLocation,
     LocalLakeLocation,
     MaintenanceReport,
+    ObjectStorage,
     Parameter,
     PostgresLakeLocation,
     PostgresSourceAttachment,
@@ -384,11 +387,16 @@ def _with_root_cert(connection: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class _Storage:
-    """Object storage settings with their credentials, read from the environment."""
+    """Object storage settings with their credentials, read from the environment: the key and
+    secret (S3, Google Cloud Storage), or the connection string (Azure, in `key_id`)."""
 
-    settings: S3Storage
+    settings: S3Storage | GcsStorage | AzureStorage
     key_id: str
-    secret: str
+    secret: str = ""
+
+
+# The URL scheme of each kind of object storage: the one spelling accepted for a data path.
+_SCHEMES = {"s3": "s3://", "gcs": "gs://", "azure": "az://"}
 
 
 def _data_path(location: AnyLakeLocation) -> str:
@@ -400,57 +408,167 @@ def _data_path(location: AnyLakeLocation) -> str:
     return location.data_path
 
 
-def _storage_credentials(storage: S3Storage | None, data_path: str) -> _Storage | None:
+def _storage_credentials(
+    storage: ObjectStorage | S3Storage | GcsStorage | AzureStorage | None, data_path: str
+) -> _Storage | None:
     """Check the data location and read its credentials, before anything is opened.
 
-    An `s3://` data path needs `storage`, and `storage` needs an `s3://` data path; any other
-    URL is refused. Unencrypted HTTP is refused unless the endpoint is the local machine
+    An object-storage data path (`s3://`, `gs://`, `az://`) needs `storage` of its kind, and
+    `storage` needs such a path; any other URL is refused, and so are `.` and `..` segments.
+    Unencrypted HTTP is refused unless the endpoint is the local machine
     (`STORE_TLS_REQUIRED`). The credentials are registered so no error can show them.
     """
+    settings = storage.root if isinstance(storage, ObjectStorage) else storage
     remote = "://" in data_path
-    if remote and not data_path.startswith("s3://"):
+    scheme = next((value for value in _SCHEMES.values() if data_path.startswith(value)), None)
+    if remote and scheme is None:
         raise StoreError(
             "STORE_LOCATION_INVALID",
-            "Data files can be on a local path or in S3-compatible storage (s3://) only.",
+            "Data files can be on a local path or in object storage (s3://, gs://, az://) only.",
             {"data_path": data_path},
         )
-    if remote and any(part in {".", ".."} for part in data_path[len("s3://") :].split("/")):
+    if scheme is not None and any(
+        part in {".", ".."} for part in data_path[len(scheme) :].split("/")
+    ):
         raise StoreError(
             "STORE_LOCATION_INVALID",
-            "An s3:// data path cannot contain . or .. segments.",
+            "An object-storage data path cannot contain . or .. segments.",
             {"data_path": data_path},
         )
-    if remote != (storage is not None):
+    if remote != (settings is not None) or (
+        settings is not None and _SCHEMES[settings.type] != scheme
+    ):
         raise StoreError(
             "STORE_LOCATION_INVALID",
-            "An s3:// data path needs its storage settings, and storage settings need an "
-            "s3:// data path.",
+            "An object-storage data path needs storage settings of its kind (s3:// with s3, "
+            "gs:// with gcs, az:// with azure), and storage settings need such a path.",
             {"data_path": data_path},
         )
-    if storage is None:
+    if settings is None:
         return None
-    if not storage.use_ssl:
-        endpoint = storage.endpoint or ""
+    if isinstance(settings, AzureStorage):
+        connection_string = _variable_value(settings.connection_string_env)
+        _check_azure(connection_string)
+        return _Storage(settings, connection_string)
+    if not settings.use_ssl:
+        endpoint = settings.endpoint or ""
         host = endpoint[1 : endpoint.find("]")] if endpoint.startswith("[") else endpoint
         host = host if endpoint.startswith("[") else endpoint.split(":", 1)[0]
         if not host or host.lower() not in _LOCAL_HOSTS:
             raise StoreError(
                 "STORE_TLS_REQUIRED",
                 "Object storage on another machine must be reached over HTTPS (use_ssl).",
-                {"endpoint": storage.endpoint or "(AWS S3)"},
+                {"endpoint": settings.endpoint or "(AWS S3)"},
             )
-    values: list[str] = []
-    for variable in (storage.key_id_env, storage.secret_env):
-        value = os.environ.get(variable, "")
-        if not value:
+    key_id = _variable_value(settings.key_id_env)
+    secret = _variable_value(settings.secret_env)
+    return _Storage(settings, key_id, secret)
+
+
+def _variable_value(variable: str) -> str:
+    """A credential from the environment, registered so no error can show it."""
+    value = os.environ.get(variable, "")
+    if not value:
+        raise StoreError(
+            "STORE_SECRET_MISSING",
+            f"The environment variable {variable} is not set.",
+            {"variable": variable},
+        )
+    register_secret(value)
+    return value
+
+
+# The keys of an Azure connection string as the Azure SDK reads them: exactly, by case, without
+# trimming, the last copy winning. A key written another way would be ignored by the SDK while
+# a forgiving check read it, so such keys and repeated keys are refused (#171, Reviewer pass 1).
+AZURE_KEYS = frozenset(
+    {
+        "DefaultEndpointsProtocol",
+        "AccountName",
+        "AccountKey",
+        "SharedAccessSignature",
+        "EndpointSuffix",
+        "BlobEndpoint",
+        "BlobSecondaryEndpoint",
+        "QueueEndpoint",
+        "QueueSecondaryEndpoint",
+        "TableEndpoint",
+        "TableSecondaryEndpoint",
+        "FileEndpoint",
+        "FileSecondaryEndpoint",
+        "DfsEndpoint",
+        "DfsSecondaryEndpoint",
+    }
+)
+_AZURE_KEYS_FOLDED = {key.lower(): key for key in AZURE_KEYS}
+
+
+def azure_pairs(connection_string: str) -> dict[str, str] | None:
+    """The `key=value` pairs of an Azure connection string, read as the Azure SDK reads them;
+    None when it is not such pairs (an empty segment included), repeats a key, or writes a known
+    key in another case or with spaces around it."""
+    pairs: dict[str, str] = {}
+    parts = connection_string.split(";")
+    if parts[-1] == "":
+        parts.pop()  # one final `;`
+    for part in parts:
+        key, equals, value = part.partition("=")
+        # An empty segment (`;;`, a leading `;`) is refused: the SDK reads a key up to the next
+        # `=`, across `;`, so the key after it would be hidden from the SDK but not from here.
+        if not equals or not key:
+            return None
+        known = _AZURE_KEYS_FOLDED.get(key.strip().lower())
+        if (known is not None and key != known) or key in pairs:
+            return None
+        pairs[key] = value
+    return pairs
+
+
+def _check_azure(connection_string: str) -> None:
+    """An Azure connection string: `key=value` pairs naming an AccountName, over HTTPS unless
+    its blob endpoint is the local machine. Its account key is registered too; nothing of it is
+    shown in errors."""
+    pairs = azure_pairs(connection_string)
+    if pairs is None:
+        raise StoreError(
+            "STORE_STATEMENT_INVALID",
+            "The Azure connection string must be key=value pairs separated by ;, each key "
+            "written once and as Azure spells it (AccountName, AccountKey, BlobEndpoint, …).",
+            {},
+        )
+    for name in ("AccountKey", "SharedAccessSignature"):
+        if pairs.get(name):
+            register_secret(pairs[name])
+    if not pairs.get("AccountName"):
+        raise StoreError(
+            "STORE_STATEMENT_INVALID", "The Azure connection string must name an AccountName.", {}
+        )
+    blob = pairs.get("BlobEndpoint")
+    if blob is not None:
+        scheme, separator, rest = blob.partition("://")
+        host_port = rest.split("/", 1)[0]
+        host = (
+            host_port[1 : host_port.find("]")]
+            if host_port.startswith("[")
+            else host_port.split(":", 1)[0]
+        )
+        local = scheme in {"http", "https"} and host.lower() in _LOCAL_HOSTS
+        if not separator or (scheme != "https" and not local):
             raise StoreError(
-                "STORE_SECRET_MISSING",
-                f"The environment variable {variable} is not set.",
-                {"variable": variable},
+                "STORE_TLS_REQUIRED",
+                "Azure Blob Storage on another machine must be reached over HTTPS "
+                "(the connection string's BlobEndpoint).",
+                {},
             )
-        register_secret(value)
-        values.append(value)
-    return _Storage(storage, values[0], values[1])
+        if local:
+            return  # an emulator on this machine: its endpoint decides the protocol
+    if pairs.get("DefaultEndpointsProtocol", "https") != "https":
+        raise StoreError(
+            "STORE_TLS_REQUIRED",
+            "Azure Blob Storage on another machine must be reached over HTTPS "
+            "(the connection string's DefaultEndpointsProtocol).",
+            {},
+        )
 
 
 def _postgres_password(location: PostgresLakeLocation) -> str:
@@ -1082,6 +1200,9 @@ class Lake:
             options = [f"DATA_PATH {_quote(data_path)}"]
             if location.encrypted:
                 # Fixed when the lake is created; deletion vectors stay off (written unencrypted).
+                # DuckDB writes encrypted files only with httpfs's crypto module loaded (without
+                # it, its built-in one is read-only and every write fails, #127).
+                self._load_httpfs()
                 options.append("ENCRYPTED")
             if isinstance(location, LocalLakeLocation):
                 self._attach_local(Path(location.path), location.catalog_path, options)
@@ -1335,26 +1456,34 @@ class Lake:
             ) from None
 
     def _storage_secret(self, storage: _Storage, data_path: str) -> None:
-        """A temporary S3 secret for the lake's prefix only; never persisted."""
-        self._load_extension("httpfs")
-        # httpfs also opens http:// and https:// addresses (and hf://) as files, and the
-        # statement check lets web addresses through as ordinary text. The lake needs only
-        # s3://, so those file systems are turned off on its connection (#136, Reviewer passes
-        # 4 and 5).
-        self._connection.sql("SET disabled_filesystems = 'HTTPFileSystem,HuggingFaceFileSystem'")
+        """A temporary secret for the lake's prefix only; never persisted."""
         settings = storage.settings
-        options = [
-            "TYPE s3",
-            f"KEY_ID {_quote(storage.key_id)}",
-            f"SECRET {_quote(storage.secret)}",
-            f"REGION {_quote(settings.region)}",
-            f"USE_SSL {'true' if settings.use_ssl else 'false'}",
-            f"SCOPE {_quote(data_path)}",
-        ]
-        if settings.endpoint is not None:
-            options.append(f"ENDPOINT {_quote(settings.endpoint)}")
-        if settings.url_style is not None:
-            options.append(f"URL_STYLE {_quote(settings.url_style)}")
+        if isinstance(settings, AzureStorage):
+            self._load_extension("azure")
+            options = [
+                "TYPE azure",
+                f"CONNECTION_STRING {_quote(storage.key_id)}",
+                f"SCOPE {_quote(data_path)}",
+            ]
+        else:
+            self._load_httpfs()
+            options = [
+                f"TYPE {settings.type}",
+                f"KEY_ID {_quote(storage.key_id)}",
+                f"SECRET {_quote(storage.secret)}",
+                f"USE_SSL {'true' if settings.use_ssl else 'false'}",
+                f"SCOPE {_quote(data_path)}",
+            ]
+            if isinstance(settings, S3Storage):
+                options.append(f"REGION {_quote(settings.region)}")
+                if settings.url_style is not None:
+                    options.append(f"URL_STYLE {_quote(settings.url_style)}")
+            if settings.endpoint is not None:
+                options.append(f"ENDPOINT {_quote(settings.endpoint)}")
+            if isinstance(settings, GcsStorage):
+                # The endpoint is reached by path (`host/bucket/key`), as the S3 API of Cloud
+                # Storage and local test servers both accept.
+                options.append("URL_STYLE 'path'")
         try:
             self._connection.sql(f"CREATE TEMPORARY SECRET lake_storage ({', '.join(options)})")
         except duckdb.Error as error:
@@ -1363,6 +1492,14 @@ class Lake:
                 "The lake's object storage settings were refused.",
                 {"duckdb": str(error)},
             ) from None
+
+    def _load_httpfs(self) -> None:
+        """httpfs, for S3 and Google Cloud Storage and for writing encrypted files, with its web
+        file systems turned off: it also opens http://, https:// and hf:// addresses as files,
+        and the statement check lets web addresses through as ordinary text (#136, Reviewer
+        passes 4 and 5). Set after the extension loads: it names its file systems."""
+        self._load_extension("httpfs")
+        self._connection.sql("SET disabled_filesystems = 'HTTPFileSystem,HuggingFaceFileSystem'")
 
     def _attach_sqlite_catalog(self, location: SqliteLakeLocation, options: Sequence[str]) -> None:
         """Attach a lake whose catalog is a SQLite file (several processes on one machine)."""

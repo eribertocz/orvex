@@ -328,10 +328,10 @@
         "data_path": {
           "type": "string",
           "minLength": 1,
-          "description": "Where data files are written, when not <path>/data/: an absolute local folder, or s3://bucket/prefix/ with storage."
+          "description": "Where data files are written, when not <path>/data/: an absolute local folder, or object storage with storage: s3://bucket/prefix/, gs://bucket/prefix/ or az://container/prefix/."
         },
         "storage": {
-          "$ref": "#/$defs/S3Storage"
+          "$ref": "#/$defs/ObjectStorage"
         },
         "encrypted": {
           "type": "boolean",
@@ -365,7 +365,7 @@
           "minLength": 1
         },
         "storage": {
-          "$ref": "#/$defs/S3Storage"
+          "$ref": "#/$defs/ObjectStorage"
         },
         "encrypted": {
           "type": "boolean",
@@ -410,7 +410,7 @@
           "minLength": 1
         },
         "storage": {
-          "$ref": "#/$defs/S3Storage"
+          "$ref": "#/$defs/ObjectStorage"
         },
         "encrypted": {
           "type": "boolean",
@@ -708,6 +708,72 @@
           "pattern": "^[A-Z_][A-Z0-9_]*$"
         }
       }
+    },
+    "GcsStorage": {
+      "description": "Google Cloud Storage for data files (gs://bucket/prefix/), reached through DuckDB's official httpfs extension with HMAC keys (Cloud Storage interoperability) as a temporary secret scoped to data_path. The keys are read from the environment variables named here. use_ssl false is refused unless the endpoint is the local machine (STORE_TLS_REQUIRED).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "key_id_env",
+        "secret_env"
+      ],
+      "properties": {
+        "type": {
+          "const": "gcs"
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 260,
+          "pattern": "^[A-Za-z0-9.\\-]+(:[0-9]{1,5})?$|^\\[[0-9A-Fa-f:]+\\](:[0-9]{1,5})?$",
+          "default": "storage.googleapis.com"
+        },
+        "use_ssl": {
+          "type": "boolean",
+          "default": true
+        },
+        "key_id_env": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$"
+        },
+        "secret_env": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$"
+        }
+      }
+    },
+    "AzureStorage": {
+      "description": "Azure Blob Storage for data files (az://container/prefix/), reached through DuckDB's official azure extension with a connection string as a temporary secret scoped to data_path. The connection string is read from the environment variable named here; its protocol must be https (DefaultEndpointsProtocol, and a BlobEndpoint if it has one) unless the endpoint is the local machine (STORE_TLS_REQUIRED). A connection string that is not key=value pairs or names no AccountName is refused (STORE_STATEMENT_INVALID), without showing it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "connection_string_env"
+      ],
+      "properties": {
+        "type": {
+          "const": "azure"
+        },
+        "connection_string_env": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$"
+        }
+      }
+    },
+    "ObjectStorage": {
+      "description": "Object storage for the lake's data files: S3-compatible, Google Cloud Storage or Azure Blob Storage.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/S3Storage"
+        },
+        {
+          "$ref": "#/$defs/GcsStorage"
+        },
+        {
+          "$ref": "#/$defs/AzureStorage"
+        }
+      ]
     }
   }
 }

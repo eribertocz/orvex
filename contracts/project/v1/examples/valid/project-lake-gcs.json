@@ -1,0 +1,1 @@
+{"version": 1, "name": "Facturación", "time_zone": "America/La_Paz", "lake": {"data": {"path": "gs://bi-lake/billing/", "gcs": {"key_id": "${env:LAKE_GCS_KEY_ID}", "secret": "${env:LAKE_GCS_SECRET}"}}, "encrypted": true}}

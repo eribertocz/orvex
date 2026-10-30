@@ -20,6 +20,7 @@ import pytest
 from moto.server import ThreadedMotoServer
 from orvex.contracts.store.v1 import (
     LocalLakeLocation,
+    ObjectStorage,
     ReadRequest,
     S3Storage,
     SqliteLakeLocation,
@@ -77,15 +78,17 @@ def keys(endpoint: str, bucket: str) -> list[str]:
     return [element.text or "" for element in listed.iter() if element.tag.endswith("}Key")]
 
 
-def storage(endpoint: str, use_ssl: bool = False) -> S3Storage:
-    return S3Storage(
-        type="s3",
-        region="us-east-1",
-        endpoint=endpoint,
-        url_style="path",
-        use_ssl=use_ssl,
-        key_id_env=KEY_ENV,
-        secret_env=SECRET_ENV,
+def storage(endpoint: str, use_ssl: bool = False) -> ObjectStorage:
+    return ObjectStorage(
+        S3Storage(
+            type="s3",
+            region="us-east-1",
+            endpoint=endpoint,
+            url_style="path",
+            use_ssl=use_ssl,
+            key_id_env=KEY_ENV,
+            secret_env=SECRET_ENV,
+        )
     )
 
 

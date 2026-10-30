@@ -543,7 +543,7 @@
       }
     },
     "LakeData": {
-      "description": "Where the lake's data files live: a local folder (relative to the project folder; a network file system mounted at the same path counts) or S3-compatible object storage (`s3://bucket/prefix/`, with `s3`). Default: `.<slug>/lake/data/`. It must hold only the lake's files: maintenance deletes Parquet files there that the lake does not list.",
+      "description": "Where the lake's data files live: a local folder (relative to the project folder; a network file system mounted at the same path counts) or object storage: S3-compatible (`s3://bucket/prefix/`, with `s3`), Google Cloud Storage (`gs://bucket/prefix/`, with `gcs`) or Azure Blob Storage (`az://container/prefix/`, with `azure`). Default: `.<slug>/lake/data/`. It must hold only the lake's files: maintenance deletes Parquet files there that the lake does not list.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -557,6 +557,12 @@
         },
         "s3": {
           "$ref": "#/$defs/S3Storage"
+        },
+        "gcs": {
+          "$ref": "#/$defs/GcsStorage"
+        },
+        "azure": {
+          "$ref": "#/$defs/AzureStorage"
         }
       }
     },
@@ -597,6 +603,36 @@
           "$ref": "#/$defs/SecretReference"
         },
         "secret": {
+          "$ref": "#/$defs/SecretReference"
+        }
+      }
+    },
+    "GcsStorage": {
+      "description": "Google Cloud Storage, reached with HMAC keys (Cloud Storage interoperability) at `storage.googleapis.com` over HTTPS. Credentials only as `${env:NAME}`; they become a temporary DuckDB secret.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key_id",
+        "secret"
+      ],
+      "properties": {
+        "key_id": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "secret": {
+          "$ref": "#/$defs/SecretReference"
+        }
+      }
+    },
+    "AzureStorage": {
+      "description": "Azure Blob Storage, reached with a connection string, only as `${env:NAME}`; it becomes a temporary DuckDB secret. Its protocol must be https (`DefaultEndpointsProtocol`, and a `BlobEndpoint` if it has one) unless the endpoint is the local machine.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "connection_string"
+      ],
+      "properties": {
+        "connection_string": {
           "$ref": "#/$defs/SecretReference"
         }
       }

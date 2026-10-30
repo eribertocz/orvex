@@ -17,6 +17,10 @@ export type StoreMessage =
  */
 export type LakeLocation = LocalLakeLocation | SqliteLakeLocation | PostgresLakeLocation;
 /**
+ * Object storage for the lake's data files: S3-compatible, Google Cloud Storage or Azure Blob Storage.
+ */
+export type ObjectStorage = S3Storage | GcsStorage | AzureStorage;
+/**
  * DuckDB type of a parameter.
  */
 export type ParameterType = string;
@@ -60,10 +64,10 @@ export interface LocalLakeLocation {
 	 */
 	catalog_path?: string;
 	/**
-	 * Where data files are written, when not <path>/data/: an absolute local folder, or s3://bucket/prefix/ with storage.
+	 * Where data files are written, when not <path>/data/: an absolute local folder, or object storage with storage: s3://bucket/prefix/, gs://bucket/prefix/ or az://container/prefix/.
 	 */
 	data_path?: string;
-	storage?: S3Storage;
+	storage?: ObjectStorage;
 	/**
 	 * DuckLake data-file encryption (ENCRYPTED), used when the lake is created.
 	 */
@@ -82,6 +86,23 @@ export interface S3Storage {
 	secret_env: string;
 }
 /**
+ * Google Cloud Storage for data files (gs://bucket/prefix/), reached through DuckDB's official httpfs extension with HMAC keys (Cloud Storage interoperability) as a temporary secret scoped to data_path. The keys are read from the environment variables named here. use_ssl false is refused unless the endpoint is the local machine (STORE_TLS_REQUIRED).
+ */
+export interface GcsStorage {
+	type: 'gcs';
+	endpoint?: string;
+	use_ssl?: boolean;
+	key_id_env: string;
+	secret_env: string;
+}
+/**
+ * Azure Blob Storage for data files (az://container/prefix/), reached through DuckDB's official azure extension with a connection string as a temporary secret scoped to data_path. The connection string is read from the environment variable named here; its protocol must be https (DefaultEndpointsProtocol, and a BlobEndpoint if it has one) unless the endpoint is the local machine (STORE_TLS_REQUIRED). A connection string that is not key=value pairs or names no AccountName is refused (STORE_STATEMENT_INVALID), without showing it.
+ */
+export interface AzureStorage {
+	type: 'azure';
+	connection_string_env: string;
+}
+/**
  * A DuckLake lake with a SQLite-file catalog (several processes on one machine): the catalog at <path>, data files under <data_path>. The file sandbox gains exactly the catalog file and its -wal, -shm and -journal files.
  */
 export interface SqliteLakeLocation {
@@ -89,7 +110,7 @@ export interface SqliteLakeLocation {
 	catalog: 'sqlite';
 	path: string;
 	data_path: string;
-	storage?: S3Storage;
+	storage?: ObjectStorage;
 	/**
 	 * DuckLake data-file encryption (ENCRYPTED), used when the lake is created.
 	 */
@@ -111,7 +132,7 @@ export interface PostgresLakeLocation {
 	 */
 	metadata_schema?: string;
 	data_path: string;
-	storage?: S3Storage;
+	storage?: ObjectStorage;
 	/**
 	 * DuckLake data-file encryption (ENCRYPTED), used when the lake is created.
 	 */
