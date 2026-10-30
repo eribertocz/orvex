@@ -720,6 +720,14 @@ def _open_recorded(home: Path, place: Place, attachments: Sequence[Attachment] =
     return lake
 
 
+def open_existing(home: Path, place: Place) -> Lake:
+    """Open the project's existing lake, under the project lock the caller holds, after
+    checking again that its settings are the lake's own: another process may have created the
+    lake since the project was checked (#181, Reviewer pass 2). `ProjectLoadError` otherwise."""
+    lake_place.check_unchanged(home, place)
+    return open_lake(place.location, _limits())
+
+
 def _limits() -> Limits:
     return Limits(
         memory_limit=_memory_limit(),
@@ -1421,7 +1429,7 @@ def runs(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
         return 0
     try:
         with project_lock(home):
-            lake = open_lake(place.location, _limits())
+            lake = open_existing(home, place)
             try:
                 snapshot = lake.current_snapshot().id
                 request = history_request(snapshot, zone, limit)
@@ -1440,6 +1448,9 @@ def runs(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
             ),
             file=out,
         )
+        return 1
+    except ProjectLoadError as error:
+        print(_load_problem(error), file=out)
         return 1
     except StoreError as error:
         print(_store_problem(error, ".", ""), file=out)

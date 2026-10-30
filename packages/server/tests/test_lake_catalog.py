@@ -19,7 +19,7 @@ from orvex.contracts.store.v1 import ReadRequest
 from orvex.server import commands, lake_place
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
-from orvex.server.project import load_project
+from orvex.server.project import ProjectLoadError, load_project
 from orvex.store.lake import Limits, open_lake
 
 SLUG = load_identity().slug
@@ -714,3 +714,21 @@ def test_a_socket_folder_keeps_its_letter_case(
     lake_place.confirm(home(folder), place)
     bare(folder, POSTGRES.format(host="/run/pg", port=5432))
     assert "was created with other settings" in problems(folder)[0]
+
+
+def test_every_open_of_an_existing_lake_checks_again_under_the_lock(tmp_path: Path) -> None:
+    # #181 Reviewer pass 2: `maintain`, `runs` and the scheduler's records passed the check
+    # before another process created the lake with other settings; `open_existing` (their one
+    # way in) checks again, so nothing is opened.
+    folder = bare(tmp_path / "proj", OTHER_SQLITE)
+    stale = chosen(folder)  # what `maintain` checked: no record yet
+    bare(folder, SQLITE)
+    created = chosen(folder)
+    lake_place.begin(home(folder), created)  # another process's run creates its lake
+    (folder / "c").mkdir()
+    (folder / "c" / "l.sqlite").touch()
+    lake_place.confirm(home(folder), created)
+    with pytest.raises(ProjectLoadError) as raised:
+        commands.open_existing(home(folder), stale)
+    assert raised.value.code == "LAKE_LOCATION_CHANGED"
+    assert not (folder / "other").exists()  # nothing opened or created

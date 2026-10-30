@@ -36,7 +36,7 @@ from orvex.server.commands import LOCK_FILE, Problem, project_lock
 from orvex.server.identity import Identity
 from orvex.server.project import Project, ProjectLoadError, load_project
 from orvex.store.errors import StoreError
-from orvex.store.lake import Lake, open_lake
+from orvex.store.lake import Lake
 
 TABLE = "_meta.maintenance_runs"
 DEFAULT_RETENTION = "90d"
@@ -307,13 +307,16 @@ def maintain(
         return 0
     try:
         with project_lock(home):
-            lake = open_lake(place.location, commands._limits())
+            lake = commands.open_existing(home, place)
             try:
                 record = run_maintenance(project, lake, identity, trigger, clock)
             finally:
                 lake.close()
     except commands.ProjectLocked:
         return _locked(identity, out, "another process is running this project; try again later.")
+    except ProjectLoadError as error:
+        print(commands._load_problem(error), file=out)
+        return 1
     except StoreError as error:
         print(commands._store_problem(error, ".", ""), file=out)
         return 1
@@ -337,7 +340,7 @@ def history(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
     if lake_place.exists(home):
         try:
             with project_lock(home):
-                lake = open_lake(place.location, commands._limits())
+                lake = commands.open_existing(home, place)
                 try:
                     snapshot = lake.current_snapshot().id
                     request = history_request(snapshot, project.settings.time_zone, limit)
@@ -350,6 +353,9 @@ def history(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
                     lake.close()
         except commands.ProjectLocked:
             return _locked(identity, out, "a run is in progress.")
+        except ProjectLoadError as error:
+            print(commands._load_problem(error), file=out)
+            return 1
         except StoreError as error:
             print(commands._store_problem(error, ".", ""), file=out)
             return 1
