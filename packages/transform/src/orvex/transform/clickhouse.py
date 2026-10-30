@@ -30,6 +30,7 @@ import socket
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from importlib import resources
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -283,10 +284,12 @@ def since_type(text: str) -> SinceType | None:
 
 
 def since_column_problems(model: Model, columns: tuple[Column, ...]) -> list[ModelError]:
-    """`{since:Date}` or `{since:Date32}` cannot protect a `partition_overwrite` model whose
-    time column is a `DateTime`: ClickHouse compares the date at midnight in the zone of the
-    expression the SQL compares it with, which the run cannot see, so the run's partition check
-    (`PARTITION_INCOMPLETE`) cannot know which rows were reloaded. A date time column, or a
+    """`{since:Date}` or `{since:Date32}` on a `partition_overwrite` model whose time column is
+    a `DateTime`: ClickHouse compares the date at midnight in the zone of the expression the SQL
+    compares it with, which the run cannot see, so a run after the first reads part of a
+    partition. The oldest-row rule (#155) then fails that run with `PARTITION_INCOMPLETE` and
+    writes nothing: no row is lost, but every such run fails (measured, #163). Refused at
+    validation instead, with the type to declare. A date time column, or a
     `{since:DateTime…}` parameter, has an exact boundary."""
     incremental = model.config.incremental
     since = declared_since(model)
@@ -346,8 +349,8 @@ def since_precision_problems(model: Model, columns: tuple[Column, ...]) -> list[
     column = _precision(found.clickhouse)
     declared = _precision(since.text)
     # A date column takes a date parameter only: ClickHouse compares `Date32` with a time at
-    # midnight in the server's zone, whatever the parameter's zone, so the watermark's day could
-    # be read again (#135, Reviewer pass 1).
+    # midnight in the connection's zone, whatever the parameter's zone, so the watermark's day
+    # could be read again (#135, Reviewer pass 1).
     if column is None or declared is None or (declared >= column and (column > 0 or declared == 0)):
         return []
     return [
@@ -356,7 +359,40 @@ def since_precision_problems(model: Model, columns: tuple[Column, ...]) -> list[
             f"{model.sql_file}: {{since:{since.text}}} does not match the time_column "
             f"{found.name} ({found.clickhouse}): an append model would read again, and insert "
             "twice, rows it already loaded. Declare {since:…} at least as precise as the "
-            "column ({since:Date} or {since:Date32} for a date column), or use strategy merge.",
+            "column ({since:Date32} for a date column), or use strategy merge.",
+            model.sql_file,
+            model=model.name,
+        )
+    ]
+
+
+def since_default_problems(model: Model, columns: tuple[Column, ...]) -> list[ModelError]:
+    """An `append` extraction model whose `{since:…}` starts at its `Date` or `DateTime` time
+    column's default value (#191, decision #206): its strict `>` filter would never load the
+    rows at 1970-01-01 (or 1970-01-01 00:00:00 UTC), which sources often use for "no date". A
+    type whose first value is earlier (`Date32`, `DateTime64(0, …)`) reads them."""
+    incremental = model.config.incremental
+    since = declared_since(model)
+    if incremental is None or incremental.strategy != "append" or since is None:
+        return []
+    time_column = incremental.time_column.root.lower()
+    found = next((column for column in columns if column.name.lower() == time_column), None)
+    if found is None:
+        return []
+    column = _kind(found.clickhouse)
+    if (column, since.family) == ("Date", "Date"):
+        moment, wider = "1970-01-01", "Date32"
+    elif (column, since.family) == ("DateTime", "DateTime"):
+        moment, wider = "1970-01-01 00:00:00 UTC", f"DateTime64(0, '{since.zone or 'UTC'}')"
+    else:
+        return []
+    return [
+        problem(
+            "INVALID_MODEL_SQL",
+            f"{model.sql_file}: {{since:{since.text}}} starts at {moment}, the default value of "
+            f"the time_column {found.name} ({found.clickhouse}): an append model's first run "
+            f"reads only rows after it, so rows at {moment} would never be loaded. Declare "
+            f"{{since:{wider}}}, which starts earlier.",
             model.sql_file,
             model=model.name,
         )
@@ -420,8 +456,8 @@ def since_range_problems(model: Model, columns: tuple[Column, ...]) -> list[Mode
             "INVALID_MODEL_SQL",
             f"{model.sql_file}: {{since:{since.text}}} cannot start a first run at the oldest "
             f"value of the time_column {found.name} ({found.clickhouse}): a first run or a full "
-            "refresh would skip its oldest rows for good, or fail. Declare {since:…} with the "
-            "column's own type.",
+            f"refresh would skip its oldest rows for good, or fail. Declare "
+            f"{{since:{_suggested(model, found.clickhouse)}}}.",
             model.sql_file,
             model=model.name,
         )
@@ -1936,23 +1972,46 @@ _FIXED_FROM, _FIXED_TO = 1970, 2100
 
 
 @functools.cache
+def _iana_zones() -> frozenset[str]:
+    """The IANA zone names of the bundled database (`tzdata`), the list the project's
+    `time_zone` is checked against: the same on every machine, without system-only entries
+    such as `localtime` or `posixrules`, which name the machine's own zone (#212)."""
+    text = resources.files("tzdata").joinpath("zones").read_text(encoding="utf-8")
+    return frozenset(text.split()) - {"Factory"}  # a placeholder of the database, not a place
+
+
+@functools.cache
+def bundled_zone(zone: str) -> ZoneInfo:
+    """`zone` read from the bundled IANA database (`tzdata`), never from the machine's own:
+    `ZoneInfo(name)` reads the system database first, and a distribution may build some zones
+    differently from IANA and ClickHouse (Ubuntu's `EET` and `WET` keep old rules: a watermark
+    in `EET` was written 1 hour off; Reviewer pass 1 on #216). `KeyError` for a name not in the
+    list."""
+    if zone not in _iana_zones():
+        raise KeyError(zone)
+    with resources.files("tzdata.zoneinfo").joinpath(*zone.split("/")).open("rb") as data:
+        return ZoneInfo.from_file(data, key=zone)
+
+
 def known_zone(zone: str) -> bool:
-    """Whether `zone` is in the time zone database Python reads (`zoneinfo`)."""
+    """Whether `zone` is an IANA zone name of the bundled database (`bundled_zone`). A name the
+    engine's machine resolves on its own (`localtime`, `posixrules`) is not: ClickHouse would
+    resolve it on its machine, to another zone (#212)."""
     try:
-        ZoneInfo(zone)
-    except KeyError, ValueError, OSError:  # ZoneInfoNotFoundError is a KeyError
+        bundled_zone(zone)
+    except KeyError, ValueError, OSError:
         return False
     return True
 
 
 @functools.cache
 def fixed_offset(zone: str) -> bool:
-    """Whether `zone` has one UTC offset from 1970 to 2100 (tz database, read with `zoneinfo`,
+    """Whether `zone` has one UTC offset from 1970 to 2100 (the bundled tz database, `bundled_zone`,
     sampled every 12 hours): no daylight-saving or other clock change, so no local time repeats. An
     unknown zone counts as no."""
     try:
-        found = ZoneInfo(zone)
-    except KeyError, ValueError, OSError:  # ZoneInfoNotFoundError is a KeyError
+        found = bundled_zone(zone)
+    except KeyError, ValueError, OSError:
         return False
     moment = dt.datetime(_FIXED_FROM, 1, 1, tzinfo=dt.UTC)
     end = dt.datetime(_FIXED_TO + 1, 1, 1, tzinfo=dt.UTC)
@@ -1992,9 +2051,26 @@ def since_zone_problem(model: Model, since: SinceType, server_zone: str) -> Mode
 
 
 def _with_utc(since: SinceType) -> str:
-    if since.family == "DateTime":
-        return "DateTime('UTC')"
-    return f"DateTime64({since.precision}, 'UTC')"
+    """The same `{since:…}` type in UTC. Seconds become `DateTime64(0, 'UTC')`, which every
+    strategy accepts on a `DateTime` column; `append` refuses `DateTime` there (#191)."""
+    precision = 0 if since.family == "DateTime" else since.precision
+    return f"DateTime64({precision}, 'UTC')"
+
+
+def _suggested(model: Model, clickhouse_type: str) -> str:
+    """The `{since:…}` type to declare for a time column: its own type, but for `append` a
+    `Date` or `DateTime` column takes one whose first value comes earlier (#191)."""
+    text = clickhouse_type
+    while (inner := re.fullmatch(r"(?:Nullable|LowCardinality)\((.*)\)", text)) is not None:
+        text = inner.group(1)
+    incremental = model.config.incremental
+    if incremental is not None and incremental.strategy == "append":
+        if text == "Date":
+            return "Date32"
+        if text == "DateTime" or text.startswith("DateTime("):
+            zone = re.search(r"'([^']+)'", text)
+            return f"DateTime64(0, '{zone.group(1) if zone else 'UTC'}')"
+    return text
 
 
 def _too_deep(model: Model) -> ModelError:
@@ -2229,8 +2305,8 @@ def _since_zone(since: SinceType, server: str, *, earliest: bool = False) -> Zon
     its boundary where midnight comes first (so a check never counts a row ClickHouse did not
     read)."""
     if since.family in {"Date", "Date32"}:
-        return ZoneInfo(_EARLIEST_MIDNIGHT if earliest else _LATEST_MIDNIGHT)
-    return ZoneInfo(since.zone or server)
+        return bundled_zone(_EARLIEST_MIDNIGHT if earliest else _LATEST_MIDNIGHT)
+    return bundled_zone(since.zone or server)
 
 
 def since_bound(since: SinceType, text: str, server: str) -> tuple[str, str]:

@@ -703,6 +703,50 @@ def test_a_date_since_on_a_zoned_column_is_refused_before_anything_runs(
     assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
 
 
+def test_without_the_refusal_a_date_since_on_a_zoned_column_fails_and_loses_nothing(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # #163: measured with the validation refusal bypassed (a seam in this test only). A
+    # `DateTime` column, which `{since:Date32}` may bound from its first value (#179). The
+    # second run binds the watermark's date, which ClickHouse compares at midnight in Tokyo:
+    # it reads part of February, and the oldest-row rule (#155) fails the run before anything
+    # is written. So the refusal saves a failure on every run, not rows.
+    monkeypatch.setattr(clickhouse, "since_column_problems", lambda model, columns: [])
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "SELECT n AS id, toString(toStartOfMonth(t)) AS month, t FROM (SELECT number AS n, "
+                "toTimeZone(toDateTime('2024-02-01 00:00:00', 'UTC') + "
+                "toIntervalHour(6 * number), 'Asia/Tokyo') AS t FROM numbers(111)) "
+                "WHERE t > {since:Date32}"
+            ),
+            "models/raw/ch_events.yaml": (
+                "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
+                "incremental:\n  strategy: partition_overwrite\n  time_column: t\n"
+                "  partition_by: [month]\n  filter: manual\n"
+            ),
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 0, out
+    rows = (
+        "SELECT count(*), sum(id), CAST(min(t) AS VARCHAR), CAST(max(t) AS VARCHAR) "
+        "FROM lake.raw.ch_events"
+    )
+    loaded = lake_value(folder, rows)
+    assert loaded[0][0:2] == (111, 111 * 110 // 2)
+    code, out = run(capsys, folder)  # nothing changed at the source
+    assert code == 1, out
+    assert "PARTITION_INCOMPLETE" in out
+    assert record(folder)[0:2] == ("failed", "PARTITION_INCOMPLETE")
+    assert lake_value(folder, rows) == loaded  # no row lost or changed
+
+
 def test_a_time_since_on_a_zoned_column_is_exact(
     tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -862,9 +906,10 @@ def test_an_append_filter_that_reads_rows_again_is_refused_before_anything_runs(
     [
         ("DateTime64(3, 'UTC')", "t > {since:DateTime64(3, 'UTC')}"),
         ("DateTime64(3, 'UTC')", "{since:DateTime64(6, 'UTC')} < t"),
-        ("Date", "t > {since:Date}"),
+        # #191: `{since:Date}` on a Date column is refused for append; Date32 starts earlier.
+        ("Date", "t > {since:Date32}"),
     ],
-    ids=["as-precise", "more-precise-reversed", "date-on-date"],
+    ids=["as-precise", "more-precise-reversed", "date32-on-date"],
 )
 def test_an_append_filter_that_reads_each_row_once_inserts_it_once(
     tmp_path: Path,
@@ -1246,4 +1291,140 @@ def test_a_connection_zone_python_cannot_read_is_refused_when_needed(
     assert code == 1, out
     assert "SOURCE_ZONE_UNKNOWN" in out
     assert "Mars/Olympus" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+
+
+@pytest.mark.parametrize(
+    ("times", "bound"),
+    [
+        ("[toDate('1970-01-01'), toDate('1970-01-01'), toDate('2024-01-01')]", "{since:Date32}"),
+        (
+            "[toDateTime(0, 'UTC'), toDateTime(0, 'UTC'), toDateTime('2024-01-01', 'UTC')]",
+            "{since:DateTime64(0, 'UTC')}",
+        ),
+    ],
+    ids=["date-1970-01-01", "datetime-epoch-0"],
+)
+def test_an_append_first_run_loads_rows_at_the_default_value(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    times: str,
+    bound: str,
+) -> None:
+    # #191 (decision #206): rows at 1970-01-01 or epoch 0, often a source's "no date".
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                f"SELECT n AS id, t FROM (SELECT number + 1 AS n, {times}[number + 1] AS t "
+                f"FROM numbers(3)) WHERE t > {bound}"
+            ),
+            "models/raw/ch_events.yaml": APPEND_SIDECAR,
+        },
+    )
+    ids = "SELECT id FROM lake.raw.ch_events ORDER BY id"
+    for _ in range(2):  # the second run loads nothing again
+        code, out = run(capsys, folder)
+        assert code == 0, out
+    assert lake_value(folder, ids) == [(1,), (2,), (3,)]
+
+
+@pytest.mark.parametrize(
+    ("times", "bound", "wider"),
+    [
+        (
+            "[toDate('1970-01-01'), toDate('2024-01-01'), toDate('2024-01-02')]",
+            "{since:Date}",
+            "{since:Date32}",
+        ),
+        (
+            "[toDateTime(0, 'UTC'), toDateTime(1, 'UTC'), toDateTime(2, 'UTC')]",
+            "{since:DateTime('UTC')}",
+            "{since:DateTime64(0, 'UTC')}",
+        ),
+    ],
+    ids=["date", "datetime"],
+)
+def test_an_append_since_starting_at_the_default_value_is_refused(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    times: str,
+    bound: str,
+    wider: str,
+) -> None:
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                f"SELECT n AS id, t FROM (SELECT number + 1 AS n, {times}[number + 1] AS t "
+                f"FROM numbers(3)) WHERE t > {bound}"
+            ),
+            "models/raw/ch_events.yaml": APPEND_SIDECAR,
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert wider in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+
+
+@pytest.mark.parametrize(
+    ("declared", "connection_zone", "strategy"),
+    [
+        ("DateTime('localtime')", None, "merge"),
+        ("DateTime('localtime')", None, "append"),
+        ("DateTime64(3, 'posixrules')", None, "merge"),
+        ("DateTime64(3, 'posixrules')", None, "append"),
+        ("DateTime", "localtime", "append"),
+        ("DateTime", "Mars/Olympus", "append"),
+    ],
+    ids=[
+        "declared-localtime-merge",
+        "declared-localtime-append",
+        "declared-posixrules-merge",
+        "declared-posixrules-append",
+        "connection-localtime",
+        "connection-unknown",
+    ],
+)
+def test_a_zone_the_machine_resolves_on_its_own_is_refused_before_anything_runs(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    declared: str,
+    connection_zone: str | None,
+    strategy: str,
+) -> None:
+    # #212: ClickHouse resolves `localtime` and `posixrules` on its own machine, the engine on
+    # its own: a watermark written in one would be read at another instant.
+    if connection_zone is not None:
+        monkeypatch.setattr(
+            clickhouse.Source, "server_zone", property(lambda self: connection_zone)
+        )
+    unique = "  unique_key: [id]\n" if strategy == "merge" else ""
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "SELECT event_id AS id, t FROM (SELECT event_id, "
+                "toDateTime(event_time, 'UTC') AS t FROM events) "
+                f"WHERE t > {{since:{declared}}}"
+            ),
+            "models/raw/ch_events.yaml": (
+                "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
+                f"incremental:\n  strategy: {strategy}\n{unique}  time_column: t\n"
+                "  filter: manual\n"
+            ),
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "SOURCE_ZONE_UNKNOWN" in out
     assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created

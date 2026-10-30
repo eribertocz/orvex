@@ -15,10 +15,12 @@ import pytest
 from orvex.contracts.store.v1 import Parameter, ParameterType
 from orvex.store.errors import StoreError
 from orvex.store.lake import (
+    PARSER_SPACES,
     SHARED_HARMLESS_FUNCTIONS,
     TABLE_FUNCTIONS_SQL,
     _created_kind_allowed,
     _guarded,
+    _plain,
     _single_statement,
     _tokens,
     _typed,
@@ -619,6 +621,184 @@ def test_a_pattern_under_the_home_folder_is_expanded_as_before(
     _guarded("SELECT '~/data/*.parquet' AS p", table_functions())  # nothing matches
 
 
+def test_parser_spaces_are_every_character_duckdb_reads_as_whitespace() -> None:
+    # #213: measured over every code point; a DuckDB upgrade that changes the set fails here.
+    found = set()
+    for point in range(0x80, 0x110000):
+        if 0xD800 <= point <= 0xDFFF:
+            continue
+        try:
+            duckdb.extract_statements(f"SELECT{chr(point)}1")
+        except duckdb.Error:
+            continue
+        found.add(chr(point))
+    assert found == set(PARSER_SPACES)
+
+
+_UNICODE_SPACE_BYPASSES = [
+    "CREATE TABLE x AS SELECT * FROM{c}read_text('x')",
+    "CREATE TABLE x AS SELECT * FROM read_text{c}('x')",
+    "CREATE TABLE x AS SELECT * FROM{c}query('SELECT 1')",
+    "SELECT * FROM{c}read_text('x')",
+]
+
+
+@pytest.mark.parametrize("space", list(PARSER_SPACES), ids=lambda c: f"U+{ord(c):04X}")
+def test_names_next_to_a_unicode_space_are_refused(space: str) -> None:
+    # #213: DuckDB reads these characters as spaces, `duckdb.tokenize` glued them to the name.
+    for template in _UNICODE_SPACE_BYPASSES:
+        sql = template.format(c=space)
+        with pytest.raises(StoreError) as refused:
+            _single_statement(sql, table_functions())
+        assert refused.value.code == "STORE_STATEMENT_INVALID", sql
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT 'a\u00a0b' AS v",
+        "SELECT E'a\u00a0b\\t' AS v",
+        "SELECT $$a\u00a0b$$ AS v",
+        "SELECT $q$a\u3000b$q$ AS v",
+        'SELECT 1 AS "a\u00a0b"',
+        "SELECT 'x\u00a0' AS v",
+    ],
+)
+def test_strings_and_quoted_names_keep_their_unicode_spaces(sql: str) -> None:
+    # #213: only the spaces between tokens are rewritten; values and names stay as written.
+    # A space before `AS`: DuckDB reads a `$` followed by a non-ASCII byte as a new dollar tag.
+    spaced = sql.replace("SELECT ", "SELECT\u2003", 1).replace(" AS", " \ufeffAS", 1)
+    plain = _plain(spaced)
+    assert len(plain) == len(spaced)
+    connection = duckdb.connect()
+    expected = connection.execute(sql)
+    rows, names = expected.fetchall(), [column[0] for column in expected.description]
+    result = connection.execute(plain)
+    assert result.fetchall() == rows
+    assert [column[0] for column in result.description] == names
+    connection.close()
+
+
+def test_a_comment_or_unquoted_text_has_its_unicode_spaces_rewritten() -> None:
+    sql = "SELECT\u00a01 /*\u3000*/\u200bAS\u2060a"
+    assert _plain(sql) == "SELECT 1 /* */ AS a"
+    assert _plain("SELECT 1") == "SELECT 1"
+
+
+@pytest.mark.parametrize(
+    "sql", ["SELECT\u00a01 AS a", "CREATE TABLE t\u3000(a INTEGER)", "SELECT * FROM t\u200bAS u"]
+)
+def test_statements_with_unicode_spaces_are_still_accepted(sql: str) -> None:
+    _single_statement(sql, table_functions())
+
+
+def test_a_file_named_after_a_unicode_space_is_refused(a_file: str) -> None:
+    with pytest.raises(StoreError) as refused:
+        _single_statement(f"SELECT * FROM\u00a0'{a_file}'", table_functions())
+    assert refused.value.code == "STORE_STATEMENT_INVALID"
+
+
+_DESYNCS = [
+    # (first select item, whether DuckDB's prepass then rewrites the U+00A0 in the file name)
+    ("/*'*/ 1", True),
+    ("/* it's */ 1", True),
+    ("E'\\''", True),
+    ('/*"*/ 1', False),
+    ("1 -- '\n", False),
+    ("$t$'$t$", False),
+    ('$$"$$', False),
+]
+
+
+@pytest.mark.parametrize(("before", "rewritten"), _DESYNCS)
+def test_a_file_named_after_a_quote_duckdb_tracks_differently_is_refused(
+    tmp_path: Path, before: str, rewritten: bool
+) -> None:
+    # Reviewer pass 1 on #214: DuckDB's prepass tracks quotes without block comments or
+    # backslash escapes, so after `/*'*/` it rewrites the U+00A0 inside the next string; the
+    # guard must check the name DuckDB opens (`lake dir`), which names an existing file.
+    folder = tmp_path / "lake dir"
+    folder.mkdir()
+    (folder / "s.csv").write_text("a\n42\n", encoding="utf-8")
+    named = (tmp_path / "lake\u00a0dir" / "s.csv").as_posix()
+    sql = f"CREATE TABLE x AS SELECT {before} AS one, * FROM '{named}'"
+    connection = duckdb.connect()
+    try:
+        opened = connection.execute(sql.replace("CREATE TABLE x AS ", "")).fetchall()
+    except duckdb.IOException:
+        opened = []  # DuckDB kept the U+00A0: no file of that name
+    connection.close()
+    assert bool(opened) is rewritten  # pins DuckDB's prepass
+    if not opened:
+        _single_statement(sql, table_functions())  # nothing to refuse: no such file
+        return
+    with pytest.raises(StoreError) as refused:
+        _single_statement(sql, table_functions())
+    assert refused.value.code == "STORE_STATEMENT_INVALID"
+
+
+_FRAGMENTS = [
+    "/*'*/",
+    '/*"*/',
+    "E'\\''",
+    "-- '\n",
+    "$t$'$t$",
+    "'a\u00a0b'",
+    "'c\u3000d'",
+    "\u00a0",
+    "\u200b",
+    " ",
+    "$$x\u2003y$$",
+    "'it''s\u00a0'",
+]
+
+
+def test_the_text_checked_is_what_duckdb_runs() -> None:
+    # #213: `_plain` reproduces DuckDB's prepass, so DuckDB reads each string constant exactly as
+    # the guard does: the value it returns is spelled, quoted, in the checked text.
+    import itertools
+
+    connection = duckdb.connect()
+    for first, second, third in itertools.product(_FRAGMENTS, repeat=3):
+        sql = f"SELECT {first} {second} 'v\u00a0w' AS v {third}"
+        plain = _plain(sql)
+        assert _plain(plain) == plain, sql
+        try:
+            expected = connection.execute(sql).fetchall()
+        except duckdb.Error:
+            continue
+        assert connection.execute(plain).fetchall() == expected, sql
+        value = expected[0][-1] if expected else None
+        if isinstance(value, str) and value.startswith("v"):
+            assert f"'{value}'" in plain, (sql, plain, value)
+    connection.close()
+
+
+def test_the_last_two_bytes_are_left_as_duckdb_leaves_them() -> None:
+    # DuckDB's prepass stops two bytes before the end: a final U+00A0 stays part of the name.
+    sql = "SELECT 1 AS a\u00a0"
+    assert _plain(sql) == sql
+    connection = duckdb.connect()
+    assert connection.execute(sql).description[0][0] == "a\u00a0"
+    connection.close()
+
+
+def test_a_long_dollar_quoted_string_is_rewritten_in_linear_time() -> None:
+    # Reviewer pass 2 on #214: comparing the closing tag by slicing copied it at every `$`, so a
+    # 1.6 MB statement took about 5 s; DuckDB parses it in a fraction of a second.
+    size = 400_000
+    sql = "SELECT \u00a0$" + "a" * size + "$" + "$" * (2 * size) + "$" + "a" * size + "$"
+    started = time.monotonic()
+    _plain(sql)
+    assert time.monotonic() - started < 1.0
+
+
+def test_a_lone_surrogate_is_a_parse_failure() -> None:
+    with pytest.raises(StoreError) as raised:
+        _single_statement(_plain("SELECT 'a\ud800'"), table_functions())
+    assert raised.value.code == "STORE_QUERY_FAILED"
+
+
 @pytest.mark.parametrize(
     "sql",
     [
@@ -667,3 +847,17 @@ def test_an_object_storage_data_path_is_a_folder(tmp_path: Path, given: str, use
         kind="lake_location", catalog="local", path=str(tmp_path), data_path=given
     )
     assert _data_path(location) == used
+
+
+@pytest.mark.parametrize("space", list(PARSER_SPACES), ids=lambda c: f"U+{ord(c):04X}")
+def test_time_travel_after_a_unicode_space_is_refused(space: str) -> None:
+    # Reviewer pass 1 on #211: DuckDB reads `t<U+00A0>AT (VERSION => 1)` as time travel; the
+    # store rewrites the space as DuckDB does (#213) before the check.
+    for sql in (
+        f"CREATE TABLE x AS SELECT * FROM t{space}AT (VERSION => 1)",
+        f"CREATE TABLE x AS SELECT * FROM t AS o{space}AT{space}(VERSION{space}=> 1)",
+    ):
+        with pytest.raises(StoreError) as refused:
+            _single_statement(_plain(sql), table_functions())
+        assert refused.value.code == "STORE_STATEMENT_INVALID", sql
+        assert refused.value.details.get("clause") == "AT", sql
