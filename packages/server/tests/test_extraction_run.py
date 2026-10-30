@@ -24,7 +24,9 @@ from clickhouse_connect.driver.client import Client
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 
-SERVER = os.environ.get("TRANSFORM_TEST_CLICKHOUSE")
+from tests.support.services import required_in_ci
+
+SERVER = required_in_ci("TRANSFORM_TEST_CLICKHOUSE")  # fails in CI when unset (#173)
 pytestmark = pytest.mark.skipif(SERVER is None, reason="no ClickHouse server for tests")
 
 SLUG = load_identity().slug
