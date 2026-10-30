@@ -1931,12 +1931,13 @@ def describe_model(
                         marked, incremental.time_column.root, strict=append
                     )
                     or limits_rows(query_tree := source.explain(found.text, since, "QUERY TREE"))
+                    or projects_a_field(
+                        marked_tree := source.explain(mark_since(found), since, "QUERY TREE"),
+                        incremental.time_column.root,
+                    )
                     or (
                         bounds_a_qualified_column(marked, incremental.time_column.root)
-                        and reads_a_field(
-                            source.explain(mark_since(found), since, "QUERY TREE"),
-                            incremental.time_column.root,
-                        )
+                        and reads_a_field(marked_tree, incremental.time_column.root)
                     )
                     or (append and not keeps_rows(marked, query_tree))
                     or (append and not _stable(source, marked, incremental.time_column.root))
@@ -2175,21 +2176,12 @@ def bounds_a_qualified_column(marked: str, time_column: str) -> bool:
     return False
 
 
-def reads_a_field(marked_query_tree: str, time_column: str) -> bool:
-    """Whether a `{since:…}` bound compares a field of a `Tuple`, `JSON` or similar column
-    rather than the time column (#164): ClickHouse reads `E.day` as the subcolumn `day` of a
-    column `E` before it reads it as table `E`'s column. In the `EXPLAIN QUERY TREE` of
-    `mark_since`'s SQL, each comparison holding the mark (`identity(identity(…))`) is looked at:
-    its other side must not read a subcolumn named like the time column (`column_name: E.day`,
-    a table's) nor call `getSubcolumn`/`tupleElement` (a subquery's). Fields read elsewhere in
-    the model do not count (Reviewer pass 1 on #205). A tree without the mark counts as yes."""
-    field = re.compile(
-        rf"column_name: \S+\.{re.escape(time_column)}(,|$)"
-        r"|function_name: (getSubcolumn|tupleElement)(,|$)"
-    )
-    marks = [
+def _marks(lines: list[_TreeLine]) -> list[_TreeLine]:
+    """The outer `identity` of each `identity(identity(…))` mark of `mark_since`'s SQL, in the
+    lines of its `EXPLAIN QUERY TREE`."""
+    return [
         line
-        for line in _query_tree(marked_query_tree)
+        for line in lines
         if line.text.startswith("FUNCTION")
         and "function_name: identity," in line.text
         and line.parent is not None
@@ -2203,6 +2195,73 @@ def reads_a_field(marked_query_tree: str, time_column: str) -> bool:
             for inner in (argument.children[0].children if argument.children else [])
         )
     ]
+
+
+def _query_of(line: _TreeLine) -> _TreeLine | None:
+    """The nearest `QUERY` node above `line`."""
+    current = line.parent
+    while current is not None and not current.text.startswith("QUERY id:"):
+        current = current.parent
+    return current
+
+
+def projects_a_field(marked_query_tree: str, time_column: str) -> bool:
+    """Whether a query returns its time column from a field of a `Tuple`, `JSON` or similar
+    column (`E.day AS day`, `tupleElement(E, 'day') AS day`) while its own `WHERE`/`PREWHERE`
+    holds no `{since:…}` bound (#164, Reviewer pass 3 on #205). A bound below such a query
+    bounds another column than the one returned: ClickHouse reads `E.day` as the field before
+    it reads it as table `E`'s column. The query whose own condition holds the bound may compute
+    its time column from a field (the alias exception: the bound names that alias). Read from
+    the `EXPLAIN QUERY TREE` of `mark_since`'s SQL, where each query lists its output names
+    (`PROJECTION COLUMNS`) in the order of its `PROJECTION` items. A tree that cannot be read
+    counts as yes."""
+    field = re.compile(
+        r"column_name: \S+\.\S+?(,|$)|function_name: (getSubcolumn|tupleElement)(,|$)"
+    )
+    lines = _query_tree(marked_query_tree)
+    if not lines or not lines[0].text.startswith("QUERY"):
+        return True
+    bounded_by_condition: set[int] = set()
+    for mark in _marks(lines):
+        section = mark.parent
+        query = _query_of(mark)
+        while section is not None and section is not query:
+            if section.parent is query and section.text in {"WHERE", "PREWHERE"}:
+                bounded_by_condition.add(id(query))
+            section = section.parent
+    for query in (line for line in lines if line.text.startswith("QUERY id:")):
+        sections = {child.text: child for child in query.children}
+        named = sections.get("PROJECTION COLUMNS")
+        projected = sections.get("PROJECTION")
+        if named is None or projected is None or not projected.children:
+            continue
+        names = [child.text.split(" ", 1)[0] for child in named.children]
+        items = projected.children[0].children
+        if len(names) != len(items):
+            return True
+        for name, item in zip(names, items, strict=True):
+            if (
+                name == time_column
+                and id(query) not in bounded_by_condition
+                and any(field.search(line.text) for line in _below(item))
+            ):
+                return True
+    return False
+
+
+def reads_a_field(marked_query_tree: str, time_column: str) -> bool:
+    """Whether a `{since:…}` bound compares a field of a `Tuple`, `JSON` or similar column
+    rather than the time column (#164): ClickHouse reads `E.day` as the subcolumn `day` of a
+    column `E` before it reads it as table `E`'s column. In the `EXPLAIN QUERY TREE` of
+    `mark_since`'s SQL, each comparison holding the mark (`identity(identity(…))`) is looked at:
+    its other side must not read a subcolumn named like the time column (`column_name: E.day`,
+    a table's) nor call `getSubcolumn`/`tupleElement` (a subquery's). Fields read elsewhere in
+    the model do not count (Reviewer pass 1 on #205). A tree without the mark counts as yes."""
+    field = re.compile(
+        rf"column_name: \S+\.{re.escape(time_column)}(,|$)"
+        r"|function_name: (getSubcolumn|tupleElement)(,|$)"
+    )
+    marks = _marks(_query_tree(marked_query_tree))
     if not marks:
         return True
     for mark in marks:
