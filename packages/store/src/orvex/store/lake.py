@@ -1677,8 +1677,9 @@ class Lake:
         matched_files = matched[0] if matched else None
         if not isinstance(matched_files, list) or not matched_files:
             raise _source_not_found(source)
-        # DuckDB's readers expand `*`, `?` and `[` in each listed name again, with no escape:
-        # `r[1].parquet` would be read as `r1.parquet` (measured on 2.0.0; #82).
+        # DuckDB's readers expand `*`, `?` and `[` in each listed name again: `r[1].parquet`
+        # would be read as `r1.parquet` (measured on 2.0.0). Such a name is refused, as #82
+        # specifies; a bracket class (`r[[]1].parquet`) would read it literally (#232).
         expanded = next(
             (str(file) for file in matched_files if _GLOB_IN_NAME.search(str(file))), None
         )

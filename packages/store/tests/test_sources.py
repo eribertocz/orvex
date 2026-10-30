@@ -318,7 +318,7 @@ def test_a_file_name_the_reader_would_expand_again_is_refused(
     pattern: str,
     refused: str,
 ) -> None:
-    # #82: `read_parquet(['r[1].parquet'])` reads `r1.parquet` (measured on 2.0.0); no escape.
+    # #82: `read_parquet(['r[1].parquet'])` reads `r1.parquet` (measured on 2.0.0); refused.
     folder = tmp_path_factory.mktemp("globbed")
     builder = duckdb.connect()
     for index, name in enumerate(names):
