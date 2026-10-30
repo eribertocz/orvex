@@ -1022,6 +1022,14 @@ def test_an_append_filter_that_reads_each_row_once_is_accepted(tmp_path: Path, s
         "SELECT * FROM (VALUES (1, now())) v(id, read_at) WHERE read_at > $since",
         "SELECT * FROM (SELECT id, read_at FROM src UNION ALL SELECT id, read_at FROM other) "
         "WHERE read_at > $since",
+        # Reviewer pass 3: a positional reference, and aggregates.
+        "SELECT * FROM (SELECT id, #2 AS read_at FROM (SELECT id, now() FROM src)) "
+        "WHERE read_at > $since",
+        "SELECT * FROM (SELECT id, list(t)[1] AS read_at FROM src GROUP BY id) "
+        "WHERE read_at > $since",
+        "SELECT * FROM (SELECT id, arg_max(t, id) AS read_at FROM src GROUP BY id) "
+        "WHERE read_at > $since",
+        "SELECT * FROM (SELECT id, max(t) AS read_at FROM src GROUP BY id) WHERE read_at > $since",
     ],
     ids=[
         "computed-here",
@@ -1040,6 +1048,10 @@ def test_an_append_filter_that_reads_each_row_once_is_accepted(tmp_path: Path, s
         "current-localtimestamp",
         "values",
         "union-below",
+        "positional",
+        "list-first",
+        "arg-max",
+        "max-per-group",
     ],
 )
 def test_an_append_time_column_that_changes_every_run_is_refused(tmp_path: Path, sql: str) -> None:
@@ -1058,8 +1070,20 @@ def test_an_append_time_column_that_changes_every_run_is_refused(tmp_path: Path,
         "WITH c AS (SELECT id, t AS read_at FROM src) SELECT * FROM c WHERE read_at > $since",
         "SELECT * FROM (SELECT r.*, m.zone FROM src AS r JOIN m USING (id)) WHERE read_at > $since",
         "SELECT e.id, e.read_at FROM src AS e WHERE e.read_at > $since",
+        "WITH src AS (SELECT * FROM src) SELECT * FROM src WHERE read_at > $since",
+        "SELECT * FROM (SELECT read_at, count(*) AS n FROM src GROUP BY read_at) "
+        "WHERE read_at > $since",
     ],
-    ids=["cast", "date-trunc", "other-column-volatile", "cte", "join-star", "qualified"],
+    ids=[
+        "cast",
+        "date-trunc",
+        "other-column-volatile",
+        "cte",
+        "join-star",
+        "qualified",
+        "cte-reading-its-own-name",
+        "grouped-by-it",
+    ],
 )
 def test_an_append_time_column_computed_the_same_way_every_run_is_accepted(
     tmp_path: Path, sql: str

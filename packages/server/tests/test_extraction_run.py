@@ -894,8 +894,12 @@ def test_an_append_filter_that_reads_each_row_once_inserts_it_once(
         "SELECT * REPLACE (now64(3, 'UTC') AS t) FROM (SELECT number + 1 AS id, "
         "toDateTime64('2024-01-01', 3, 'UTC') AS t FROM numbers(3)) "
         "WHERE t > {since:DateTime64(3, 'UTC')}",
+        # Reviewer pass 3: a tuple named like its subquery.
+        "SELECT * FROM (SELECT id, x.t AS t FROM (SELECT number AS id, "
+        "CAST(tuple(now64(3, 'UTC')), 'Tuple(t DateTime64(3, \\'UTC\\'))') AS x "
+        "FROM numbers(3)) AS x) WHERE t > {since:DateTime64(3, 'UTC')}",
     ],
-    ids=["computed-here", "computed-below", "tuple-field", "replace"],
+    ids=["computed-here", "computed-below", "tuple-field", "replace", "tuple-named-like-table"],
 )
 def test_an_append_time_column_that_changes_every_run_is_refused(
     tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str], sql: str

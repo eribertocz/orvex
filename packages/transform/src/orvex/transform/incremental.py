@@ -493,11 +493,13 @@ def since_is_a_lower_bound(
         result = accepted
         for node in nodes(expression):
             kind = node.get("class")
-            if kind in {"WINDOW", "SUBQUERY", "STAR", "LAMBDA", "PARAMETER"}:
-                return refused
+            if kind is not None and kind not in _TRACED_EXPRESSIONS:
+                return refused  # a window, a subquery, `#2`, a lambda, …: not traced
             if kind == "FUNCTION":
                 name = str(node.get("function_name")).lower()
-                if not _consistent(name) or name in _UNSTABLE_FUNCTIONS:
+                if not _consistent(name) or name in _UNSTABLE_FUNCTIONS or _aggregate(name):
+                    # An aggregate's value can change when rows join its group, or with the
+                    # order rows arrive in (`list(t)[1]`, `arg_max`): refused (pass 3).
                     return refused
             if kind == "COLUMN_REF":
                 parts = column_parts(node)
@@ -538,7 +540,10 @@ def since_is_a_lower_bound(
             if relation is not None and relation not in {alias or table}:
                 return absent
             if not source.get("schema_name") and not source.get("catalog_name") and table in scope:
-                return node_state(scope[table], name, scope)
+                # The CTE's body does not see itself (`WITH m AS (SELECT * FROM m)` reads the
+                # table m), nor any CTE already being followed.
+                inner_scope = {key: value for key, value in scope.items() if key != table}
+                return node_state(scope[table], name, inner_scope)
             return accepted  # a source or model table: its column holds each row's value
         if kind == "SUBQUERY":
             if relation is not None and relation != alias:
@@ -600,7 +605,10 @@ def since_is_a_lower_bound(
         `COLUMNS(…)`, table functions, `VALUES`, set operations below the model's query."""
         if not isinstance(tree, list) or len(tree) != 1 or not isinstance(tree[0], dict):
             return False
-        return node_state(tree[0].get("node"), wanted, {}) == accepted
+        try:
+            return node_state(tree[0].get("node"), wanted, {}) == accepted
+        except RecursionError:
+            return False  # too deep to follow: refused
 
     return check(statements, None) and (not strict or stable(statements))
 
@@ -645,6 +653,42 @@ def _consistent_functions() -> frozenset[str]:
 
 def _consistent(name: str) -> bool:
     return name.lower() in _consistent_functions()
+
+
+@functools.cache
+def _aggregate_functions() -> frozenset[str]:
+    """The names DuckDB lists as aggregate functions (some are window functions too)."""
+    connection = duckdb.connect()
+    try:
+        row = connection.execute(
+            "SELECT string_agg(DISTINCT lower(function_name), chr(10)) FROM duckdb_functions() "
+            "WHERE function_type = 'aggregate'"
+        ).fetchone()
+    finally:
+        connection.close()
+    return frozenset(str(row[0]).split("\n")) if row and row[0] is not None else frozenset()
+
+
+def _aggregate(name: str) -> bool:
+    return name.lower() in _aggregate_functions()
+
+
+# The expression kinds the time column's trace understands: anything else is refused (#135,
+# Reviewer pass 3: a positional reference `#2` was not).
+_TRACED_EXPRESSIONS = frozenset(
+    {
+        "COLUMN_REF",
+        "CONSTANT",
+        "FUNCTION",
+        "CAST",
+        "TYPE",  # the target type of a CAST
+        "OPERATOR",
+        "CASE",
+        "COMPARISON",
+        "CONJUNCTION",
+        "BETWEEN",
+    }
+)
 
 
 def since_bound_problem(model: Model, columns_of: ColumnsOf | None = None) -> ModelError | None:

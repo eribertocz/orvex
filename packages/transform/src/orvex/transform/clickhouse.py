@@ -843,11 +843,15 @@ def time_column_functions(tree: str, time_column: str) -> frozenset[str] | None:
             tables(child)
 
     def field(node: _Node) -> bool:
-        """A dotted name whose prefix names no table or subquery: a tuple's field."""
+        """A dotted name whose prefix names no table or subquery, or also names a column (a
+        tuple named like its subquery, Reviewer pass 3): read as a tuple's field."""
         if node.kind != "Identifier":
             return False
         text = re.sub(r" \(alias [^)]+\)$", "", node.detail)
-        return "." in text and text.rsplit(".", 1)[0] not in relations
+        if "." not in text:
+            return False
+        prefix = text.rsplit(".", 1)[0]
+        return prefix not in relations or prefix in column_aliases
 
     def collect(node: _Node, in_table: bool = False) -> None:
         nonlocal untraced
@@ -868,6 +872,16 @@ def time_column_functions(tree: str, time_column: str) -> frozenset[str] | None:
             collect(child, node.kind == "TableExpression")
 
     tables(root)
+
+    def aliases(node: _Node) -> None:
+        alias = _aliased(node)
+        if alias and node.kind not in {"TableIdentifier", "Subquery"}:
+            column_aliases.add(alias)
+        for child in node.children:
+            aliases(child)
+
+    column_aliases: set[str] = set()
+    aliases(root)
     collect(root)
     if untraced:
         return None
