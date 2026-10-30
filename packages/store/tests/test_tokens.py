@@ -419,3 +419,45 @@ def test_the_statement_checks_take_time_in_proportion_to_the_statement() -> None
     assert guard_seconds(wide(2_000)) < 0.5
     small, big = guard_seconds(wide(2_000)), guard_seconds(wide(8_000))
     assert big < 8 * small + 0.2, (small, big)
+
+
+# --- #178: the checks cost a bounded amount --------------------------------------------------
+
+
+def test_many_e_strings_are_checked_quickly() -> None:
+    sql = "SELECT " + ", ".join(f"E'v\\x{index % 10}a' AS c{index}" for index in range(2000))
+    started = time.monotonic()
+    _guarded(sql, table_functions())
+    assert time.monotonic() - started < 1.0
+
+
+@pytest.mark.parametrize("pattern", ["/**/zz_none*", "/usr/**/zz_none*"])
+def test_a_pattern_too_broad_to_check_is_refused_quickly(pattern: str) -> None:
+    started = time.monotonic()
+    with pytest.raises(StoreError) as raised:
+        _guarded(f"SELECT '{pattern}' AS p", table_functions())
+    assert raised.value.code == "STORE_STATEMENT_INVALID"
+    assert time.monotonic() - started < 1.0
+
+
+def test_a_pattern_in_a_small_folder_is_checked_as_before(tmp_path: Path) -> None:
+    (tmp_path / "data" / ".hidden").mkdir(parents=True)
+    (tmp_path / "data" / ".hidden" / "x.csv").write_text("a\n1\n")
+    (tmp_path / "empty").mkdir()
+    for pattern in (f"{tmp_path}/data/**/*.csv", f"{tmp_path}/data/*/x.csv"):
+        with pytest.raises(StoreError):
+            _guarded(f"SELECT '{pattern}' AS p", table_functions())
+    _guarded(f"SELECT '{tmp_path}/empty/**/*.csv' AS p", table_functions())  # nothing matches
+
+
+def test_one_budget_covers_the_whole_statement(tmp_path: Path) -> None:
+    folder = tmp_path / "many"
+    folder.mkdir()
+    for index in range(1000):
+        (folder / f"f{index}.txt").write_text("")
+    single = f"SELECT '{folder}/*.csv' AS p"
+    _guarded(single, table_functions())  # 1,000 entries: within the budget
+    together = "SELECT " + ", ".join(f"'{folder}/*.csv{index}' AS p{index}" for index in range(50))
+    with pytest.raises(StoreError) as raised:
+        _guarded(together, table_functions())  # 50,000 entries together: past it
+    assert raised.value.code == "STORE_STATEMENT_INVALID"

@@ -10,7 +10,7 @@ from __future__ import annotations
 import collections
 import contextlib
 import datetime as dt
-import glob as globlib
+import fnmatch
 import itertools
 import json
 import math
@@ -726,13 +726,14 @@ def _refuse_file_names(
         "A file cannot be named in a statement; declare it as a source and use its name.",
         {},
     )
+    budget = _Budget()  # one for the whole statement, so many patterns cannot add up (#178)
     texts: list[tuple[str, duckdb.token_type]] = []
     for position, kind in tokens:
         end = ends[position]
         text = sql[position:end].strip()
         texts.append((text, kind))
         quoted = kind == duckdb.token_type.string_const or text.startswith('"')
-        if quoted and _names_a_file(text):
+        if quoted and _names_a_file(text, budget):
             raise refused
     # A dotted name: DuckDB joins its parts with `.` and reads the result as a file when no
     # table has that name (`"<dir>/x".parquet`, `x.parquet`, `"<dir>/*".csv`; measured on
@@ -748,7 +749,7 @@ def _refuse_file_names(
         while index + 1 < len(texts) and texts[index][0] == "." and texts[index + 1][1] in names:
             parts.append(_string_content(texts[index + 1][0]))
             index += 2
-        if len(parts) > 1 and _names_a_file(".".join(parts)):
+        if len(parts) > 1 and _names_a_file(".".join(parts), budget):
             raise refused
 
 
@@ -805,13 +806,15 @@ def _escape_string_value(token: str) -> str:
     tokens = duckdb.tokenize(token)
     if len(tokens) != 1 or tokens[0][1] != duckdb.token_type.string_const:
         return token[2:-1]
+    parser = _parser()  # one parser database for the process, not a connection each (#178)
     try:
-        with duckdb.connect(config={"enable_external_access": False}) as connection:
-            row = connection.execute(f"SELECT {token}").fetchone()
+        row = parser.execute(f"SELECT {token}").fetchone()
     except duckdb.Error:
         # Not a valid constant (`E'a\\'`, `E'\\x00'`): the statement fails later, when it is
         # parsed, with `STORE_QUERY_FAILED`.
         return token[2:-1]
+    finally:
+        parser.close()
     return str(row[0]) if row is not None and row[0] is not None else ""
 
 
@@ -872,7 +875,72 @@ def _refuse_show_statements(
             )
 
 
-def _names_a_file(token: str) -> bool:
+# How many directory entries the file checks of one statement may read (#178): a pattern too
+# broad to check within it counts as naming a file, so the statement is refused.
+PATTERN_BUDGET = 10_000
+
+
+class _Budget:
+    """The directory entries a statement's file checks may still read."""
+
+    def __init__(self, entries: int = PATTERN_BUDGET) -> None:
+        self.entries = entries
+
+
+class _Unchecked(Exception):
+    """A pattern could not be checked within the budget, or a folder could not be listed."""
+
+
+def _listed(folder: str, budget: _Budget) -> list[os.DirEntry[str]]:
+    """A folder's entries, each counted against the budget. A folder that does not exist (or is
+    not one) has none; one that cannot be listed cannot be checked."""
+    try:
+        with os.scandir(folder or ".") as found:
+            entries = []
+            for entry in found:
+                budget.entries -= 1
+                if budget.entries < 0:
+                    raise _Unchecked
+                entries.append(entry)
+            return entries
+    except FileNotFoundError, NotADirectoryError:
+        return []
+    except OSError:
+        raise _Unchecked from None
+
+
+def _expanded(pattern: str, budget: _Budget) -> Iterator[str]:
+    """The paths a glob pattern names, as DuckDB expands it (`**` at any depth, hidden names
+    included, like `glob.iglob(recursive=True, include_hidden=True)`), read within `budget`."""
+
+    def walk(base: str, parts: list[str]) -> Iterator[str]:
+        if not parts:
+            yield base
+            return
+        head, rest = parts[0], parts[1:]
+        if head == "":
+            yield from walk(base, rest)
+        elif head == "**":
+            yield from walk(base, rest)  # no folder at all
+            for entry in _listed(base, budget):
+                below = os.path.join(base, entry.name)
+                if not rest:
+                    yield below
+                if entry.is_dir():
+                    yield from walk(below, parts)
+        elif _GLOB.search(head):
+            for entry in _listed(base, budget):
+                if fnmatch.fnmatchcase(entry.name, head):
+                    yield from walk(os.path.join(base, entry.name), rest)
+        else:
+            yield from walk(os.path.join(base, head), rest)
+
+    root = os.sep if pattern.startswith(os.sep) else ""
+    yield from walk(root, pattern.split(os.sep))
+
+
+def _names_a_file(token: str, budget: _Budget | None = None) -> bool:
+    budget = budget if budget is not None else _Budget()
     content = _string_content(token)
     if _OBJECT_ADDRESS.match(content):
         return True
@@ -888,17 +956,14 @@ def _names_a_file(token: str) -> bool:
         if os.path.isfile(path):
             return True
         looks_like_path = any(mark in candidate for mark in ("/", "\\", "."))
-        if (
-            looks_like_path
-            and _GLOB.search(candidate)
-            and any(
-                os.path.isfile(match)
+        if looks_like_path and _GLOB.search(candidate):
+            try:
                 # As DuckDB expands it: `**` at any depth, hidden names included (#136, Reviewer
-                # pass 7).
-                for match in globlib.iglob(path, recursive=True, include_hidden=True)
-            )
-        ):
-            return True
+                # pass 7), within the statement's budget (#178).
+                if any(os.path.isfile(match) for match in _expanded(path, budget)):
+                    return True
+            except _Unchecked:
+                return True  # too broad to check, or a folder that cannot be listed: refused
     return False
 
 
