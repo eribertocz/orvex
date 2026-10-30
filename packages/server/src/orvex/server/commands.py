@@ -771,6 +771,7 @@ def _open_recorded(home: Path, place: Place, attachments: Sequence[Attachment] =
         raise
     try:
         lake_place.confirm(home, place)
+        lake_place.complete(home, place)  # a record written before #147 gets its endpoint
     except BaseException:
         lake.close()
         raise
@@ -783,7 +784,13 @@ def open_existing(home: Path, place: Place) -> Lake:
     lake since the project was checked (#181, Reviewer pass 2). `ProjectLoadError` otherwise."""
     lake_place.check_unchanged(home, place)
     _refuse_missing_catalog(home)
-    return open_lake(place.location, _limits())
+    lake = open_lake(place.location, _limits())
+    try:
+        lake_place.complete(home, place)  # a record written before #147 gets its endpoint
+    except BaseException:
+        lake.close()
+        raise
+    return lake
 
 
 def _refuse_missing_catalog(home: Path) -> None:

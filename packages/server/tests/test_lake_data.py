@@ -8,6 +8,7 @@ free port of 127.0.0.1 with disposable credentials.
 
 from __future__ import annotations
 
+import json
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ElementTree
@@ -551,3 +552,59 @@ def test_the_gcs_record_holds_no_credential(tmp_path: Path) -> None:
     assert "gs://bi-lake/billing/" in text
     assert SECRET not in text
     assert "test-key-id" not in text
+
+
+# --- #147: the object-storage endpoint is part of the lake's identity ---------------------------
+
+
+def recorded_lake(folder: Path, lake: str) -> None:
+    """A lake recorded with `lake`, as its first open records and confirms it."""
+    bare(folder, lake)
+    place = lake_place.place(load_project(folder), home(folder))
+    lake_place.begin(home(folder), place)
+    lake_place.confirm(home(folder), place)
+
+
+@pytest.mark.usefixtures("credentials")
+def test_another_endpoint_for_an_existing_lake_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Decision #182 (1A): the same bucket and prefix on another service is another lake, which
+    # maintenance must not clean.
+    folder = tmp_path / "proj"
+    recorded_lake(folder, s3_lake("127.0.0.1:9000"))
+    record = (home(folder) / lake_place.RECORD_FILE).read_text(encoding="utf-8")
+    assert '"endpoint": "127.0.0.1:9000"' in record
+    bare(folder, s3_lake("localhost:9000"))
+    found = problems(folder)
+    assert found[0].startswith("LAKE_LOCATION_CHANGED project.yaml"), found
+    assert "endpoint was 127.0.0.1:9000, now localhost:9000" in found[0]
+    assert "lake.catalog" not in found[0]
+    code, out = run(capsys, "maintain", str(folder))  # nothing opened, nothing cleaned
+    assert code == 1, out
+    assert "LAKE_LOCATION_CHANGED" in out
+
+
+@pytest.mark.usefixtures("credentials")
+def test_an_endpoint_is_compared_without_case_scheme_or_trailing_slash(tmp_path: Path) -> None:
+    folder = tmp_path / "proj"
+    recorded_lake(folder, s3_lake("127.0.0.1:9000"))
+    for spelling in ("127.0.0.1:9000/", "HTTP://127.0.0.1:9000", "http://127.0.0.1:9000/"):
+        assert lake_place._normalized_endpoint(spelling) == "127.0.0.1:9000"
+
+
+@pytest.mark.usefixtures("credentials")
+def test_a_record_written_before_147_matches_and_gets_its_endpoint(tmp_path: Path) -> None:
+    folder = tmp_path / "proj"
+    recorded_lake(folder, s3_lake("127.0.0.1:9000"))
+    path = home(folder) / lake_place.RECORD_FILE
+    identity = json.loads(path.read_text(encoding="utf-8"))
+    del identity["endpoint"]  # the layout before #147
+    path.write_text(json.dumps(identity), encoding="utf-8")
+    bare(folder, s3_lake("localhost:9000"))
+    assert problems(folder) == []  # no endpoint recorded: any matches, once
+    place = lake_place.place(load_project(folder), home(folder))
+    lake_place.complete(home(folder), place)
+    assert json.loads(path.read_text(encoding="utf-8"))["endpoint"] == "localhost:9000"
+    bare(folder, s3_lake("127.0.0.1:9000"))
+    assert "endpoint was localhost:9000" in problems(folder)[0]  # recorded from then on

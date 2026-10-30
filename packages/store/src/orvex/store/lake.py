@@ -402,12 +402,18 @@ _SCHEMES = {"s3": "s3://", "gcs": "gs://", "azure": "az://"}
 
 
 def _data_path(location: AnyLakeLocation) -> str:
-    """Where the lake's data files go: `data_path`, or `<path>/data/` for a local lake."""
+    """Where the lake's data files go: `data_path`, or `<path>/data/` for a local lake. An
+    object-storage path always ends with `/`, so the secret's `SCOPE` is that folder and not
+    every key that starts like it (#147)."""
     if isinstance(location, LocalLakeLocation):
         if location.data_path is None:
             return (Path(location.path) / "data").as_posix() + "/"
-        return location.data_path
-    return location.data_path
+        path = location.data_path
+    else:
+        path = location.data_path
+    if "://" in path and not path.endswith("/"):
+        return path + "/"
+    return path
 
 
 def _storage_credentials(
@@ -651,6 +657,7 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
     ends = dict(itertools.pairwise(positions))
     _refuse_file_names(sql, tokens, ends)
     _refuse_show_statements(sql, tokens, ends)
+    _refuse_time_travel(sql, tokens, ends)
     first = ""
     for index, (position, kind) in enumerate(tokens):
         if kind not in {duckdb.token_type.identifier, duckdb.token_type.keyword}:
@@ -821,6 +828,29 @@ def _escape_string_value(token: str) -> str:
     finally:
         parser.close()
     return str(row[0]) if row is not None and row[0] is not None else ""
+
+
+def _refuse_time_travel(
+    sql: str, tokens: list[tuple[int, duckdb.token_type]], ends: dict[int, int]
+) -> None:
+    """Refuse a table read at another snapshot (`… AT (VERSION => n)`, `AT (TIMESTAMP => t)`):
+    a model reads the current data, so rows deleted since cannot come back through it (#147,
+    decision #182). A read is pinned to its snapshot by the store itself, after this check. A
+    name or label `at` is not followed by `(VERSION =>` or `(TIMESTAMP =>` and stays allowed."""
+    texts = [sql[position : ends[position]].strip().lower() for position, _ in tokens]
+    for index in range(len(texts) - 3):
+        if (
+            texts[index] == "at"
+            and texts[index + 1] == "("
+            and texts[index + 2] in {"version", "timestamp"}
+            and texts[index + 3] == "=>"
+        ):
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "A statement reads the current data: a table cannot be read at another "
+                "snapshot (AT (VERSION => …) or AT (TIMESTAMP => …)).",
+                {"clause": "AT"},
+            )
 
 
 def _refuse_show_statements(

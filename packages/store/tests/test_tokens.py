@@ -617,3 +617,53 @@ def test_a_pattern_under_the_home_folder_is_expanded_as_before(
         with pytest.raises(StoreError):
             _guarded(f"SELECT '{named}' AS p", table_functions())
     _guarded("SELECT '~/data/*.parquet' AS p", table_functions())  # nothing matches
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "CREATE TABLE x AS SELECT * FROM t AT (VERSION => 1)",
+        "CREATE TABLE x AS SELECT * FROM t AT (TIMESTAMP => now())",
+        "SELECT * FROM t at ( version => 3 )",
+        "INSERT INTO x SELECT * FROM main.t AT (VERSION => 2) AS o",
+    ],
+)
+def test_a_table_read_at_another_snapshot_is_refused(sql: str) -> None:
+    # #147 (decision #182, 2A): a model reads the current data; deleted rows never come back.
+    with pytest.raises(StoreError) as raised:
+        _guarded(sql, table_functions())
+    assert raised.value.code == "STORE_STATEMENT_INVALID"
+    assert raised.value.details == {"clause": "AT"}
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT x AS at FROM t",
+        "SELECT at FROM t",
+        'SELECT "at"(1) FROM t',
+        "CREATE TABLE at (a INT)",
+    ],
+)
+def test_a_name_at_is_still_allowed(sql: str) -> None:
+    _guarded(sql, table_functions())
+
+
+@pytest.mark.parametrize(
+    ("given", "used"),
+    [
+        ("s3://bucket/prefix", "s3://bucket/prefix/"),
+        ("s3://bucket/prefix/", "s3://bucket/prefix/"),
+        ("gs://bucket/p", "gs://bucket/p/"),
+        ("az://container/p", "az://container/p/"),
+    ],
+)
+def test_an_object_storage_data_path_is_a_folder(tmp_path: Path, given: str, used: str) -> None:
+    # #147: the secret's SCOPE is that folder, not every key that starts like it.
+    from orvex.contracts.store.v1 import LocalLakeLocation
+    from orvex.store.lake import _data_path
+
+    location = LocalLakeLocation(
+        kind="lake_location", catalog="local", path=str(tmp_path), data_path=given
+    )
+    assert _data_path(location) == used
