@@ -544,7 +544,7 @@ def test_a_snapshot_unreadable_after_the_commit_prints_a_dash(
     assert any(line.startswith("STORE_SNAPSHOT_NOT_FOUND . ") for line in out.splitlines())
 
 
-def test_a_real_second_orvex_run_process_is_locked_out(tmp_path: Path) -> None:
+def test_a_real_second_run_process_is_locked_out(tmp_path: Path) -> None:
     full_project(tmp_path)
     holder = hold_lock(tmp_path / f".{SLUG}")
     try:
