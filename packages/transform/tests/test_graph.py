@@ -90,6 +90,46 @@ def test_compiled_sql_returns_the_same_rows(tmp_path: Path) -> None:
     assert connection.execute(compiled_sql(by_name["s.top"], by_name)).fetchall() == expected
 
 
+EVENS = [(0,), (2,), (4,), (6,), (8,)]
+
+
+@pytest.mark.parametrize(
+    ("top", "expected"),
+    [
+        ("SELECT s.even.n FROM s.even", EVENS),
+        ("SELECT lake.s.even.n FROM lake.s.even", EVENS),
+        (
+            "SELECT s.even.n FROM s.even "
+            "WHERE EXISTS (SELECT 1 FROM s.base AS b WHERE b.n = s.even.n)",
+            EVENS,
+        ),
+        ("SELECT e.n FROM s.even AS e", EVENS),
+        ("WITH even AS (SELECT 1 AS n) SELECT even.n FROM even", [(1,)]),
+    ],
+    ids=["schema", "catalog", "correlated", "aliased", "cte"],
+)
+def test_a_schema_qualified_view_column_binds_after_inlining(
+    tmp_path: Path, top: str, expected: list[tuple[int]]
+) -> None:
+    # #88 item 2: the inlined view is named `even` only; `s.even.n` must still bind.
+    found = project(
+        tmp_path,
+        {
+            "models/s/base.sql": "SELECT range AS n FROM range(10)",
+            "models/s/even.sql": "SELECT n FROM s.base WHERE n % 2 = 0",
+            "models/s/even.yaml": "version: 1\nmaterialized: view\n",
+            "models/s/top.sql": top,
+        },
+    )
+    by_name = {model.name: model for model in found.models}
+    connection = duckdb.connect()
+    connection.execute("CREATE SCHEMA s")
+    connection.execute("CREATE TABLE s.base AS SELECT range AS n FROM range(10)")
+    compiled = compiled_sql(by_name["s.top"], by_name)
+    rows = sorted(connection.execute(compiled.replace("lake.s.base", "s.base")).fetchall())
+    assert rows == expected
+
+
 def test_cycle_is_reported_in_order(tmp_path: Path) -> None:
     found = project(
         tmp_path,

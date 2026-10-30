@@ -238,6 +238,7 @@ def _inline(
 ) -> Tree:
     tree = _tree(connection, sql)
     ctes = _cte_names(tree)
+    unaliased: dict[int, tuple[str, str]] = {}
     for node in list(_walk(tree)):
         if node.get("type") != "BASE_TABLE":
             continue
@@ -263,9 +264,55 @@ def _inline(
             },
             "column_name_alias": node.get("column_name_alias", []),
         }
+        if not node.get("alias"):
+            unaliased[id(node)] = (parts[0].lower(), parts[1].lower())
         node.clear()
         node.update(replacement)
+    if unaliased:
+        _requalify(tree, unaliased)
     return tree
+
+
+def _requalify(tree: Tree, unaliased: Mapping[int, tuple[str, str]]) -> None:
+    """Rewrite `schema.view.column` (and `lake.schema.view.column`) to `view.column` where an
+    inlined view without an alias is in scope: the subquery replacing it is named `view` only.
+
+    A query sees the views in its own `FROM` and those of the queries around it, unless a
+    relation of its own `FROM` takes the same name."""
+    pending: list[tuple[object, dict[tuple[str, ...], str]]] = [(tree, {})]
+    while pending:
+        item, scope = pending.pop()
+        if isinstance(item, list):
+            pending.extend((child, scope) for child in item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "SELECT_NODE":
+            local: dict[tuple[str, ...], str] = {}
+            names: set[str] = set()
+            relations = [item.get("from_table")]
+            while relations:
+                relation = relations.pop()
+                if not isinstance(relation, dict):
+                    continue
+                if relation.get("type") == "JOIN":
+                    relations += [relation.get("left"), relation.get("right")]
+                    continue
+                name = str(relation.get("alias") or relation.get("table_name") or "").lower()
+                names.add(name)
+                if id(relation) in unaliased:
+                    schema, view = unaliased[id(relation)]
+                    local[(schema, view)] = view
+                    local[(LAKE_CATALOG, schema, view)] = view
+            scope = {key: alias for key, alias in scope.items() if alias not in names} | local
+        parts = item.get("column_names")
+        if item.get("class") == "COLUMN_REF" and isinstance(parts, list) and len(parts) >= 3:
+            for size in (3, 2):
+                key = tuple(str(part).lower() for part in parts[:size])
+                if len(parts) > size and key in scope:
+                    item["column_names"] = [scope[key], *parts[size:]]
+                    break
+        pending.extend((child, scope) for child in item.values())
 
 
 def _identifier(name: str) -> str:

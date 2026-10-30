@@ -73,6 +73,7 @@ from orvex.transform.graph import (
     test_relations,
 )
 from orvex.transform.incremental import (
+    WATERMARKS,
     Columns,
     Count,
     Refuse,
@@ -81,7 +82,7 @@ from orvex.transform.incremental import (
     since_bound_problem,
 )
 from orvex.transform.model_tests import ModelTest
-from orvex.transform.models import Discovery, Model, discover_models
+from orvex.transform.models import NAME, Discovery, Model, discover_models
 from orvex.transform.reconciliation import Comparison, Reconcile
 from orvex.transform.run_records import history_request, record_statements
 from orvex.transform.sources import Attachment, source_attachments
@@ -616,9 +617,23 @@ def run(
     out: IO[str],
     full_refresh: Sequence[str] | None = None,
     selection: Selection | None = None,
+    drop_leftovers: bool = False,
 ) -> int:
     """Build every model, or only the `selection` of a scheduled run. `full_refresh`:
-    incremental models to rebuild from every row (all of them when empty; None: none)."""
+    incremental models to rebuild from every row (all of them when empty; None: none).
+    `drop_leftovers`: also drop, in the run's transaction, the lake tables no model stores
+    now (#88, decision #233); never in a scheduled run."""
+    if drop_leftovers and selection is not None:
+        print(
+            Problem(
+                "RUN_OPTION_INVALID",
+                ".",
+                None,
+                "--drop-leftovers is a manual step; a scheduled run never drops tables.",
+            ),
+            file=out,
+        )
+        return 1
     checked = check_project(folder, identity)
     if checked.problems or checked.project is None or checked.graph is None:
         for problem in checked.problems:
@@ -649,7 +664,9 @@ def run(
     home = project.folder / f".{identity.slug}"
     try:
         with project_lock(home):
-            return _run_locked(project, graph, checked, home, identity, out, refreshed, selection)
+            return _run_locked(
+                project, graph, checked, home, identity, out, refreshed, selection, drop_leftovers
+            )
     except ProjectLocked:
         print(
             Problem(
@@ -836,6 +853,7 @@ def _run_locked(
     out: IO[str],
     refreshed: frozenset[str] = frozenset(),
     selection: Selection | None = None,
+    drop_leftovers: bool = False,
 ) -> int:
     discovery = checked.discovery
     run_id = str(uuid.uuid4())
@@ -865,8 +883,10 @@ def _run_locked(
     existing: dict[str, Columns | None] = {}
     previous: dict[str, str | None] = {}
     since: dict[str, str] = {}
+    leftovers: list[tuple[str, str]] = []
     if lake is not None:
         try:
+            leftovers = _leftovers(lake, discovery.models)
             for model in discovery.models:
                 if model.config.materialized == "incremental":
                     existing[model.name] = _table_columns(lake, model)
@@ -940,6 +960,9 @@ def _run_locked(
                 current = None
                 if failures:
                     raise _NothingToCommit
+                if drop_leftovers:
+                    for statement in _drop_statements(leftovers):
+                        transaction.execute(statement)
         except _NothingToCommit:
             pass
         except (StoreError, _StepFailed, KeyboardInterrupt) as error:
@@ -1067,8 +1090,63 @@ def _run_locked(
         if item.model.config.materialized == "view":
             print(f"tested {item.model.name}", file=out)  # a view is not stored
         else:
-            print(f"built {item.model.name}: {item.rows_written} rows", file=out)
+            rows = "unknown" if item.rows_written is None else item.rows_written
+            print(f"built {item.model.name}: {rows} rows", file=out)
+    for schema, table in leftovers:
+        if drop_leftovers:
+            print(f"dropped {schema}.{table}", file=out)
+        else:
+            print(
+                f"leftover {schema}.{table}: no model stores it; kept as it was "
+                "(remove it with --drop-leftovers)",
+                file=out,
+            )
     return 0
+
+
+def _leftovers(lake: Lake, models: Sequence[Model]) -> list[tuple[str, str]]:
+    """Tables of the lake that no model stores now (removed, renamed, or now a `view`), in
+    schemas a model could use: never `_meta` or `_stage` (#88). Only names a model could have
+    are listed, so a table made outside a run with any other name is never dropped."""
+    stored = {
+        (model.schema.lower(), model.table.lower())
+        for model in models
+        if model.config.materialized != "view"
+    }
+    return sorted(
+        (schema, table)
+        for schema, table in lake.tables()
+        if NAME.fullmatch(schema) and NAME.fullmatch(table) and (schema, table) not in stored
+    )
+
+
+def _drop_statements(leftovers: Sequence[tuple[str, str]]) -> list[StatementRequest]:
+    """Drop each leftover and forget its watermark (a model added back later starts over)."""
+    if not leftovers:
+        return []
+    # Both names match the model-name pattern (`_leftovers`): plain to quote.
+    statements = [
+        StatementRequest(kind="statement", sql=f'DROP TABLE "{schema}"."{table}"', parameters=[])
+        for schema, table in leftovers
+    ]
+    statements += [
+        StatementRequest(kind="statement", sql="CREATE SCHEMA IF NOT EXISTS _meta", parameters=[]),
+        StatementRequest(
+            kind="statement",
+            sql=f"CREATE TABLE IF NOT EXISTS {WATERMARKS} (model VARCHAR, watermark VARCHAR)",
+            parameters=[],
+        ),
+    ]
+    for schema, table in leftovers:
+        model = Parameter(name="p_model", type=ParameterType("VARCHAR"), value=f"{schema}.{table}")
+        statements.append(
+            StatementRequest(
+                kind="statement",
+                sql=f"DELETE FROM {WATERMARKS} WHERE model = $p_model",
+                parameters=[model],
+            )
+        )
+    return statements
 
 
 LINEAGE_FOLDER = "lineage"
