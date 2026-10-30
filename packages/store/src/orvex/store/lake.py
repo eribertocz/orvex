@@ -1578,8 +1578,10 @@ class Lake:
         """One metadata row, on `cursor` (a request's, under its guard, #160) or on a
         short-lived cursor; no unfinished result is left behind."""
         if cursor is not None:
-            rows = cursor.execute(sql, parameters).fetchall()
-            return tuple(rows[0]) if rows else None
+            result = cursor.execute(sql, parameters)
+            found: tuple[object, ...] | None = result.fetchone()
+            result.fetchone()  # reaches the end of the one-row result: the cursor is free again
+            return found
         own = self._cursor()
         try:
             row: tuple[object, ...] | None = own.execute(sql, parameters).fetchone()
