@@ -356,7 +356,7 @@ def since_precision_problems(model: Model, columns: tuple[Column, ...]) -> list[
             f"{model.sql_file}: {{since:{since.text}}} does not match the time_column "
             f"{found.name} ({found.clickhouse}): an append model would read again, and insert "
             "twice, rows it already loaded. Declare {since:…} at least as precise as the "
-            "column ({since:Date} or {since:Date32} for a date column), or use strategy merge.",
+            "column ({since:Date32} for a date column), or use strategy merge.",
             model.sql_file,
             model=model.name,
         )
@@ -453,8 +453,8 @@ def since_range_problems(model: Model, columns: tuple[Column, ...]) -> list[Mode
             "INVALID_MODEL_SQL",
             f"{model.sql_file}: {{since:{since.text}}} cannot start a first run at the oldest "
             f"value of the time_column {found.name} ({found.clickhouse}): a first run or a full "
-            "refresh would skip its oldest rows for good, or fail. Declare {since:…} with the "
-            "column's own type.",
+            f"refresh would skip its oldest rows for good, or fail. Declare "
+            f"{{since:{_suggested(model, found.clickhouse)}}}.",
             model.sql_file,
             model=model.name,
         )
@@ -2025,9 +2025,26 @@ def since_zone_problem(model: Model, since: SinceType, server_zone: str) -> Mode
 
 
 def _with_utc(since: SinceType) -> str:
-    if since.family == "DateTime":
-        return "DateTime('UTC')"
-    return f"DateTime64({since.precision}, 'UTC')"
+    """The same `{since:…}` type in UTC. Seconds become `DateTime64(0, 'UTC')`, which every
+    strategy accepts on a `DateTime` column; `append` refuses `DateTime` there (#191)."""
+    precision = 0 if since.family == "DateTime" else since.precision
+    return f"DateTime64({precision}, 'UTC')"
+
+
+def _suggested(model: Model, clickhouse_type: str) -> str:
+    """The `{since:…}` type to declare for a time column: its own type, but for `append` a
+    `Date` or `DateTime` column takes one whose first value comes earlier (#191)."""
+    text = clickhouse_type
+    while (inner := re.fullmatch(r"(?:Nullable|LowCardinality)\((.*)\)", text)) is not None:
+        text = inner.group(1)
+    incremental = model.config.incremental
+    if incremental is not None and incremental.strategy == "append":
+        if text == "Date":
+            return "Date32"
+        if text == "DateTime" or text.startswith("DateTime("):
+            zone = re.search(r"'([^']+)'", text)
+            return f"DateTime64(0, '{zone.group(1) if zone else 'UTC'}')"
+    return text
 
 
 def _too_deep(model: Model) -> ModelError:
