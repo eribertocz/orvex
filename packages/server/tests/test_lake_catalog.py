@@ -809,14 +809,14 @@ def test_a_record_that_cannot_be_written_is_reported(
             raise OSError(28, "No space left on device")
         replace(source, target)
 
-    monkeypatch.setattr(lake_place.os, "replace", flaky)
+    monkeypatch.setattr(os, "replace", flaky)
     code, out = run(capsys, "run", str(tmp_path))
     assert code == 1, out
     assert "LAKE_LOCATION_CHANGED" in out
     assert "cannot be written (OSError)" in out
     assert "Traceback" not in out
     assert not list(home(tmp_path).glob(".lake.location.*"))  # no half-written file
-    monkeypatch.setattr(lake_place.os, "replace", replace)
+    monkeypatch.setattr(os, "replace", replace)
     # The lake was closed (or never opened): the next run opens it.
     code, out = run(capsys, "run", str(tmp_path))
     assert code == 0, out
