@@ -283,10 +283,12 @@ def since_type(text: str) -> SinceType | None:
 
 
 def since_column_problems(model: Model, columns: tuple[Column, ...]) -> list[ModelError]:
-    """`{since:Date}` or `{since:Date32}` cannot protect a `partition_overwrite` model whose
-    time column is a `DateTime`: ClickHouse compares the date at midnight in the zone of the
-    expression the SQL compares it with, which the run cannot see, so the run's partition check
-    (`PARTITION_INCOMPLETE`) cannot know which rows were reloaded. A date time column, or a
+    """`{since:Date}` or `{since:Date32}` on a `partition_overwrite` model whose time column is
+    a `DateTime`: ClickHouse compares the date at midnight in the zone of the expression the SQL
+    compares it with, which the run cannot see, so a run after the first reads part of a
+    partition. The oldest-row rule (#155) then fails that run with `PARTITION_INCOMPLETE` and
+    writes nothing: no row is lost, but every such run fails (measured, #163). Refused at
+    validation instead, with the type to declare. A date time column, or a
     `{since:DateTime…}` parameter, has an exact boundary."""
     incremental = model.config.incremental
     since = declared_since(model)
