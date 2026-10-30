@@ -339,13 +339,18 @@ def _azure_over_https(connection_string: str) -> bool:
     """Whether a connection string reaches Blob Storage over HTTPS, or an endpoint on the local
     machine. A key repeated, or a known key written in another case or with spaces around it,
     counts as no: the SDK would read another value than this check (#171, Reviewer pass 1). A
-    string that is not pairs at all passes here: the store refuses it, without showing it."""
+    string that is not `key=value` pairs (an empty segment included) counts as no too."""
     folded = {key.lower(): key for key in _AZURE_KEYS}
     pairs: dict[str, str] = {}
-    for part in connection_string.split(";"):
+    parts = connection_string.split(";")
+    if parts[-1] == "":
+        parts.pop()  # one final `;`
+    for part in parts:
         key, equals, value = part.partition("=")
-        if not part or not equals:
-            continue
+        # An empty segment or one without `=` counts as no: the SDK reads a key up to the next
+        # `=`, across `;`, and would not see the key after it (#171, Reviewer pass 2).
+        if not equals or not key:
+            return False
         known = folded.get(key.strip().lower())
         if (known is not None and key != known) or key in pairs:
             return False

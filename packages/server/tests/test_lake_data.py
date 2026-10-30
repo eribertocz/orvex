@@ -520,6 +520,12 @@ def test_a_lake_in_azure_blob_storage(
         "blobendpoint=http://localhost/a",
         f"DefaultEndpointsProtocol=https;AccountName=a;AccountKey={ACCOUNT_KEY};"
         "DefaultEndpointsProtocol=http",
+        # Reviewer pass 2: after an empty segment the SDK reads ";BlobEndpoint" as the key.
+        f"DefaultEndpointsProtocol=http;AccountName=a;AccountKey={ACCOUNT_KEY};;"
+        "BlobEndpoint=http://127.0.0.1:10000/a",
+        f";BlobEndpoint=http://127.0.0.1:10000/a;DefaultEndpointsProtocol=http;AccountName=a;"
+        f"AccountKey={ACCOUNT_KEY}",
+        f"DefaultEndpointsProtocol=https;AccountName=a;AccountKey={ACCOUNT_KEY};no-equals",
     ],
 )
 def test_an_azure_connection_string_is_read_as_the_sdk_reads_it(

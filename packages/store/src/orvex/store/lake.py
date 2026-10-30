@@ -505,13 +505,16 @@ _AZURE_KEYS_FOLDED = {key.lower(): key for key in AZURE_KEYS}
 
 def azure_pairs(connection_string: str) -> dict[str, str] | None:
     """The `key=value` pairs of an Azure connection string, read as the Azure SDK reads them;
-    None when it is not such pairs, repeats a key, or writes a known key in another case or with
-    spaces around it."""
+    None when it is not such pairs (an empty segment included), repeats a key, or writes a known
+    key in another case or with spaces around it."""
     pairs: dict[str, str] = {}
-    for part in connection_string.split(";"):
-        if not part:
-            continue
+    parts = connection_string.split(";")
+    if parts[-1] == "":
+        parts.pop()  # one final `;`
+    for part in parts:
         key, equals, value = part.partition("=")
+        # An empty segment (`;;`, a leading `;`) is refused: the SDK reads a key up to the next
+        # `=`, across `;`, so the key after it would be hidden from the SDK but not from here.
         if not equals or not key:
             return None
         known = _AZURE_KEYS_FOLDED.get(key.strip().lower())

@@ -415,6 +415,11 @@ FORGED = [
     f"DefaultEndpointsProtocol=https;AccountName=a;AccountKey={ACCOUNT_KEY};"
     "DefaultEndpointsProtocol=http",
     f"DefaultEndpointsProtocol= https;AccountName=a;AccountKey={ACCOUNT_KEY}",
+    # #171 Reviewer pass 2: after an empty segment the SDK reads ";BlobEndpoint" as the key.
+    f"DefaultEndpointsProtocol=http;AccountName=a;AccountKey={ACCOUNT_KEY};;"
+    "BlobEndpoint=http://127.0.0.1:10000/a",
+    f";BlobEndpoint=http://127.0.0.1:10000/a;DefaultEndpointsProtocol=http;AccountName=a;"
+    f"AccountKey={ACCOUNT_KEY}",
 ]
 
 
