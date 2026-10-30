@@ -30,6 +30,7 @@ import socket
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from importlib import resources
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -348,8 +349,8 @@ def since_precision_problems(model: Model, columns: tuple[Column, ...]) -> list[
     column = _precision(found.clickhouse)
     declared = _precision(since.text)
     # A date column takes a date parameter only: ClickHouse compares `Date32` with a time at
-    # midnight in the server's zone, whatever the parameter's zone, so the watermark's day could
-    # be read again (#135, Reviewer pass 1).
+    # midnight in the connection's zone, whatever the parameter's zone, so the watermark's day
+    # could be read again (#135, Reviewer pass 1).
     if column is None or declared is None or (declared >= column and (column > 0 or declared == 0)):
         return []
     return [
@@ -1971,23 +1972,46 @@ _FIXED_FROM, _FIXED_TO = 1970, 2100
 
 
 @functools.cache
+def _iana_zones() -> frozenset[str]:
+    """The IANA zone names of the bundled database (`tzdata`), the list the project's
+    `time_zone` is checked against: the same on every machine, without system-only entries
+    such as `localtime` or `posixrules`, which name the machine's own zone (#212)."""
+    text = resources.files("tzdata").joinpath("zones").read_text(encoding="utf-8")
+    return frozenset(text.split()) - {"Factory"}  # a placeholder of the database, not a place
+
+
+@functools.cache
+def bundled_zone(zone: str) -> ZoneInfo:
+    """`zone` read from the bundled IANA database (`tzdata`), never from the machine's own:
+    `ZoneInfo(name)` reads the system database first, and a distribution may build some zones
+    differently from IANA and ClickHouse (Ubuntu's `EET` and `WET` keep old rules: a watermark
+    in `EET` was written 1 hour off; Reviewer pass 1 on #216). `KeyError` for a name not in the
+    list."""
+    if zone not in _iana_zones():
+        raise KeyError(zone)
+    with resources.files("tzdata.zoneinfo").joinpath(*zone.split("/")).open("rb") as data:
+        return ZoneInfo.from_file(data, key=zone)
+
+
 def known_zone(zone: str) -> bool:
-    """Whether `zone` is in the time zone database Python reads (`zoneinfo`)."""
+    """Whether `zone` is an IANA zone name of the bundled database (`bundled_zone`). A name the
+    engine's machine resolves on its own (`localtime`, `posixrules`) is not: ClickHouse would
+    resolve it on its machine, to another zone (#212)."""
     try:
-        ZoneInfo(zone)
-    except KeyError, ValueError, OSError:  # ZoneInfoNotFoundError is a KeyError
+        bundled_zone(zone)
+    except KeyError, ValueError, OSError:
         return False
     return True
 
 
 @functools.cache
 def fixed_offset(zone: str) -> bool:
-    """Whether `zone` has one UTC offset from 1970 to 2100 (tz database, read with `zoneinfo`,
+    """Whether `zone` has one UTC offset from 1970 to 2100 (the bundled tz database, `bundled_zone`,
     sampled every 12 hours): no daylight-saving or other clock change, so no local time repeats. An
     unknown zone counts as no."""
     try:
-        found = ZoneInfo(zone)
-    except KeyError, ValueError, OSError:  # ZoneInfoNotFoundError is a KeyError
+        found = bundled_zone(zone)
+    except KeyError, ValueError, OSError:
         return False
     moment = dt.datetime(_FIXED_FROM, 1, 1, tzinfo=dt.UTC)
     end = dt.datetime(_FIXED_TO + 1, 1, 1, tzinfo=dt.UTC)
@@ -2281,8 +2305,8 @@ def _since_zone(since: SinceType, server: str, *, earliest: bool = False) -> Zon
     its boundary where midnight comes first (so a check never counts a row ClickHouse did not
     read)."""
     if since.family in {"Date", "Date32"}:
-        return ZoneInfo(_EARLIEST_MIDNIGHT if earliest else _LATEST_MIDNIGHT)
-    return ZoneInfo(since.zone or server)
+        return bundled_zone(_EARLIEST_MIDNIGHT if earliest else _LATEST_MIDNIGHT)
+    return bundled_zone(since.zone or server)
 
 
 def since_bound(since: SinceType, text: str, server: str) -> tuple[str, str]:
