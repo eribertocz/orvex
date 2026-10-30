@@ -401,6 +401,29 @@ def stored(folder: Path) -> list[str]:
     return [str(row[0]) for row in rows]
 
 
+def marks(folder: Path) -> list[tuple[str]]:
+    lake = lake_tables(folder)
+    try:
+        return [
+            (str(row[0]),)
+            for row in lake.execute("SELECT model FROM lake._meta.watermarks ORDER BY 1").fetchall()
+        ]
+    finally:
+        lake.close()
+
+
+def contents(folder: Path) -> list[object]:
+    """The rows of the two tables that become leftovers."""
+    lake = lake_tables(folder)
+    try:
+        return [
+            lake.execute("SELECT * FROM lake.marts.consumption ORDER BY ALL").fetchall(),
+            lake.execute("SELECT * FROM lake.staging.extra").fetchall(),
+        ]
+    finally:
+        lake.close()
+
+
 def with_leftovers(folder: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A run that stores `staging.extra` and `marts.consumption`, then a project where one is
     removed and the other became a view, and a watermark left for the removed one."""
@@ -419,6 +442,8 @@ def with_leftovers(folder: Path, capsys: pytest.CaptureFixture[str]) -> None:
         lake.execute(
             "INSERT INTO lake._meta.watermarks VALUES ('staging.extra', '1'), ('a.b', '2')"
         )
+        # Not a name a model could have: never listed, never dropped (Reviewer pass 1 on #234).
+        lake.execute('CREATE TABLE lake.staging."x""; DROP TABLE y" AS SELECT 1 AS v')
     finally:
         lake.close()
 
@@ -428,8 +453,11 @@ def test_a_run_reports_leftover_tables_and_keeps_them(
 ) -> None:
     with_leftovers(tmp_path, capsys)
     before = stored(tmp_path)
+    data_before = contents(tmp_path)
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 0, out
+    assert contents(tmp_path) == data_before
+    assert "DROP TABLE y" not in out
     assert (
         "leftover marts.consumption: no model stores it; kept as it was "
         "(remove it with --drop-leftovers)"
@@ -449,13 +477,8 @@ def test_drop_leftovers_drops_only_them_and_their_watermarks(
     assert code == 0, out
     assert "dropped marts.consumption" in out.splitlines()
     assert "dropped staging.extra" in out.splitlines()
-    assert stored(tmp_path) == ["staging.consumers", "staging.readings"]
-    lake = lake_tables(tmp_path)
-    try:
-        marks = lake.execute("SELECT model FROM lake._meta.watermarks ORDER BY 1").fetchall()
-    finally:
-        lake.close()
-    assert marks == [("a.b",)]
+    assert stored(tmp_path) == ["staging.consumers", "staging.readings", 'staging.x"; DROP TABLE y']
+    assert marks(tmp_path) == [("a.b",)]
 
 
 def test_a_failing_run_drops_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -466,6 +489,7 @@ def test_a_failing_run_drops_nothing(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert code == 1, out
     assert "dropped" not in out
     assert stored(tmp_path) == before
+    assert marks(tmp_path) == [("a.b",), ("staging.extra",)]
 
 
 def test_drop_leftovers_is_refused_in_a_scheduled_run(tmp_path: Path) -> None:

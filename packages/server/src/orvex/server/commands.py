@@ -1106,7 +1106,8 @@ def _run_locked(
 
 def _leftovers(lake: Lake, models: Sequence[Model]) -> list[tuple[str, str]]:
     """Tables of the lake that no model stores now (removed, renamed, or now a `view`), in
-    schemas a model could use: never `_meta` or `_stage` (#88)."""
+    schemas a model could use: never `_meta` or `_stage` (#88). Only names a model could have
+    are listed, so a table made outside a run with any other name is never dropped."""
     stored = {
         (model.schema.lower(), model.table.lower())
         for model in models
@@ -1115,7 +1116,7 @@ def _leftovers(lake: Lake, models: Sequence[Model]) -> list[tuple[str, str]]:
     return sorted(
         (schema, table)
         for schema, table in lake.tables()
-        if NAME.fullmatch(schema) and (schema, table) not in stored
+        if NAME.fullmatch(schema) and NAME.fullmatch(table) and (schema, table) not in stored
     )
 
 
@@ -1123,6 +1124,7 @@ def _drop_statements(leftovers: Sequence[tuple[str, str]]) -> list[StatementRequ
     """Drop each leftover and forget its watermark (a model added back later starts over)."""
     if not leftovers:
         return []
+    # Both names match the model-name pattern (`_leftovers`): plain to quote.
     statements = [
         StatementRequest(kind="statement", sql=f'DROP TABLE "{schema}"."{table}"', parameters=[])
         for schema, table in leftovers
