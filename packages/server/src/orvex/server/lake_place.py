@@ -304,24 +304,54 @@ def _azure(settings: AzureStorage) -> StoreAzureStorage:
     if not _azure_over_https(os.environ[variable]):
         raise ProjectLoadError(
             "LAKE_TLS_REQUIRED",
-            f"lake.data.azure: the connection string in {variable} reaches Azure Blob Storage "
-            "over plain HTTP; use DefaultEndpointsProtocol=https (and an https:// "
-            "BlobEndpoint). Plain HTTP is accepted only for an endpoint on the local machine.",
+            f"lake.data.azure: the connection string in {variable} does not reach Azure Blob "
+            "Storage over HTTPS: use DefaultEndpointsProtocol=https (and an https:// "
+            "BlobEndpoint), each key written once and as Azure spells it. Plain HTTP is "
+            "accepted only for an endpoint on the local machine.",
             file=PROJECT_FILE,
             path=pointer,
         )
     return StoreAzureStorage(type="azure", connection_string_env=variable)
 
 
+# The keys of an Azure connection string as the Azure SDK reads them (by case, untrimmed, the
+# last copy winning): read the same way here, so the check sees what the SDK will use.
+_AZURE_KEYS = (
+    "DefaultEndpointsProtocol",
+    "AccountName",
+    "AccountKey",
+    "SharedAccessSignature",
+    "EndpointSuffix",
+    "BlobEndpoint",
+    "BlobSecondaryEndpoint",
+    "QueueEndpoint",
+    "QueueSecondaryEndpoint",
+    "TableEndpoint",
+    "TableSecondaryEndpoint",
+    "FileEndpoint",
+    "FileSecondaryEndpoint",
+    "DfsEndpoint",
+    "DfsSecondaryEndpoint",
+)
+
+
 def _azure_over_https(connection_string: str) -> bool:
     """Whether a connection string reaches Blob Storage over HTTPS, or an endpoint on the local
-    machine. A string that cannot be read passes here: the store refuses it, without showing it."""
+    machine. A key repeated, or a known key written in another case or with spaces around it,
+    counts as no: the SDK would read another value than this check (#171, Reviewer pass 1). A
+    string that is not pairs at all passes here: the store refuses it, without showing it."""
+    folded = {key.lower(): key for key in _AZURE_KEYS}
     pairs: dict[str, str] = {}
-    for part in connection_string.strip().strip(";").split(";"):
-        key, _, value = part.partition("=")
-        pairs[key.strip().lower()] = value.strip()
-    blob = pairs.get("blobendpoint", "")
-    if blob:
+    for part in connection_string.split(";"):
+        key, equals, value = part.partition("=")
+        if not part or not equals:
+            continue
+        known = folded.get(key.strip().lower())
+        if (known is not None and key != known) or key in pairs:
+            return False
+        pairs[key] = value
+    blob = pairs.get("BlobEndpoint")
+    if blob is not None:
         scheme, _, rest = blob.partition("://")
         host_port = rest.split("/", 1)[0]
         host = (
@@ -329,11 +359,11 @@ def _azure_over_https(connection_string: str) -> bool:
             if host_port.startswith("[")
             else host_port.split(":", 1)[0]
         )
-        if host.lower() in LOCAL_HOSTS:
+        if scheme in {"http", "https"} and host.lower() in LOCAL_HOSTS:
             return True
-        if scheme.lower() != "https":
+        if scheme != "https":
             return False
-    return pairs.get("defaultendpointsprotocol", "https").lower() == "https"
+    return pairs.get("DefaultEndpointsProtocol", "https") == "https"
 
 
 def endpoint_host(endpoint: str) -> str:

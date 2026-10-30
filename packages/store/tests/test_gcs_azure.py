@@ -388,9 +388,10 @@ def test_an_encrypted_lake_on_a_local_disk_is_written_and_unreadable_alone(tmp_p
     flow(lake_at)
     lake = open_lake(lake_at, LIMITS)
     try:
-        # httpfs's web file systems stay off.
-        with pytest.raises(duckdb.Error):
+        # httpfs's web file systems stay off (not only the sandbox refusing).
+        with pytest.raises(duckdb.Error) as refused:
             lake._connection.execute("SELECT * FROM 'https://example.com/x.parquet'").fetchall()
+        assert "HTTPFileSystem" in str(refused.value)
     finally:
         lake.close()
     data = next((tmp_path / "lake" / "data").rglob("ducklake-*.parquet"))
@@ -398,3 +399,45 @@ def test_an_encrypted_lake_on_a_local_disk_is_written_and_unreadable_alone(tmp_p
     with pytest.raises(duckdb.Error):
         plain.execute(f"SELECT * FROM '{data}'").fetchall()
     plain.close()
+
+
+# #171 Reviewer pass 1: the Azure SDK reads keys exactly (by case, untrimmed, the last copy
+# winning); each of these sends data over plain HTTP to another machine if read forgivingly.
+FORGED = [
+    f"DefaultEndpointsProtocol=http;AccountName=a;AccountKey={ACCOUNT_KEY};"
+    "blobendpoint=http://127.0.0.1:10000/a",
+    f"DefaultEndpointsProtocol=http;AccountName=a;AccountKey={ACCOUNT_KEY};"
+    "BlobEndpoint =http://127.0.0.1:10000/a",
+    f"DefaultEndpointsProtocol=http;AccountName=a;AccountKey={ACCOUNT_KEY};"
+    "defaultendpointsprotocol=https",
+    f"BlobEndpoint=http://evil.example.com/a;AccountName=a;AccountKey={ACCOUNT_KEY};"
+    "blobendpoint=http://localhost/a",
+    f"DefaultEndpointsProtocol=https;AccountName=a;AccountKey={ACCOUNT_KEY};"
+    "DefaultEndpointsProtocol=http",
+    f"DefaultEndpointsProtocol= https;AccountName=a;AccountKey={ACCOUNT_KEY}",
+]
+
+
+@pytest.mark.parametrize("connection", FORGED)
+def test_an_azure_connection_string_is_read_as_the_sdk_reads_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, connection: str
+) -> None:
+    monkeypatch.setenv(AZURE_ENV, connection)
+    error = code_of(lambda: open_lake(location(tmp_path, "az://c/p/", azure()), LIMITS))
+    assert error.code in {"STORE_STATEMENT_INVALID", "STORE_TLS_REQUIRED"}, error.message
+    assert ACCOUNT_KEY not in str(error.message) + str(error.details)
+    assert not (tmp_path / "lake").exists()
+
+
+@pytest.mark.usefixtures("credentials")
+def test_a_gcs_error_never_shows_the_hmac_secret(tmp_path: Path, endpoint: str) -> None:
+    # A bucket that does not exist: the first write fails; the error shows neither key.
+    lake = open_lake(
+        location(tmp_path, f"gs://missing-{uuid.uuid4().hex[:8]}/p/", gcs(endpoint, False)),
+        LIMITS,
+    )
+    try:
+        error = code_of(lambda: write(lake, READINGS))
+    finally:
+        lake.close()
+    assert SECRET not in str(error.message) + str(error.details)

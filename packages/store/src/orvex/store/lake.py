@@ -478,30 +478,70 @@ def _variable_value(variable: str) -> str:
     return value
 
 
+# The keys of an Azure connection string as the Azure SDK reads them: exactly, by case, without
+# trimming, the last copy winning. A key written another way would be ignored by the SDK while
+# a forgiving check read it, so such keys and repeated keys are refused (#171, Reviewer pass 1).
+AZURE_KEYS = frozenset(
+    {
+        "DefaultEndpointsProtocol",
+        "AccountName",
+        "AccountKey",
+        "SharedAccessSignature",
+        "EndpointSuffix",
+        "BlobEndpoint",
+        "BlobSecondaryEndpoint",
+        "QueueEndpoint",
+        "QueueSecondaryEndpoint",
+        "TableEndpoint",
+        "TableSecondaryEndpoint",
+        "FileEndpoint",
+        "FileSecondaryEndpoint",
+        "DfsEndpoint",
+        "DfsSecondaryEndpoint",
+    }
+)
+_AZURE_KEYS_FOLDED = {key.lower(): key for key in AZURE_KEYS}
+
+
+def azure_pairs(connection_string: str) -> dict[str, str] | None:
+    """The `key=value` pairs of an Azure connection string, read as the Azure SDK reads them;
+    None when it is not such pairs, repeats a key, or writes a known key in another case or with
+    spaces around it."""
+    pairs: dict[str, str] = {}
+    for part in connection_string.split(";"):
+        if not part:
+            continue
+        key, equals, value = part.partition("=")
+        if not equals or not key:
+            return None
+        known = _AZURE_KEYS_FOLDED.get(key.strip().lower())
+        if (known is not None and key != known) or key in pairs:
+            return None
+        pairs[key] = value
+    return pairs
+
+
 def _check_azure(connection_string: str) -> None:
     """An Azure connection string: `key=value` pairs naming an AccountName, over HTTPS unless
     its blob endpoint is the local machine. Its account key is registered too; nothing of it is
     shown in errors."""
-    pairs: dict[str, str] = {}
-    for part in connection_string.strip().strip(";").split(";"):
-        key, equals, value = part.partition("=")
-        if not equals or not key.strip():
-            raise StoreError(
-                "STORE_STATEMENT_INVALID",
-                "The Azure connection string must be key=value pairs separated by ;.",
-                {},
-            )
-        pairs[key.strip().lower()] = value.strip()
-    for name in ("accountkey", "sharedaccesssignature"):
+    pairs = azure_pairs(connection_string)
+    if pairs is None:
+        raise StoreError(
+            "STORE_STATEMENT_INVALID",
+            "The Azure connection string must be key=value pairs separated by ;, each key "
+            "written once and as Azure spells it (AccountName, AccountKey, BlobEndpoint, …).",
+            {},
+        )
+    for name in ("AccountKey", "SharedAccessSignature"):
         if pairs.get(name):
             register_secret(pairs[name])
-    if not pairs.get("accountname"):
+    if not pairs.get("AccountName"):
         raise StoreError(
             "STORE_STATEMENT_INVALID", "The Azure connection string must name an AccountName.", {}
         )
-    blob = pairs.get("blobendpoint", "")
-    host = ""
-    if blob:
+    blob = pairs.get("BlobEndpoint")
+    if blob is not None:
         scheme, separator, rest = blob.partition("://")
         host_port = rest.split("/", 1)[0]
         host = (
@@ -509,8 +549,8 @@ def _check_azure(connection_string: str) -> None:
             if host_port.startswith("[")
             else host_port.split(":", 1)[0]
         )
-        local = host.lower() in _LOCAL_HOSTS
-        if not separator or (scheme.lower() != "https" and not local):
+        local = scheme in {"http", "https"} and host.lower() in _LOCAL_HOSTS
+        if not separator or (scheme != "https" and not local):
             raise StoreError(
                 "STORE_TLS_REQUIRED",
                 "Azure Blob Storage on another machine must be reached over HTTPS "
@@ -519,7 +559,7 @@ def _check_azure(connection_string: str) -> None:
             )
         if local:
             return  # an emulator on this machine: its endpoint decides the protocol
-    if pairs.get("defaultendpointsprotocol", "https").lower() != "https":
+    if pairs.get("DefaultEndpointsProtocol", "https") != "https":
         raise StoreError(
             "STORE_TLS_REQUIRED",
             "Azure Blob Storage on another machine must be reached over HTTPS "

@@ -505,3 +505,39 @@ def test_a_lake_in_azure_blob_storage(
     code, out = run(capsys, "runs", str(tmp_path))
     assert code == 0, out
     assert account_key not in out
+
+
+@pytest.mark.parametrize(
+    "connection",
+    [
+        f"DefaultEndpointsProtocol=http;AccountName=a;AccountKey={ACCOUNT_KEY};"
+        "blobendpoint=http://127.0.0.1:10000/a",
+        f"DefaultEndpointsProtocol=http;AccountName=a;AccountKey={ACCOUNT_KEY};"
+        "BlobEndpoint =http://127.0.0.1:10000/a",
+        f"DefaultEndpointsProtocol=http;AccountName=a;AccountKey={ACCOUNT_KEY};"
+        "defaultendpointsprotocol=https",
+        f"BlobEndpoint=http://evil.example.com/a;AccountName=a;AccountKey={ACCOUNT_KEY};"
+        "blobendpoint=http://localhost/a",
+        f"DefaultEndpointsProtocol=https;AccountName=a;AccountKey={ACCOUNT_KEY};"
+        "DefaultEndpointsProtocol=http",
+    ],
+)
+def test_an_azure_connection_string_is_read_as_the_sdk_reads_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, connection: str
+) -> None:
+    # #171 Reviewer pass 1: keys by case, untrimmed, written once.
+    monkeypatch.setenv(AZURE_ENV, connection)
+    found = problems(bare(tmp_path, azure_lake()))
+    assert len(found) == 1
+    assert found[0].startswith("LAKE_TLS_REQUIRED project.yaml"), found
+    assert ACCOUNT_KEY not in found[0]
+
+
+@pytest.mark.usefixtures("credentials")
+def test_the_gcs_record_holds_no_credential(tmp_path: Path) -> None:
+    folder = bare(tmp_path, GCS)
+    lake_place.record(home(folder), commands.lake_location(load_project(folder), home(folder)))
+    text = (home(folder) / lake_place.RECORD_FILE).read_text(encoding="utf-8")
+    assert "gs://bi-lake/billing/" in text
+    assert SECRET not in text
+    assert "test-key-id" not in text
