@@ -1376,6 +1376,18 @@ TUPLED = (
             f"({DAILY} WHERE day >= {{since:Date}}) AS E) AS s",
             False,
         ),
+        # Reviewer pass 4 on #205: a bound of its own does not excuse the bound below; a field
+        # flattened in a subquery is what the bound above it reads.
+        (
+            f"SELECT event_id, E.day AS day, month FROM ({DAILY} WHERE day >= {{since:Date}}) "
+            "AS E WHERE day >= {since:Date}",
+            False,
+        ),
+        (
+            "SELECT event_id, day, month FROM (SELECT event_id, E.day AS day, month FROM "
+            f"({TUPLED})) AS s WHERE day >= {{since:Date}}",
+            True,
+        ),
     ],
     ids=[
         "tuple-field",
@@ -1385,6 +1397,8 @@ TUPLED = (
         "alias-of-tuple-element",
         "field-above-the-bound",
         "field-two-levels-above",
+        "field-above-two-bounds",
+        "field-flattened-below-the-bound",
     ],
 )
 def test_a_qualified_bound_that_reads_a_tuple_field_is_refused(

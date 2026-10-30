@@ -1773,6 +1773,121 @@ _FIELD_IN_THE_BOUNDS_QUERY = (
 )
 
 
+# `E.day AS day … (… WHERE day >= {since}) AS E WHERE day >= {since}`, and
+# `SELECT … FROM (SELECT E.day AS day …) AS s WHERE day >= {since}`, marked.
+_FIELD_ABOVE_TWO_BOUNDS = (
+    "QUERY id: 0\n"
+    "  PROJECTION COLUMNS\n"
+    "    id UInt64\n"
+    "    day Date\n"
+    "    month String\n"
+    "  PROJECTION\n"
+    "    LIST id: 1, nodes: 3\n"
+    "      COLUMN id: 2, column_name: id, result_type: UInt64, source_id: 3\n"
+    "      FUNCTION id: 4, function_name: getSubcolumn, function_type: ordinary, result_type: Date\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "        ARGUMENTS\n"
+    "          LIST id: 5, nodes: 2\n"
+    "            COLUMN id: 6, column_name: E, result_type: Tuple(day Date), source_id: 3\n"
+    "            CONSTANT id: 7, constant_value: \\'day\\', constant_value_type: String\n"
+    "      COLUMN id: 8, column_name: month, result_type: String, source_id: 3\n"
+    "  JOIN TREE\n"
+    "    QUERY id: 3, alias: __table1, is_subquery: 1\n"
+    "      PROJECTION COLUMNS\n"
+    "        id UInt64\n"
+    "        month String\n"
+    "        E Tuple(day Date)\n"
+    "      PROJECTION\n"
+    "        LIST id: 9, nodes: 3\n"
+    "          COLUMN id: 10, column_name: id, result_type: UInt64, source_id: 11\n"
+    "          COLUMN id: 12, column_name: month, result_type: String, source_id: 11\n"
+    "          COLUMN id: 13, column_name: E, result_type: Tuple(day Date), source_id: 11\n"
+    "      JOIN TREE\n"
+    "        TABLE id: 11, alias: __table2, table_name: default.ev205\n"
+    "      WHERE\n"
+    "        FUNCTION id: 14, function_name: greaterOrEquals, function_type: ordinary, result_type: UInt8\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "          ARGUMENTS\n"
+    "            LIST id: 15, nodes: 2\n"
+    "              COLUMN id: 16, column_name: day, result_type: Date, source_id: 11\n"
+    "              FUNCTION id: 17, function_name: identity, function_type: ordinary, result_type: Date\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "                ARGUMENTS\n"
+    "                  LIST id: 18, nodes: 1\n"
+    "                    FUNCTION id: 19, function_name: identity, function_type: ordinary, result_type: Date\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "                      ARGUMENTS\n"
+    "                        LIST id: 20, nodes: 1\n"
+    "                          CONSTANT id: 21, constant_value: UInt64_20736, constant_value_type: Date\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "                            EXPRESSION\n"
+    "                              FUNCTION id: 22, function_name: toDate, function_type: ordinary, result_type: Date\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "                                ARGUMENTS\n"
+    "                                  LIST id: 23, nodes: 1\n"
+    "                                    CONSTANT id: 24, constant_value: \\'2026-10-10\\', constant_value_type: String\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "  WHERE\n"
+    "    FUNCTION id: 25, function_name: greaterOrEquals, function_type: ordinary, result_type: UInt8\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "      ARGUMENTS\n"
+    "        LIST id: 26, nodes: 2\n"
+    "          FUNCTION id: 4, function_name: getSubcolumn, function_type: ordinary, result_type: Date\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "            ARGUMENTS\n"
+    "              LIST id: 5, nodes: 2\n"
+    "                COLUMN id: 6, column_name: E, result_type: Tuple(day Date), source_id: 3\n"
+    "                CONSTANT id: 7, constant_value: \\'day\\', constant_value_type: String\n"
+    "          FUNCTION id: 27, function_name: identity, function_type: ordinary, result_type: Date\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "            ARGUMENTS\n"
+    "              LIST id: 28, nodes: 1\n"
+    "                FUNCTION id: 29, function_name: identity, function_type: ordinary, result_type: Date\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "                  ARGUMENTS\n"
+    "                    LIST id: 30, nodes: 1\n"
+    "                      CONSTANT id: 31, constant_value: UInt64_20736, constant_value_type: Date\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "                        EXPRESSION\n"
+    "                          FUNCTION id: 32, function_name: toDate, function_type: ordinary, result_type: Date\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "                            ARGUMENTS\n"
+    "                              LIST id: 33, nodes: 1\n"
+    "                                CONSTANT id: 34, constant_value: \\'2026-10-10\\', constant_value_type: String\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "  SETTINGS prefer_column_name_to_alias=0\n"
+)
+_FIELD_BELOW_THE_BOUND = (
+    "QUERY id: 0\n"
+    "  PROJECTION COLUMNS\n"
+    "    id UInt64\n"
+    "    day Date\n"
+    "    month String\n"
+    "  PROJECTION\n"
+    "    LIST id: 1, nodes: 3\n"
+    "      COLUMN id: 2, column_name: id, result_type: UInt64, source_id: 3\n"
+    "      COLUMN id: 4, column_name: day, result_type: Date, source_id: 3\n"
+    "      COLUMN id: 5, column_name: month, result_type: String, source_id: 3\n"
+    "  JOIN TREE\n"
+    "    QUERY id: 3, alias: __table1, is_subquery: 1\n"
+    "      PROJECTION COLUMNS\n"
+    "        id UInt64\n"
+    "        day Date\n"
+    "        month String\n"
+    "      PROJECTION\n"
+    "        LIST id: 6, nodes: 3\n"
+    "          COLUMN id: 7, column_name: id, result_type: UInt64, source_id: 8\n"
+    "          COLUMN id: 9, column_name: E.day, result_type: Date, source_id: 8\n"
+    "          COLUMN id: 10, column_name: month, result_type: String, source_id: 8\n"
+    "      JOIN TREE\n"
+    "        TABLE id: 8, alias: __table2, table_name: default.ev205\n"
+    "  WHERE\n"
+    "    FUNCTION id: 11, function_name: greaterOrEquals, function_type: ordinary, result_type: UInt8\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "      ARGUMENTS\n"
+    "        LIST id: 12, nodes: 2\n"
+    "          COLUMN id: 4, column_name: day, result_type: Date, source_id: 3\n"
+    "          FUNCTION id: 13, function_name: identity, function_type: ordinary, result_type: Date\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "            ARGUMENTS\n"
+    "              LIST id: 14, nodes: 1\n"
+    "                FUNCTION id: 15, function_name: identity, function_type: ordinary, result_type: Date\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "                  ARGUMENTS\n"
+    "                    LIST id: 16, nodes: 1\n"
+    "                      CONSTANT id: 17, constant_value: UInt64_20736, constant_value_type: Date\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "                        EXPRESSION\n"
+    "                          FUNCTION id: 18, function_name: toDate, function_type: ordinary, result_type: Date\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "                            ARGUMENTS\n"
+    "                              LIST id: 19, nodes: 1\n"
+    "                                CONSTANT id: 20, constant_value: \\'2026-10-10\\', constant_value_type: String\n"  # noqa: E501 (an EXPLAIN line as ClickHouse prints it)
+    "  SETTINGS prefer_column_name_to_alias=0\n"
+)
+
+
 def test_a_time_column_read_from_a_field_above_the_bound_is_seen() -> None:
     # Reviewer pass 3 on #205: ClickHouse reads `E.day` as the tuple's field, so the bound below
     # bounds another column than the one returned. In the bound's own query it is the alias
@@ -1783,3 +1898,7 @@ def test_a_time_column_read_from_a_field_above_the_bound_is_seen() -> None:
     assert not projects_a_field(_FIELD_IN_THE_BOUNDS_QUERY, "day")
     assert not projects_a_field(_FIELD_ABOVE_THE_BOUND, "month")
     assert projects_a_field("not a tree", "day")  # unreadable: refused
+    # Reviewer pass 4 on #205: a bound of its own does not excuse a bound below; a field
+    # flattened below the bound is what the bound reads.
+    assert projects_a_field(_FIELD_ABOVE_TWO_BOUNDS, "day")
+    assert not projects_a_field(_FIELD_BELOW_THE_BOUND, "day")

@@ -2207,29 +2207,32 @@ def _query_of(line: _TreeLine) -> _TreeLine | None:
 
 def projects_a_field(marked_query_tree: str, time_column: str) -> bool:
     """Whether a query returns its time column from a field of a `Tuple`, `JSON` or similar
-    column (`E.day AS day`, `tupleElement(E, 'day') AS day`) while its own `WHERE`/`PREWHERE`
-    holds no `{since:…}` bound (#164, Reviewer pass 3 on #205). A bound below such a query
-    bounds another column than the one returned: ClickHouse reads `E.day` as the field before
-    it reads it as table `E`'s column. The query whose own condition holds the bound may compute
-    its time column from a field (the alias exception: the bound names that alias). Read from
-    the `EXPLAIN QUERY TREE` of `mark_since`'s SQL, where each query lists its output names
-    (`PROJECTION COLUMNS`) in the order of its `PROJECTION` items. A tree that cannot be read
-    counts as yes."""
+    column (`E.day AS day`, `tupleElement(E, 'day') AS day`) while a `{since:…}` bound lies in a
+    query below it, in its `JOIN TREE` (#164, Reviewer passes 3 and 4 on #205). That bound
+    bounds another column than the one returned (ClickHouse reads `E.day` as the field before it
+    reads it as table `E`'s column), even when the query has a bound of its own too. A query
+    with no bound below it may compute its time column from a field: the alias exception, when
+    its own condition names that alias, or a field flattened below a bound that reads it (`SELECT
+    * FROM (SELECT toDate(payload.ts) AS day …) WHERE day >= {since:Date}`). Queries outside
+    the row path (`IN (SELECT …)`) hold no bound below them either. Read from the `EXPLAIN QUERY
+    TREE` of `mark_since`'s SQL, where each query lists its output names (`PROJECTION COLUMNS`)
+    in the order of its `PROJECTION` items. A tree that cannot be read counts as yes."""
     field = re.compile(
         r"column_name: \S+\.\S+?(,|$)|function_name: (getSubcolumn|tupleElement)(,|$)"
     )
     lines = _query_tree(marked_query_tree)
     if not lines or not lines[0].text.startswith("QUERY"):
         return True
-    bounded_by_condition: set[int] = set()
+    bounded_below: set[int] = set()
     for mark in _marks(lines):
-        section = mark.parent
-        query = _query_of(mark)
-        while section is not None and section is not query:
-            if section.parent is query and section.text in {"WHERE", "PREWHERE"}:
-                bounded_by_condition.add(id(query))
-            section = section.parent
+        current = mark.parent
+        while current is not None:
+            if current.text == "JOIN TREE" and current.parent is not None:
+                bounded_below.add(id(current.parent))  # the query this join tree belongs to
+            current = current.parent
     for query in (line for line in lines if line.text.startswith("QUERY id:")):
+        if id(query) not in bounded_below:
+            continue
         sections = {child.text: child for child in query.children}
         named = sections.get("PROJECTION COLUMNS")
         projected = sections.get("PROJECTION")
@@ -2240,11 +2243,7 @@ def projects_a_field(marked_query_tree: str, time_column: str) -> bool:
         if len(names) != len(items):
             return True
         for name, item in zip(names, items, strict=True):
-            if (
-                name == time_column
-                and id(query) not in bounded_by_condition
-                and any(field.search(line.text) for line in _below(item))
-            ):
+            if name == time_column and any(field.search(line.text) for line in _below(item)):
                 return True
     return False
 
