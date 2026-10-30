@@ -342,7 +342,8 @@ def test_braces_spaces_and_accents_stay_readable(
     builder.close()
     lake = open_lake(location, LIMITS, [source("fine", "parquet", folder / "*.parquet")])
     try:
-        rows = read(lake, "SELECT a FROM fine.data ORDER BY a")
+        write(lake, "CREATE TABLE fine_rows AS SELECT a FROM fine.data")
+        rows = read(lake, "SELECT a FROM fine_rows ORDER BY a")
         assert rows == [{"a": 0}, {"a": 1}]
     finally:
         lake.close()
