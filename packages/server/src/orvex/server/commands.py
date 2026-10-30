@@ -68,7 +68,14 @@ from orvex.transform import (
     schedule,
 )
 from orvex.transform.extraction import Extract
-from orvex.transform.graph import Graph, build_graph, compiled_sql, plan_run, test_relations
+from orvex.transform.graph import (
+    Graph,
+    build_graph,
+    compiled_sql,
+    known_output_names,
+    plan_run,
+    test_relations,
+)
 from orvex.transform.incremental import (
     Columns,
     Count,
@@ -169,7 +176,18 @@ def check_project(folder: Path, identity: Identity | None = None) -> Checked:
     differences: dict[str, list[Comparison]] = {}
     filtered: dict[str, str] = {}
     extracted: dict[str, tuple[clickhouse.Column, ...]] = {}
-    needs_binding = any(
+    # A repeated output name (#113): found from the text when it decides the names; otherwise
+    # the model is bound, as below.
+    unknown_names = False
+    for model in discovery.models:
+        if model.extraction:
+            continue
+        names = known_output_names(model.sql)
+        if names is None:
+            unknown_names = True
+        else:
+            problems += _repeated_names(model, names)
+    needs_binding = unknown_names or any(
         m.config.materialized == "incremental"
         or m.config.tests
         or m.config.reconciliation

@@ -5,8 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
+import pytest
 from orvex.contracts.store.v1 import StatementRequest
-from orvex.transform.graph import build_graph, compiled_sql, plan_run
+from orvex.transform.graph import build_graph, compiled_sql, known_output_names, plan_run
 from orvex.transform.models import Discovery, discover_models
 
 
@@ -173,3 +174,27 @@ def test_every_independent_cycle_is_reported(tmp_path: Path) -> None:
         "c.a → c.b → c.a.",
         "d.a → d.b → d.a.",
     ]
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        ("SELECT 1 AS a, 2 AS A", ["a", "A"]),
+        ("SELECT a, t.b FROM t", ["a", "b"]),
+        ("SELECT * FROM t", []),
+        ("SELECT * EXCLUDE (a) FROM t", []),
+        ("SELECT * FROM (SELECT 1 AS a, 2 AS a) AS s", ["a", "a"]),
+        ("WITH c AS (SELECT 1 AS a, 2 AS A) SELECT * FROM c", ["a", "A"]),
+        ("SELECT 1 AS a, 1 AS A UNION ALL SELECT 2 AS b, 3 AS c", ["a", "A"]),
+        ("SELECT a, x + 1 FROM t", None),
+        ("SELECT * FROM a JOIN b USING (k)", None),
+        ("SELECT *, 1 AS id FROM t", None),
+        ("SELECT * RENAME (a AS b) FROM t", None),
+        ("SELECT COLUMNS('a.*') FROM t", None),
+        ("SELECT * FROM (SELECT 1, 2) AS s(a, b)", None),
+        ("SELEC", None),
+    ],
+)
+def test_known_output_names(sql: str, expected: list[str] | None) -> None:
+    # #113: the names a model's text alone decides; None when only binding can tell.
+    assert known_output_names(sql) == expected

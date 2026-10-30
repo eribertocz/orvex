@@ -388,3 +388,81 @@ def test_relations(models: Sequence[Model]) -> dict[str, str]:
         else f"{_identifier(model.schema)}.{_identifier(model.table)}"
         for model in models
     }
+
+
+def known_output_names(sql: str) -> list[str] | None:
+    """The output column names of a model's SELECT when its text alone decides them (#113), in
+    order; None when only binding can (an unnamed expression, a star next to other items or over
+    a join, `COLUMNS(…)`, a star that renames). A star over one table alone gives [], since a
+    table holds no repeated name. Names are the text's spelling."""
+    connection = _parser()
+    try:
+        tree = _tree(connection, sql)
+    except duckdb.Error:
+        return None
+    finally:
+        connection.close()
+    statements = tree.get("statements")
+    if tree.get("error") or not isinstance(statements, list) or len(statements) != 1:
+        return None
+
+    def ctes(node: Tree, known: dict[str, Tree]) -> dict[str, Tree]:
+        found = dict(known)
+        cte_map = node.get("cte_map")
+        for entry in cte_map.get("map", []) if isinstance(cte_map, dict) else []:
+            value = entry.get("value") if isinstance(entry, dict) else None
+            if isinstance(value, dict) and isinstance(value.get("query_node"), dict):
+                if value.get("aliases"):
+                    return {}  # renamed by position: not followed
+                found[str(entry.get("key", "")).lower()] = value["query_node"]
+        return found
+
+    def names(node: object, known: dict[str, Tree]) -> list[str] | None:
+        if not isinstance(node, dict):
+            return None
+        scope = ctes(node, known)
+        if node.get("type") == "SET_OPERATION_NODE":
+            children = node.get("children")
+            first = children[0] if isinstance(children, list) and children else node.get("left")
+            return names(first, scope)  # the first branch names the columns
+        if node.get("type") != "SELECT_NODE":
+            return None
+        items = node.get("select_list")
+        if not isinstance(items, list):
+            return None
+        found: list[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                return None
+            if item.get("class") == "STAR":
+                if len(items) != 1 or item.get("columns") or item.get("expr") is not None:
+                    return None
+                if item.get("rename_list") or item.get("relation_name"):
+                    return None
+                source = node.get("from_table")
+                kind = source.get("type") if isinstance(source, dict) else None
+                if kind == "SUBQUERY" and isinstance(source, dict):
+                    subquery = source.get("subquery")
+                    inner = subquery.get("node") if isinstance(subquery, dict) else None
+                    if source.get("column_name_alias"):
+                        return None
+                    return names(inner, scope)
+                if kind == "BASE_TABLE" and isinstance(source, dict):
+                    table = str(source.get("table_name") or "").lower()
+                    if not source.get("schema_name") and table in scope:
+                        if source.get("column_name_alias"):
+                            return None
+                        return names(scope[table], scope)
+                    return []  # one table: its names are distinct
+                return None
+            alias = str(item.get("alias") or "")
+            parts = item.get("column_names")
+            if alias:
+                found.append(alias)
+            elif item.get("class") == "COLUMN_REF" and isinstance(parts, list) and parts:
+                found.append(str(parts[-1]))
+            else:
+                return None
+        return found
+
+    return names(statements[0].get("node"), {})
