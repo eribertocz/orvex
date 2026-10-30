@@ -186,7 +186,9 @@ def test_the_watermark_comes_from_the_data_not_the_clock(
 def test_every_temporal_time_column(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], cast: str, watermark: str
 ) -> None:
-    model = f"SELECT id, {cast} AS read_at FROM feed.data WHERE {cast} > $since"
+    # The bound is on the subquery's column: an append model's `$since` bounds the time column
+    # itself, passed through unchanged (#135).
+    model = f"SELECT * FROM (SELECT id, {cast} AS read_at FROM feed.data) WHERE read_at > $since"
     project(tmp_path, APPEND, model)
     feed(
         tmp_path,

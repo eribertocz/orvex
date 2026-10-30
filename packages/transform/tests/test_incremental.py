@@ -933,10 +933,71 @@ def test_a_since_filter_on_the_time_column_is_accepted(tmp_path: Path, where: st
     assert config_problems(chosen) == []
 
 
-def test_the_same_column_rule_is_for_partition_overwrite_only(tmp_path: Path) -> None:
+def test_an_append_model_is_held_to_its_own_time_column(tmp_path: Path) -> None:
+    # Before #135 this filter on another column was accepted for `append`; it reads rows again
+    # whenever `read_at` and `day` disagree, so it is now refused.
     append = BY_DAY.replace("partition_overwrite", "append").replace(", partition_by: [month]", "")
     chosen = sql_model(tmp_path, append, "SELECT * FROM src WHERE read_at > $since")
-    assert config_problems(chosen) == []
+    assert [item.code.root for item in config_problems(chosen)] == ["INVALID_MODEL_SQL"]
+
+
+MANUAL_APPEND = (
+    "version: 1\nmaterialized: incremental\n"
+    "incremental: {strategy: append, time_column: read_at, filter: manual}\n"
+)
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM src WHERE read_at >= $since",
+        "SELECT * FROM src WHERE $since <= read_at",
+        "SELECT * FROM src WHERE read_at > $since - INTERVAL 1 HOUR",
+        "SELECT * FROM src WHERE read_at > $since OR read_at IS NULL",
+        "SELECT * FROM src WHERE other_column > $since",
+        "SELECT * FROM src WHERE read_at > $since UNION ALL SELECT * FROM src",
+        "SELECT * FROM src WHERE read_at > $since UNION ALL "
+        "SELECT * FROM src WHERE read_at > $since",
+        "SELECT * FROM src WHERE read_at > least($since, now())",
+        "SELECT * FROM src WHERE read_at = $since",
+    ],
+    ids=[
+        "inclusive",
+        "inclusive-reversed",
+        "widened",
+        "or-null",
+        "other-column",
+        "union-one-side",
+        "union-both-sides",
+        "expression",
+        "equal",
+    ],
+)
+def test_an_append_filter_that_reads_rows_again_is_refused(tmp_path: Path, sql: str) -> None:
+    found = config_problems(sql_model(tmp_path, MANUAL_APPEND, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+    assert "append model inserts every row it reads" in found[0].message
+    assert "read_at > $since" in found[0].message
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM src WHERE read_at > $since",
+        "SELECT * FROM src WHERE $since < read_at",
+        "SELECT * FROM src WHERE read_at > $since AND status = 'ok'",
+        "SELECT * FROM (SELECT id, read_at FROM src WHERE read_at > $since) AS s",
+        "WITH w AS (SELECT * FROM src WHERE read_at > $since) SELECT * FROM w",
+    ],
+    ids=["strict", "reversed", "and", "subquery", "cte"],
+)
+def test_an_append_filter_that_reads_each_row_once_is_accepted(tmp_path: Path, sql: str) -> None:
+    assert config_problems(sql_model(tmp_path, MANUAL_APPEND, sql)) == []
+
+
+def test_an_append_model_with_the_automatic_filter_is_accepted(tmp_path: Path) -> None:
+    auto = MANUAL_APPEND.replace(", filter: manual", "")
+    assert config_problems(sql_model(tmp_path, auto, "SELECT * FROM src")) == []
 
 
 @pytest.mark.parametrize(

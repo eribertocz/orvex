@@ -15,16 +15,24 @@ CONNECTIONS = "version: 1\nconnections:\n  feed:\n    type: parquet\n    path: d
 MODEL = "SELECT * FROM feed.data"
 
 
-def every_row(sql: str) -> str:
+def with_since(sql: str, append: bool) -> str:
     """The model `s.m` reading every row on each run: these tests are about how loaded rows are
-    written, not which rows are loaded (`$since` is required in an incremental model's SQL)."""
+    written, not which rows are loaded (`$since` is required in an incremental model's SQL). An
+    `append` model may only read the rows after the watermark (#135); its tests feed new rows
+    with later times."""
+    if append:
+        return f"SELECT * FROM ({sql}) WHERE read_at > $since"
     return f"SELECT * FROM ({sql}) WHERE $since IS NOT NULL"
 
 
 def write(folder: Path, files: dict[str, str]) -> None:
+    sidecar = files.get("models/s/m.yaml")
+    if sidecar is None and (folder / "models" / "s" / "m.yaml").exists():
+        sidecar = (folder / "models" / "s" / "m.yaml").read_text(encoding="utf-8")
+    append = sidecar is not None and "strategy: append" in sidecar
     for relative, text in files.items():
         if relative == "models/s/m.sql" and "$since" not in text:
-            text = every_row(text)
+            text = with_since(text, append)
         path = folder / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
@@ -116,6 +124,7 @@ def test_append_adds_loaded_rows_and_keeps_them_on_failure(
     write(
         tmp_path, {"models/s/m.sql": "SELECT * REPLACE (CAST('x' AS INTEGER) AS id) FROM feed.data"}
     )
+    feed(tmp_path, rows((6, "n", "6.0006")))  # a later row: append reads only those (#135)
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 1
     assert len(table(tmp_path)) == 5
@@ -210,7 +219,11 @@ def test_column_rules_are_checked_by_binding_without_running(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     feed(tmp_path, rows((1, "n", "1.0000")))
-    project(tmp_path, APPEND.replace("time_column: read_at", "time_column: region"))
+    project(
+        tmp_path,
+        APPEND.replace("time_column: read_at", "time_column: region"),
+        "SELECT * FROM feed.data WHERE region > $since",
+    )
     code, out = command(capsys, "validate", str(tmp_path))
     assert code == 1
     assert out.startswith("TIME_COLUMN_NOT_TEMPORAL models/s/m.yaml")
@@ -239,7 +252,8 @@ def lake_value(folder: Path, sql: str) -> list[tuple[object, ...]]:
             [
                 (1, "n", "1.0000", BIG, "1704189600000000"),
                 (2, "n", "2.0000", BIG, "1704276000000000"),
-                (2, "s", "2.5001", BIG, "1704276000000000"),
+                # (2, "s") has the watermark's time: an append model reads only later rows
+                # (#135).
                 (3, "s", "3.0000", BIG, "1704362400000000"),
             ],
         ),
@@ -458,6 +472,7 @@ def test_sync_all_columns_drops_widens_and_refuses_lossy_changes(
             )
         },
     )
+    feed(tmp_path, rows((4, "n", "4.00")))  # a later row: append reads only those (#135)
     assert command(capsys, "run", str(tmp_path))[0] == 0  # adds `code` VARCHAR
     write(
         tmp_path,

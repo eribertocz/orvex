@@ -303,6 +303,50 @@ def since_column_problems(model: Model, columns: tuple[Column, ...]) -> list[Mod
     ]
 
 
+def _precision(clickhouse_type: str) -> int | None:
+    """How finely a date or time type tells instants apart, as a number that grows with it:
+    0 for a date, 1 for seconds, 2 + p for `DateTime64(p)`; None for anything else.
+    `Nullable(…)` and `LowCardinality(…)` wrappers are read through."""
+    text = clickhouse_type
+    while (inner := re.fullmatch(r"(?:Nullable|LowCardinality)\((.*)\)", text)) is not None:
+        text = inner.group(1)
+    if text in {"Date", "Date32"}:
+        return 0
+    if text == "DateTime" or text.startswith("DateTime("):
+        return 1
+    found = re.fullmatch(r"DateTime64\((\d+)(?:,.*)?\)", text)
+    return 2 + int(found.group(1)) if found is not None else None
+
+
+def since_precision_problems(model: Model, columns: tuple[Column, ...]) -> list[ModelError]:
+    """An `append` extraction model whose `{since:…}` type is coarser than its time column
+    reads again the rows between the truncated value and the watermark, and inserts them twice
+    (#135): its type must tell apart every instant the column does."""
+    incremental = model.config.incremental
+    since = declared_since(model)
+    if incremental is None or incremental.strategy != "append" or since is None:
+        return []
+    time_column = incremental.time_column.root.lower()
+    found = next((column for column in columns if column.name.lower() == time_column), None)
+    if found is None:
+        return []
+    column = _precision(found.clickhouse)
+    declared = _precision(since.text)
+    if column is None or declared is None or declared >= column:
+        return []
+    return [
+        problem(
+            "INVALID_MODEL_SQL",
+            f"{model.sql_file}: {{since:{since.text}}} is coarser than the time_column "
+            f"{found.name} ({found.clickhouse}): an append model would read again, and insert "
+            "twice, the rows between the truncated value and the last loaded one. Declare "
+            "{since:…} at least as precise as the column, or use strategy merge.",
+            model.sql_file,
+            model=model.name,
+        )
+    ]
+
+
 def since_problems(model: Model) -> list[ModelError]:
     """The rules of `{since:Type}` in an extraction model, from its text alone
     (transformation.md §3.5): incremental models need it, others must not use it, its type is a
@@ -770,7 +814,7 @@ def _aliased(node: _Node) -> str:
     return found.group(1) if found is not None else ""
 
 
-def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
+def since_is_a_lower_bound(tree: str, time_column: str, strict: bool = False) -> bool:
     """Whether, in the `EXPLAIN AST` of `mark_since`'s SQL, every marked `{since:…}` is in a
     lower bound of the time column of the rows the model returns, as `incremental.
     since_is_a_lower_bound` requires of DuckDB SQL (#155):
@@ -935,6 +979,15 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
     def lower_bound(node: _Node, names: set[str]) -> bool:
         position = _FROM_BELOW.get(_function_name(node))
         found = arguments(node)
+        if strict:
+            # `append` (#135): `time_column > {since:…}` exactly, so no row is read twice.
+            return (
+                _function_name(node) in {"greater", "less"}
+                and position is not None
+                and len(found) == 2
+                and is_time_column(found[position], names)
+                and _is_mark(found[1 - position])
+            )
         return (
             position is not None
             and len(found) == 2
@@ -966,8 +1019,9 @@ def since_is_a_lower_bound(tree: str, time_column: str) -> bool:
         if names is not None and lower_bound(node, names):
             return not alias or unqualified(node)
         if names is not None and _function_name(node) == "or":
-            # `time_column > {since:…} OR time_column IS NULL`: the undated rows too.
-            return all(
+            # `time_column > {since:…} OR time_column IS NULL`: the undated rows too (not for
+            # `append`: it would insert them again in every run).
+            return not strict and all(
                 (lower_bound(child, names) and (not alias or unqualified(child)))
                 or (is_time_null(child, names) and (not alias or unqualified(child)))
                 for child in arguments(node)
@@ -1550,20 +1604,34 @@ def describe_model(
     incremental = model.config.incremental
     try:
         plain = source.check_select(found.text, since)
+        append = incremental is not None and incremental.strategy == "append"
         if (
             incremental is not None
-            and incremental.strategy == "partition_overwrite"
+            and incremental.strategy in {"partition_overwrite", "append"}
             and since is not None
             and (
                 found.spaced_name
                 or writes_since_mark(plain)
                 or not since_is_a_lower_bound(
-                    source.explain(mark_since(found), since), incremental.time_column.root
+                    source.explain(mark_since(found), since),
+                    incremental.time_column.root,
+                    strict=append,
                 )
                 or limits_rows(source.explain(found.text, since, "QUERY TREE"))
             )
         ):
             column = incremental.time_column.root
+            if append:
+                return problem(
+                    "INVALID_MODEL_SQL",
+                    f"{model.name}: an append model inserts every row it reads, so its filter "
+                    f"must read each row once: write WHERE {column} > {{since:…}} (not >=, no "
+                    f"expression around it, no OR {column} IS NULL), in queries that return "
+                    f"{column} unchanged and keep their rows. Use strategy merge when rows can "
+                    "be read again.",
+                    file,
+                    model=model.name,
+                )
             return problem(
                 "INVALID_MODEL_SQL",
                 f"{model.name}: in a partition_overwrite model, {{since:…}} may only set a "

@@ -133,6 +133,9 @@ def uses_since(sql: str) -> bool:
     )
 
 
+# `time_column > $since` (or `$since < time_column`): the only bound an `append` model may use
+# (#135): it reads each row once.
+_STRICTLY_FROM_BELOW = frozenset({"COMPARE_GREATERTHAN", "COMPARE_LESSTHAN"})
 # `time_column > …`, `time_column >= …` (and the same written the other way round): the only
 # comparisons a `$since` may be in, in a partition_overwrite model (#155).
 _FROM_BELOW = {
@@ -152,7 +155,9 @@ _PER_ROW_FUNCTIONS = frozenset({"random", "gen_random_uuid", "uuid", "uuidv4", "
 type ColumnsOf = Callable[[tuple[str, ...]], frozenset[str] | None]
 
 
-def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | None = None) -> bool:
+def since_is_a_lower_bound(
+    sql: str, time_column: str, columns_of: ColumnsOf | None = None, strict: bool = False
+) -> bool:
     """Whether every `$since` of a DuckDB-SQL model is in a lower bound of the time column of
     the rows the model returns (#155):
 
@@ -403,10 +408,18 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
     def lower_bound(node: object, names: set[str]) -> bool:
         if not isinstance(node, dict) or node.get("class") != "COMPARISON":
             return False
-        side = _FROM_BELOW.get(str(node.get("type")))
+        kind = str(node.get("type"))
+        side = _FROM_BELOW.get(kind)
         if side is None:
             return False
         other = node.get("right" if side == "left" else "left")
+        if strict:
+            # `append` (#135): `time_column > $since` exactly, so no row is read twice.
+            return (
+                kind in _STRICTLY_FROM_BELOW
+                and is_time_column(node.get(side), names)
+                and is_since(other)
+            )
         return is_time_column(node.get(side), names) and bound(other)
 
     def is_time_null(node: object, names: set[str]) -> bool:
@@ -435,11 +448,16 @@ def since_is_a_lower_bound(sql: str, time_column: str, columns_of: ColumnsOf | N
         if names is not None and node.get("class") == "CONJUNCTION":
             children = node.get("children")
             if node.get("type") == "CONJUNCTION_OR":
-                # `time_column > $since OR time_column IS NULL`: the undated rows too.
-                return isinstance(children, list) and all(
-                    (lower_bound(child, names) or is_time_null(child, names))
-                    and (not alias or unqualified(child))
-                    for child in children
+                # `time_column > $since OR time_column IS NULL`: the undated rows too (not for
+                # `append`: it would insert them again in every run).
+                return (
+                    not strict
+                    and isinstance(children, list)
+                    and all(
+                        (lower_bound(child, names) or is_time_null(child, names))
+                        and (not alias or unqualified(child))
+                        for child in children
+                    )
                 )
             if node.get("type") == "CONJUNCTION_AND":
                 return check(children, names, alias)
@@ -464,14 +482,26 @@ def since_bound_problem(model: Model, columns_of: ColumnsOf | None = None) -> Mo
     if (
         config.materialized != "incremental"
         or incremental is None
-        or incremental.strategy != "partition_overwrite"
+        or incremental.strategy not in {"partition_overwrite", "append"}
         or (incremental.filter or "auto") == "auto"
         or model.extraction
         or not uses_since(model.sql)
-        or since_is_a_lower_bound(model.sql, incremental.time_column.root, columns_of)
     ):
         return None
+    append = incremental.strategy == "append"
     column = incremental.time_column.root
+    if since_is_a_lower_bound(model.sql, column, columns_of, strict=append):
+        return None
+    if append:
+        return problem(
+            "INVALID_MODEL_SQL",
+            f"{model.sql_file}: an append model inserts every row it reads, so its filter must "
+            f"read each row once: write WHERE {column} > $since (not >=, no expression around "
+            f"$since, no OR {column} IS NULL), in queries that return {column} unchanged and "
+            "keep their rows. Use strategy merge when rows can be read again.",
+            model.sql_file,
+            model=model.name,
+        )
     return problem(
         "INVALID_MODEL_SQL",
         f"{model.sql_file}: in a partition_overwrite model, $since may only set a lower bound of "

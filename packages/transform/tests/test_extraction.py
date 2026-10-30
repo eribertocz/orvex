@@ -286,3 +286,63 @@ def test_a_date_since_is_refused_for_partition_overwrite_on_a_datetime_column(
     assert problems("partition_overwrite", "DateTime64(3, 'UTC')", "DateTime64(3, 'UTC')") == []
     # Only the partition check needs the exact boundary.
     assert problems("merge", "Date", "DateTime64(3, 'UTC')") == []
+
+
+@pytest.mark.parametrize(
+    ("strategy", "declared", "column_type", "refused"),
+    [
+        ("append", "Date", "DateTime('UTC')", True),
+        ("append", "Date32", "DateTime64(3, 'UTC')", True),
+        ("append", "DateTime('UTC')", "DateTime64(0, 'UTC')", True),
+        ("append", "DateTime64(0, 'UTC')", "DateTime64(3, 'UTC')", True),
+        ("append", "DateTime64(3, 'UTC')", "Nullable(DateTime64(6, 'UTC'))", True),
+        ("append", "Date", "Date", False),
+        ("append", "Date", "Date32", False),
+        ("append", "DateTime('UTC')", "Date", False),
+        ("append", "DateTime('UTC')", "DateTime('UTC')", False),
+        ("append", "DateTime64(0, 'UTC')", "DateTime('UTC')", False),
+        ("append", "DateTime64(3, 'UTC')", "DateTime64(3, 'UTC')", False),
+        ("append", "DateTime64(6, 'UTC')", "DateTime64(3, 'UTC')", False),
+        ("append", "DateTime64(6, 'UTC')", "Nullable(DateTime('UTC'))", False),
+        # Strategies that replace re-read rows may read them again.
+        ("merge", "Date", "DateTime('UTC')", False),
+    ],
+)
+def test_an_append_since_must_be_as_precise_as_the_time_column(
+    tmp_path: Path, strategy: str, declared: str, column_type: str, refused: bool
+) -> None:
+    # #135: a coarser `{since:…}` is truncated, so an append model would read again, and insert
+    # twice, the rows between the truncated value and the watermark.
+    from orvex.contracts.project.v1 import ClickhouseConnection
+    from orvex.transform.clickhouse import map_type, since_precision_problems
+    from orvex.transform.models import discover_models
+
+    connection = ClickhouseConnection.model_validate(
+        {
+            "type": "clickhouse",
+            "host": "h",
+            "port": 8123,
+            "database": "d",
+            "user": "u",
+            "password": "${env:UNUSED}",
+            "read_only": True,
+        }
+    )
+    (tmp_path / "models" / "raw").mkdir(parents=True)
+    (tmp_path / "models" / "raw" / "e.sql").write_text(
+        f"SELECT id, t FROM events WHERE t > {{since:{declared}}}", encoding="utf-8"
+    )
+    unique = "  unique_key: [id]\n" if strategy == "merge" else ""
+    (tmp_path / "models" / "raw" / "e.yaml").write_text(
+        "version: 1\nconnection: ch\nmaterialized: incremental\nincremental:\n"
+        f"  strategy: {strategy}\n  time_column: t\n{unique}  filter: manual\n",
+        encoding="utf-8",
+    )
+    found = discover_models(tmp_path, {"ch": connection})
+    assert found.problems == ()
+    mapped = map_type(column_type)
+    assert mapped is not None
+    problems = since_precision_problems(found.models[0], (Column("t", column_type, mapped),))
+    assert [item.code.root for item in problems] == (["INVALID_MODEL_SQL"] if refused else [])
+    if refused:
+        assert "coarser than the time_column t" in problems[0].message

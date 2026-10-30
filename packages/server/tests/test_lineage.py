@@ -358,7 +358,7 @@ def test_column_lineage_follows_the_select_after_a_column_is_added(
     assert command(capsys, "run", str(tmp_path))[0] == 0
     (tmp_path / "models" / "s" / "m.sql").write_text(
         "SELECT reading_id, consumer_id AS tag, kwh, read_at FROM archive.data "
-        "WHERE read_at >= $since",
+        "WHERE read_at > $since",
         encoding="utf-8",
     )
     for old in (tmp_path / f".{SLUG}" / "lineage").glob("*.ndjson"):
