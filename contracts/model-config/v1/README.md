@@ -31,7 +31,7 @@ New cross-field rules are added by the issues that implement those behaviors, as
 | `MODEL_SCHEMA_CONFLICT` | A model folder named like a connection, or `lake` |
 | `ORPHAN_MODEL_CONFIG` | A sidecar without its `.sql` |
 | `UNSUPPORTED_MODEL_KIND` | A `.py` model (reserved for after v1.0.0, ADR-0023) |
-| `INVALID_MODEL_SQL` | A DuckDB-SQL model that is not exactly one `SELECT` (or `WITH … SELECT`); for ClickHouse extraction models, SQL ClickHouse refuses or that breaks the rules of the extraction section (`{since:…}`, settings, subqueries); a `partition_overwrite` model whose `$since`/`{since:…}` is not only in a lower bound of its `time_column` (see "Partitions cut by `$since`") |
+| `INVALID_MODEL_SQL` | A DuckDB-SQL model that is not exactly one `SELECT` (or `WITH … SELECT`); a model whose output repeats a column name (names are compared without letter case, as DuckDB stores them; one problem per repeated name); for ClickHouse extraction models, SQL ClickHouse refuses or that breaks the rules of the extraction section (`{since:…}`, settings, subqueries); a `partition_overwrite` model whose `$since`/`{since:…}` is not only in a lower bound of its `time_column` (see "Partitions cut by `$since`") |
 | `MODEL_CONFIG_INVALID` | A sidecar that is not valid YAML or does not match `ModelConfig`, or whose `connection` is not a `clickhouse` connection of the project, or an incremental model with `filter: auto` whose SQL already uses `$since` (`path` `/incremental/filter`) |
 | `MODEL_REFERENCE_UNKNOWN` | A model reads a table that is neither a model (`<folder>.<name>`) nor a source (`<connection>.<table>`) |
 | `DEPENDENCY_CYCLE` | Models depend on each other in a cycle (the message lists it in order) |

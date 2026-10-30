@@ -148,6 +148,80 @@ def test_an_invalid_incremental_model_is_refused_before_opening_the_lake(
     assert not (tmp_path / f".{SLUG}").exists()
 
 
+@pytest.mark.parametrize(
+    ("sql", "sidecar", "expected"),
+    [
+        ("SELECT 1 AS a, 2 AS A", None, ["the output repeats the column name a (a, A)"]),
+        ("SELECT 1 AS b, 2 AS b, 3 AS c", None, ["the output repeats the column name b (b, b)"]),
+        (
+            "SELECT 1 AS x, 2 AS y, 3 AS Y, 4 AS X",
+            None,
+            [
+                "the output repeats the column name x (x, X)",
+                "the output repeats the column name y (y, Y)",
+            ],
+        ),
+        (
+            "SELECT 1 AS a, 2 AS a",
+            "version: 1\nmaterialized: view\n",
+            ["the output repeats the column name a (a, a)"],
+        ),
+    ],
+    ids=["letter-case", "same", "two-names", "view"],
+)
+def test_a_model_that_repeats_a_column_name_is_refused(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    sql: str,
+    sidecar: str | None,
+    expected: list[str],
+) -> None:
+    # #113: a table cannot hold both names, and CREATE TABLE AS would store `A_1` silently.
+    full_project(tmp_path)
+    files = {
+        "models/s/m.sql": sql,
+        # Reads the refused model: skipped, with no problem of its own.
+        "models/s/after.sql": "SELECT * FROM s.m",
+    }
+    if sidecar is not None:
+        files["models/s/m.yaml"] = sidecar
+    write(tmp_path, files)
+    code, out = command(capsys, "validate", str(tmp_path))
+    assert code == 1, out
+    lines = out.splitlines()
+    assert lines == [
+        f"INVALID_MODEL_SQL models/s/m.sql s.m: {message}; column names are not case-sensitive."
+        for message in expected
+    ]
+    assert "Traceback" not in out
+
+
+def test_distinct_column_names_are_accepted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    full_project(tmp_path)
+    write(
+        tmp_path,
+        {
+            "models/s/m.sql": 'SELECT 1 AS a, 2 AS ab, 3 AS "a b"',
+            "models/s/after.sql": 'SELECT a, ab, "a b" FROM s.m',
+        },
+    )
+    code, out = command(capsys, "validate", str(tmp_path))
+    assert (code, out.strip()) == (0, "6 models, no problems.")
+
+
+def test_run_refuses_a_repeated_column_name_and_creates_nothing_for_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    full_project(tmp_path)
+    write(tmp_path, {"models/s/m.sql": "SELECT 1 AS a, 2 AS A"})
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL models/s/m.sql s.m: the output repeats the column name a" in out
+    assert not (tmp_path / f".{SLUG}" / "lake").exists()  # validation stops the run first
+
+
 def hold_lock(home: Path) -> subprocess.Popen[str]:
     """Another process holding the project's lake lock until it is killed."""
     script = (
