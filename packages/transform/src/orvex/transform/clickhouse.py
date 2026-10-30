@@ -1931,7 +1931,10 @@ def describe_model(
                         marked, incremental.time_column.root, strict=append
                     )
                     or limits_rows(query_tree := source.explain(found.text, since, "QUERY TREE"))
-                    or reads_a_field(marked, query_tree, incremental.time_column.root)
+                    or reads_a_field(
+                        source.explain(mark_since(found), since, "QUERY TREE"),
+                        incremental.time_column.root,
+                    )
                     or (append and not keeps_rows(marked, query_tree))
                     or (append and not _stable(source, marked, incremental.time_column.root))
                 )
@@ -2093,29 +2096,96 @@ def tree_depth(tree: str) -> int:
     return deepest
 
 
-def reads_a_field(tree: str, query_tree: str, time_column: str) -> bool:
-    """Whether a qualified time column (`E.day`) may be a field of a `Tuple` or `JSON` column
-    rather than the column of table `E` (#164): ClickHouse reads `X.day` as the subcolumn of a
-    column `X` before it reads it as table `X`'s column. `EXPLAIN QUERY TREE` shows such a read
-    as a column named `E.day` (a table's column) or as a `getSubcolumn`/`tupleElement` call (a
-    subquery's); when the model qualifies the time column, any of them counts. A tree that
-    cannot be read counts as yes."""
-    root = _ast(tree)
-    if root is None:
-        return True
-    qualified = any(
-        node.kind == "Identifier"
-        and node.detail.split(" ", 1)[0].rpartition(".")[2] == time_column
-        and "." in node.detail.split(" ", 1)[0]
-        for node in _nodes(root)
-    )
-    if not qualified:
-        return False
+@dataclass
+class _TreeLine:
+    """A line of `EXPLAIN QUERY TREE`, with the lines nested under it."""
+
+    text: str
+    parent: _TreeLine | None
+    children: list[_TreeLine]
+
+
+def _query_tree(text: str) -> list[_TreeLine]:
+    """Every line of an `EXPLAIN QUERY TREE`, linked by indentation (no recursion)."""
+    lines: list[_TreeLine] = []
+    open_lines: list[tuple[int, _TreeLine]] = []
+    for raw in text.split("\n"):
+        stripped = raw.lstrip(" ")
+        if not stripped:
+            continue
+        indent = len(raw) - len(stripped)
+        while open_lines and open_lines[-1][0] >= indent:
+            open_lines.pop()
+        parent = open_lines[-1][1] if open_lines else None
+        line = _TreeLine(stripped, parent, [])
+        if parent is not None:
+            parent.children.append(line)
+        lines.append(line)
+        open_lines.append((indent, line))
+    return lines
+
+
+def _below(line: _TreeLine) -> list[_TreeLine]:
+    found: list[_TreeLine] = []
+    stack = [line]
+    while stack:
+        current = stack.pop()
+        found.append(current)
+        stack.extend(current.children)
+    return found
+
+
+def reads_a_field(marked_query_tree: str, time_column: str) -> bool:
+    """Whether a `{since:…}` bound compares a field of a `Tuple`, `JSON` or similar column
+    rather than the time column (#164): ClickHouse reads `E.day` as the subcolumn `day` of a
+    column `E` before it reads it as table `E`'s column. In the `EXPLAIN QUERY TREE` of
+    `mark_since`'s SQL, each comparison holding the mark (`identity(identity(…))`) is looked at:
+    its other side must not read a subcolumn named like the time column (`column_name: E.day`,
+    a table's) nor call `getSubcolumn`/`tupleElement` (a subquery's). Fields read elsewhere in
+    the model do not count (Reviewer pass 1 on #205). A tree without the mark counts as yes."""
     field = re.compile(
         rf"column_name: \S+\.{re.escape(time_column)}(,|$)"
         r"|function_name: (getSubcolumn|tupleElement)(,|$)"
     )
-    return any(field.search(line) for line in query_tree.split("\n"))
+    marks = [
+        line
+        for line in _query_tree(marked_query_tree)
+        if line.text.startswith("FUNCTION")
+        and "function_name: identity," in line.text
+        and line.parent is not None
+        and line.parent.text.startswith("LIST")
+        and line.parent.parent is not None
+        and line.parent.parent.parent is not None
+        and "function_name: identity," not in line.parent.parent.parent.text
+        and any(
+            "function_name: identity," in inner.text
+            for argument in line.children
+            for inner in (argument.children[0].children if argument.children else [])
+        )
+    ]
+    if not marks:
+        return True
+    for mark in marks:
+        # The comparison the mark is in, through any function around it
+        # (`E.day >= toStartOfMonth({since:Date})`), and the argument of it that holds the mark.
+        chain: list[_TreeLine] = [mark]
+        comparison = mark.parent
+        while comparison is not None and not (
+            comparison.text.startswith("FUNCTION")
+            and re.search(r"function_name: (greater|less)(OrEquals)?,", comparison.text)
+        ):
+            chain.append(comparison)
+            comparison = comparison.parent
+        if comparison is None:
+            return True
+        listed = next((c.children[0] for c in comparison.children if c.children), None)
+        if listed is None:
+            return True
+        side = next((line for line in chain if line.parent is listed), None)
+        for other in listed.children:
+            if other is not side and any(field.search(line.text) for line in _below(other)):
+                return True
+    return False
 
 
 def keeps_rows(tree: str, query_tree: str) -> bool:

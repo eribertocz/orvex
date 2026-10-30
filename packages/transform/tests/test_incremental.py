@@ -1596,29 +1596,34 @@ def test_a_finer_column_renamed_below_the_bound_is_refused(tmp_path: Path, sql: 
 
 
 def test_a_qualified_clickhouse_bound_that_reads_a_field_is_seen() -> None:
-    # #164: `E.day` as a tuple's field, in EXPLAIN QUERY TREE.
+    # #164: `E.day` as a tuple's field, in the EXPLAIN QUERY TREE of the marked SQL; a field
+    # read elsewhere in the model does not count (Reviewer pass 1 on #205).
     from orvex.transform.clickhouse import reads_a_field
 
-    tree = """SelectWithUnionQuery (children 1)
- ExpressionList (children 1)
-  SelectQuery (children 3)
-   ExpressionList (children 1)
-    Identifier day
-   TablesInSelectQuery (children 1)
-    TablesInSelectQueryElement (children 1)
-     TableExpression (children 1)
-      TableIdentifier ev (alias E)
-   Function greaterOrEquals (children 1)
-    ExpressionList (children 2)
-     Identifier E.day
-     Literal UInt64_1
+    def tree(bound_side: str, projection: str = "COLUMN id: 2, column_name: id") -> str:
+        return f"""QUERY id: 0
+  PROJECTION
+    LIST id: 1, nodes: 1
+      {projection}
+  WHERE
+    FUNCTION id: 6, function_name: greaterOrEquals, function_type: ordinary
+      ARGUMENTS
+        LIST id: 7, nodes: 2
+          {bound_side}
+          FUNCTION id: 8, function_name: identity, function_type: ordinary
+            ARGUMENTS
+              LIST id: 9, nodes: 1
+                FUNCTION id: 10, function_name: identity, function_type: ordinary
+                  ARGUMENTS
+                    LIST id: 11, nodes: 1
+                      CONSTANT id: 12, constant_value: UInt64_19723
 """
-    plain = tree.replace("Identifier E.day", "Identifier day")
-    subcolumn = "          COLUMN id: 7, column_name: E.day, result_type: Date, source_id: 3"
-    function = "          FUNCTION id: 31, function_name: getSubcolumn, function_type: ordinary"
-    column = "          COLUMN id: 7, column_name: day, result_type: Date, source_id: 3"
-    assert reads_a_field(tree, subcolumn, "day")
-    assert reads_a_field(tree, function, "day")
-    assert not reads_a_field(tree, column, "day")
-    assert not reads_a_field(plain, subcolumn, "day")  # not qualified: the rule's own check
-    assert reads_a_field("not a tree", column, "day")
+
+    field = "COLUMN id: 5, column_name: E.day, result_type: Date, source_id: 3"
+    column = "COLUMN id: 5, column_name: day, result_type: Date, source_id: 3"
+    call = "FUNCTION id: 5, function_name: getSubcolumn, function_type: ordinary"
+    assert reads_a_field(tree(field), "day")
+    assert reads_a_field(tree(call), "day")
+    assert not reads_a_field(tree(column), "day")
+    assert not reads_a_field(tree(column, projection=field), "day")  # read elsewhere only
+    assert reads_a_field("QUERY id: 0", "day")  # no mark: refused

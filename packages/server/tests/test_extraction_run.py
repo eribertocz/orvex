@@ -1284,8 +1284,14 @@ DAILY = (
         # subquery's `day`: every row would be left out of a month it overwrites.
         (f"SELECT event_id, month, day FROM ({DAILY}) AS E WHERE E.day >= {{since:Date}}", False),
         (f"SELECT event_id, month, day FROM ({DAILY}) AS s WHERE s.day >= {{since:Date}}", True),
+        # Reviewer pass 1 on #205: a field read elsewhere is not the bound's.
+        (
+            f"SELECT event_id, month, day, s.E.day AS eday FROM ({DAILY}) AS s "
+            "WHERE s.day >= {since:Date}",
+            True,
+        ),
     ],
-    ids=["tuple-field", "subquery-column"],
+    ids=["tuple-field", "subquery-column", "field-elsewhere"],
 )
 def test_a_qualified_bound_that_reads_a_tuple_field_is_refused(
     tmp_path: Path,
