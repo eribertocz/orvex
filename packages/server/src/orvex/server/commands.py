@@ -708,7 +708,8 @@ def _open_recorded(home: Path, place: Place, attachments: Sequence[Attachment] =
     lake_place.begin(home, place)
     try:
         lake = open_lake(place.location, _limits(), attachments)
-    except StoreError:
+    except BaseException:
+        # Ctrl-C or any error: the record goes only when nothing was created (#181).
         lake_place.abandon(home, place)
         raise
     try:
@@ -817,6 +818,13 @@ def _run_locked(
     open_error: StoreError | None = None
     assert checked.place is not None  # a refused place is a problem: no run
     place = checked.place
+    try:
+        # Checked again under the project lock: another process may have started this lake's
+        # first open since the project was checked (#181, Reviewer pass 1).
+        lake_place.check_unchanged(home, place)
+    except ProjectLoadError as error:
+        print(_load_problem(error), file=out)
+        return 1
     try:
         lake = _open_recorded(home, place, source_attachments(project.connections))
     except StoreError as error:

@@ -582,7 +582,10 @@ def exists(home: Path) -> bool:
     whose first open did not finish is not a lake yet (#146)."""
     if (lake_folder(home) / DEFAULT_CATALOG["duckdb"]).exists():
         return True
-    read = _read_record(home)
+    try:
+        read = _read_record(home)
+    except ProjectLoadError:
+        return True  # a record that cannot be read: the commands that open the lake report it
     return read is not None and not read[1]
 
 
@@ -599,16 +602,18 @@ def check_unchanged(home: Path, chosen: Place) -> None:
     existing lake was created with, naming each setting that changed. A record whose first open
     did not finish binds only if a lake may exist there (#146)."""
     read = _read_record(home)
+    if read is not None and read[1] and _nothing_created(read[0]):
+        read = None  # an unfinished first open that created nothing: as if no record (#181)
     if read is None:
-        existing = recorded(home)
+        existing = None
+        if (lake_folder(home) / DEFAULT_CATALOG["duckdb"]).exists():
+            existing = _default_identity(home)
         creating = False
     else:
         existing, creating = read
     current = chosen.identity
     if existing is None or _same(existing, current):
         return
-    if creating and _nothing_created(existing):
-        return  # nothing was created there: the first open is tried again with these settings
     changes = []
     if _catalog_identity(existing) != _catalog_identity(current):
         changes.append(f"lake.catalog was {_describe(existing)}, now {_describe(current)}")
@@ -646,8 +651,10 @@ def _same(existing: dict[str, str | int], current: dict[str, str | int]) -> bool
 
 def _comparable(identity: dict[str, str | int]) -> dict[str, str | int]:
     found = dict(identity)
-    if found.get("catalog") == "postgres" and isinstance(found.get("host"), str):
-        found["host"] = str(found["host"]).casefold()
+    host = found.get("host")
+    # Network host names ignore letter case; a Unix socket folder (`/…`) does not.
+    if found.get("catalog") == "postgres" and isinstance(host, str) and not host.startswith("/"):
+        found["host"] = host.casefold()
     return found
 
 
@@ -683,7 +690,10 @@ def _write(home: Path, content: dict[str, str | int]) -> None:
     home.mkdir(parents=True, exist_ok=True)
     target = home / RECORD_FILE
     partial = target.with_name(f".{RECORD_FILE}.{os.getpid()}")
-    partial.write_text(json.dumps(content, sort_keys=True) + "\n", encoding="utf-8")
+    with partial.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(content, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())  # on disk before it replaces the record
     os.replace(partial, target)
 
 
@@ -693,10 +703,15 @@ def begin(home: Path, chosen: Place) -> None:
     lake without one. The default DuckDB catalog without data or encryption settings needs no
     record (its file identifies it, as before #120). A `creating` record of another identity is
     replaced only when `check_unchanged` let it through (nothing was created there)."""
-    if chosen.identity == _default_identity(home):
-        return
     read = _read_record(home)
-    if read is not None and not (read[1] and not _same(read[0], chosen.identity)):
+    stale = read is not None and read[1] and _nothing_created(read[0])
+    if chosen.identity == _default_identity(home):
+        if stale:
+            # An unfinished first open elsewhere that created nothing: the default lake needs
+            # no record, and that one must not bind it later (#181, Reviewer pass 1).
+            (home / RECORD_FILE).unlink(missing_ok=True)
+        return
+    if read is not None and not (stale and not _same(read[0], chosen.identity)):
         return
     _write(home, {**chosen.identity, "state": CREATING})
 

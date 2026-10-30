@@ -664,3 +664,53 @@ def test_schedule_on_a_sqlite_catalog(
     code, out = run(capsys, "runs", str(tmp_path))
     assert code == 0, out
     assert "success" in out
+
+
+def default_lake(folder: Path) -> None:
+    """The default DuckDB lake's catalog file, as its first open creates it."""
+    catalog = home(folder) / "lake" / "catalog.ducklake"
+    catalog.parent.mkdir(parents=True, exist_ok=True)
+    catalog.touch()
+
+
+def test_an_unfinished_record_that_created_nothing_does_not_bind_a_default_lake(
+    tmp_path: Path,
+) -> None:
+    # #181 Reviewer pass 1, reproduction A: stopped before the open with `encrypted: true`.
+    folder = bare(tmp_path / "proj", "lake:\n  encrypted: true\n")
+    lake_place.begin(home(folder), chosen(folder))
+    assert record_text(folder)["state"] == "creating"
+    bare(folder, "")  # no lake section: the default lake
+    assert problems(folder) == []
+    lake_place.begin(home(folder), chosen(folder))  # drops the record that bound nothing
+    assert not (home(folder) / lake_place.RECORD_FILE).exists()
+    default_lake(folder)  # the default lake is created, unencrypted
+    assert problems(folder) == []
+    bare(folder, "lake:\n  encrypted: true\n")
+    found = problems(folder)
+    assert "was created with other settings" in found[0], found
+
+
+def test_a_default_lake_is_not_abandoned_for_an_unfinished_sqlite_record(tmp_path: Path) -> None:
+    # #181 Reviewer pass 1, reproduction B.
+    folder = bare(tmp_path / "proj", SQLITE)
+    lake_place.begin(home(folder), chosen(folder))
+    bare(folder, "")
+    assert problems(folder) == []
+    lake_place.begin(home(folder), chosen(folder))
+    default_lake(folder)
+    bare(folder, SQLITE)
+    found = problems(folder)
+    assert found[0].startswith("LAKE_LOCATION_CHANGED project.yaml"), found
+
+
+def test_a_socket_folder_keeps_its_letter_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LAKE_TEST_PASSWORD", "secret-value")
+    folder = bare(tmp_path / "proj", POSTGRES.format(host="/run/PG", port=5432))
+    place = chosen(folder)
+    lake_place.begin(home(folder), place)
+    lake_place.confirm(home(folder), place)
+    bare(folder, POSTGRES.format(host="/run/pg", port=5432))
+    assert "was created with other settings" in problems(folder)[0]
