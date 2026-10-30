@@ -120,7 +120,7 @@ Grammar:
 
 Run-time values:
 
-- `$since` = last watermark − `lookback`. On a full refresh (and on the first run), `$since` is the lowest value of the `time_column` type: `-infinity` for DuckDB `DATE`/`TIMESTAMP`/`TIMESTAMPTZ`; for ClickHouse extraction models, the minimum of the declared parameter type (`1900-01-01 00:00:00` for `DateTime64`). The **same SQL** serves full and incremental runs.
+- `$since` = last watermark − `lookback`. On a full refresh (and on the first run), `$since` is the lowest value of the `time_column` type: `-infinity` for DuckDB `DATE`/`TIMESTAMP`/`TIMESTAMPTZ`; for ClickHouse extraction models, a value no later than the first instant of the declared parameter type in every zone, which must start no later than the time column's type (exact values and accepted pairs: [`contracts/model-config/v1/README.md`](../../contracts/model-config/v1/README.md), "First run, full refresh, or no stored watermark"). The **same SQL** serves full and incremental runs.
 - The new watermark is `max(time_column)` **of the rows loaded**, never the wall clock, to avoid clock skew between servers. A run that loads zero rows keeps the previous watermark.
 - `$since` is always passed as an explicit prepared-statement parameter, never through `SET VARIABLE` on a shared connection.
 
