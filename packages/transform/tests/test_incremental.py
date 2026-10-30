@@ -1292,20 +1292,6 @@ def test_a_bound_under_a_union_is_refused(tmp_path: Path, sql: str) -> None:
     assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
 
 
-def test_a_query_tree_with_a_row_limit_is_seen() -> None:
-    # #162 Reviewer pass 5: `EXPLAIN AST` shows `LIMIT 1 > 0` as a condition; the query tree
-    # labels it. Names and values never stand alone on a line.
-    from orvex.transform.clickhouse import limits_rows
-
-    tree = (
-        "QUERY id: 0\n  PROJECTION COLUMNS\n    LIMIT UInt8\n  WHERE\n"
-        "    CONSTANT id: 4, constant_value: \\'LIMIT\\', constant_value_type: String\n"
-    )
-    assert not limits_rows(tree)
-    for label in ("LIMIT", "OFFSET", "LIMIT BY", "LIMIT BY LIMIT", "LIMIT BY OFFSET"):
-        assert limits_rows(f"{tree}  {label}\n    CONSTANT id: 9\n")
-
-
 @pytest.mark.parametrize("reader", ["query_table('c')", "query('SELECT * FROM c')"])
 def test_a_cte_read_again_by_name_at_run_time_is_not_followed(tmp_path: Path, reader: str) -> None:
     # #162 Reviewer pass 6: these read the CTE again without a table reference to count.
@@ -1315,23 +1301,6 @@ def test_a_cte_read_again_by_name_at_run_time_is_not_followed(tmp_path: Path, re
     )
     found = config_problems(sql_model(tmp_path, BY_DAY, sql))
     assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
-
-
-@pytest.mark.parametrize(
-    ("sql", "spaced"),
-    [
-        ("SELECT id, fecha FROM lect WHERE `fecha lectura` >= {since:Date}", True),
-        ('SELECT "a.b" FROM t', True),
-        ("SELECT `s (alias y)`.x FROM t AS `s (alias y)`", True),
-        ("SELECT `fecha_lectura`, 'a b' AS x FROM t", False),
-    ],
-)
-def test_a_clickhouse_name_explain_ast_cannot_delimit_is_seen(sql: str, spaced: bool) -> None:
-    # #162 Reviewer pass 7: `EXPLAIN AST` prints names as is; the rule reads a name up to its
-    # first space, so such names are refused for the `{since:…}` bound (`describe_model`).
-    from orvex.transform.clickhouse import scan
-
-    assert scan(sql).spaced_name is spaced
 
 
 @pytest.mark.parametrize(
@@ -1454,53 +1423,6 @@ def test_an_expression_beyond_duckdbs_own_limit_is_reported_at_discovery(tmp_pat
     (folder / "m.yaml").write_text(MANUAL_APPEND, encoding="utf-8")
     found = discover_models(tmp_path, {})
     assert [item.code.root for item in found.problems] == ["INVALID_MODEL_SQL"]
-
-
-def test_a_deep_clickhouse_tree_is_read_without_recursion() -> None:
-    # Reviewer pass 1 on #188: reading an `EXPLAIN AST` 70 to 95 levels deep raised
-    # RecursionError before the depth check.
-    from orvex.transform.clickhouse import sets_settings, tree_depth, writes_since_mark
-
-    levels = 3000
-    lines = [" " * level + "Function plus (children 1)" for level in range(levels)]
-    lines.append(" " * levels + "Literal UInt64_1")
-    tree = "\n".join(lines)
-    assert tree_depth(tree) == levels
-    assert not sets_settings(tree)
-    assert not writes_since_mark(tree)
-
-
-def test_a_clickhouse_relation_read_in_an_expression_is_seen() -> None:
-    # Reviewer pass 2 on #188: `x IN ids` reads a table without a subquery in the AST.
-    from orvex.transform.clickhouse import _reads_a_relation_in_an_expression
-
-    in_table = """QUERY id: 0
-  JOIN TREE
-    TABLE_FUNCTION id: 3, alias: __table1, table_function_name: numbers
-      ARGUMENTS
-        LIST id: 4, nodes: 1
-          CONSTANT id: 5, constant_value: UInt64_10, constant_value_type: UInt8
-  WHERE
-    FUNCTION id: 6, function_name: in, function_type: ordinary, result_type: UInt8
-      ARGUMENTS
-        LIST id: 7, nodes: 2
-          COLUMN id: 2, column_name: number, result_type: UInt64, source_id: 3
-          TABLE id: 8, alias: __table2, table_name: default.ids
-"""
-    joined = """QUERY id: 0
-  JOIN TREE
-    JOIN id: 4, strictness: ALL, kind: INNER
-      LEFT TABLE EXPRESSION
-        QUERY id: 9, is_subquery: 1, cte_name: x
-          JOIN TREE
-            TABLE id: 10, alias: __table3, table_name: default.events
-      RIGHT TABLE EXPRESSION
-        TABLE id: 7, alias: __table2, table_name: default.ids
-      JOIN EXPRESSION
-        FUNCTION id: 8, function_name: equals, function_type: ordinary, result_type: UInt8
-"""
-    assert _reads_a_relation_in_an_expression(in_table)
-    assert not _reads_a_relation_in_an_expression(joined)
 
 
 def test_a_select_list_subquery_in_the_filtering_query_is_refused(tmp_path: Path) -> None:

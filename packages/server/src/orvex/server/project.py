@@ -16,7 +16,6 @@ from importlib import resources
 from pathlib import Path
 
 from orvex.contracts.project.v1 import (
-    ClickhouseConnection,
     CsvConnection,
     DuckdbConnection,
     ParquetConnection,
@@ -51,14 +50,9 @@ def is_local_host(host: str) -> bool:
 
 
 type Connection = (
-    ParquetConnection
-    | CsvConnection
-    | DuckdbConnection
-    | SqliteConnection
-    | PostgresConnection
-    | ClickhouseConnection
+    ParquetConnection | CsvConnection | DuckdbConnection | SqliteConnection | PostgresConnection
 )
-DATABASE_TYPES = (DuckdbConnection, SqliteConnection, PostgresConnection, ClickhouseConnection)
+DATABASE_TYPES = (DuckdbConnection, SqliteConnection, PostgresConnection)
 FILE_TYPES = (ParquetConnection, CsvConnection, DuckdbConnection, SqliteConnection)
 
 CONNECTION_TYPES: dict[str, type[Connection]] = {
@@ -67,7 +61,6 @@ CONNECTION_TYPES: dict[str, type[Connection]] = {
     "duckdb": DuckdbConnection,
     "sqlite": SqliteConnection,
     "postgres": PostgresConnection,
-    "clickhouse": ClickhouseConnection,
 }
 CONNECTION_NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
 SECRET_REFERENCE = re.compile(r"\$\{env:([A-Z_][A-Z0-9_]*)\}")

@@ -1,7 +1,7 @@
 """#98: `Transaction.load_arrow`, an Arrow stream into a table of the write transaction.
 
 A plain DuckDB transaction stands in for the lake's: the method only uses the transaction's
-cursor (the lake's own transactions are exercised by the extraction runs in `server`).
+cursor.
 """
 
 from __future__ import annotations

@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 import pytest
-from orvex.contracts.project.v1 import ClickhouseConnection, CsvConnection, PostgresConnection
+from orvex.contracts.project.v1 import CsvConnection, PostgresConnection
 from orvex.transform.models import Discovery, discover_models
 from orvex.transform.sources import Connection
 
@@ -46,17 +46,6 @@ reconciliation:
 def connections() -> dict[str, Connection]:
     return {
         "tariffs": CsvConnection.model_validate({"type": "csv", "path": "/data/t.csv"}),
-        "events": ClickhouseConnection.model_validate(
-            {
-                "type": "clickhouse",
-                "host": "ch.example.invalid",
-                "port": 8443,
-                "database": "events",
-                "user": "reader",
-                "password": "${env:EVENTS_PASSWORD}",
-                "read_only": True,
-            }
-        ),
         "production": PostgresConnection.model_validate(
             {
                 "type": "postgres",
@@ -239,28 +228,14 @@ def test_with_and_union_are_selects(tmp_path: Path, sql: str) -> None:
     assert found.problems == ()
 
 
-def test_extraction_model_is_not_parsed_by_duckdb(tmp_path: Path) -> None:
-    found = discover(
-        write(
-            tmp_path,
-            {
-                "models/raw/events.sql": "SELECT toStartOfMonth(ts) AS month FROM events FINAL",
-                "models/raw/events.yaml": "version: 1\nconnection: events\n",
-            },
-        )
-    )
-    assert found.problems == ()
-    assert found.models[0].extraction
-
-
-@pytest.mark.parametrize("connection", ["production", "unknown"])
-def test_extraction_needs_a_clickhouse_connection(tmp_path: Path, connection: str) -> None:
+def test_a_connection_key_is_refused(tmp_path: Path) -> None:
+    # ADR-0028: extraction models are retired, so `connection` is no longer a sidecar key.
     found = discover(
         write(
             tmp_path,
             {
                 "models/raw/events.sql": "SELECT 1",
-                "models/raw/events.yaml": f"version: 1\nconnection: {connection}\n",
+                "models/raw/events.yaml": "version: 1\nconnection: production\n",
             },
         )
     )

@@ -20,12 +20,7 @@ export type CatalogPath = string;
  * via the `patternProperty` "^[a-z][a-z0-9_]{0,62}$".
  */
 export type Connection =
-	| ParquetConnection
-	| CsvConnection
-	| DuckdbConnection
-	| SqliteConnection
-	| PostgresConnection
-	| ClickhouseConnection;
+	ParquetConnection | CsvConnection | DuckdbConnection | SqliteConnection | PostgresConnection;
 /**
  * A file path; relative paths are resolved against the project folder. Globs are allowed for `parquet` and `csv`.
  */
@@ -226,22 +221,6 @@ export interface PostgresConnection {
 	 * Certificate authorities that verify the server with `verify-full`: `system` (the operating system's store, the default) or `${env:NAME}`, a variable holding the path of a CA file.
 	 */
 	ssl_root_cert?: string;
-}
-/**
- * A ClickHouse database.
- */
-export interface ClickhouseConnection {
-	type: 'clickhouse';
-	host: string;
-	port: number;
-	database: string;
-	user: string;
-	password: SecretReference;
-	/**
-	 * TLS to the server; default true.
-	 */
-	secure?: boolean;
-	read_only: ReadOnly;
 }
 /**
  * A project that cannot be loaded or a secret that cannot be resolved. `details` names the file, the location of the problem as a JSON pointer (`path`) and its `line` when known; never a secret value.

@@ -13,7 +13,6 @@ import re
 from collections.abc import Mapping
 
 from orvex.contracts.project.v1 import (
-    ClickhouseConnection,
     CsvConnection,
     DuckdbConnection,
     ParquetConnection,
@@ -27,12 +26,7 @@ from orvex.contracts.store.v1 import (
 )
 
 type Connection = (
-    ParquetConnection
-    | CsvConnection
-    | DuckdbConnection
-    | SqliteConnection
-    | PostgresConnection
-    | ClickhouseConnection
+    ParquetConnection | CsvConnection | DuckdbConnection | SqliteConnection | PostgresConnection
 )
 type Attachment = FileSourceAttachment | SqliteSourceAttachment | PostgresSourceAttachment
 
@@ -40,10 +34,7 @@ _REFERENCE = re.compile(r"\$\{env:([A-Z_][A-Z0-9_]*)\}")
 
 
 def source_attachments(connections: Mapping[str, Connection]) -> list[Attachment]:
-    """Every connection DuckDB attaches, as a source attachment, sorted by name.
-
-    ClickHouse is reached through extraction models instead (P1-17).
-    """
+    """Every connection, as a source attachment, sorted by name."""
     attachments: list[Attachment] = []
     for name in sorted(connections):
         connection = connections[name]

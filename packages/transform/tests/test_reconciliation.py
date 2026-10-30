@@ -16,7 +16,7 @@ from orvex.transform.reconciliation import (
     steps,
 )
 
-CONNECTIONS = {"feed": "parquet", "ch": "clickhouse"}
+CONNECTIONS = {"feed": "parquet"}
 RELATION = '"s"."m"'
 
 
@@ -56,7 +56,7 @@ def test_static_rules(tmp_path: Path) -> None:
         "  - {name: a, measure: '(SELECT 1)', source: feed.data}\n"
         "  - {name: b, measure: count(*), group_by: ['1, 2'], source: feed.data}\n"
         "  - {name: c, measure: count(*), source: nowhere.t}\n"
-        "  - {name: d, measure: count(*), source: ch.events}\n"
+        "  - {name: d, measure: count(*), source: feed}\n"
         "  - {name: e, measure: count(*), source: feed.data, tolerance: -1}\n"
         "  - {name: f, measure: count(*), source: feed.data, tolerance: 1e5}\n"
         "  - {name: g, measure: count(*), source: feed.data, tolerance: 0.0001}\n",

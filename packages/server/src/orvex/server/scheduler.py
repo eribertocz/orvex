@@ -315,7 +315,7 @@ def _schedule(
                 with renewing():
                     wait = _cycle(folder, identity, out, clock, monotonic, state, control, stopped)
             except KeyboardInterrupt:
-                # Ctrl+C during an extraction load: the run recorded it and rolled back.
+                # Ctrl+C that reached a run: the run recorded it and rolled back.
                 if not stop_reason:
                     stop_reason.append(signal.SIGINT.name)
                 break

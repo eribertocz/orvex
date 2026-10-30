@@ -74,14 +74,7 @@ export type ModelErrorCode =
 	| 'INCREMENTAL_FILTER_NOT_PROVABLE'
 	| 'MODEL_TEST_FAILED'
 	| 'RECONCILIATION_FAILED'
-	| 'FRESHNESS_TOO_SHORT'
-	| 'UNSUPPORTED_SOURCE_TYPE'
-	| 'SOURCE_CONNECTION_FAILED'
-	| 'SOURCE_QUERY_FAILED'
-	| 'UNSUPPORTED_SOURCE_VALUE'
-	| 'SOURCE_NOT_READ_ONLY'
-	| 'SOURCE_LIMITS_REFUSED'
-	| 'SOURCE_ZONE_UNKNOWN';
+	| 'FRESHNESS_TOO_SHORT';
 
 /**
  * Sidecar of one model. Without a sidecar a model is `materialized: table`, fully rebuilt on each run.
@@ -90,10 +83,6 @@ export interface ModelConfig {
 	version: 1;
 	description?: string;
 	owner?: string;
-	/**
-	 * Only for extraction models: a `clickhouse` connection of the project; the SQL is then ClickHouse SQL run on that connection.
-	 */
-	connection?: string;
 	materialized?: 'view' | 'table' | 'incremental';
 	incremental?: Incremental;
 	freshness?: PositiveDuration;

@@ -156,13 +156,6 @@ class ModelErrorCode(
             "MODEL_TEST_FAILED",
             "RECONCILIATION_FAILED",
             "FRESHNESS_TOO_SHORT",
-            "UNSUPPORTED_SOURCE_TYPE",
-            "SOURCE_CONNECTION_FAILED",
-            "SOURCE_QUERY_FAILED",
-            "UNSUPPORTED_SOURCE_VALUE",
-            "SOURCE_NOT_READ_ONLY",
-            "SOURCE_LIMITS_REFUSED",
-            "SOURCE_ZONE_UNKNOWN",
         ]
     ]
 ):
@@ -190,13 +183,6 @@ class ModelErrorCode(
         "MODEL_TEST_FAILED",
         "RECONCILIATION_FAILED",
         "FRESHNESS_TOO_SHORT",
-        "UNSUPPORTED_SOURCE_TYPE",
-        "SOURCE_CONNECTION_FAILED",
-        "SOURCE_QUERY_FAILED",
-        "UNSUPPORTED_SOURCE_VALUE",
-        "SOURCE_NOT_READ_ONLY",
-        "SOURCE_LIMITS_REFUSED",
-        "SOURCE_ZONE_UNKNOWN",
     ]
 
 
@@ -261,10 +247,6 @@ class ModelConfig(BaseModel):
     version: Literal[1]
     description: Annotated[str | None, Field(max_length=2000)] = None
     owner: Annotated[str | None, Field(max_length=128, min_length=1)] = None
-    connection: Annotated[str | None, Field(pattern="^[a-z][a-z0-9_]{0,62}$")] = None
-    """
-    Only for extraction models: a `clickhouse` connection of the project; the SQL is then ClickHouse SQL run on that connection.
-    """
     materialized: Literal["view", "table", "incremental"] | None = "table"
     incremental: Incremental | None = None
     freshness: PositiveDuration | None = None
