@@ -8,6 +8,7 @@ point of the read is hit, deterministically.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from types import SimpleNamespace
@@ -58,13 +59,19 @@ class _FiresOnLook(Guard):
         self._reason = value
 
 
+def _unpinned(tree: dict[str, object], snapshot: int, cursor: object) -> str:
+    """The read's SQL back from its checked tree, not pinned (no lake here)."""
+    row = duckdb.execute("SELECT json_deserialize_sql($tree)", {"tree": json.dumps(tree)})
+    return str(row.fetchone()[0])  # type: ignore[index]
+
+
 def _lake(connection: duckdb.DuckDBPyConnection) -> Lake:
     lake = Lake.__new__(Lake)
     lake._admission = Admission(1, 0)
     lake._limits = SimpleNamespace(default_timeout_ms=600_000)  # type: ignore[assignment]
     lake._table_functions = frozenset()
-    lake._snapshot = lambda snapshot_id: object()  # type: ignore[method-assign,assignment,return-value]
-    lake._pinned = lambda sql, snapshot: sql  # type: ignore[method-assign]
+    lake._snapshot = lambda snapshot_id, cursor=None: object()  # type: ignore[method-assign,assignment,return-value]
+    lake._pinned = _unpinned  # type: ignore[method-assign]
     lake._cursor = connection.cursor  # type: ignore[method-assign]
     return lake
 
