@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 from orvex.contracts.project.v1 import (
-    ClickhouseConnection,
     CsvConnection,
     DuckdbConnection,
     ParquetConnection,
@@ -52,14 +51,6 @@ connections:
     read_only: true
     schema: public
     ssl_mode: verify-full
-  events:
-    type: clickhouse
-    host: ch.example.invalid
-    port: 8443
-    database: events
-    user: reader
-    password: ${env:TEST_SECRET_PASSWORD}
-    read_only: true
 """
 
 SECRET = "very-recognizable"
@@ -89,13 +80,11 @@ def test_complete_project_loads_with_every_connection_type(tmp_path: Path) -> No
         "legacy": DuckdbConnection,
         "field": SqliteConnection,
         "production": PostgresConnection,
-        "events": ClickhouseConnection,
     }
     archive = loaded.connections["archive"]
     legacy = loaded.connections["legacy"]
     field = loaded.connections["field"]
     production = loaded.connections["production"]
-    events = loaded.connections["events"]
     assert isinstance(archive, ParquetConnection)
     assert archive.path.root == str(tmp_path / "data/readings/*.parquet")
     assert isinstance(legacy, DuckdbConnection)
@@ -105,8 +94,6 @@ def test_complete_project_loads_with_every_connection_type(tmp_path: Path) -> No
     assert isinstance(production, PostgresConnection)
     assert production.schema_ == "public"
     assert production.password.root == "${env:TEST_SECRET_PASSWORD}"
-    assert isinstance(events, ClickhouseConnection)
-    assert events.secure is True
 
 
 def test_defaults_are_applied(tmp_path: Path) -> None:
@@ -365,12 +352,19 @@ def test_factory_is_not_a_time_zone(tmp_path: Path) -> None:
     assert error.code == "PROJECT_SCHEMA_INVALID"
 
 
-def test_clickhouse_read_only_false_is_refused(tmp_path: Path) -> None:
-    head, events = CONNECTIONS.split("  events:\n")
-    text = head + "  events:\n" + events.replace("read_only: true", "read_only: false")
+def test_a_clickhouse_connection_is_refused(tmp_path: Path) -> None:
+    # ADR-0028: ClickHouse is no longer a connection type of `connections.yaml`.
+    text = (
+        "version: 1\nconnections:\n  events:\n    type: clickhouse\n"
+        "    host: ch.example.invalid\n    port: 8443\n    database: events\n"
+        "    user: reader\n    password: ${env:TEST_SECRET_PASSWORD}\n    read_only: true\n"
+    )
     error = failure(project(tmp_path, connections=text))
-    assert error.code == "SOURCE_NOT_READ_ONLY"
-    assert error.error.details.connection == "events"
+    assert error.code == "PROJECT_SCHEMA_INVALID"
+    assert error.error.details.file == "connections.yaml"
+    assert error.error.details.path == "/connections/events/type"
+    assert "Connection 'events' needs a type" in error.error.message
+    assert "clickhouse" not in error.error.message.split("one of ")[1]
 
 
 @pytest.mark.parametrize("depth", [40, 500, 5000])
@@ -426,12 +420,12 @@ def test_error_paths_escape_key_names(tmp_path: Path) -> None:
     [
         ("    schema: public\n", "    schema: ~\n", "/connections/production/schema"),
         (
-            "    database: events\n",
-            "    database: events\n    secure:\n",
-            "/connections/events/secure",
+            "    ssl_mode: verify-full\n",
+            "    ssl_mode:\n",
+            "/connections/production/ssl_mode",
         ),
     ],
-    ids=["null-schema", "empty-secure"],
+    ids=["null-schema", "empty-ssl-mode"],
 )
 def test_null_connection_fields_are_refused(tmp_path: Path, old: str, new: str, path: str) -> None:
     error = failure(project(tmp_path, connections=CONNECTIONS.replace(old, new)))

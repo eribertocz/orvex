@@ -117,9 +117,6 @@
         },
         {
           "$ref": "#/$defs/PostgresConnection"
-        },
-        {
-          "$ref": "#/$defs/ClickhouseConnection"
         }
       ]
     },
@@ -274,56 +271,6 @@
           "type": "string",
           "pattern": "^(system|\\$\\{env:[A-Z_][A-Z0-9_]*\\})$",
           "default": "system"
-        }
-      }
-    },
-    "ClickhouseConnection": {
-      "description": "A ClickHouse database.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "type",
-        "host",
-        "port",
-        "database",
-        "user",
-        "password",
-        "read_only"
-      ],
-      "properties": {
-        "type": {
-          "const": "clickhouse"
-        },
-        "host": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 253
-        },
-        "port": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 65535
-        },
-        "database": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        },
-        "user": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        },
-        "password": {
-          "$ref": "#/$defs/SecretReference"
-        },
-        "secure": {
-          "description": "TLS to the server; default true.",
-          "type": "boolean",
-          "default": true
-        },
-        "read_only": {
-          "$ref": "#/$defs/ReadOnly"
         }
       }
     },

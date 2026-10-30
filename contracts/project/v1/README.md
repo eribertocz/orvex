@@ -19,7 +19,6 @@ Connection types (`type`):
 | `parquet`, `csv` | `path` (glob allowed) |
 | `duckdb`, `sqlite` | `path`, `read_only` |
 | `postgres` | `host`, `port`, `database`, `user`, `password`, `read_only`, optional `schema`, `ssl_mode` (`verify-full`, or `disable` on the local machine), `ssl_root_cert` (`system`, the default, or `${env:NAME}` holding a CA file's path) |
-| `clickhouse` | `host`, `port`, `database`, `user`, `password`, `read_only`, optional `secure` (default `true`) |
 
 Relative `path` values are resolved against the project folder by the loader.
 

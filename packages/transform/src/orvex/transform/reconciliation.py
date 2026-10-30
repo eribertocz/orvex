@@ -128,7 +128,7 @@ def problems(model: Model, connections: Mapping[str, str]) -> list[ModelError]:
             if expression(item.root) is None:
                 invalid(f"{base}/group_by/{position}", "write one expression per item.")
         parts = _source(check.source)
-        if len(parts) not in {2, 3} or connections.get(parts[0]) in {None, "clickhouse"}:
+        if len(parts) not in {2, 3} or parts[0] not in connections:
             invalid(
                 f"{base}/source",
                 f"{check.source} is not a table of a connection (<connection>.<table>).",

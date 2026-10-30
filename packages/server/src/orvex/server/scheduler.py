@@ -16,9 +16,8 @@ Unattended (P1-21, #69): one scheduler per project (an OS lock held for its life
 `SIGTERM` or Ctrl+C stops it at once between runs (no run or maintenance is decided after a
 stop; a run already decided when the stop arrives may still start, and gets the grace period),
 and a run in progress may finish within the stop grace period, then is cancelled and rolls back
-(maintenance in progress finishes). Exception: Ctrl+C during a load from a source cancels the
-load at once. A heartbeat in the project's folder says what it is doing, renewed every minute,
-during runs too; problems the scheduler prints are its last decision.
+(maintenance in progress finishes). A heartbeat in the project's folder says what it is doing,
+renewed every minute, during runs too; problems the scheduler prints are its last decision.
 """
 
 from __future__ import annotations
@@ -161,8 +160,7 @@ def schedule(
     """Run the due models of a project until stopped (#69 for running unattended).
 
     `SIGTERM` or Ctrl+C (`SIGINT`) stops it: at once between runs; during a run, the run may
-    finish for `stop_grace` seconds, then it is cancelled and rolls back. Exception: Ctrl+C while
-    a run loads from a source cancels the load at once (`store.lake._on_ctrl_c`, as for `run`).
+    finish for `stop_grace` seconds, then it is cancelled and rolls back.
     One scheduler per project: a second one exits with `SCHEDULER_ALREADY_RUNNING`. While it
     runs, it keeps a heartbeat (`heartbeat.py`) that the `runs` command shows.
     """
@@ -315,7 +313,7 @@ def _schedule(
                 with renewing():
                     wait = _cycle(folder, identity, out, clock, monotonic, state, control, stopped)
             except KeyboardInterrupt:
-                # Ctrl+C during an extraction load: the run recorded it and rolled back.
+                # Ctrl+C that reached a run: the run recorded it and rolled back.
                 if not stop_reason:
                     stop_reason.append(signal.SIGINT.name)
                 break
@@ -352,8 +350,7 @@ def _watch_signals(stop: Callable[[int, FrameType | None], None]) -> Callable[[]
     Python runs signal handlers only in the main thread, when it gets control back: a long
     statement would delay the stop, and with it the grace period. So the signals are also
     watched from another thread through Python's wakeup file descriptor, which the C-level
-    handler writes to as a signal arrives (the same way as `store.lake._on_ctrl_c`, which
-    forwards to this one while a load runs). Returns the restoring function.
+    handler writes to as a signal arrives. Returns the restoring function.
     """
     numbers = (signal.SIGINT, signal.SIGTERM)
     previous = {number: signal.getsignal(number) for number in numbers}

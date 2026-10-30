@@ -19,10 +19,7 @@ long to let it stop, and how to see what it is doing.
   cancelled. The next start runs it again.
 - **During lake maintenance**, maintenance finishes; it is not cancelled.
 
-Ctrl+C (`SIGINT`) does the same, with one exception: while a run is loading rows from a source
-connection (an extraction model), Ctrl+C cancels the load **at once**, as it does for `run`,
-without the grace period. The run is recorded as cancelled and the scheduler stops. Use
-`SIGTERM` to let a run finish.
+Ctrl+C (`SIGINT`) does the same.
 
 When it has stopped, it prints `stopped (SIGTERM)` (or `SIGINT`) and exits with code 0.
 

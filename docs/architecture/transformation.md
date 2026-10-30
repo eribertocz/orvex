@@ -18,7 +18,7 @@ Turns sources into clean, tested tables in DuckLake: route A of ADR-0027. Data t
 version: 1
 connections:
   production:
-    type: postgres                 # parquet | csv | duckdb | sqlite | postgres | clickhouse
+    type: postgres                 # parquet | csv | duckdb | sqlite | postgres
     host: db.example.internal
     port: 5432
     database: billing
@@ -35,11 +35,10 @@ connections:
 | `parquet`, `csv` | DuckDB native readers |
 | `duckdb` | `ATTACH ... (READ_ONLY)` |
 | `sqlite`, `postgres` | DuckDB official extensions, attached read-only |
-| `clickhouse` | `clickhouse-connect`, the official Python client maintained by ClickHouse, Inc.: **extraction models** written in ClickHouse SQL run on ClickHouse and stream Arrow record batches into DuckDB (§3.5). Querying ClickHouse in place, without extraction, is Direct Query, planned for after v1.0.0 (ADR-0027) |
 
-For every type except `clickhouse`, a connection name becomes a SQL schema in DuckDB: `production.readings` reads table `readings` from connection `production`, and DuckDB pushes filters and projections down to the source. ClickHouse has no DuckDB extension that meets the dependency policy (ADR-0002), so it is reached only through extraction models.
+A connection name becomes a SQL schema in DuckDB: `production.readings` reads table `readings` from connection `production`, and DuckDB pushes filters and projections down to the source. Raw sources are structured data read only through DuckDB's official native support (decision #226). ClickHouse is not a raw source: it is queried in place by Direct Query (ADR-0028).
 
-**One dialect per engine, no transpilation (ADR-0026).** Orvex never translates SQL between dialects. A model's SQL is DuckDB SQL, except extraction models, whose SQL is the source's own dialect and runs on the source.
+**One dialect per engine, no transpilation (ADR-0026).** Orvex never translates SQL between dialects. A model's SQL is DuckDB SQL.
 
 ## 3. Models
 
@@ -65,7 +64,6 @@ models/
 version: 1
 description: Meter readings, one row per reading
 owner: eriberto
-connection: production               # only for extraction models (§3.5); omitted ⇒ DuckDB SQL
 materialized: incremental            # view | table | incremental        (default: table)
 
 incremental:
@@ -120,7 +118,7 @@ Grammar:
 
 Run-time values:
 
-- `$since` = last watermark − `lookback`. On a full refresh (and on the first run), `$since` is the lowest value of the `time_column` type: `-infinity` for DuckDB `DATE`/`TIMESTAMP`/`TIMESTAMPTZ`; for ClickHouse extraction models, a value no later than the first instant of the declared parameter type in every zone, which must start no later than the time column's type (exact values and accepted pairs: [`contracts/model-config/v1/README.md`](../../contracts/model-config/v1/README.md), "First run, full refresh, or no stored watermark"). The **same SQL** serves full and incremental runs.
+- `$since` = last watermark − `lookback`. On a full refresh (and on the first run), `$since` is the lowest value of the `time_column` type: `-infinity` for `DATE`, `TIMESTAMP` and `TIMESTAMPTZ`. The **same SQL** serves full and incremental runs.
 - The new watermark is `max(time_column)` **of the rows loaded**, never the wall clock, to avoid clock skew between servers. A run that loads zero rows keeps the previous watermark.
 - `$since` is always passed as an explicit prepared-statement parameter, never through `SET VARIABLE` on a shared connection.
 
@@ -131,38 +129,6 @@ A watermark on `updated_at` cannot see rows deleted at the source. Orvex handles
 - `full_refresh.cron` rebuilds the model periodically.
 - `reconciliation` detects divergence between source and model and raises an alert.
 - Change-data-capture sources are out of scope for v1.0.0.
-
-### 3.5 Extraction models (ClickHouse)
-
-> **Retired by [ADR-0028](../adr/0028-clickhouse-by-direct-query-only.md) (decision #222).** ClickHouse is reached only by Direct Query. This section describes the extraction models still in the code until P1-23 removes them, together with this section.
-
-An extraction model brings data from a source that DuckDB cannot attach. It is a normal model pair whose sidecar names the connection:
-
-```yaml
-# models/raw/ch_events.yaml
-connection: analytics_ch            # a connection of type clickhouse
-materialized: incremental
-incremental:
-  strategy: merge
-  unique_key: [event_id]
-  time_column: event_time
-  lookback: 10m
-  filter: manual
-```
-
-```sql
--- models/raw/ch_events.sql — ClickHouse SQL, runs on ClickHouse
-SELECT event_id, meter_id, event_time, toDecimal64(value, 4) AS value
-FROM events
-WHERE event_time > {since:DateTime64(6, 'UTC')}
-```
-
-- The SQL is sent unchanged to ClickHouse with the read-only setting (`readonly = 1`); `$since` is a ClickHouse **server-side parameter** (`{since:Type}`), never string-formatted.
-- Results stream as Arrow record batches (`query_arrow_stream`) straight into the DuckDB write of the run; no rows are collected in Python (ADR-0025).
-- Only `filter: manual` is allowed (Orvex does not parse ClickHouse SQL); a missing `{since:…}` parameter in an incremental extraction model fails with `MISSING_SINCE_PARAMETER`.
-- Extraction models have no model dependencies (they read only their connection) and must be one `SELECT`; validation asks ClickHouse to parse it (`EXPLAIN SYNTAX`) and fails with `INVALID_MODEL_SQL` if it does not.
-- Type mapping ClickHouse → Arrow → DuckDB is explicit and tested: `Decimal` stays `DECIMAL`, `UInt64` becomes `UBIGINT`, `DateTime64` keeps its time zone, `Nullable` keeps `NULL`. An unmappable type fails with `UNSUPPORTED_SOURCE_TYPE`.
-- Downstream models are DuckDB SQL over the extracted table, like any other model.
 
 ## 4. Runs: write–audit–publish
 
@@ -214,7 +180,7 @@ Every run produces a **run record** (`contracts/run-record/v1`): run id, model, 
 | `LOOKBACK_REQUIRES_UNIQUE_KEY` | `append` with `lookback` greater than zero |
 | `TIME_COLUMN_NOT_TEMPORAL` | `time_column` is not a date or timestamp |
 | `PROJECT_LOCKED` | Another process holds the project's local warehouse (§6) |
-| `SOURCE_NOT_READ_ONLY` | A database connection (`sqlite`, `postgres`, `duckdb`, `clickhouse`) does not declare `read_only: true`; in v1.0.0 every database source is read-only |
+| `SOURCE_NOT_READ_ONLY` | A database connection (`sqlite`, `postgres`, `duckdb`) does not declare `read_only: true`; in v1.0.0 every database source is read-only |
 | `SCHEMA_CHANGED` | Output schema changed with `on_schema_change: fail` |
 | `MODEL_TEST_FAILED` | A test failed; the run was rolled back |
 | `RECONCILIATION_FAILED` | Model and source diverge beyond tolerance |

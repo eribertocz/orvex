@@ -16,7 +16,6 @@ from pathlib import Path
 
 import duckdb
 from orvex.contracts.model_config.v1 import ModelConfig, ModelError, ModelErrorDetails
-from orvex.contracts.project.v1 import ClickhouseConnection
 from orvex.transform.config_file import ConfigFile, ConfigProblem
 from orvex.transform.sources import Connection
 
@@ -30,10 +29,7 @@ _PARSER_LINE = re.compile(r"LINE (\d+):")
 
 @dataclass(frozen=True, slots=True)
 class Model:
-    """One model: `schema.table`, its SQL as written, and its configuration (defaults applied).
-
-    `extraction` models name a ClickHouse connection; their SQL is that source's dialect.
-    """
+    """One model: `schema.table`, its SQL as written, and its configuration (defaults applied)."""
 
     schema: str
     table: str
@@ -47,10 +43,6 @@ class Model:
     @property
     def name(self) -> str:
         return f"{self.schema}.{self.table}"
-
-    @property
-    def extraction(self) -> bool:
-        return self.config.connection is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,7 +182,7 @@ def discover_models(folder: Path, connections: Mapping[str, Connection]) -> Disc
                     )
                 )
             continue
-        found = _model(folder, path, schema, stem, connections)
+        found = _model(folder, path, schema, stem)
         if isinstance(found, Model):
             models.append(found)
         else:
@@ -200,9 +192,7 @@ def discover_models(folder: Path, connections: Mapping[str, Connection]) -> Disc
     return Discovery(tuple(models), tuple(problems))
 
 
-def _model(
-    folder: Path, path: Path, schema: str, stem: str, connections: Mapping[str, Connection]
-) -> Model | list[ModelError]:
+def _model(folder: Path, path: Path, schema: str, stem: str) -> Model | list[ModelError]:
     relative = path.relative_to(folder).as_posix()
     name = f"{schema}.{stem}"
     problems: list[ModelError] = []
@@ -212,7 +202,7 @@ def _model(
     config_file: str | None = None
     if sidecar.exists() or sidecar.is_symlink():
         config_file = sidecar.relative_to(folder).as_posix()
-        loaded = _config(sidecar, config_file, name, connections)
+        loaded = _config(sidecar, config_file, name)
         if isinstance(loaded, ModelError):
             problems.append(loaded)
         else:
@@ -220,17 +210,16 @@ def _model(
     sql = _read_sql(path, relative, name)
     if isinstance(sql, ModelError):
         return [*problems, sql]
-    if config.connection is None:
-        invalid = _check_select(sql, relative, name)
-        if invalid is not None:
-            problems.append(invalid)
+    invalid = _check_select(sql, relative, name)
+    if invalid is not None:
+        problems.append(invalid)
     if problems:
         return problems
     return Model(schema, stem, relative, sql, config, config_file, numbers)
 
 
 def _config(
-    path: Path, relative: str, name: str, connections: Mapping[str, Connection]
+    path: Path, relative: str, name: str
 ) -> tuple[ModelConfig, dict[str, str]] | ModelError:
     issue: ConfigProblem | None = None
     try:
@@ -258,19 +247,6 @@ def _config(
             path=repeated,
             line=document.line(repeated),
         )
-    if config.connection is not None:
-        connection = connections.get(config.connection)
-        if not isinstance(connection, ClickhouseConnection):
-            what = "not a connection of the project" if connection is None else "not ClickHouse"
-            return problem(
-                "MODEL_CONFIG_INVALID",
-                f"{relative}: connection '{config.connection}' is {what}; extraction models "
-                "read from a ClickHouse connection.",
-                relative,
-                model=name,
-                path="/connection",
-                line=document.line("/connection"),
-            )
     return config, document.numbers()
 
 

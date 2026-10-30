@@ -114,27 +114,6 @@ class PostgresConnection(BaseModel):
     """
 
 
-class ClickhouseConnection(BaseModel):
-    """
-    A ClickHouse database.
-    """
-
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    type: Literal["clickhouse"]
-    host: Annotated[str, Field(max_length=253, min_length=1)]
-    port: Annotated[int, Field(ge=1, le=65535)]
-    database: Annotated[str, Field(max_length=128, min_length=1)]
-    user: Annotated[str, Field(max_length=128, min_length=1)]
-    password: SecretReference
-    secure: bool | None = True
-    """
-    TLS to the server; default true.
-    """
-    read_only: ReadOnly
-
-
 class ProjectErrorCode(
     RootModel[
         Literal[
@@ -317,21 +296,11 @@ class AzureStorage(BaseModel):
 
 class Connection(
     RootModel[
-        ParquetConnection
-        | CsvConnection
-        | DuckdbConnection
-        | SqliteConnection
-        | PostgresConnection
-        | ClickhouseConnection
+        ParquetConnection | CsvConnection | DuckdbConnection | SqliteConnection | PostgresConnection
     ]
 ):
     root: (
-        ParquetConnection
-        | CsvConnection
-        | DuckdbConnection
-        | SqliteConnection
-        | PostgresConnection
-        | ClickhouseConnection
+        ParquetConnection | CsvConnection | DuckdbConnection | SqliteConnection | PostgresConnection
     )
 
 

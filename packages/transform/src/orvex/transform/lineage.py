@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from orvex.contracts.project.v1 import (
-    ClickhouseConnection,
     CsvConnection,
     DuckdbConnection,
     ParquetConnection,
@@ -26,12 +25,7 @@ from orvex.transform.graph import LAKE_CATALOG, _cte_names, _parser, _path, _tre
 from orvex.transform.models import Model
 
 type Connection = (
-    ParquetConnection
-    | CsvConnection
-    | DuckdbConnection
-    | SqliteConnection
-    | PostgresConnection
-    | ClickhouseConnection
+    ParquetConnection | CsvConnection | DuckdbConnection | SqliteConnection | PostgresConnection
 )
 type Event = dict[str, Any]
 
@@ -86,11 +80,6 @@ def source_dataset(connection: Connection, parts: Sequence[str]) -> Dataset:
             f"postgres://{connection.host}:{connection.port}",
             f"{connection.database}.{schema}.{parts[-1]}",
         )
-    if isinstance(connection, ClickhouseConnection):
-        return Dataset(
-            f"clickhouse://{connection.host}:{connection.port}",
-            f"{connection.database}.{parts[-1]}",
-        )
     kind = "duckdb" if isinstance(connection, DuckdbConnection) else "sqlite"
     return Dataset(f"{kind}://{connection.path.root}", ".".join(parts))
 
@@ -116,20 +105,11 @@ def inputs(
     model: Model, models: Mapping[str, Model], connections: Mapping[str, Connection], lake: str
 ) -> list[Dataset]:
     """The datasets a model reads, in order of first appearance, without repeats."""
-    if model.extraction:
-        # ClickHouse SQL is never parsed here: the input is the connection's database as a
-        # whole (namespace `clickhouse://host:port`, name `<database>`; #98).
-        connection = connections.get(model.config.connection or "")
-        if isinstance(connection, ClickhouseConnection):
-            return [
-                Dataset(f"clickhouse://{connection.host}:{connection.port}", connection.database)
-            ]
-        return []
-    connection_ = _parser()
+    connection = _parser()
     try:
-        tree = _tree(connection_, model.sql)
+        tree = _tree(connection, model.sql)
     finally:
-        connection_.close()
+        connection.close()
     ctes = _cte_names(tree)
     found: list[Dataset] = []
     for node in _walk(tree):
@@ -167,8 +147,6 @@ def column_lineage(
     `["staging", "readings"]`), or None when unknown: an unqualified name counts only when it
     is a real column of the single table read, never a lateral alias or a lambda parameter.
     """
-    if model.extraction:
-        return {}
     connection = _parser()
     try:
         tree = _tree(connection, model.sql)

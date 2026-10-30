@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import dataclasses
 import json
 from pathlib import Path
 from typing import Any
 
 import jsonschema
-from orvex.contracts.model_config.v1 import ModelConfig
-from orvex.contracts.project.v1 import ClickhouseConnection, ParquetConnection, PostgresConnection
+from orvex.contracts.project.v1 import ParquetConnection, PostgresConnection
 from orvex.transform.lineage import (
     Connection,
     Dataset,
@@ -224,28 +222,3 @@ def test_unqualified_names_must_be_real_columns(tmp_path: Path) -> None:
     assert (
         column_lineage(models["marts.lambda"], lambdas, models, CONNECTIONS, LAKE, columns_of) == {}
     )
-
-
-def test_an_extraction_model_reads_its_clickhouse_database(tmp_path: Path) -> None:
-    """Its SQL is never parsed: the input is the connection's database (#98)."""
-    models = project(tmp_path, {"models/raw/events.sql": "SELECT 1"})
-    extraction = dataclasses.replace(
-        models["raw.events"], config=ModelConfig(version=1, connection="ch")
-    )
-    # A connection that is not ClickHouse (or is missing) gives no invented input.
-    assert inputs(extraction, models, CONNECTIONS, LAKE) == []
-    clickhouse = ClickhouseConnection.model_validate(
-        {
-            "type": "clickhouse",
-            "host": "ch.internal",
-            "port": 8443,
-            "database": "analytics",
-            "user": "reader",
-            "password": "${env:SECRET_PASSWORD}",
-            "read_only": True,
-        }
-    )
-    connections: dict[str, Connection] = {**CONNECTIONS, "ch": clickhouse}
-    assert inputs(extraction, models, connections, LAKE) == [
-        Dataset("clickhouse://ch.internal:8443", "analytics")
-    ]

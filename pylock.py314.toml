@@ -91,25 +91,25 @@ sha256 = "ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc"
 
 [[packages]]
 name = "boto3"
-version = "1.43.121"
+version = "1.43.122"
 
 [[packages.wheels]]
-name = "boto3-1.43.121-py3-none-any.whl"
-url = "https://files.pythonhosted.org/packages/31/57/a5fda6560d519037cc7df6dd116d5d66e7914be2f562e8c7b1ef888161a2/boto3-1.43.121-py3-none-any.whl"
+name = "boto3-1.43.122-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/ee/fd/fef3d36be7875f413d8ef3a17c1743b64f9686693d1aed8d5126e7fa1dcd/boto3-1.43.122-py3-none-any.whl"
 
 [packages.wheels.hashes]
-sha256 = "fc41ea80507416c30a3f7bdea3682124551ec0c36405c0d8149efaf65d9628e7"
+sha256 = "cca51b3650080594a1df344b8a2e76007eab6d5fa50504a0b622dfdc14cdeaa1"
 
 [[packages]]
 name = "botocore"
-version = "1.43.121"
+version = "1.43.122"
 
 [[packages.wheels]]
-name = "botocore-1.43.121-py3-none-any.whl"
-url = "https://files.pythonhosted.org/packages/ad/a8/5a0730dda5e076588c45c8ce73a56d1fc630accb994bfad0503c6825daf5/botocore-1.43.121-py3-none-any.whl"
+name = "botocore-1.43.122-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/8b/ee/bde83952daa267697a73c0c0dada587127e5022056c802bf07e0a9ad8b95/botocore-1.43.122-py3-none-any.whl"
 
 [packages.wheels.hashes]
-sha256 = "39bfd17e69f3370350e6aac2072df64045d002f9878e09115e85b87c772bd473"
+sha256 = "668e608edf8847fc4c3c6b38688e183c3bcf19b8a1f7f58d33c03a6f3039bd49"
 
 [[packages]]
 name = "certifi"
@@ -154,17 +154,6 @@ url = "https://files.pythonhosted.org/packages/58/50/6c0d534c5f134586a8e1ba4e330
 
 [packages.wheels.hashes]
 sha256 = "255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360"
-
-[[packages]]
-name = "clickhouse-connect"
-version = "1.11.0"
-
-[[packages.wheels]]
-name = "clickhouse_connect-1.11.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
-url = "https://files.pythonhosted.org/packages/f3/00/48fc68b74765fade6b567cc80b8d52f39dee496ac6c5ac79eb9171c76fe1/clickhouse_connect-1.11.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
-
-[packages.wheels.hashes]
-sha256 = "8fbe36f21e793210112797938abbff54bfd3010367a2e51f7f941156885999a0"
 
 [[packages]]
 name = "cryptography"
@@ -431,17 +420,6 @@ url = "https://files.pythonhosted.org/packages/50/07/79007d2165f649ea93e08c0962d
 sha256 = "ca8052401c55d7511dda6760719fda7618067e83535d7d0010096d216c34b667"
 
 [[packages]]
-name = "lz4"
-version = "4.4.5"
-
-[[packages.wheels]]
-name = "lz4-4.4.5-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
-url = "https://files.pythonhosted.org/packages/f1/01/d52c7b11eaa286d49dae619c0eec4aabc0bf3cda7a7467eb77c62c4471f3/lz4-4.4.5-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
-
-[packages.wheels.hashes]
-sha256 = "0bba042ec5a61fa77c7e380351a61cb768277801240249841defd2ff0a10742f"
-
-[[packages]]
 name = "markupsafe"
 version = "3.0.4"
 
@@ -520,14 +498,14 @@ sha256 = "222fecffc7714f6d0a6ad62c0e4b66cc2b7dbfafb7b93acfc6c308abbdb51af8"
 
 [[packages]]
 name = "opentelemetry-api"
-version = "1.45.1"
+version = "1.45.2"
 
 [[packages.wheels]]
-name = "opentelemetry_api-1.45.1-py3-none-any.whl"
-url = "https://files.pythonhosted.org/packages/1e/41/f7dcf80b81ee8e71c1a2b59f14208bc723edbd89ed027a73b175abf6348e/opentelemetry_api-1.45.1-py3-none-any.whl"
+name = "opentelemetry_api-1.45.2-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/a9/2d/610db864d7513158cebb8f36cc88e67e73bd6c7aa1905ef18d89e1281c81/opentelemetry_api-1.45.2-py3-none-any.whl"
 
 [packages.wheels.hashes]
-sha256 = "b31553efa588ae44bc306f863c785c5333a9ecc091248c6ee68b4b6c87fdedfb"
+sha256 = "2cbd737377e710ee740d261c94e93fa0f08e6d037c18f17513cc0a2d94479a34"
 
 [[packages]]
 name = "packaging"

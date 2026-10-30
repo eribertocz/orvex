@@ -806,7 +806,6 @@ def since_bound_problem(model: Model, columns_of: ColumnsOf | None = None) -> Mo
         or incremental is None
         or incremental.strategy not in {"partition_overwrite", "append"}
         or (incremental.filter or "auto") == "auto"
-        or model.extraction
         or not uses_since(model.sql)
     ):
         return None
@@ -875,9 +874,7 @@ def config_problems(model: Model) -> list[ModelError]:
             )
         )
     automatic = (incremental.filter or "auto") == "auto"
-    # Extraction models are ClickHouse SQL: their `{since:Type}` is checked by
-    # `clickhouse.since_problems`, never by DuckDB's parser.
-    if not automatic and not model.extraction and not uses_since(model.sql):
+    if not automatic and not uses_since(model.sql):
         found.append(
             problem(
                 "MISSING_SINCE_PARAMETER",
@@ -889,18 +886,7 @@ def config_problems(model: Model) -> list[ModelError]:
         )
     elif (bounded := since_bound_problem(model)) is not None:
         found.append(bounded)
-    elif automatic and model.extraction:
-        found.append(
-            problem(
-                "INCREMENTAL_FILTER_NOT_PROVABLE",
-                f"{file}: the engine does not read ClickHouse SQL, so it cannot place the "
-                "filter (reason: extraction); set filter: manual and use {since:Type}.",
-                file,
-                model=model.name,
-                path="/incremental/filter",
-            )
-        )
-    elif automatic and not model.extraction and uses_since(model.sql):
+    elif automatic and uses_since(model.sql):
         found.append(
             problem(
                 "MODEL_CONFIG_INVALID",
@@ -1156,15 +1142,12 @@ def steps(
     since: str = LOWEST,
     full_refresh: bool = False,
     previous: str | None = None,
-    filtered: bool | None = None,
 ) -> list[Step]:
     """The run steps of one incremental model.
 
     `existing`: its table's columns (None if absent); `since`: the `$since` value (text of the
     time column's type); `full_refresh`: replace the table with every loaded row; `previous`:
-    the stored watermark (ignored on a full refresh); `filtered`: whether the loaded rows were
-    selected by `$since` (default: whether `sql` uses it; an extraction model's rows were
-    filtered on ClickHouse, so its SQL here does not).
+    the stored watermark (ignored on a full refresh).
     """
     incremental = model.config.incremental
     assert incremental is not None  # only incremental models get here
@@ -1251,8 +1234,7 @@ def steps(
         )
         # Only on an existing table (this branch): with no watermark yet `$since` is -infinity,
         # no row is older, but undated rows the filter never reloads are still protected.
-        by_since = bool(parameters) if filtered is None else filtered
-        if strategy == "partition_overwrite" and by_since:
+        if strategy == "partition_overwrite" and parameters:
             result.append(_cut_partitions(model, target, stage, output))
         replaced = _replaced(model, target)
         if replaced is not None:

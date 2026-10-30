@@ -8,6 +8,3 @@ development = ["MPL-2.0", "MIT-0", "BlueOak-1.0.0", "CC0-1.0", "Python-2.0"]
 
 # Per-package exceptions: package name -> reason. Each needs an issue or ADR reference.
 [exceptions]
-# certifi: Mozilla's CA certificate bundle, a required dependency of clickhouse-connect (#65); used
-# unmodified as data (file-level MPL-2.0 terms apply only to changed files of certifi itself).
-certifi = "MPL-2.0 CA bundle required by clickhouse-connect, used unmodified (#65)"
