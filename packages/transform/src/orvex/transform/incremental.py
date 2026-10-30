@@ -525,13 +525,14 @@ def _consistent_functions() -> frozenset[str]:
     same value in every query (not `now()`, `random()`, `nextval()`, …)."""
     connection = duckdb.connect()
     try:
-        rows = connection.execute(
-            "SELECT lower(function_name) FROM duckdb_functions() GROUP BY 1 "
-            "HAVING bool_and(coalesce(stability = 'CONSISTENT', false))"
-        ).fetchall()
+        row = connection.execute(
+            "SELECT string_agg(name, chr(10)) FROM (SELECT lower(function_name) AS name "
+            "FROM duckdb_functions() GROUP BY 1 "
+            "HAVING bool_and(coalesce(stability = 'CONSISTENT', false)))"
+        ).fetchone()
     finally:
         connection.close()
-    return frozenset(str(row[0]) for row in rows)
+    return frozenset(str(row[0]).split("\n")) if row and row[0] is not None else frozenset()
 
 
 def _consistent(name: str) -> bool:
