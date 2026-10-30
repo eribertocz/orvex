@@ -2085,6 +2085,9 @@ class Lake:
                 changed_outside, unpinnable = handle.bounded(
                     lambda: (_outside_inventory(cursor) != outside, _unpinnable_objects(cursor))
                 )
+                if handle.cancelled:
+                    # A cancel that came as the checks finished still stops the commit.
+                    raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
                 if changed_outside:
                     raise StoreError(
                         "STORE_STATEMENT_INVALID",
@@ -2138,7 +2141,10 @@ def _read_tree(sql: str) -> dict[str, Any]:
     on a connection of its own, with no lake attached, so it runs before the read is admitted:
     an invalid read gets its own error on a busy lake (#160)."""
     parser = _parser()
-    serialized = parser.execute("SELECT json_serialize_sql($sql)", {"sql": sql}).fetchone()
+    try:
+        serialized = parser.execute("SELECT json_serialize_sql($sql)", {"sql": sql}).fetchone()
+    finally:
+        parser.close()
     tree: dict[str, Any] = json.loads(str(serialized[0])) if serialized else {"error": True}
     if tree.get("error"):
         raise StoreError(
@@ -2175,18 +2181,20 @@ def _read_tree(sql: str) -> dict[str, Any]:
     return tree
 
 
-_PARSER = threading.local()
+_PARSER_LOCK = threading.Lock()
+_PARSER_DATABASE: list[duckdb.DuckDBPyConnection] = []
 
 
 def _parser() -> duckdb.DuckDBPyConnection:
-    """This thread's in-memory DuckDB connection for parsing only: no lake, no extension, no
-    file access."""
-    found: duckdb.DuckDBPyConnection | None = getattr(_PARSER, "connection", None)
-    if found is None:
-        found = duckdb.connect(config={"enable_external_access": False})
-        found.execute("SET autoload_known_extensions = false")
-        _PARSER.connection = found
-    return found
+    """A cursor on the process's one in-memory DuckDB database for parsing only: no lake, no
+    extension, no file access. One database for every thread (a cursor each call), so parsing
+    adds no DuckDB instance per thread (#160, Reviewer pass 1). The caller closes the cursor."""
+    with _PARSER_LOCK:
+        if not _PARSER_DATABASE:
+            database = duckdb.connect(config={"enable_external_access": False})
+            database.execute("SET autoload_known_extensions = false")
+            _PARSER_DATABASE.append(database)
+        return _PARSER_DATABASE[0].cursor()
 
 
 def _commit(cursor: duckdb.DuckDBPyConnection) -> None:

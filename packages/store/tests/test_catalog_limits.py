@@ -195,19 +195,28 @@ def test_a_commit_that_starts_in_time_is_never_reported_as_failed(
 
 
 @pytest.mark.parametrize(
-    ("sql", "expected"),
+    ("sql", "expected", "token_check"),
     [
-        ("SELECT * FROM (SUMMARIZE t)", "STORE_STATEMENT_INVALID"),
-        ("SELECT * FROM read_csv('x.csv')", "STORE_STATEMENT_INVALID"),
-        ("SELECT * FROM glob('*')", "STORE_STATEMENT_INVALID"),
-        ("SELECT getenv('HOME')", "STORE_STATEMENT_INVALID"),
-        ("SELEC 1", "STORE_QUERY_FAILED"),
-        ("SELECT n FROM t", "STORE_BUSY"),
+        ("SELECT * FROM (SUMMARIZE t)", "STORE_STATEMENT_INVALID", True),
+        ("SELECT * FROM read_csv('x.csv')", "STORE_STATEMENT_INVALID", True),
+        ("SELECT * FROM glob('*')", "STORE_STATEMENT_INVALID", True),
+        ("SELEC 1", "STORE_QUERY_FAILED", True),
+        # With the token check's list of table functions emptied, only the parse-tree check
+        # (`_read_tree`) can refuse these: it does so before admission too.
+        ("SELECT * FROM duckdb_settings()", "STORE_STATEMENT_INVALID", False),
+        ("SELECT * FROM range(3), duckdb_tables()", "STORE_STATEMENT_INVALID", False),
+        ("SELECT n FROM t", "STORE_BUSY", True),
     ],
 )
 def test_on_a_full_lake_an_invalid_read_gets_its_own_error(
-    lake: Lake, sql: str, expected: str
+    lake: Lake,
+    monkeypatch: pytest.MonkeyPatch,
+    sql: str,
+    expected: str,
+    token_check: bool,
 ) -> None:
+    if not token_check:
+        monkeypatch.setattr(lake, "_table_functions", frozenset())
     holder = lake.start_read(request("SELECT range AS n FROM range(100000000)", lake))
     try:
         found = code_of(lambda: lake.read(request(sql, lake)))
@@ -216,3 +225,53 @@ def test_on_a_full_lake_an_invalid_read_gets_its_own_error(
         with contextlib.suppress(StoreError):
             holder.reader.read_all()
     assert found == expected
+
+
+def test_the_checks_before_begin_stop_at_the_limit(
+    lake: Lake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    before = lake.current_snapshot().id
+    real = lake_module._outside_inventory
+    calls: list[int] = []
+
+    def slow_first(cursor: duckdb.DuckDBPyConnection) -> str:
+        calls.append(1)
+        if len(calls) == 1:  # the inventory taken before BEGIN
+            slow_on(cursor)
+        return real(cursor)
+
+    monkeypatch.setattr(lake_module, "_outside_inventory", slow_first)
+
+    def block() -> None:
+        with lake.transaction() as transaction:
+            transaction.execute(statement("INSERT INTO t VALUES (1)"))
+
+    code, elapsed = timed(block)
+    assert code == "STORE_TIMEOUT"
+    assert elapsed < LIMIT_MS / 1000 + MARGIN, elapsed
+    assert lake.current_snapshot().id == before
+    monkeypatch.undo()
+    with lake.transaction() as transaction:  # the writer lock and the slot are free
+        transaction.execute(statement("INSERT INTO t VALUES (2)"))
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM duckdb_settings()",
+        "SELECT * FROM (SUMMARIZE t)",
+        "SELECT json_execute_serialized_sql('x')",
+        "SELECT * FROM postgres_scan('a', 'b', 'c')",
+    ],
+)
+def test_the_parse_tree_check_needs_no_lake(sql: str) -> None:
+    # #160: what `_read_tree` refuses, with no lake at all (it runs before admission).
+    with pytest.raises(StoreError) as raised:
+        lake_module._read_tree(sql)
+    assert raised.value.code == "STORE_STATEMENT_INVALID"
+
+
+def test_the_parse_tree_check_reports_sql_that_does_not_parse() -> None:
+    with pytest.raises(StoreError) as raised:
+        lake_module._read_tree("SELEC 1")
+    assert raised.value.code == "STORE_QUERY_FAILED"
