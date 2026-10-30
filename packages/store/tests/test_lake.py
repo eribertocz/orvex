@@ -572,9 +572,12 @@ def test_summarize_and_dollar_quoted_files_are_refused_through_the_lake(
     for sql in (
         f"CREATE TABLE x AS SUMMARIZE $${target.as_posix()}$$",
         f"CREATE TABLE x AS SUMMARIZE '{target.as_posix()}'",
-        f"CREATE TABLE x AS SELECT * FROM $tag${target.as_posix()}$tag$",
     ):
         assert code_of(lambda sql=sql: write(lake, statement(sql))) == "STORE_STATEMENT_INVALID"
+    # A dollar-quoted name in FROM does not parse in DuckDB 2.0: it fails before any check, and
+    # nothing is read (#158).
+    unparsable = f"CREATE TABLE x AS SELECT * FROM $tag${target.as_posix()}$tag$"
+    assert code_of(lambda: write(lake, statement(unparsable))) == "STORE_QUERY_FAILED"
     assert lake.current_snapshot().id == before  # nothing was created
 
 
