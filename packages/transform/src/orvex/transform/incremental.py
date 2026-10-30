@@ -200,10 +200,15 @@ def since_is_a_lower_bound(
         return False
     finally:
         connection.close()
-    tree = json.loads(str(row[0])) if row else {"error": True}
+    try:
+        tree = json.loads(str(row[0])) if row else {"error": True}
+    except RecursionError:
+        return False  # too deep to read: refused (#183)
     statements = tree.get("statements")
     if tree.get("error") or not isinstance(statements, list) or len(statements) != 1:
         return False
+    if tree_depth(statements) > MAX_DEPTH:
+        return False  # too deep to follow: refused before any recursive walk (#183)
     wanted = time_column.lower()
     type Node = dict[str, object]
 
@@ -617,10 +622,20 @@ def since_is_a_lower_bound(
             return False
         if isinstance(source, dict) and source.get("sample") is not None:
             return False
+        # A window function lets a query above choose rows per key, as `QUALIFY` does
+        # (`row_number() OVER (…) AS rn` … `WHERE rn = 1`; Reviewer pass 1 on #188).
+        if any(item.get("class") == "WINDOW" for item in nodes(node.get("select_list"))):
+            return False
+        # Conditions that read other rows: in `WHERE`, `HAVING`, or a join's `ON`.
+        conditions: list[object] = [node.get("where_clause"), node.get("having")]
+        joined: list[object] = [source]
+        while joined:
+            table = joined.pop()
+            if isinstance(table, dict) and table.get("type") == "JOIN":
+                conditions.append(table.get("condition"))
+                joined += [table.get("left"), table.get("right")]
         return not any(
-            item.get("class") == "SUBQUERY"
-            for key in ("where_clause", "having")
-            for item in nodes(node.get(key))
+            item.get("class") == "SUBQUERY" for found in conditions for item in nodes(found)
         )
 
     def stable(tree: object) -> bool:
@@ -637,28 +652,27 @@ def since_is_a_lower_bound(
         except RecursionError:
             return False  # too deep to follow: refused
 
-    if query_depth(statements) > MAX_QUERY_DEPTH:
-        return False
     try:
         return check(statements, None) and (not strict or stable(statements))
     except RecursionError:
         return False  # too deep to follow: refused (#183)
 
 
-# How deeply queries may nest in a model whose `$since` is checked: deeper is refused, rather
-# than followed until Python's recursion limit (#183).
-MAX_QUERY_DEPTH = 64
+# How deeply queries and expressions may nest in a model whose `$since` is checked: deeper is
+# refused, rather than followed until Python's recursion limit (#183).
+MAX_DEPTH = 64
 
 
-def query_depth(tree: object) -> int:
-    """How deeply queries nest in a parse tree (a query in a query counts 2), walked without
-    recursion so any depth can be measured."""
+def tree_depth(tree: object) -> int:
+    """How deeply queries and expressions nest in a parse tree: each query (`SELECT`, set
+    operation) and each expression (a node with a `class`) counts one level. Walked without
+    recursion, so any depth can be measured."""
     deepest = 0
     stack: list[tuple[object, int]] = [(tree, 0)]
     while stack:
         node, depth = stack.pop()
         if isinstance(node, dict):
-            if str(node.get("type")) in {"SELECT_NODE", "SET_OPERATION_NODE"}:
+            if "class" in node or str(node.get("type")) in {"SELECT_NODE", "SET_OPERATION_NODE"}:
                 depth += 1
                 deepest = max(deepest, depth)
             stack.extend((value, depth) for value in node.values())
@@ -668,7 +682,8 @@ def query_depth(tree: object) -> int:
 
 
 def sql_depth(sql: str) -> int:
-    """`query_depth` of a DuckDB-SQL statement; 0 when it does not parse."""
+    """`tree_depth` of a DuckDB-SQL statement; 0 when it does not parse, more than `MAX_DEPTH`
+    when its parse tree is too deep for Python to read."""
     connection = duckdb.connect()
     try:
         connection.execute("SET enable_external_access = false")
@@ -678,8 +693,11 @@ def sql_depth(sql: str) -> int:
         return 0
     finally:
         connection.close()
-    tree = json.loads(str(row[0])) if row else {}
-    return query_depth(tree.get("statements"))
+    try:
+        tree = json.loads(str(row[0])) if row else {}
+    except RecursionError:
+        return MAX_DEPTH + 1
+    return tree_depth(tree.get("statements"))
 
 
 # Functions DuckDB marks `CONSISTENT` whose value still changes between runs (the session's
@@ -777,11 +795,11 @@ def since_bound_problem(model: Model, columns_of: ColumnsOf | None = None) -> Mo
         return None
     append = incremental.strategy == "append"
     column = incremental.time_column.root
-    if sql_depth(model.sql) > MAX_QUERY_DEPTH:
+    if sql_depth(model.sql) > MAX_DEPTH:
         return problem(
             "INVALID_MODEL_SQL",
-            f"{model.sql_file}: queries nested more than {MAX_QUERY_DEPTH} levels deep: too "
-            "deeply nested to check where $since bounds the time column.",
+            f"{model.sql_file}: queries and expressions nested more than {MAX_DEPTH} levels "
+            "deep: too deeply nested to check where $since bounds the time column.",
             model.sql_file,
             model=model.name,
         )
@@ -793,9 +811,9 @@ def since_bound_problem(model: Model, columns_of: ColumnsOf | None = None) -> Mo
             f"{model.sql_file}: an append model inserts every row it reads, so its filter must "
             f"read each row once: write WHERE {column} > $since (not >=, no expression around "
             f"$since, no OR {column} IS NULL), in queries that return {column} unchanged and "
-            "keep every row they read (no LIMIT, DISTINCT ON, QUALIFY or row-choosing subquery "
-            "below the filter). Use strategy merge when rows can be read again, or for the "
-            "latest row per key.",
+            "keep every row they read (no LIMIT, DISTINCT ON, QUALIFY, window function or "
+            "row-choosing subquery below the filter). Use strategy merge when rows can be read "
+            "again, or for the latest row per key.",
             model.sql_file,
             model=model.name,
         )

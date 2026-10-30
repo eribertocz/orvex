@@ -1344,8 +1344,22 @@ def test_a_clickhouse_name_explain_ast_cannot_delimit_is_seen(sql: str, spaced: 
         "SELECT * FROM src QUALIFY row_number() OVER (PARTITION BY id ORDER BY read_at DESC) = 1",
         "SELECT * FROM src AS s WHERE read_at = "
         "(SELECT max(read_at) FROM src AS s2 WHERE s2.id = s.id)",
+        # Reviewer pass 1 on #188: the same choices, written another way.
+        "SELECT * FROM (SELECT *, row_number() OVER (PARTITION BY id ORDER BY read_at DESC) "
+        "AS rn FROM src) WHERE rn = 1",
+        "SELECT s.* FROM src AS s JOIN m ON m.id = s.id "
+        "AND s.read_at = (SELECT max(read_at) FROM src AS s2 WHERE s2.id = s.id)",
     ],
-    ids=["limit", "offset", "sample", "distinct-on", "qualify", "row-choosing-subquery"],
+    ids=[
+        "limit",
+        "offset",
+        "sample",
+        "distinct-on",
+        "qualify",
+        "row-choosing-subquery",
+        "window-then-where",
+        "subquery-in-join-on",
+    ],
 )
 def test_an_append_model_that_leaves_rows_out_below_its_filter_is_refused(
     tmp_path: Path, inner: str
@@ -1391,3 +1405,57 @@ def test_a_deeply_nested_model_is_refused_not_crashed(
     assert [item.code.root for item in deep] == ["INVALID_MODEL_SQL"]
     assert "too deeply nested" in deep[0].message
     assert config_problems(sql_model(tmp_path / "ok", chosen, nested(30, bound))) == []
+
+
+@pytest.mark.parametrize("terms", [70, 200, 400, 900])
+@pytest.mark.parametrize(
+    ("sidecar", "bound"), [("append", "read_at > $since"), ("day", "day >= $since")]
+)
+def test_a_deeply_nested_expression_is_refused_not_crashed(
+    tmp_path: Path, sidecar: str, bound: str, terms: int
+) -> None:
+    # Reviewer pass 1 on #188: 400 chained additions raised RecursionError; 200 got the
+    # generic message.
+    chosen = MANUAL_APPEND if sidecar == "append" else BY_DAY
+    total = " + ".join(["id"] * terms)
+    sql = f"SELECT *, {total} AS total FROM src WHERE {bound}"
+    deep = config_problems(sql_model(tmp_path, chosen, sql))
+    assert [item.code.root for item in deep] == ["INVALID_MODEL_SQL"]
+    assert "too deeply nested" in deep[0].message
+
+
+@pytest.mark.parametrize(
+    ("sidecar", "bound"), [("append", "read_at > $since"), ("day", "day >= $since")]
+)
+def test_an_expression_30_levels_deep_is_accepted(tmp_path: Path, sidecar: str, bound: str) -> None:
+    chosen = MANUAL_APPEND if sidecar == "append" else BY_DAY
+    total = " + ".join(["id"] * 30)
+    sql = f"SELECT *, {total} AS total FROM src WHERE {bound}"
+    assert config_problems(sql_model(tmp_path, chosen, sql)) == []
+
+
+def test_an_expression_beyond_duckdbs_own_limit_is_reported_at_discovery(tmp_path: Path) -> None:
+    # DuckDB's parser stops at 1000 levels: reported as a problem, not raised.
+    folder = tmp_path / "models" / "s"
+    folder.mkdir(parents=True)
+    total = " + ".join(["id"] * 2000)
+    (folder / "m.sql").write_text(
+        f"SELECT *, {total} AS total FROM src WHERE read_at > $since", encoding="utf-8"
+    )
+    (folder / "m.yaml").write_text(MANUAL_APPEND, encoding="utf-8")
+    found = discover_models(tmp_path, {})
+    assert [item.code.root for item in found.problems] == ["INVALID_MODEL_SQL"]
+
+
+def test_a_deep_clickhouse_tree_is_read_without_recursion() -> None:
+    # Reviewer pass 1 on #188: reading an `EXPLAIN AST` 70 to 95 levels deep raised
+    # RecursionError before the depth check.
+    from orvex.transform.clickhouse import sets_settings, tree_depth, writes_since_mark
+
+    levels = 3000
+    lines = [" " * level + "Function plus (children 1)" for level in range(levels)]
+    lines.append(" " * levels + "Literal UInt64_1")
+    tree = "\n".join(lines)
+    assert tree_depth(tree) == levels
+    assert not sets_settings(tree)
+    assert not writes_since_mark(tree)
