@@ -23,7 +23,7 @@
 4 (deterministic models, visible freshness), 8 (models as code), 9 (run observability), 11 (exact types), A6 (no silent failures), A10 (freshness).
 
 ## Conformance
-Model-config contract tests; integration tests against real DuckDB, DuckLake, SQLite, PostgreSQL and ClickHouse; incremental correctness tests (late data with lookback, deletions with full refresh, schema change policies, rollback on failed test).
+Model-config contract tests; integration tests against real DuckDB, DuckLake, SQLite and PostgreSQL; incremental correctness tests (late data with lookback, deletions with full refresh, schema change policies, rollback on failed test).
 
 ## Error codes
 `architecture/transformation.md` §7.
