@@ -1677,6 +1677,19 @@ class Lake:
         matched_files = matched[0] if matched else None
         if not isinstance(matched_files, list) or not matched_files:
             raise _source_not_found(source)
+        # DuckDB's readers expand `*`, `?` and `[` in each listed name again, with no escape:
+        # `r[1].parquet` would be read as `r1.parquet` (measured on 2.0.0; #82).
+        expanded = next(
+            (str(file) for file in matched_files if _GLOB_IN_NAME.search(str(file))), None
+        )
+        if expanded is not None:
+            raise StoreError(
+                "STORE_SOURCE_INVALID",
+                f"Source {source.name} matches the file {expanded}, whose name has *, ? or [: "
+                "DuckDB would read it as a pattern, so another file could be read in its place. "
+                "Rename the file.",
+                {"source": source.name, "file": expanded},
+            )
         # The view lives in its own small database file, attached read-only: nothing can be
         # created in, or dropped from, a source catalog.
         folder = Path(self._spill) / "sources"
@@ -3170,6 +3183,9 @@ def _sqlite_snapshot(source: SqliteSourceAttachment, copy: Path) -> list[tuple[s
     if failure is not None:
         raise failure
     return found
+
+
+_GLOB_IN_NAME = re.compile(r"[*?\[]")
 
 
 def _source_not_found(source: FileSourceAttachment | SqliteSourceAttachment) -> StoreError:

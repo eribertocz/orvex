@@ -25,7 +25,7 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 
 | `type` | Tables |
 |---|---|
-| `parquet`, `csv` | one table `<name>.data`: every file matching `path` (a glob is allowed), columns united by name, types inferred by DuckDB |
+| `parquet`, `csv` | one table `<name>.data`: every file matching `path` (a glob is allowed), columns united by name, types inferred by DuckDB. A matched file whose name has `*`, `?` or `[` is `STORE_SOURCE_INVALID` (`details.file`): DuckDB's readers would expand it again and read another file (#82) |
 | `duckdb` | the file attached `READ_ONLY`: `<name>.<schema>.<table>`, and `<name>.<table>` for schema `main` |
 
 - Only **write transactions** read sources; a read (`ReadRequest`) still sees only the lake (`STORE_STATEMENT_INVALID`).

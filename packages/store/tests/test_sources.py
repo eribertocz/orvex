@@ -300,3 +300,49 @@ def test_synthetic_dataset_loads_through_declared_sources(
         "payments": 236_400,
         "credit_notes": 100,
     }
+
+
+@pytest.mark.parametrize(
+    ("names", "kind", "pattern", "refused"),
+    [
+        (["r1.parquet", "r[1].parquet"], "parquet", "r*.parquet", "r[1].parquet"),
+        (["q*.csv", "qx.csv"], "csv", "q*.csv", "q*.csv"),
+        (["a?b.parquet"], "parquet", "a?b.parquet", "a?b.parquet"),
+    ],
+)
+def test_a_file_name_the_reader_would_expand_again_is_refused(
+    location: Location,
+    tmp_path_factory: pytest.TempPathFactory,
+    names: list[str],
+    kind: str,
+    pattern: str,
+    refused: str,
+) -> None:
+    # #82: `read_parquet(['r[1].parquet'])` reads `r1.parquet` (measured on 2.0.0); no escape.
+    folder = tmp_path_factory.mktemp("globbed")
+    builder = duckdb.connect()
+    for index, name in enumerate(names):
+        target = (folder / name).as_posix().replace("'", "''")
+        fmt = "(FORMAT csv, HEADER)" if kind == "csv" else "(FORMAT parquet)"
+        builder.sql(f"COPY (SELECT {index}::BIGINT AS a) TO '{target}' {fmt}")
+    builder.close()
+    with pytest.raises(StoreError) as raised:
+        open_lake(location, LIMITS, [source("odd", kind, folder / pattern)])
+    assert raised.value.code == "STORE_SOURCE_INVALID"
+    assert raised.value.details["file"].endswith(refused)
+
+
+def test_braces_spaces_and_accents_stay_readable(
+    location: Location, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    folder = tmp_path_factory.mktemp("plain")
+    builder = duckdb.connect()
+    for index, name in enumerate(["b{x}.parquet", "lectura año 1.parquet"]):
+        builder.sql(f"COPY (SELECT {index}::BIGINT AS a) TO '{(folder / name).as_posix()}'")
+    builder.close()
+    lake = open_lake(location, LIMITS, [source("fine", "parquet", folder / "*.parquet")])
+    try:
+        rows = read(lake, "SELECT a FROM fine.data ORDER BY a")
+        assert rows == [{"a": 0}, {"a": 1}]
+    finally:
+        lake.close()
