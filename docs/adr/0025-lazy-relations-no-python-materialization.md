@@ -1,6 +1,6 @@
 # 0025 — Data stays in DuckDB: lazy relations, no materialization in Python
 
-**Status:** Accepted (2026-10-26); rule 6 applied to row-policy values and rule 1 to be amended in part by [ADR-0027](0027-two-data-routes.md) (ClickHouse execution after v1.0.0)
+**Status:** Accepted (2026-10-26); rule 6 applied to row-policy values and rule 1 amended in part by [ADR-0028](0028-clickhouse-by-direct-query-only.md) (ClickHouse datasets stay in ClickHouse; results leave as Arrow)
 
 ## Context
 The Owner requires that Orvex always work with DuckDB Python relations, which do not materialize. In DuckDB 2.0 a relation is a lazy query: building it runs nothing (DuckDB only binds it to learn columns and types), and **every read reruns the query**; `con.sql(text, params=...)` binds its parameters on every read; `materialize()` runs once and keeps the rows. Copying data into Python objects (lists, dicts, DataFrames) between steps wastes memory, loses exact types, and breaks with 100 M-row tables on a 16 GB machine.

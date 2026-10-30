@@ -81,7 +81,7 @@ orvex facturacion/ --server     # or the official Docker image
 - DuckLake uses a **PostgreSQL catalog** by default, on premises or in the cloud, which supports concurrent readers and writers across processes and machines. A SQLite catalog serves a server on one machine. Data files live on local disk (one machine), a network file system or object storage (ADR-0027 §2).
 - Module state uses PostgreSQL, **one schema and one database role per module**, so modules never read each other's tables.
 - Login is required (local users and/or OIDC).
-- Direct Query on an existing DuckLake is an optional connection executed by `store`, never a startup requirement; Quack and ClickHouse Direct Query come after v1.0.0 (ADR-0027).
+- Direct Query on an existing DuckLake is an optional connection executed by `store`, never a startup requirement; ClickHouse is reached only by Direct Query, in v1.0.0 (ADR-0028); Quack comes after v1.0.0 (ADR-0027).
 
 Both modes run the same code; only the adapters selected at composition differ.
 
@@ -165,7 +165,7 @@ Python packages share the `orvex` namespace through implicit namespace packages 
 
 | Concern | Choice |
 |---|---|
-| Analytical engine | DuckDB (latest stable, ADR-0022); data stays in DuckDB as lazy relations, results leave as Arrow (ADR-0025). Direct Query: an existing DuckLake in v1.0.0; remote DuckDB through Quack and ClickHouse after v1.0.0 (ADR-0027) |
+| Analytical engine | DuckDB (latest stable, ADR-0022); data stays in DuckDB as lazy relations, results leave as Arrow (ADR-0025). Direct Query: an existing DuckLake and ClickHouse in v1.0.0 (ADR-0028); a remote DuckDB through Quack after v1.0.0 (ADR-0027) |
 | Warehouse format | DuckLake (DuckDB-file, SQLite or PostgreSQL catalog; data files on disk, a network file system or object storage; ADR-0027 §2) |
 | Backend language | Python (latest stable) |
 | HTTP | FastAPI (Pydantic included) |

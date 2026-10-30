@@ -53,7 +53,7 @@ SecurityContext (JSON) ─────────────┤
                                     │      └─ every obligation discharged ◄─────────┘
                                     ▼
               Dialect adapter ─► PhysicalQuery (SQL + bound parameters + data version)
-              (DuckDB in v1.0.0; ClickHouse after)
+              (DuckDB and ClickHouse in v1.0.0)
                                     ▼
                               Execution (store) ─► Arrow result
                                     ▼
@@ -66,15 +66,15 @@ SecurityContext (JSON) ─────────────┤
 | Query binding | `SemanticQuery` (canonical) | Bind names to model members, normalize filters, canonicalize ordering so equivalent queries have equal fingerprints |
 | Correctness engine | `CorrectnessReport` | Decide **whether** the question has one correct answer: derive semantic facts, emit obligations the plan must satisfy, or reject. Does not decide how to execute |
 | Planner | `SemanticPlan` | Decide **how**: per-fact aggregation, alignment, joins, recomputation, window steps, policy placement. Must discharge every obligation; an undischarged obligation is a planner error, never a silent result |
-| Dialect adapter | `PhysicalQuery` | Generate the SQL of the dataset's engine from the plan, with bound parameters only: in v1.0.0, DuckDB SQL for the managed lake and an existing DuckLake; after v1.0.0, also for a remote DuckDB, and ClickHouse SQL for ClickHouse (ADR-0027). Never translates SQL between dialects. The only stage that knows a dialect |
-| Execution | Arrow | Run once through `store` on the dataset's engine, within time and memory budgets: on a fixed DuckLake snapshot for the managed lake, on its latest verified snapshot for an existing DuckLake (ADR-0027 §7), live on a remote DuckDB or ClickHouse after v1.0.0. Data stays in the engine and is read once into Arrow (ADR-0025) |
+| Dialect adapter | `PhysicalQuery` | Generate the SQL of the dataset's engine from the plan, with bound parameters only: in v1.0.0, DuckDB SQL for the managed lake and an existing DuckLake, and ClickHouse SQL for ClickHouse (ADR-0028); after v1.0.0, also DuckDB SQL for a remote DuckDB (ADR-0027). Never translates SQL between dialects. The only stage that knows a dialect |
+| Execution | Arrow | Run once through `store` on the dataset's engine, within time and memory budgets: on a fixed DuckLake snapshot for the managed lake, on its latest verified snapshot for an existing DuckLake (ADR-0027 §7), live on ClickHouse (ADR-0028), and on a remote DuckDB after v1.0.0. Data stays in the engine and is read once into Arrow (ADR-0025) |
 
 Properties:
 
 - Every intermediate representation is immutable and typed, with a canonical fingerprint: SHA-256 over the JSON Canonicalization Scheme (RFC 8785).
 - Deterministic: same model fingerprint + same query fingerprint + same security fingerprint + same snapshot ⇒ same result. On live engines (after v1.0.0) the data version is the read instant, so the result is explainable, not replayable (ADR-0027 §5).
 - Engine-independent up to the adapter: adding an engine requires a new adapter only, enabled once the whole corpus passes on it with results identical to the managed-lake reference, and offered in a release only once the security suite passes too (ADR-0027 §4).
-- **Two data routes (ADR-0027):** datasets come from the managed DuckLake (route A) or from an existing engine queried in place (route B: an existing DuckLake in v1.0.0; remote DuckDB through Quack and ClickHouse after v1.0.0). Each dataset belongs to one engine; a relationship or a query spanning two engines is rejected with `CROSS_ENGINE_QUERY`.
+- **Two data routes (ADR-0027):** datasets come from the managed DuckLake (route A) or from an existing engine queried in place (route B: an existing DuckLake and ClickHouse in v1.0.0, ADR-0028; a remote DuckDB through Quack after v1.0.0). Each dataset belongs to one engine; a relationship or a query spanning two engines is rejected with `CROSS_ENGINE_QUERY`.
 
 ## 5. Correctness core (parity with SEF)
 
@@ -165,7 +165,7 @@ Because `transform` and `semantic` live in the same product, the engine **re-ver
 
 ### Query budgets and cost estimation (law 7)
 
-- Before execution the planner estimates the cost of each `SemanticPlan` from DuckLake statistics (row counts, file sizes, column min/max) and DuckDB's `EXPLAIN` cardinalities: rows scanned, groups produced, cells returned. On ClickHouse (after v1.0.0) the estimate comes from `EXPLAIN ESTIMATE` where the table engine supports it (ADR-0027 §7).
+- Before execution the planner estimates the cost of each `SemanticPlan` from DuckLake statistics (row counts, file sizes, column min/max) and DuckDB's `EXPLAIN` cardinalities: rows scanned, groups produced, cells returned. On ClickHouse the estimate comes from `EXPLAIN ESTIMATE` where the table engine supports it (ADR-0027 §7).
 - Budgets per query (rows scanned, result rows, matrix cells, time, memory) are configured per project with safe defaults. A plan whose estimate exceeds a budget is rejected **before** running with `QUERY_BUDGET_EXCEEDED` (or `MATRIX_TOO_WIDE`), stating which budget and the estimate, and suggesting a filter or a coarser grain.
 - The time and memory budgets are also enforced while running (the engine's own limits and cancellation), because estimates can be wrong.
 - The estimate and the actual figures are recorded in the receipt so wrong estimates can be measured and improved.
