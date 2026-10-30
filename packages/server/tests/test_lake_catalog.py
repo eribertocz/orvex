@@ -275,8 +275,10 @@ def test_no_lake_section_keeps_the_lake_where_it_was(
 ) -> None:
     project(tmp_path)
     full_flow(tmp_path, capsys)
-    assert (home(tmp_path) / "lake" / "catalog.ducklake").is_file()
-    assert not (home(tmp_path) / lake_place.RECORD_FILE).exists()
+    catalog = home(tmp_path) / "lake" / "catalog.ducklake"
+    assert catalog.is_file()
+    # The default lake is recorded too (#204), with the same place as before.
+    assert record_text(tmp_path) == {"catalog": "duckdb", "path": catalog.resolve().as_posix()}
 
 
 def test_a_duckdb_catalog_at_another_local_path(
@@ -884,6 +886,10 @@ def test_default_lake_data_without_catalog_or_record_is_refused(
     feed(tmp_path, 3)
     code, out = run(capsys, "run", str(tmp_path))
     assert code == 0, out
+    # Small writes are kept in the catalog (DuckLake inlines them); maintenance writes them out.
+    code, out = run(capsys, "maintain", str(tmp_path))
+    assert code == 0, out
+    assert list((home(tmp_path) / "lake" / "data").rglob("*.parquet"))
     (home(tmp_path) / lake_place.RECORD_FILE).unlink()
     (home(tmp_path) / "lake" / "catalog.ducklake").unlink()
     assert lake_place.exists(home(tmp_path))
