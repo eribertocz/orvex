@@ -10,9 +10,12 @@ long to let it stop, and how to see what it is doing.
 
 - **While waiting between runs**, the scheduler stops within a second. While it is checking the
   project or reading the run records, it stops once that step ends (connecting to a slow source
-  and validating against it can take tens of seconds). No run or lake maintenance starts after a stop, even one already decided.
+  and validating against it can take tens of seconds). No run or lake maintenance is decided
+  after a stop. One short window remains: a stop that arrives after the scheduler has decided a
+  run, but before the run is admitted to the lake, still lets that run start; it then gets the
+  grace period, like any run in progress.
 - **During a run**, the run may finish for the stop grace period (`--stop-grace`, 60 seconds by
-  default). After that it is cancelled: nothing it wrote is kept, and the run records say it was
+  default, from 0 to 86400). After that it is cancelled: nothing it wrote is kept, and the run records say it was
   cancelled. The next start runs it again.
 - **During lake maintenance**, maintenance finishes; it is not cancelled.
 
@@ -77,8 +80,10 @@ the scheduler waits while another command holds it.
 | `scheduler: has not run` | No scheduler has run on this project |
 | `scheduler: unknown (…)` | The heartbeat file exists but cannot be read |
 
-The last decision is the last line the scheduler printed about a run, maintenance or a stop.
-Problems it prints (a project that does not check, another process holding the project) are not
-in the heartbeat: see the scheduler's output for them.
+The last decision is the last line the scheduler printed about a run, maintenance or a stop, or
+the first line of the problems that keep it from running models (`waiting: another process holds
+the project`, a project that does not check, run records it cannot read), at the time they were
+first printed. The other problem lines are in the scheduler's output.
 
-The heartbeat names models and times only; it never holds a secret.
+The heartbeat holds times and lines the scheduler also prints, nothing more: no secret reaches it
+that would not reach the output.

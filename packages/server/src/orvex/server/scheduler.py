@@ -13,10 +13,12 @@ Lake maintenance (P1-20) runs when no model is due: once a day after a success, 
 failure. Model runs keep priority: maintenance only starts between runs.
 
 Unattended (P1-21, #69): one scheduler per project (an OS lock held for its lifetime);
-`SIGTERM` or Ctrl+C stops it at once between runs (no run or maintenance starts after a stop),
+`SIGTERM` or Ctrl+C stops it at once between runs (no run or maintenance is decided after a
+stop; a run already decided when the stop arrives may still start, and gets the grace period),
 and a run in progress may finish within the stop grace period, then is cancelled and rolls back
-(maintenance in progress finishes); a heartbeat in the project's folder says what it is doing,
-renewed every minute, during runs too.
+(maintenance in progress finishes). Exception: Ctrl+C during a load from a source cancels the
+load at once. A heartbeat in the project's folder says what it is doing, renewed every minute,
+during runs too; problems the scheduler prints are its last decision.
 """
 
 from __future__ import annotations
@@ -397,12 +399,17 @@ def _say(state: _State, out: IO[str], zone: str, moment: dt.datetime, text: str)
     state.decided()
 
 
-def _report(out: IO[str], state: _State, lines: tuple[str, ...]) -> float:
-    """Print problems once until they change; look again in a minute."""
+def _report(out: IO[str], state: _State, lines: tuple[str, ...], moment: dt.datetime) -> float:
+    """Print problems once until they change; look again in a minute. The first line becomes
+    the heartbeat's last decision, at the time it was first printed (#166), so `runs` shows why
+    no model runs."""
     if lines != state.reported:
         for line in lines:
             print(line, file=out, flush=True)
         state.reported = lines
+        if lines:
+            state.decision = (moment, lines[0])
+            state.decided()
     return LOOK_AGAIN.total_seconds()
 
 
@@ -436,7 +443,7 @@ def _cycle(
         state.checked_at, state.recheck_at = monotonic(), None
     checked = state.checked
     if checked.problems or checked.project is None or checked.graph is None:
-        return _report(out, state, tuple(str(problem) for problem in checked.problems))
+        return _report(out, state, tuple(str(problem) for problem in checked.problems), now)
     project, graph = checked.project, checked.graph
     zone = project.settings.time_zone
     state.zone = zone
@@ -446,10 +453,9 @@ def _cycle(
     try:
         records = _records(home, place)
     except commands.ProjectLocked:
-        return _report(out, state, ("waiting: another process holds the project",))
+        return _report(out, state, ("waiting: another process holds the project",), now)
     except StoreError as error:
-        return _report(out, state, (str(commands._store_problem(error, ".", "run records")),))
-    state.reported = ()
+        return _report(out, state, (str(commands._store_problem(error, ".", "run records")),), now)
     last_runs = [moment for moment in (records.last_run_start, state.last_run_wall) if moment]
 
     def decide(held: dict[str, dt.datetime]) -> Plan:
@@ -489,6 +495,7 @@ def _cycle(
         if waited < MINIMUM_INTERVAL.total_seconds():
             return min(LOOK_AGAIN.total_seconds(), MINIMUM_INTERVAL.total_seconds() - waited)
     if not decided.models:
+        state.reported = ()  # nothing blocks the scheduler now: a problem that comes back is new
         return _maybe_maintain(
             folder, identity, out, clock, monotonic, state, records, decided, zone, stopped
         )
@@ -498,7 +505,8 @@ def _cycle(
         with project_lock(home):
             pass  # free now; a process taking it in between makes the run fail as locked
     except commands.ProjectLocked:
-        return _report(out, state, ("waiting: another process holds the project",))
+        return _report(out, state, ("waiting: another process holds the project",), now)
+    state.reported = ()
     for name in decided.models:
         trigger = "full refresh" if name in decided.full_refresh else "freshness"
         _say(state, out, zone, now, f"running {name} ({trigger})")

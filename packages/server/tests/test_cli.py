@@ -10,6 +10,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+from orvex.server import cli
 from orvex.server.cli import LOCAL_HOST, free_port, main, server_config
 from orvex.server.identity import load_identity
 from orvex.server.instance import home_variable
@@ -171,3 +172,31 @@ def test_a_project_folder_is_never_deleted(tmp_path: Path, number: int) -> None:
             process.kill()
             process.wait()
     assert (project / "notes.txt").read_text(encoding="utf-8") == "kept"
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", "-1", "86401", "1e400"])
+def test_a_stop_grace_that_cannot_be_honored_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], value: str
+) -> None:
+    # #166: `nan` and `inf` parse as floats but crashed the grace thread.
+    (tmp_path / "project.yaml").write_text("version: 1\nname: Test\ntime_zone: UTC\n")
+    assert main(["schedule", str(tmp_path), f"--stop-grace={value}"]) == 2
+    assert capsys.readouterr().err.strip() == (
+        "--stop-grace must be a number of seconds from 0 to 86400"
+    )
+    assert not (tmp_path / f".{load_identity().slug}").exists()  # nothing started
+
+
+@pytest.mark.parametrize("value", ["0", "86400"])
+def test_the_stop_grace_bounds_are_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    seen: list[float] = []
+
+    def schedule(*_arguments: object, stop_grace: float) -> int:
+        seen.append(stop_grace)
+        return 0
+
+    monkeypatch.setattr(cli, "schedule", schedule)
+    assert main(["schedule", str(tmp_path), f"--stop-grace={value}"]) == 0
+    assert seen == [float(value)]
