@@ -88,7 +88,7 @@ from orvex.transform.model_tests import ModelTest
 from orvex.transform.models import Discovery, Model, discover_models
 from orvex.transform.reconciliation import Comparison, Reconcile
 from orvex.transform.run_records import history_request, record_statements
-from orvex.transform.sources import source_attachments
+from orvex.transform.sources import Attachment, source_attachments
 
 LOCK_FILE = "lake.lock"
 DEFAULT_MEMORY = "4GB"
@@ -752,6 +752,33 @@ def _trigger(
     return "manual" if selection is None else selection.trigger
 
 
+def _open_recorded(home: Path, place: Place, attachments: Sequence[Attachment] = ()) -> Lake:
+    """Open the project's lake for a run, its record written first (`creating`) and confirmed
+    once it opened, so no lake is ever left without a record (#146). A failed first open drops
+    its record when nothing was created."""
+    lake_place.begin(home, place)
+    try:
+        lake = open_lake(place.location, _limits(), attachments)
+    except BaseException:
+        # Ctrl-C or any error: the record goes only when nothing was created (#181).
+        lake_place.abandon(home, place)
+        raise
+    try:
+        lake_place.confirm(home, place)
+    except BaseException:
+        lake.close()
+        raise
+    return lake
+
+
+def open_existing(home: Path, place: Place) -> Lake:
+    """Open the project's existing lake, under the project lock the caller holds, after
+    checking again that its settings are the lake's own: another process may have created the
+    lake since the project was checked (#181, Reviewer pass 2). `ProjectLoadError` otherwise."""
+    lake_place.check_unchanged(home, place)
+    return open_lake(place.location, _limits())
+
+
 def _limits() -> Limits:
     return Limits(
         memory_limit=_memory_limit(),
@@ -851,8 +878,14 @@ def _run_locked(
     assert checked.place is not None  # a refused place is a problem: no run
     place = checked.place
     try:
-        lake = open_lake(place.location, _limits(), source_attachments(project.connections))
-        lake_place.record(home, place)
+        # Checked again under the project lock: another process may have started this lake's
+        # first open since the project was checked (#181, Reviewer pass 1).
+        lake_place.check_unchanged(home, place)
+    except ProjectLoadError as error:
+        print(_load_problem(error), file=out)
+        return 1
+    try:
+        lake = _open_recorded(home, place, source_attachments(project.connections))
     except StoreError as error:
         open_error = error
     existing: dict[str, Columns | None] = {}
@@ -906,8 +939,7 @@ def _run_locked(
         # The run could not start (a source is unreachable, say): it is still recorded, in a
         # lake opened without sources.
         try:
-            lake = open_lake(place.location, _limits())
-            lake_place.record(home, place)
+            lake = _open_recorded(home, place)
         except StoreError as error:
             for problem in failures or [_store_problem(error, ".", "")]:
                 print(problem, file=out)
@@ -1448,7 +1480,7 @@ def runs(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
         return 0
     try:
         with project_lock(home):
-            lake = open_lake(place.location, _limits())
+            lake = open_existing(home, place)
             try:
                 snapshot = lake.current_snapshot().id
                 request = history_request(snapshot, zone, limit)
@@ -1467,6 +1499,9 @@ def runs(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
             ),
             file=out,
         )
+        return 1
+    except ProjectLoadError as error:
+        print(_load_problem(error), file=out)
         return 1
     except StoreError as error:
         print(_store_problem(error, ".", ""), file=out)

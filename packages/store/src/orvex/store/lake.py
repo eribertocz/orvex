@@ -1509,7 +1509,15 @@ class Lake:
 
     def _attach_sqlite_catalog(self, location: SqliteLakeLocation, options: Sequence[str]) -> None:
         """Attach a lake whose catalog is a SQLite file (several processes on one machine)."""
-        Path(location.path).parent.mkdir(parents=True, exist_ok=True)
+        try:
+            Path(location.path).parent.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            # A file where the folder goes, no permission, …: the catalog cannot be reached.
+            raise StoreError(
+                "STORE_CATALOG_UNAVAILABLE",
+                "The lake's SQLite catalog folder cannot be created.",
+                {"error": type(error).__name__},
+            ) from None
         self._load_extension("sqlite")
         self._attach(
             f"ATTACH {_quote('ducklake:sqlite:' + Path(location.path).as_posix())} AS {LAKE} "

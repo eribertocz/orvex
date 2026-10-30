@@ -475,7 +475,9 @@ def test_moving_an_existing_lake_to_another_provider_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     folder = bare(tmp_path / "proj", s3_lake("127.0.0.1:9000"))
-    lake_place.record(home(folder), commands.lake_location(load_project(folder), home(folder)))
+    chosen = commands.lake_location(load_project(folder), home(folder))
+    lake_place.begin(home(folder), chosen)
+    lake_place.confirm(home(folder), chosen)
     bare(folder, GCS)
     found = problems(folder)
     assert found[0].startswith("LAKE_LOCATION_CHANGED project.yaml"), found
@@ -542,7 +544,9 @@ def test_an_azure_connection_string_is_read_as_the_sdk_reads_it(
 @pytest.mark.usefixtures("credentials")
 def test_the_gcs_record_holds_no_credential(tmp_path: Path) -> None:
     folder = bare(tmp_path, GCS)
-    lake_place.record(home(folder), commands.lake_location(load_project(folder), home(folder)))
+    chosen = commands.lake_location(load_project(folder), home(folder))
+    lake_place.begin(home(folder), chosen)
+    lake_place.confirm(home(folder), chosen)
     text = (home(folder) / lake_place.RECORD_FILE).read_text(encoding="utf-8")
     assert "gs://bi-lake/billing/" in text
     assert SECRET not in text

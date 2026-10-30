@@ -42,8 +42,8 @@ from zoneinfo import ZoneInfo
 from orvex.server import commands, heartbeat, lake_place, maintenance
 from orvex.server.commands import Checked, Selection, project_lock
 from orvex.server.identity import Identity
+from orvex.server.project import ProjectLoadError
 from orvex.store.errors import StoreError
-from orvex.store.lake import open_lake
 from orvex.transform.run_records import last_run_request, model_history_request
 from orvex.transform.schedule import (
     LOOK_AGAIN,
@@ -88,7 +88,7 @@ def _records(home: Path, place: lake_place.Place) -> _Records:
     if not lake_place.exists(home):
         return _Records({}, None, ())
     with project_lock(home):
-        lake = open_lake(place.location, commands._limits())
+        lake = commands.open_existing(home, place)
         try:
             maintained = maintenance.last_maintenance(lake)
             snapshot = lake.current_snapshot().id
@@ -454,6 +454,8 @@ def _cycle(
         records = _records(home, place)
     except commands.ProjectLocked:
         return _report(out, state, ("waiting: another process holds the project",), now)
+    except ProjectLoadError as error:
+        return _report(out, state, (str(commands._load_problem(error)),), now)
     except StoreError as error:
         return _report(out, state, (str(commands._store_problem(error, ".", "run records")),), now)
     last_runs = [moment for moment in (records.last_run_start, state.last_run_wall) if moment]
@@ -523,7 +525,7 @@ def _cycle(
     after = clock()
     try:
         latest: _Records | None = _records(home, place)
-    except commands.ProjectLocked, StoreError:
+    except commands.ProjectLocked, ProjectLoadError, StoreError:
         latest = None
     if latest is None or latest.last_run_start in {None, previous_start}:
         # No run was recorded: it did not start (a source down while checking, the project
