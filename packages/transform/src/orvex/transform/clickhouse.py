@@ -664,9 +664,11 @@ def _ast(tree: str) -> _Node | None:
 
 
 def _counts_match(node: _Node) -> bool:
-    announced = _CHILDREN.search(node.detail)
-    expected = int(announced.group(1)) if announced else 0
-    return len(node.children) == expected and all(_counts_match(c) for c in node.children)
+    for each in _nodes(node):
+        announced = _CHILDREN.search(each.detail)
+        if len(each.children) != (int(announced.group(1)) if announced else 0):
+            return False
+    return True
 
 
 def _function_name(node: _Node) -> str:
@@ -677,13 +679,7 @@ def sets_settings(tree: str) -> bool:
     """Whether the `EXPLAIN AST` tree has a `SETTINGS` clause (a `Set` node) anywhere, or cannot
     be read as a tree: a model must not change the limits its queries run with."""
     root = _ast(tree)
-    if root is None:
-        return True
-
-    def visit(node: _Node) -> bool:
-        return node.kind == "Set" or any(visit(child) for child in node.children)
-
-    return visit(root)
+    return root is None or any(node.kind == "Set" for node in _nodes(root))
 
 
 def evaluated_while_describing(tree: str) -> bool:
@@ -745,9 +741,13 @@ def _is_mark(node: _Node) -> bool:
 
 
 def _nodes(node: _Node) -> list[_Node]:
-    found = [node]
-    for child in node.children:
-        found += _nodes(child)
+    """`node` and every node below it, in document order, walked without recursion (#183)."""
+    found: list[_Node] = []
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        found.append(current)
+        stack.extend(reversed(current.children))
     return found
 
 
@@ -1742,16 +1742,27 @@ def describe_model(
             and since is not None
             else ""
         )
-        if (
+        checked = (
             incremental is not None
             and incremental.strategy in {"partition_overwrite", "append"}
             and since is not None
-            and (
-                found.spaced_name
-                or writes_since_mark(plain)
-                or not since_is_a_lower_bound(marked, incremental.time_column.root, strict=append)
-                or limits_rows(source.explain(found.text, since, "QUERY TREE"))
-                or (append and not _stable(source, marked, incremental.time_column.root))
+        )
+        if checked and tree_depth(marked) > MAX_DEPTH:
+            return _too_deep(model)
+        if (
+            checked
+            and incremental is not None
+            and _refused(
+                lambda: (
+                    found.spaced_name
+                    or writes_since_mark(plain)
+                    or not since_is_a_lower_bound(
+                        marked, incremental.time_column.root, strict=append
+                    )
+                    or limits_rows(query_tree := source.explain(found.text, since, "QUERY TREE"))
+                    or (append and not keeps_rows(marked, query_tree))
+                    or (append and not _stable(source, marked, incremental.time_column.root))
+                )
             )
         ):
             column = incremental.time_column.root
@@ -1761,8 +1772,10 @@ def describe_model(
                     f"{model.name}: an append model inserts every row it reads, so its filter "
                     f"must read each row once: write WHERE {column} > {{since:…}} (not >=, no "
                     f"expression around it, no OR {column} IS NULL), in queries that return "
-                    f"{column} unchanged and keep their rows. Use strategy merge when rows can "
-                    "be read again.",
+                    f"{column} unchanged and keep every row they read (no LIMIT, LIMIT … BY, "
+                    "DISTINCT ON, QUALIFY, SAMPLE, window function or row-choosing subquery). "
+                    "Use strategy merge when rows can be read again, or for the latest row per "
+                    "key.",
                     file,
                     model=model.name,
                 )
@@ -1779,8 +1792,105 @@ def describe_model(
         return source.describe(found.text, since)
     except SourceError as error:
         return problem(error.code, f"{model.name}: {error.message}", file, model=model.name)
+    except RecursionError:
+        return _too_deep(model)  # nested below ClickHouse's own limit, beyond Python's (#183)
     finally:
         source.close()
+
+
+def _too_deep(model: Model) -> ModelError:
+    return problem(
+        "INVALID_MODEL_SQL",
+        f"{model.name}: queries and expressions nested more than {MAX_DEPTH} levels deep: too "
+        "deeply nested to check.",
+        model.sql_file,
+        model=model.name,
+    )
+
+
+# How deeply queries and expressions may nest in a model whose `{since:…}` is checked (#183).
+MAX_DEPTH = 64
+
+
+def tree_depth(tree: str) -> int:
+    """How deeply queries (`SelectQuery`) and expressions (`Function`) nest in an `EXPLAIN AST`
+    text, read from the indentation (no recursion, so any depth can be measured)."""
+    open_levels: list[int] = []
+    deepest = 0
+    for line in tree.split("\n"):
+        stripped = line.lstrip(" ")
+        if not stripped:
+            continue
+        indent = len(line) - len(stripped)
+        while open_levels and open_levels[-1] >= indent:
+            open_levels.pop()
+        if stripped.split(" ", 1)[0] in {"SelectQuery", "Function"}:
+            open_levels.append(indent)
+            deepest = max(deepest, len(open_levels))
+    return deepest
+
+
+def keeps_rows(tree: str, query_tree: str) -> bool:
+    """Whether an `append` model keeps every row its queries read (#183): no `SAMPLE`, no
+    `QUALIFY`, no window function (a query above could choose rows per key with it, as
+    `QUALIFY` does), and no subquery used as a condition (`IN (SELECT …)`, also in a join's
+    `ON`) rather than as a table. `tree` is the model's `EXPLAIN AST`, `query_tree` its
+    `EXPLAIN QUERY TREE`: only the query tree labels `QUALIFY`. `LIMIT`, `OFFSET`, `LIMIT … BY`
+    and `DISTINCT ON` (read as `LIMIT 1 BY`) are refused by `limits_rows`."""
+    if any(line.strip() == "QUALIFY" for line in query_tree.split("\n")):
+        return False
+    if _reads_a_relation_in_an_expression(query_tree):
+        return False
+    root = _ast(tree)
+    if root is None:
+        return False
+    stack: list[tuple[_Node, str]] = [(root, "")]
+    while stack:
+        node, parent = stack.pop()
+        if node.kind.startswith("Sample") or node.kind == "WindowDefinition":
+            return False
+        # A subquery read as a table: in `FROM`/`JOIN`, or defined by `WITH x AS (…)` (read
+        # where it is named; Reviewer pass 2 on #188).
+        if node.kind == "Subquery" and parent not in {"TableExpression", "WithElement"}:
+            return False
+        stack.extend((child, node.kind) for child in node.children)
+    return True
+
+
+# `EXPLAIN QUERY TREE` nodes that read rows of a relation.
+_RELATIONS = frozenset({"TABLE", "TABLE_FUNCTION", "QUERY", "UNION"})
+# The nodes a relation can sit under: a function's arguments, or a query's join tree.
+_HOLDERS = frozenset({"FUNCTION", "JOIN", "LEFT", "RIGHT", "QUERY", "UNION"})
+
+
+def _reads_a_relation_in_an_expression(query_tree: str) -> bool:
+    """Whether a function reads a relation (`x IN ids`, `x IN cte`): it chooses rows by reading
+    other rows, as `IN (SELECT …)` does, but `EXPLAIN AST` shows no subquery for a table or CTE
+    name (Reviewer pass 2 on #188). Read from the indentation: a relation whose nearest holder
+    is a function."""
+    holders: list[tuple[int, str]] = []
+    for line in query_tree.split("\n"):
+        stripped = line.lstrip(" ")
+        if not stripped:
+            continue
+        indent = len(line) - len(stripped)
+        while holders and holders[-1][0] >= indent:
+            holders.pop()
+        kind = stripped.split(" ", 1)[0].rstrip(",")
+        if kind in _RELATIONS and holders:
+            nearest = next((name for _, name in reversed(holders) if name in _HOLDERS), "")
+            if nearest == "FUNCTION":
+                return True
+        holders.append((indent, kind))
+    return False
+
+
+def _refused(check: Callable[[], bool]) -> bool:
+    """`check()`, or True when the tree is too deep to follow (#183)."""
+    try:
+        return check()
+    except RecursionError:
+        return True
 
 
 def _stable(source: Source, tree: str, time_column: str) -> bool:

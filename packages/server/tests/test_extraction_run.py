@@ -914,3 +914,107 @@ def test_an_append_time_column_that_changes_every_run_is_refused(
     assert code == 1, out
     assert "INVALID_MODEL_SQL" in out
     assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+
+
+@pytest.mark.parametrize(
+    "inner",
+    [
+        "SELECT * FROM events LIMIT 1 BY event_id",
+        "SELECT * FROM events LIMIT 10",
+        "SELECT * FROM events WHERE event_id IN (SELECT event_id FROM events)",
+        # Reviewer pass 1 on #188.
+        "SELECT * FROM events QUALIFY row_number() OVER (PARTITION BY meter_id "
+        "ORDER BY event_time DESC) = 1",
+        "SELECT * FROM (SELECT *, row_number() OVER (PARTITION BY meter_id "
+        "ORDER BY event_time DESC) AS rn FROM events) WHERE rn = 1",
+        "SELECT e.* FROM events AS e JOIN events AS f ON e.event_id = f.event_id "
+        "AND e.event_id IN (SELECT 1)",
+        # Reviewer pass 2 on #188: a relation read by name in an expression.
+        "WITH ids AS (SELECT event_id FROM events WHERE event_id < 5) "
+        "SELECT * FROM events WHERE event_id IN ids",
+    ],
+    ids=[
+        "limit-by",
+        "limit",
+        "in-subquery",
+        "qualify",
+        "window-then-where",
+        "on-subquery",
+        "in-with-name",
+    ],
+)
+def test_an_append_model_that_leaves_rows_out_is_refused_before_anything_runs(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str], inner: str
+) -> None:
+    # #183: rows left out at or before the watermark are never read again.
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                f"SELECT event_id, event_time AS t FROM ({inner}) "
+                "WHERE t > {since:DateTime64(6, 'UTC')}"
+            ),
+            "models/raw/ch_events.yaml": APPEND_SIDECAR,
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+
+
+def test_an_append_model_with_a_with_clause_is_accepted(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Reviewer pass 2 on #188: a `WITH x AS (…)` read as a table keeps every row.
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                "WITH x AS (SELECT event_id, event_time AS t FROM events) "
+                "SELECT event_id, t FROM x WHERE t > {since:DateTime64(6, 'UTC')}"
+            ),
+            "models/raw/ch_events.yaml": APPEND_SIDECAR,
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 0, out
+    assert lake_value(folder, "SELECT count(*) FROM lake.raw.ch_events") == [(1000,)]
+
+
+@pytest.mark.parametrize("strategy", ["append", "partition_overwrite"])
+@pytest.mark.parametrize("levels", [30, 80])
+def test_a_deeply_nested_extraction_model_is_refused(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    strategy: str,
+    levels: int,
+) -> None:
+    # #183: 80 levels is below ClickHouse's own parser limit (about 100 here) but deep enough
+    # to exhaust Python's recursion (Reviewer pass 1 on #188: 70 to 95 levels raised
+    # RecursionError); 30 levels are checked as usual.
+    sql = "SELECT event_id, event_time AS t FROM events WHERE t > {since:DateTime64(6, 'UTC')}"
+    if strategy == "partition_overwrite":
+        sql = "SELECT event_id, toDate(event_time) AS t FROM events WHERE t >= {since:Date}"
+    for _ in range(levels):
+        sql = f"SELECT * FROM ({sql})"
+    sidecar = APPEND_SIDECAR
+    if strategy == "partition_overwrite":
+        sidecar = (
+            "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
+            "incremental:\n  strategy: partition_overwrite\n  time_column: t\n"
+            "  partition_by: [t]\n  filter: manual\n"
+        )
+    folder = project(
+        tmp_path, source, {"models/raw/ch_events.sql": sql, "models/raw/ch_events.yaml": sidecar}
+    )
+    code, out = run(capsys, folder)
+    assert "Traceback" not in out
+    if levels == 30:
+        assert code == 0, out
+        return
+    assert code == 1, out
+    assert "too deeply nested to check" in out

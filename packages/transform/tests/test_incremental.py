@@ -1332,3 +1332,182 @@ def test_a_clickhouse_name_explain_ast_cannot_delimit_is_seen(sql: str, spaced: 
     from orvex.transform.clickhouse import scan
 
     assert scan(sql).spaced_name is spaced
+
+
+@pytest.mark.parametrize(
+    "inner",
+    [
+        "SELECT * FROM src LIMIT 10",
+        "SELECT * FROM src OFFSET 5",
+        "SELECT * FROM src USING SAMPLE 10%",
+        "SELECT DISTINCT ON (id) * FROM src",
+        "SELECT * FROM src QUALIFY row_number() OVER (PARTITION BY id ORDER BY read_at DESC) = 1",
+        "SELECT * FROM src AS s WHERE read_at = "
+        "(SELECT max(read_at) FROM src AS s2 WHERE s2.id = s.id)",
+        # Reviewer pass 1 on #188: the same choices, written another way.
+        "SELECT * FROM (SELECT *, row_number() OVER (PARTITION BY id ORDER BY read_at DESC) "
+        "AS rn FROM src) WHERE rn = 1",
+        "SELECT s.* FROM src AS s JOIN m ON m.id = s.id "
+        "AND s.read_at = (SELECT max(read_at) FROM src AS s2 WHERE s2.id = s.id)",
+        # Reviewer pass 2 on #188: a sample on either side of a join.
+        "SELECT r.* FROM src AS r TABLESAMPLE 10% JOIN m USING (id)",
+        "SELECT r.* FROM src AS r JOIN m TABLESAMPLE 10% USING (id)",
+        # Reviewer pass 3 on #188: a select-list subquery filtered by a query above.
+        "SELECT * FROM (SELECT s.*, (SELECT max(read_at) FROM src AS s2 WHERE s2.id = s.id) "
+        "AS m FROM src AS s) WHERE read_at = m",
+    ],
+    ids=[
+        "limit",
+        "offset",
+        "sample",
+        "distinct-on",
+        "qualify",
+        "row-choosing-subquery",
+        "window-then-where",
+        "subquery-in-join-on",
+        "sample-on-joined-left",
+        "sample-on-joined-right",
+        "select-list-subquery-below",
+    ],
+)
+def test_an_append_model_that_leaves_rows_out_below_its_filter_is_refused(
+    tmp_path: Path, inner: str
+) -> None:
+    # #183: a row left out at or before the watermark is never read again.
+    sql = f"SELECT * FROM ({inner}) WHERE read_at > $since"
+    found = config_problems(sql_model(tmp_path, MANUAL_APPEND, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+    assert "keep every row they read" in found[0].message
+
+
+@pytest.mark.parametrize(
+    "inner",
+    [
+        "SELECT DISTINCT id, read_at FROM src",
+        "SELECT read_at, count(*) AS n FROM src GROUP BY read_at",
+        "SELECT r.*, m.zone FROM src AS r JOIN m USING (id)",
+        "SELECT * FROM src ORDER BY read_at",
+    ],
+    ids=["distinct", "grouped-by-it", "join", "order-by"],
+)
+def test_an_append_model_that_keeps_every_row_is_accepted(tmp_path: Path, inner: str) -> None:
+    sql = f"SELECT * FROM ({inner}) WHERE read_at > $since"
+    assert config_problems(sql_model(tmp_path, MANUAL_APPEND, sql)) == []
+
+
+def nested(levels: int, bound: str) -> str:
+    sql = f"SELECT * FROM src WHERE {bound}"
+    for _ in range(levels):
+        sql = f"SELECT * FROM ({sql})"
+    return sql
+
+
+@pytest.mark.parametrize(
+    ("sidecar", "bound"), [("append", "read_at > $since"), ("day", "day >= $since")]
+)
+def test_a_deeply_nested_model_is_refused_not_crashed(
+    tmp_path: Path, sidecar: str, bound: str
+) -> None:
+    # #183: 300 nested subqueries raised RecursionError.
+    chosen = MANUAL_APPEND if sidecar == "append" else BY_DAY
+    deep = config_problems(sql_model(tmp_path / "deep", chosen, nested(300, bound)))
+    assert [item.code.root for item in deep] == ["INVALID_MODEL_SQL"]
+    assert "too deeply nested" in deep[0].message
+    assert config_problems(sql_model(tmp_path / "ok", chosen, nested(30, bound))) == []
+
+
+@pytest.mark.parametrize("terms", [70, 200, 400, 900])
+@pytest.mark.parametrize(
+    ("sidecar", "bound"), [("append", "read_at > $since"), ("day", "day >= $since")]
+)
+def test_a_deeply_nested_expression_is_refused_not_crashed(
+    tmp_path: Path, sidecar: str, bound: str, terms: int
+) -> None:
+    # Reviewer pass 1 on #188: 400 chained additions raised RecursionError; 200 got the
+    # generic message.
+    chosen = MANUAL_APPEND if sidecar == "append" else BY_DAY
+    total = " + ".join(["id"] * terms)
+    sql = f"SELECT *, {total} AS total FROM src WHERE {bound}"
+    deep = config_problems(sql_model(tmp_path, chosen, sql))
+    assert [item.code.root for item in deep] == ["INVALID_MODEL_SQL"]
+    assert "too deeply nested" in deep[0].message
+
+
+@pytest.mark.parametrize(
+    ("sidecar", "bound"), [("append", "read_at > $since"), ("day", "day >= $since")]
+)
+def test_an_expression_30_levels_deep_is_accepted(tmp_path: Path, sidecar: str, bound: str) -> None:
+    chosen = MANUAL_APPEND if sidecar == "append" else BY_DAY
+    total = " + ".join(["id"] * 30)
+    sql = f"SELECT *, {total} AS total FROM src WHERE {bound}"
+    assert config_problems(sql_model(tmp_path, chosen, sql)) == []
+
+
+def test_an_expression_beyond_duckdbs_own_limit_is_reported_at_discovery(tmp_path: Path) -> None:
+    # DuckDB's parser stops at 1000 levels: reported as a problem, not raised.
+    folder = tmp_path / "models" / "s"
+    folder.mkdir(parents=True)
+    total = " + ".join(["id"] * 2000)
+    (folder / "m.sql").write_text(
+        f"SELECT *, {total} AS total FROM src WHERE read_at > $since", encoding="utf-8"
+    )
+    (folder / "m.yaml").write_text(MANUAL_APPEND, encoding="utf-8")
+    found = discover_models(tmp_path, {})
+    assert [item.code.root for item in found.problems] == ["INVALID_MODEL_SQL"]
+
+
+def test_a_deep_clickhouse_tree_is_read_without_recursion() -> None:
+    # Reviewer pass 1 on #188: reading an `EXPLAIN AST` 70 to 95 levels deep raised
+    # RecursionError before the depth check.
+    from orvex.transform.clickhouse import sets_settings, tree_depth, writes_since_mark
+
+    levels = 3000
+    lines = [" " * level + "Function plus (children 1)" for level in range(levels)]
+    lines.append(" " * levels + "Literal UInt64_1")
+    tree = "\n".join(lines)
+    assert tree_depth(tree) == levels
+    assert not sets_settings(tree)
+    assert not writes_since_mark(tree)
+
+
+def test_a_clickhouse_relation_read_in_an_expression_is_seen() -> None:
+    # Reviewer pass 2 on #188: `x IN ids` reads a table without a subquery in the AST.
+    from orvex.transform.clickhouse import _reads_a_relation_in_an_expression
+
+    in_table = """QUERY id: 0
+  JOIN TREE
+    TABLE_FUNCTION id: 3, alias: __table1, table_function_name: numbers
+      ARGUMENTS
+        LIST id: 4, nodes: 1
+          CONSTANT id: 5, constant_value: UInt64_10, constant_value_type: UInt8
+  WHERE
+    FUNCTION id: 6, function_name: in, function_type: ordinary, result_type: UInt8
+      ARGUMENTS
+        LIST id: 7, nodes: 2
+          COLUMN id: 2, column_name: number, result_type: UInt64, source_id: 3
+          TABLE id: 8, alias: __table2, table_name: default.ids
+"""
+    joined = """QUERY id: 0
+  JOIN TREE
+    JOIN id: 4, strictness: ALL, kind: INNER
+      LEFT TABLE EXPRESSION
+        QUERY id: 9, is_subquery: 1, cte_name: x
+          JOIN TREE
+            TABLE id: 10, alias: __table3, table_name: default.events
+      RIGHT TABLE EXPRESSION
+        TABLE id: 7, alias: __table2, table_name: default.ids
+      JOIN EXPRESSION
+        FUNCTION id: 8, function_name: equals, function_type: ordinary, result_type: UInt8
+"""
+    assert _reads_a_relation_in_an_expression(in_table)
+    assert not _reads_a_relation_in_an_expression(joined)
+
+
+def test_a_select_list_subquery_in_the_filtering_query_is_refused(tmp_path: Path) -> None:
+    # Reviewer pass 3 on #188: the same choice when the filter is in that query.
+    sql = (
+        "SELECT s.*, (SELECT max(read_at) FROM src AS s2 WHERE s2.id = s.id) AS m "
+        "FROM src AS s WHERE read_at > $since AND read_at = m"
+    )
+    found = config_problems(sql_model(tmp_path, MANUAL_APPEND, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
