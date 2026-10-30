@@ -130,7 +130,11 @@ def _resident(pid: int) -> int | None:
 def sampled(command: list[str]) -> Sampled:
     """Run `command`, timestamping each line it prints and sampling its resident memory."""
     started = time.monotonic()
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    # Unbuffered, so each line arrives when it is printed and the peak can be placed among them.
+    environment = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    process = subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=environment
+    )
     assert process.stdout is not None
     stream = process.stdout
     lines: list[tuple[float, str]] = []
@@ -276,7 +280,10 @@ def catalog_files(lake: Path) -> dict[str, int] | None:
             " WHERE end_snapshot IS NULL), "
             "(SELECT coalesce(sum(file_size_bytes), 0) FROM c.ducklake_data_file) + "
             "(SELECT coalesce(sum(file_size_bytes), 0) FROM c.ducklake_delete_file), "
-            "(SELECT count(*) FROM c.ducklake_files_scheduled_for_deletion)"
+            "(SELECT count(*) FROM c.ducklake_files_scheduled_for_deletion), "
+            "(SELECT count(*) FROM c.ducklake_data_file WHERE end_snapshot IS NULL), "
+            "(SELECT count(*) FROM c.ducklake_data_file), "
+            "(SELECT count(*) FROM c.ducklake_snapshot)"
         ).fetchone()
     finally:
         connection.close()
@@ -286,6 +293,9 @@ def catalog_files(lake: Path) -> dict[str, int] | None:
         "current_snapshot_bytes": int(row[0]),
         "listed_bytes": int(row[1]),
         "scheduled_for_deletion": int(row[2]),
+        "current_data_files": int(row[3]),
+        "listed_data_files": int(row[4]),
+        "snapshots": int(row[5]),
         "on_disk_bytes": size(data) if data.exists() else 0,
     }
 
