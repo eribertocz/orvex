@@ -682,9 +682,12 @@ def test_an_unfinished_record_that_created_nothing_does_not_bind_a_default_lake(
     assert record_text(folder)["state"] == "creating"
     bare(folder, "")  # no lake section: the default lake
     assert problems(folder) == []
-    lake_place.begin(home(folder), chosen(folder))  # drops the record that bound nothing
-    assert not (home(folder) / lake_place.RECORD_FILE).exists()
+    # Replaces the record that bound nothing with the default lake's own (#204).
+    lake_place.begin(home(folder), chosen(folder))
+    assert record_text(folder)["state"] == "creating"
+    assert "encrypted" not in record_text(folder)
     default_lake(folder)  # the default lake is created, unencrypted
+    lake_place.confirm(home(folder), chosen(folder))  # as its first open does (#204)
     assert problems(folder) == []
     bare(folder, "lake:\n  encrypted: true\n")
     found = problems(folder)
@@ -821,3 +824,77 @@ def test_a_record_that_cannot_be_written_is_reported(
     code, out = run(capsys, "run", str(tmp_path))
     assert code == 0, out
     assert count(tmp_path) == 3
+
+
+# --- the default lake is recorded (#204) ------------------------------------------------------
+
+
+def test_a_default_lake_is_recorded_and_refused_when_its_catalog_is_lost(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from orvex.server import scheduler
+    from orvex.store.errors import StoreError
+
+    project(tmp_path)  # no lake section: the default lake
+    feed(tmp_path, 3)
+    code, out = run(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    record = record_text(tmp_path)
+    assert record["catalog"] == "duckdb" and "state" not in record  # confirmed
+    catalog = home(tmp_path) / "lake" / "catalog.ducklake"
+    kept = tmp_path / "kept"
+    catalog.rename(kept)
+    for command in ("run", "runs", "maintain"):
+        code, out = run(capsys, command, str(tmp_path))
+        assert code == 1, (command, out)
+        assert "STORE_CATALOG_UNAVAILABLE" in out, (command, out)
+        assert not catalog.exists(), command  # no new, empty lake in its place
+    with pytest.raises(StoreError) as raised:
+        scheduler._records(home(tmp_path), chosen(tmp_path))
+    assert raised.value.code == "STORE_CATALOG_UNAVAILABLE"
+    kept.rename(catalog)
+    feed(tmp_path, 5)
+    code, out = run(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    assert count(tmp_path) == 5
+
+
+@pytest.mark.parametrize("command", ["runs", "run"])
+def test_a_default_lake_made_before_204_is_recorded_on_its_next_open(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    project(tmp_path)
+    feed(tmp_path, 3)
+    code, out = run(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    (home(tmp_path) / lake_place.RECORD_FILE).unlink()  # the layout before #204
+    code, out = run(capsys, command, str(tmp_path))
+    assert code == 0, out
+    record = record_text(tmp_path)
+    assert record["catalog"] == "duckdb" and "state" not in record
+
+
+def test_default_lake_data_without_catalog_or_record_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A default lake made before #204 that lost its catalog: its data files remain.
+    project(tmp_path)
+    feed(tmp_path, 3)
+    code, out = run(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    (home(tmp_path) / lake_place.RECORD_FILE).unlink()
+    (home(tmp_path) / "lake" / "catalog.ducklake").unlink()
+    assert lake_place.exists(home(tmp_path))
+    for command in ("run", "runs"):
+        code, out = run(capsys, command, str(tmp_path))
+        assert code == 1, (command, out)
+        assert "STORE_CATALOG_UNAVAILABLE" in out, (command, out)
+    assert not (home(tmp_path) / "lake" / "catalog.ducklake").exists()
+
+
+def test_a_fresh_project_has_no_lake_and_no_orphan_data(tmp_path: Path) -> None:
+    folder = bare(tmp_path / "proj", "")
+    assert not lake_place.exists(home(folder))
+    assert lake_place.missing_catalog(home(folder)) is None
+    lake_place.adopt(home(folder), chosen(folder))  # no catalog: nothing to record
+    assert not (home(folder) / lake_place.RECORD_FILE).exists()
