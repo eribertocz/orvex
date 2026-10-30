@@ -1210,3 +1210,40 @@ def test_a_merge_extraction_model_may_join_and_use_any_zone(
     code, out = run(capsys, folder)
     assert code == 0, out
     assert lake_value(folder, "SELECT count(*) FROM lake.raw.ch_events") == [(3,)]
+
+
+@pytest.mark.parametrize(("declared", "accepted"), [("DateTime", False), ("DateTime('UTC')", True)])
+def test_a_connection_zone_python_cannot_read_is_refused_when_needed(
+    tmp_path: Path,
+    source: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    declared: str,
+    accepted: bool,
+) -> None:
+    # #201: never taken as UTC; a type that declares its zone does not need it.
+    monkeypatch.setattr(clickhouse.Source, "server_zone", property(lambda self: "Mars/Olympus"))
+    convert = "toDateTime(event_time, 'UTC')"
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                f"SELECT event_id AS id, t FROM (SELECT event_id, {convert} AS t FROM events) "
+                f"WHERE t > {{since:{declared}}}"
+            ),
+            "models/raw/ch_events.yaml": (
+                "version: 1\nconnection: analytics_ch\nmaterialized: incremental\n"
+                "incremental:\n  strategy: merge\n  unique_key: [id]\n  time_column: t\n"
+                "  filter: manual\n"
+            ),
+        },
+    )
+    code, out = run(capsys, folder)
+    if accepted:
+        assert code == 0, out
+        return
+    assert code == 1, out
+    assert "SOURCE_ZONE_UNKNOWN" in out
+    assert "Mars/Olympus" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created

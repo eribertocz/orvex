@@ -1280,6 +1280,7 @@ class Source:
 
     def __init__(self, name: str, connection: ClickhouseConnection, password: str) -> None:
         self.name = name
+        self._zone: str | None = None
         self._password = password
         self._connection = connection
         try:
@@ -1356,9 +1357,32 @@ class Source:
 
     @property
     def server_zone(self) -> str:
-        """The server's time zone: the zone of `DateTime` values and parameters that declare
-        none."""
-        return str(self._client.server_tz)
+        """The connection's time zone, as ClickHouse reports it (`SELECT timezone()`, under the
+        validation settings): the zone of `DateTime` values and parameters that declare none,
+        the server's or the user profile's `session_timezone`. Asked once per `Source`; never
+        the client library's guess, which falls back to UTC for a name it cannot resolve
+        (#201)."""
+        if self._zone is None:
+            rows = self._rows("SELECT timezone()", None)
+            self._zone = str(rows[0][0]) if rows and rows[0] else ""
+        return self._zone
+
+    def zone_of(self, since: SinceType) -> str:
+        """The zone a `{since:…}` value is written in: the one the type declares, else the
+        connection's, which must be in the time zone database (`SOURCE_ZONE_UNKNOWN`, #201). A
+        date type is taken in fixed zones (`since_value`) and needs none."""
+        if since.zone is not None or since.family in {"Date", "Date32"}:
+            return since.zone or "UTC"
+        zone = self.server_zone
+        if not known_zone(zone):
+            raise SourceError(
+                "SOURCE_ZONE_UNKNOWN",
+                f"ClickHouse connection {self.name}: {{since:{since.text}}} declares no zone, and "
+                f"the connection's zone {zone!r} (the server's, or the user's profile) is not in "
+                f"the time zone database; declare the zone in the type, for example "
+                f"{{since:{_with_utc(since)}}}.",
+            )
+        return zone
 
     def settings(self) -> dict[str, object]:
         """Settings for each validation query: the limits, then `readonly = 1`. They are sent with
@@ -1465,7 +1489,7 @@ class Source:
                 f"no exact DuckDB type for {', '.join(unsupported)}; cast it in the SQL "
                 "(for example toDecimal128(x, 10) or toString(x)).",
             )
-        return Described(tuple(columns), str(self._client.server_tz))
+        return Described(tuple(columns), self.server_zone)
 
     def check_columns(
         self, text: str, since: SinceType | None, expected: tuple[Column, ...]
@@ -1812,6 +1836,8 @@ def describe_model(
     incremental = model.config.incremental
     try:
         plain = source.check_select(found.text, since)
+        if since is not None:
+            source.zone_of(since)  # a zone the run could not read: refused now (#201)
         append = incremental is not None and incremental.strategy == "append"
         marked = (
             source.explain(mark_since(found), since)
@@ -1828,7 +1854,7 @@ def describe_model(
         if checked and tree_depth(marked) > MAX_DEPTH:
             return _too_deep(model)
         if append and since is not None:
-            zoned = since_zone_problem(model, since, source.server_zone)
+            zoned = since_zone_problem(model, since, source.zone_of(since))
             if zoned is not None:
                 return zoned
             if _refused(lambda: joins(marked)):
@@ -1903,9 +1929,19 @@ _FIXED_FROM, _FIXED_TO = 1970, 2100
 
 
 @functools.cache
+def known_zone(zone: str) -> bool:
+    """Whether `zone` is in the time zone database Python reads (`zoneinfo`)."""
+    try:
+        ZoneInfo(zone)
+    except KeyError, ValueError, OSError:  # ZoneInfoNotFoundError is a KeyError
+        return False
+    return True
+
+
+@functools.cache
 def fixed_offset(zone: str) -> bool:
     """Whether `zone` has one UTC offset from 1970 to 2100 (tz database, read with `zoneinfo`,
-    sampled every day): no daylight-saving or other clock change, so no local time repeats. An
+    sampled every 12 hours): no daylight-saving or other clock change, so no local time repeats. An
     unknown zone counts as no."""
     try:
         found = ZoneInfo(zone)
@@ -1932,7 +1968,11 @@ def since_zone_problem(model: Model, since: SinceType, server_zone: str) -> Mode
     zone = since.zone or server_zone
     if fixed_offset(zone):
         return None
-    where = "declared" if since.zone else "the server's, as the type declares none"
+    where = (
+        "declared"
+        if since.zone
+        else "the connection's: the server's, or the user's profile, as the type declares none"
+    )
     return problem(
         "INVALID_MODEL_SQL",
         f"{model.name}: {{since:{since.text}}} is read in the zone {zone} ({where}), whose "

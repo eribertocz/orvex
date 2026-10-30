@@ -531,3 +531,32 @@ def test_a_clickhouse_join_is_seen_in_the_tree() -> None:
     assert joins(joined)
     assert not joins(plain)
     assert joins("not a tree")  # unreadable: counts as a join
+
+
+def test_a_since_without_zone_needs_a_known_connection_zone() -> None:
+    # #201: a zone Python cannot read is refused, never taken as UTC.
+    from orvex.transform.clickhouse import Source, SourceError, known_zone
+
+    source = Source.__new__(Source)
+    source.name = "ch"
+    source._zone = "Mars/Olympus"  # as `SELECT timezone()` would report it
+    assert not known_zone("Mars/Olympus")
+    for text in ("DateTime", "DateTime64(3)"):
+        declared = since_type(text)
+        assert declared is not None
+        with pytest.raises(SourceError) as raised:
+            source.zone_of(declared)
+        assert raised.value.code == "SOURCE_ZONE_UNKNOWN"
+        assert "Mars/Olympus" in raised.value.message
+        assert "UTC" in raised.value.message
+    for text, zone in (
+        ("DateTime('UTC')", "UTC"),
+        ("DateTime64(3, 'America/La_Paz')", "America/La_Paz"),
+    ):
+        declared = since_type(text)
+        assert declared is not None
+        assert source.zone_of(declared) == zone
+    for text in ("Date", "Date32"):
+        declared = since_type(text)
+        assert declared is not None
+        source.zone_of(declared)  # a date needs no connection zone

@@ -162,6 +162,7 @@ class ModelErrorCode(
             "UNSUPPORTED_SOURCE_VALUE",
             "SOURCE_NOT_READ_ONLY",
             "SOURCE_LIMITS_REFUSED",
+            "SOURCE_ZONE_UNKNOWN",
         ]
     ]
 ):
@@ -195,6 +196,7 @@ class ModelErrorCode(
         "UNSUPPORTED_SOURCE_VALUE",
         "SOURCE_NOT_READ_ONLY",
         "SOURCE_LIMITS_REFUSED",
+        "SOURCE_ZONE_UNKNOWN",
     ]
 
 

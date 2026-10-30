@@ -1356,13 +1356,15 @@ def _extract(
     sent = False
     try:
         since = (
-            clickhouse.since_value(step.since, step.watermark, step.lookback, source.server_zone)
+            clickhouse.since_value(
+                step.since, step.watermark, step.lookback, source.zone_of(step.since)
+            )
             if step.since is not None
             else None
         )
         item.since = since
         if since is not None and step.since is not None:
-            item.bound = clickhouse.since_bound(step.since, since, source.server_zone)
+            item.bound = clickhouse.since_bound(step.since, since, source.zone_of(step.since))
         source.check_columns(step.text, step.since, step.columns)
         sent = True
         stream = source.stream(step.text, step.columns, since, DEFAULT_TIMEOUT_MS // 1000)
