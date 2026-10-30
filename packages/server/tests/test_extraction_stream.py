@@ -648,3 +648,21 @@ def test_a_changed_source_is_refused_before_reading(reader: dict[str, str]) -> N
     finally:
         client.close()
     assert changed.value.code == "SCHEMA_CHANGED"
+
+
+@live
+def test_the_connection_zone_is_read_from_clickhouse(reader: dict[str, str]) -> None:
+    # #201: a profile's `session_timezone` is the zone of parameters that declare none, and the
+    # engine asks ClickHouse for it rather than trusting the client library.
+    user = profiled(reader, "session_timezone = 'America/New_York'")
+    try:
+        client = source(user)
+        try:
+            assert client.server_zone == "America/New_York"
+            declared = since_type("DateTime")
+            assert declared is not None
+            assert client.zone_of(declared) == "America/New_York"
+        finally:
+            client.close()
+    finally:
+        drop(user)

@@ -531,3 +531,71 @@ def test_a_clickhouse_join_is_seen_in_the_tree() -> None:
     assert joins(joined)
     assert not joins(plain)
     assert joins("not a tree")  # unreadable: counts as a join
+
+
+def test_the_connection_zone_is_asked_of_clickhouse_once() -> None:
+    # #201 Reviewer pass 1: the client library's `server_tz` (UTC here, its fallback) is never
+    # used; ClickHouse's own `SELECT timezone()` is, with the validation settings, once.
+    from orvex.transform.clickhouse import Source, SourceError
+
+    asked: list[tuple[str, object]] = []
+
+    class Result:
+        def __init__(self) -> None:
+            self.result_rows = [["Mars/Olympus"]]
+
+    class Client:
+        server_tz = "UTC"
+
+        def query(self, sql: str, settings: object = None, **_: object) -> Result:
+            asked.append((sql, settings))
+            return Result()
+
+    source = Source.__new__(Source)
+    source.name = "ch"
+    source._zone = None
+    source._client = Client()  # type: ignore[assignment]
+    assert source.server_zone == "Mars/Olympus"
+    assert source.server_zone == "Mars/Olympus"
+    assert [sql for sql, _ in asked] == ["SELECT timezone()"]
+    assert asked[0][1] == source.settings()
+    declared = since_type("DateTime")
+    assert declared is not None
+    with pytest.raises(SourceError) as raised:
+        source.zone_of(declared)
+    assert raised.value.code == "SOURCE_ZONE_UNKNOWN"
+    # A declared zone the database does not know is refused too, not a KeyError at run time.
+    unknown = since_type("DateTime64(3, 'Mars/Olympus')")
+    assert unknown is not None
+    with pytest.raises(SourceError) as raised:
+        source.zone_of(unknown)
+    assert raised.value.code == "SOURCE_ZONE_UNKNOWN"
+
+
+def test_a_since_without_zone_needs_a_known_connection_zone() -> None:
+    # #201: a zone Python cannot read is refused, never taken as UTC.
+    from orvex.transform.clickhouse import Source, SourceError, known_zone
+
+    source = Source.__new__(Source)
+    source.name = "ch"
+    source._zone = "Mars/Olympus"  # as `SELECT timezone()` would report it
+    assert not known_zone("Mars/Olympus")
+    for text in ("DateTime", "DateTime64(3)"):
+        declared = since_type(text)
+        assert declared is not None
+        with pytest.raises(SourceError) as raised:
+            source.zone_of(declared)
+        assert raised.value.code == "SOURCE_ZONE_UNKNOWN"
+        assert "Mars/Olympus" in raised.value.message
+        assert "UTC" in raised.value.message
+    for text, zone in (
+        ("DateTime('UTC')", "UTC"),
+        ("DateTime64(3, 'America/La_Paz')", "America/La_Paz"),
+    ):
+        declared = since_type(text)
+        assert declared is not None
+        assert source.zone_of(declared) == zone
+    for text in ("Date", "Date32"):
+        declared = since_type(text)
+        assert declared is not None
+        source.zone_of(declared)  # a date needs no connection zone

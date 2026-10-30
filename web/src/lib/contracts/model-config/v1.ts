@@ -80,7 +80,8 @@ export type ModelErrorCode =
 	| 'SOURCE_QUERY_FAILED'
 	| 'UNSUPPORTED_SOURCE_VALUE'
 	| 'SOURCE_NOT_READ_ONLY'
-	| 'SOURCE_LIMITS_REFUSED';
+	| 'SOURCE_LIMITS_REFUSED'
+	| 'SOURCE_ZONE_UNKNOWN';
 
 /**
  * Sidecar of one model. Without a sidecar a model is `materialized: table`, fully rebuilt on each run.

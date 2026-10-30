@@ -627,7 +627,7 @@ _SIMPLE = {
 @dataclass(frozen=True, slots=True)
 class Mapped:
     """A ClickHouse column type mapped to DuckDB: the type, whether it may be NULL, and the
-    time zone of a `DateTime` column (None: the server's)."""
+    time zone of a `DateTime` column (None: the connection's)."""
 
     duckdb: str
     nullable: bool
@@ -1243,11 +1243,9 @@ class Column:
 
 @dataclass(frozen=True, slots=True)
 class Described:
-    """An extraction model's output: its columns, and the server's time zone (the zone of
-    `DateTime` columns that declare none)."""
+    """An extraction model's output: its columns."""
 
     columns: tuple[Column, ...]
-    server_zone: str
 
 
 class SourceError(Exception):
@@ -1280,6 +1278,7 @@ class Source:
 
     def __init__(self, name: str, connection: ClickhouseConnection, password: str) -> None:
         self.name = name
+        self._zone: str | None = None
         self._password = password
         self._connection = connection
         try:
@@ -1356,9 +1355,41 @@ class Source:
 
     @property
     def server_zone(self) -> str:
-        """The server's time zone: the zone of `DateTime` values and parameters that declare
-        none."""
-        return str(self._client.server_tz)
+        """The connection's time zone, as ClickHouse reports it (`SELECT timezone()`, under the
+        validation settings): the zone of `DateTime` values and parameters that declare none,
+        the server's or the user profile's `session_timezone`. Asked once per `Source`; never
+        the client library's guess, which falls back to UTC for a name it cannot resolve
+        (#201)."""
+        if self._zone is None:
+            try:
+                result = self._client.query("SELECT timezone()", settings=self.settings())
+            except ClickHouseError as error:
+                raise self._error(error, "SOURCE_CONNECTION_FAILED") from None
+            rows = result.result_rows
+            self._zone = str(rows[0][0]) if rows and rows[0] else ""
+        return self._zone
+
+    def zone_of(self, since: SinceType) -> str:
+        """The zone a `{since:…}` value is written in: the one the type declares, else the
+        connection's. Either must be in the time zone database the engine reads
+        (`SOURCE_ZONE_UNKNOWN`, #201). A date type is taken in fixed zones (`since_value`) and
+        needs none."""
+        if since.family in {"Date", "Date32"}:
+            return "UTC"  # unused: dates are taken in fixed zones
+        zone = since.zone or self.server_zone
+        if not known_zone(zone):
+            where = (
+                "declared"
+                if since.zone
+                else "the connection's: the server's, or the user's profile"
+            )
+            raise SourceError(
+                "SOURCE_ZONE_UNKNOWN",
+                f"ClickHouse connection {self.name}: {{since:{since.text}}} is read in the zone "
+                f"{zone!r} ({where}), which is not in the time zone database the engine reads; "
+                f"declare a zone it knows, for example {{since:{_with_utc(since)}}}.",
+            )
+        return zone
 
     def settings(self) -> dict[str, object]:
         """Settings for each validation query: the limits, then `readonly = 1`. They are sent with
@@ -1448,7 +1479,7 @@ class Source:
         )
 
     def describe(self, text: str, since: SinceType | None) -> Described:
-        """The output columns (`DESCRIBE`, nothing executed) and the server's time zone."""
+        """The output columns (`DESCRIBE`, nothing executed)."""
         rows = self._rows(f"DESCRIBE TABLE (\n{text}\n)", since)
         columns: list[Column] = []
         unsupported: list[str] = []
@@ -1465,7 +1496,7 @@ class Source:
                 f"no exact DuckDB type for {', '.join(unsupported)}; cast it in the SQL "
                 "(for example toDecimal128(x, 10) or toString(x)).",
             )
-        return Described(tuple(columns), str(self._client.server_tz))
+        return Described(tuple(columns))
 
     def check_columns(
         self, text: str, since: SinceType | None, expected: tuple[Column, ...]
@@ -1812,6 +1843,8 @@ def describe_model(
     incremental = model.config.incremental
     try:
         plain = source.check_select(found.text, since)
+        if since is not None:
+            source.zone_of(since)  # a zone the run could not read: refused now (#201)
         append = incremental is not None and incremental.strategy == "append"
         marked = (
             source.explain(mark_since(found), since)
@@ -1828,7 +1861,7 @@ def describe_model(
         if checked and tree_depth(marked) > MAX_DEPTH:
             return _too_deep(model)
         if append and since is not None:
-            zoned = since_zone_problem(model, since, source.server_zone)
+            zoned = since_zone_problem(model, since, source.zone_of(since))
             if zoned is not None:
                 return zoned
             if _refused(lambda: joins(marked)):
@@ -1903,9 +1936,19 @@ _FIXED_FROM, _FIXED_TO = 1970, 2100
 
 
 @functools.cache
+def known_zone(zone: str) -> bool:
+    """Whether `zone` is in the time zone database Python reads (`zoneinfo`)."""
+    try:
+        ZoneInfo(zone)
+    except KeyError, ValueError, OSError:  # ZoneInfoNotFoundError is a KeyError
+        return False
+    return True
+
+
+@functools.cache
 def fixed_offset(zone: str) -> bool:
     """Whether `zone` has one UTC offset from 1970 to 2100 (tz database, read with `zoneinfo`,
-    sampled every day): no daylight-saving or other clock change, so no local time repeats. An
+    sampled every 12 hours): no daylight-saving or other clock change, so no local time repeats. An
     unknown zone counts as no."""
     try:
         found = ZoneInfo(zone)
@@ -1925,14 +1968,18 @@ def since_zone_problem(model: Model, since: SinceType, server_zone: str) -> Mode
     """`INVALID_MODEL_SQL` when an `append` model's `{since:DateTime…}` is read in a zone whose
     clock goes back (#189): `since_value` writes the watermark as local time, and ClickHouse reads
     a repeated local time as its earlier instant, so up to an hour of rows would be read, and
-    inserted, again. The zone is the one the type declares, else the server's. A date type is
+    inserted, again. The zone is the one the type declares, else the connection's. A date type is
     taken in a fixed zone already."""
     if since.family not in {"DateTime", "DateTime64"}:
         return None
     zone = since.zone or server_zone
     if fixed_offset(zone):
         return None
-    where = "declared" if since.zone else "the server's, as the type declares none"
+    where = (
+        "declared"
+        if since.zone
+        else "the connection's: the server's, or the user's profile, as the type declares none"
+    )
     return problem(
         "INVALID_MODEL_SQL",
         f"{model.name}: {{since:{since.text}}} is read in the zone {zone} ({where}), whose "
@@ -2178,7 +2225,7 @@ _EARLIEST_MIDNIGHT = "Etc/GMT-14"  # UTC+14, fixed: a date's midnight comes firs
 
 def _since_zone(since: SinceType, server: str, *, earliest: bool = False) -> ZoneInfo:
     """The zone of a `{since:…}` value. A time is in the zone its type declares, else the
-    server's. A date is taken where its midnight comes last (so no newer row is skipped), and
+    connection's. A date is taken where its midnight comes last (so no newer row is skipped), and
     its boundary where midnight comes first (so a check never counts a row ClickHouse did not
     read)."""
     if since.family in {"Date", "Date32"}:
@@ -2188,7 +2235,7 @@ def _since_zone(since: SinceType, server: str, *, earliest: bool = False) -> Zon
 
 def since_bound(since: SinceType, text: str, server: str) -> tuple[str, str]:
     """The boundary that `{since:…}` = `text` puts on the rows, for DuckDB: the instant (ISO 8601,
-    in UTC) and the date, `text` being in the parameter's zone (the server's when it declares
+    in UTC) and the date, `text` being in the parameter's zone (the connection's when it declares
     none). A date is midnight where midnight comes first (UTC+14): no earlier than ClickHouse's
     own boundary, whatever zone it compared in. ClickHouse reads an ambiguous local time as the
     earlier instant (measured on 26.9), as `fold=0` does here.
@@ -2212,7 +2259,7 @@ def since_value(since: SinceType, watermark: str | None, lookback: str | None, s
     `watermark` is the model's previous watermark as stored (DuckDB text: `YYYY-MM-DD` for a
     `Date` time column, an ISO instant with offset for a `DateTime` one; None on a first run or
     a full refresh, which bind the lowest value of the type). `lookback` is subtracted from the
-    instant; the result is written in the parameter's zone (the server's when it declares none),
+    instant; the result is written in the parameter's zone (the connection's when it declares none),
     or for `Date`/`Date32` in UTC-12, where a date's midnight comes last, so no row newer than
     the watermark is skipped whatever zone ClickHouse compares the date in (it may read up to
     two days again): a date for `Date`/`Date32`, seconds for `DateTime`, `p` fraction digits
