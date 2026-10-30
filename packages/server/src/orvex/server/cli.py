@@ -42,6 +42,7 @@ LOCAL_HOST = "127.0.0.1"
 COMMANDS = frozenset({"validate", "run", "runs", "schedule", "maintain"})
 DEFAULT_PORT = 7878
 PORT_ATTEMPTS = 100
+MAX_PORT = 65_535
 
 
 def parser_for(identity: Identity) -> argparse.ArgumentParser:
@@ -55,22 +56,39 @@ def parser_for(identity: Identity) -> argparse.ArgumentParser:
         type=Path,
         help="project folder to open (created if missing); omitted: a temporary in-memory project",
     )
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="first port to try")
+    parser.add_argument(
+        "--port",
+        type=port_number,
+        default=DEFAULT_PORT,
+        help=f"first port to try, from 1 to {MAX_PORT}; the next free one is used if it is busy",
+    )
     parser.add_argument("--no-browser", action="store_true", help="do not open the browser")
     parser.add_argument("--version", action="store_true", help="print versions and exit")
     return parser
 
 
+def port_number(text: str) -> int:
+    """A TCP port from 1 to 65535 (#144, decision #182): port 0 would let the system pick a port
+    that is never shown, so the printed address would answer nothing."""
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    if not 1 <= value <= MAX_PORT:
+        raise argparse.ArgumentTypeError(f"must be a port number from 1 to {MAX_PORT}")
+    return value
+
+
 def free_port(first: int, host: str = LOCAL_HOST, attempts: int = PORT_ATTEMPTS) -> int:
-    """The first port from `first` on that can be bound on `host`."""
-    for port in range(first, first + attempts):
+    """The first port from `first` on that can be bound on `host`, never past 65535."""
+    for port in range(first, min(first + attempts, MAX_PORT + 1)):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as candidate:
             try:
                 candidate.bind((host, port))
             except OSError:
                 continue
             return port
-    raise OSError(f"no free port in {first}..{first + attempts - 1}")
+    raise OSError(f"no free port from {first} to {min(first + attempts - 1, MAX_PORT)}")
 
 
 def web_build_directory() -> Path | None:
@@ -204,7 +222,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
 
     with project_context as project:
-        port = free_port(arguments.port)
+        try:
+            port = free_port(arguments.port)
+        except OSError as error:
+            print(f"{error}; choose another --port", file=sys.stderr)
+            return 1
         url = f"http://{LOCAL_HOST}:{port}/"
         server = uvicorn.Server(server_config(port, versions, web_build_directory()))
         with stopping(server) as received:
