@@ -614,6 +614,22 @@ def test_sql_that_does_not_parse_fails_with_the_parser_message(lake: Lake, sql: 
         assert "syntax error" in str(raised.value.details.get("duckdb", ""))
 
 
+def test_sql_naming_a_lake_data_file_that_does_not_parse_fails_before_any_check(
+    lake: Lake, tmp_path: Path
+) -> None:
+    # #158: it does not parse, so nothing runs and the file is never named to a check.
+    write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(200000)"))
+    before = lake.current_snapshot().id
+    target = next(tmp_path.rglob("ducklake-*.parquet")).as_posix()
+    sql = f"SELECT * FROM '{target}' desc"
+    for action in (lambda: read(lake, sql), lambda: write(lake, statement(sql))):
+        with pytest.raises(StoreError) as raised:
+            action()
+        assert raised.value.code == "STORE_QUERY_FAILED"
+        assert "syntax error" in str(raised.value.details.get("duckdb", ""))
+    assert lake.current_snapshot().id == before
+
+
 def test_histogram_ducklake_macros_and_table_options_are_refused_through_the_lake(
     lake: Lake, tmp_path: Path
 ) -> None:
