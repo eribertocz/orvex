@@ -6,6 +6,7 @@ token each check must find.
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -438,6 +439,28 @@ def test_a_pattern_too_broad_to_check_is_refused_quickly(pattern: str) -> None:
         _guarded(f"SELECT '{pattern}' AS p", table_functions())
     assert raised.value.code == "STORE_STATEMENT_INVALID"
     assert time.monotonic() - started < 1.0
+    # #193: `/**` may meet a folder the user cannot list before the budget runs out (the CI
+    # runner does); `/usr` holds none.
+    reasons = (
+        {"pattern_too_broad", "pattern_unreadable"}
+        if pattern == "/**/zz_none*"
+        else {"pattern_too_broad"}
+    )
+    assert raised.value.details["reason"] in reasons
+
+
+def test_many_strings_over_one_large_folder_are_bounded(tmp_path: Path) -> None:
+    # #193 Reviewer pass 1: 34,000 'big/zz*' over a kept listing of 9,000 names took 104 s.
+    big = tmp_path / "big"
+    big.mkdir()
+    for index in range(9000):
+        (big / f"f{index}").write_text("")
+    sql = "SELECT " + ", ".join(f"'{big}/zz*' AS c{index}" for index in range(34000))
+    started = time.monotonic()
+    with pytest.raises(StoreError) as raised:
+        _guarded(sql, table_functions())
+    assert time.monotonic() - started < 1.0
+    assert raised.value.details == {"reason": "pattern_too_broad"}
 
 
 def test_a_pattern_in_a_small_folder_is_checked_as_before(tmp_path: Path) -> None:
@@ -451,16 +474,26 @@ def test_a_pattern_in_a_small_folder_is_checked_as_before(tmp_path: Path) -> Non
 
 
 def test_one_budget_covers_the_whole_statement(tmp_path: Path) -> None:
-    folder = tmp_path / "many"
-    folder.mkdir()
-    for index in range(1000):
-        (folder / f"f{index}.txt").write_text("")
-    single = f"SELECT '{folder}/*.csv' AS p"
+    folders = []
+    for number in range(50):
+        folder = tmp_path / f"many{number}"
+        folder.mkdir()
+        for index in range(1000):
+            (folder / f"f{index}.txt").write_text("")
+        folders.append(folder)
+    single = f"SELECT '{folders[0]}/*.csv' AS p"
     _guarded(single, table_functions())  # 1,000 entries: within the budget
-    together = "SELECT " + ", ".join(f"'{folder}/*.csv{index}' AS p{index}" for index in range(50))
+    # #193: the same folder read by 50 patterns is read once.
+    same = "SELECT " + ", ".join(f"'{folders[0]}/*.csv{index}' AS p{index}" for index in range(50))
+    _guarded(same, table_functions())
+    # 50 folders of 1,000 entries together: past it.
+    together = "SELECT " + ", ".join(
+        f"'{folder}/*.csv' AS p{index}" for index, folder in enumerate(folders)
+    )
     with pytest.raises(StoreError) as raised:
-        _guarded(together, table_functions())  # 50,000 entries together: past it
+        _guarded(together, table_functions())
     assert raised.value.code == "STORE_STATEMENT_INVALID"
+    assert raised.value.details == {"reason": "pattern_too_broad"}
 
 
 @pytest.mark.parametrize(
@@ -502,9 +535,60 @@ def test_each_folder_read_costs_more_than_an_entry(tmp_path: Path) -> None:
 
 
 def test_text_naming_missing_folders_costs_little() -> None:
-    # A missing folder costs one entry, so ordinary text such as 'N/A*' stays allowed.
-    sql = "SELECT " + ", ".join(f"'N/A*{index}' AS c{index}" for index in range(1000))
+    # A missing folder costs one entry, once per statement: ordinary text such as 'N/A*' stays
+    # allowed (#193).
+    sql = "SELECT " + ", ".join(f"'N/A*{index}' AS c{index}" for index in range(5000))
     _guarded(sql, table_functions())
+
+
+def test_text_that_lists_the_working_folder_reads_it_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #193: text with a `.` and a glob character but no `/` lists the working folder; about 140
+    # such strings were refused when each one read it again.
+    for index in range(20):
+        (tmp_path / f"w{index}.txt").write_text("")
+    monkeypatch.chdir(tmp_path)
+    texts = [f"'Is it paid? Yes {index}.'" for index in range(1000)]
+    texts += [f"'v1.{index}*'" for index in range(1000)]
+    sql = "SELECT " + ", ".join(f"{text} AS c{index}" for index, text in enumerate(texts))
+    started = time.monotonic()
+    _guarded(sql, table_functions())
+    assert time.monotonic() - started < 1.0
+
+
+def test_a_named_file_and_an_unchecked_pattern_have_their_own_reason(tmp_path: Path) -> None:
+    (tmp_path / "x.csv").write_text("a\n1\n")
+    with pytest.raises(StoreError) as raised:
+        _guarded(f"SELECT '{tmp_path}/x.csv' AS p", table_functions())
+    assert raised.value.details == {"reason": "names_a_file"}
+    # 250 folders pass the budget (`/**` would meet an unreadable folder first when not root).
+    for index in range(250):
+        (tmp_path / "wide" / f"d{index}").mkdir(parents=True)
+    with pytest.raises(StoreError) as raised:
+        _guarded(f"SELECT '{tmp_path}/wide/*/zz*' AS p", table_functions())
+    assert raised.value.details == {"reason": "pattern_too_broad"}
+    hidden = tmp_path / "closed"
+    hidden.mkdir()
+    hidden.chmod(0)
+    try:
+        if os.access(hidden, os.R_OK):
+            pytest.skip("root reads any folder")
+        with pytest.raises(StoreError) as raised:
+            _guarded(f"SELECT '{hidden}/*.csv' AS p", table_functions())
+        assert raised.value.details == {"reason": "pattern_unreadable"}
+    finally:
+        hidden.chmod(0o700)
+
+
+def test_two_statements_do_not_share_their_listings(tmp_path: Path) -> None:
+    # #193: a file created between two statements is seen by the second.
+    sql = f"SELECT '{tmp_path}/*.csv' AS p"
+    _guarded(sql, table_functions())
+    (tmp_path / "late.csv").write_text("a\n1\n")
+    with pytest.raises(StoreError) as raised:
+        _guarded(sql, table_functions())
+    assert raised.value.details == {"reason": "names_a_file"}
 
 
 @pytest.mark.parametrize("length", [280, 5000])
