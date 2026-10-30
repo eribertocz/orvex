@@ -1349,6 +1349,9 @@ def test_a_clickhouse_name_explain_ast_cannot_delimit_is_seen(sql: str, spaced: 
         "AS rn FROM src) WHERE rn = 1",
         "SELECT s.* FROM src AS s JOIN m ON m.id = s.id "
         "AND s.read_at = (SELECT max(read_at) FROM src AS s2 WHERE s2.id = s.id)",
+        # Reviewer pass 2 on #188: a sample on either side of a join.
+        "SELECT r.* FROM src AS r TABLESAMPLE 10% JOIN m USING (id)",
+        "SELECT r.* FROM src AS r JOIN m TABLESAMPLE 10% USING (id)",
     ],
     ids=[
         "limit",
@@ -1359,6 +1362,8 @@ def test_a_clickhouse_name_explain_ast_cannot_delimit_is_seen(sql: str, spaced: 
         "row-choosing-subquery",
         "window-then-where",
         "subquery-in-join-on",
+        "sample-on-joined-left",
+        "sample-on-joined-right",
     ],
 )
 def test_an_append_model_that_leaves_rows_out_below_its_filter_is_refused(
@@ -1459,3 +1464,36 @@ def test_a_deep_clickhouse_tree_is_read_without_recursion() -> None:
     assert tree_depth(tree) == levels
     assert not sets_settings(tree)
     assert not writes_since_mark(tree)
+
+
+def test_a_clickhouse_relation_read_in_an_expression_is_seen() -> None:
+    # Reviewer pass 2 on #188: `x IN ids` reads a table without a subquery in the AST.
+    from orvex.transform.clickhouse import _reads_a_relation_in_an_expression
+
+    in_table = """QUERY id: 0
+  JOIN TREE
+    TABLE_FUNCTION id: 3, alias: __table1, table_function_name: numbers
+      ARGUMENTS
+        LIST id: 4, nodes: 1
+          CONSTANT id: 5, constant_value: UInt64_10, constant_value_type: UInt8
+  WHERE
+    FUNCTION id: 6, function_name: in, function_type: ordinary, result_type: UInt8
+      ARGUMENTS
+        LIST id: 7, nodes: 2
+          COLUMN id: 2, column_name: number, result_type: UInt64, source_id: 3
+          TABLE id: 8, alias: __table2, table_name: default.ids
+"""
+    joined = """QUERY id: 0
+  JOIN TREE
+    JOIN id: 4, strictness: ALL, kind: INNER
+      LEFT TABLE EXPRESSION
+        QUERY id: 9, is_subquery: 1, cte_name: x
+          JOIN TREE
+            TABLE id: 10, alias: __table3, table_name: default.events
+      RIGHT TABLE EXPRESSION
+        TABLE id: 7, alias: __table2, table_name: default.ids
+      JOIN EXPRESSION
+        FUNCTION id: 8, function_name: equals, function_type: ordinary, result_type: UInt8
+"""
+    assert _reads_a_relation_in_an_expression(in_table)
+    assert not _reads_a_relation_in_an_expression(joined)

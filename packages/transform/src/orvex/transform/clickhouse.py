@@ -1839,6 +1839,8 @@ def keeps_rows(tree: str, query_tree: str) -> bool:
     and `DISTINCT ON` (read as `LIMIT 1 BY`) are refused by `limits_rows`."""
     if any(line.strip() == "QUALIFY" for line in query_tree.split("\n")):
         return False
+    if _reads_a_relation_in_an_expression(query_tree):
+        return False
     root = _ast(tree)
     if root is None:
         return False
@@ -1847,10 +1849,40 @@ def keeps_rows(tree: str, query_tree: str) -> bool:
         node, parent = stack.pop()
         if node.kind.startswith("Sample") or node.kind == "WindowDefinition":
             return False
-        if node.kind == "Subquery" and parent != "TableExpression":
+        # A subquery read as a table: in `FROM`/`JOIN`, or defined by `WITH x AS (…)` (read
+        # where it is named; Reviewer pass 2 on #188).
+        if node.kind == "Subquery" and parent not in {"TableExpression", "WithElement"}:
             return False
         stack.extend((child, node.kind) for child in node.children)
     return True
+
+
+# `EXPLAIN QUERY TREE` nodes that read rows of a relation.
+_RELATIONS = frozenset({"TABLE", "TABLE_FUNCTION", "QUERY", "UNION"})
+# The nodes a relation can sit under: a function's arguments, or a query's join tree.
+_HOLDERS = frozenset({"FUNCTION", "JOIN", "LEFT", "RIGHT", "QUERY", "UNION"})
+
+
+def _reads_a_relation_in_an_expression(query_tree: str) -> bool:
+    """Whether a function reads a relation (`x IN ids`, `x IN cte`): it chooses rows by reading
+    other rows, as `IN (SELECT …)` does, but `EXPLAIN AST` shows no subquery for a table or CTE
+    name (Reviewer pass 2 on #188). Read from the indentation: a relation whose nearest holder
+    is a function."""
+    holders: list[tuple[int, str]] = []
+    for line in query_tree.split("\n"):
+        stripped = line.lstrip(" ")
+        if not stripped:
+            continue
+        indent = len(line) - len(stripped)
+        while holders and holders[-1][0] >= indent:
+            holders.pop()
+        kind = stripped.split(" ", 1)[0].rstrip(",")
+        if kind in _RELATIONS and holders:
+            nearest = next((name for _, name in reversed(holders) if name in _HOLDERS), "")
+            if nearest == "FUNCTION":
+                return True
+        holders.append((indent, kind))
+    return False
 
 
 def _refused(check: Callable[[], bool]) -> bool:

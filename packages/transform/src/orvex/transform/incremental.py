@@ -620,8 +620,6 @@ def since_is_a_lower_bound(
         source = node.get("from_table")
         if node.get("sample") is not None or node.get("qualify") is not None:
             return False
-        if isinstance(source, dict) and source.get("sample") is not None:
-            return False
         # A window function lets a query above choose rows per key, as `QUALIFY` does
         # (`row_number() OVER (…) AS rn` … `WHERE rn = 1`; Reviewer pass 1 on #188).
         if any(item.get("class") == "WINDOW" for item in nodes(node.get("select_list"))):
@@ -631,7 +629,12 @@ def since_is_a_lower_bound(
         joined: list[object] = [source]
         while joined:
             table = joined.pop()
-            if isinstance(table, dict) and table.get("type") == "JOIN":
+            if not isinstance(table, dict):
+                continue
+            # A sample on the table read, or on any table it joins (Reviewer pass 2 on #188).
+            if table.get("sample") is not None:
+                return False
+            if table.get("type") == "JOIN":
                 conditions.append(table.get("condition"))
                 joined += [table.get("left"), table.get("right")]
         return not any(
