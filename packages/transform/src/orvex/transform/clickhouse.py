@@ -1931,9 +1931,12 @@ def describe_model(
                         marked, incremental.time_column.root, strict=append
                     )
                     or limits_rows(query_tree := source.explain(found.text, since, "QUERY TREE"))
-                    or reads_a_field(
-                        source.explain(mark_since(found), since, "QUERY TREE"),
-                        incremental.time_column.root,
+                    or (
+                        bounds_a_qualified_column(marked, incremental.time_column.root)
+                        and reads_a_field(
+                            source.explain(mark_since(found), since, "QUERY TREE"),
+                            incremental.time_column.root,
+                        )
                     )
                     or (append and not keeps_rows(marked, query_tree))
                     or (append and not _stable(source, marked, incremental.time_column.root))
@@ -2133,6 +2136,43 @@ def _below(line: _TreeLine) -> list[_TreeLine]:
         found.append(current)
         stack.extend(current.children)
     return found
+
+
+def bounds_a_qualified_column(marked: str, time_column: str) -> bool:
+    """Whether, in the `EXPLAIN AST` of `mark_since`'s SQL, a comparison holding the mark
+    (`identity(identity(…))`) names the time column with a qualifier (`E.day`). Only a qualified
+    name can be read as a field of a `Tuple` or `JSON` column; an unqualified one is the table's
+    column or the select list's alias (the alias exception), even when that alias is computed
+    from a field (`toDate(J.day) AS day`; Reviewer pass 2 on #205). A tree that cannot be read
+    counts as yes."""
+    root = _ast(marked)
+    if root is None:
+        return True
+
+    def marked_below(node: _Node) -> bool:
+        return any(
+            _function_name(found) == "identity"
+            and any(
+                _function_name(inner) == "identity"
+                for listed in found.children
+                for inner in listed.children
+            )
+            for found in _nodes(node)
+        )
+
+    for node in _nodes(root):
+        if not re.fullmatch(r"(greater|less)(OrEquals)?", _function_name(node)):
+            continue
+        arguments = node.children[0].children if node.children else []
+        if not any(marked_below(argument) for argument in arguments):
+            continue
+        for argument in arguments:
+            if argument.kind != "Identifier":
+                continue
+            qualifier, _, name = argument.detail.split(" ", 1)[0].rpartition(".")
+            if qualifier and name == time_column:
+                return True
+    return False
 
 
 def reads_a_field(marked_query_tree: str, time_column: str) -> bool:

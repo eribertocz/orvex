@@ -1627,3 +1627,64 @@ def test_a_qualified_clickhouse_bound_that_reads_a_field_is_seen() -> None:
     assert not reads_a_field(tree(column), "day")
     assert not reads_a_field(tree(column, projection=field), "day")  # read elsewhere only
     assert reads_a_field("QUERY id: 0", "day")  # no mark: refused
+
+
+# `EXPLAIN AST` of ClickHouse 26.9 for `toDate(E.day) AS day … WHERE day >= {since:Date}` and
+# `… FROM t AS E WHERE E.day >= toStartOfMonth({since:Date})`, the parameter marked.
+_UNQUALIFIED_AST = (
+    "SelectWithUnionQuery (children 1)\n"
+    " ExpressionList (children 1)\n"
+    "  SelectQuery (children 3)\n"
+    "   ExpressionList (children 1)\n"
+    "    Function toDate (alias day) (children 1)\n"
+    "     ExpressionList (children 1)\n"
+    "      Identifier E.day\n"
+    "   TablesInSelectQuery (children 1)\n"
+    "    TablesInSelectQueryElement (children 1)\n"
+    "     TableExpression (children 1)\n"
+    "      TableIdentifier t\n"
+    "   Function greaterOrEquals (children 1)\n"
+    "    ExpressionList (children 2)\n"
+    "     Identifier day\n"
+    "     Function identity (children 1)\n"
+    "      ExpressionList (children 1)\n"
+    "       Function identity (children 1)\n"
+    "        ExpressionList (children 1)\n"
+    "         Function toDate (children 1)\n"
+    "          ExpressionList (children 1)\n"
+    "           Literal UInt64_0\n"
+)
+_QUALIFIED_AST = (
+    "SelectWithUnionQuery (children 1)\n"
+    " ExpressionList (children 1)\n"
+    "  SelectQuery (children 3)\n"
+    "   ExpressionList (children 1)\n"
+    "    Identifier day\n"
+    "   TablesInSelectQuery (children 1)\n"
+    "    TablesInSelectQueryElement (children 1)\n"
+    "     TableExpression (children 1)\n"
+    "      TableIdentifier t (alias E)\n"
+    "   Function greaterOrEquals (children 1)\n"
+    "    ExpressionList (children 2)\n"
+    "     Identifier E.day\n"
+    "     Function toStartOfMonth (children 1)\n"
+    "      ExpressionList (children 1)\n"
+    "       Function identity (children 1)\n"
+    "        ExpressionList (children 1)\n"
+    "         Function identity (children 1)\n"
+    "          ExpressionList (children 1)\n"
+    "           Function toDate (children 1)\n"
+    "            ExpressionList (children 1)\n"
+    "             Literal UInt64_0\n"
+)
+
+
+def test_only_a_qualified_clickhouse_bound_is_checked_for_a_field() -> None:
+    # Reviewer pass 2 on #205: an unqualified bound is the time column or its alias, even when
+    # that alias is computed from a field (`toDate(J.day) AS day`).
+    from orvex.transform.clickhouse import bounds_a_qualified_column
+
+    assert not bounds_a_qualified_column(_UNQUALIFIED_AST, "day")
+    assert bounds_a_qualified_column(_QUALIFIED_AST, "day")
+    assert not bounds_a_qualified_column(_QUALIFIED_AST, "Day")  # names are case-sensitive
+    assert bounds_a_qualified_column("not a tree", "day")  # unreadable: checked

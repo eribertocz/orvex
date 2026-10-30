@@ -1276,6 +1276,11 @@ DAILY = (
     "CAST(tuple(toDate('2020-01-01')), 'Tuple(day Date)') AS E FROM events"
 )
 
+TUPLED = (
+    "SELECT event_id, toString(toStartOfMonth(event_time)) AS month, "
+    "CAST(tuple(toDate(event_time)), 'Tuple(day Date)') AS E FROM events"
+)
+
 
 @pytest.mark.parametrize(
     ("sql", "accepted"),
@@ -1290,8 +1295,26 @@ DAILY = (
             "WHERE s.day >= {since:Date}",
             True,
         ),
+        # Reviewer pass 2 on #205: the time column computed from a field in the bound's own
+        # query (the alias exception); the unqualified bound reads that alias.
+        (
+            f"SELECT event_id, month, toDate(E.day) AS day FROM ({TUPLED}) "
+            "WHERE day >= {since:Date}",
+            True,
+        ),
+        (
+            f"SELECT event_id, month, toDate(tupleElement(E, 1)) AS day FROM ({TUPLED}) "
+            "WHERE day >= toStartOfMonth({since:Date})",
+            True,
+        ),
     ],
-    ids=["tuple-field", "subquery-column", "field-elsewhere"],
+    ids=[
+        "tuple-field",
+        "subquery-column",
+        "field-elsewhere",
+        "alias-of-a-field",
+        "alias-of-tuple-element",
+    ],
 )
 def test_a_qualified_bound_that_reads_a_tuple_field_is_refused(
     tmp_path: Path,
