@@ -1332,3 +1332,62 @@ def test_a_clickhouse_name_explain_ast_cannot_delimit_is_seen(sql: str, spaced: 
     from orvex.transform.clickhouse import scan
 
     assert scan(sql).spaced_name is spaced
+
+
+@pytest.mark.parametrize(
+    "inner",
+    [
+        "SELECT * FROM src LIMIT 10",
+        "SELECT * FROM src OFFSET 5",
+        "SELECT * FROM src USING SAMPLE 10%",
+        "SELECT DISTINCT ON (id) * FROM src",
+        "SELECT * FROM src QUALIFY row_number() OVER (PARTITION BY id ORDER BY read_at DESC) = 1",
+        "SELECT * FROM src AS s WHERE read_at = "
+        "(SELECT max(read_at) FROM src AS s2 WHERE s2.id = s.id)",
+    ],
+    ids=["limit", "offset", "sample", "distinct-on", "qualify", "row-choosing-subquery"],
+)
+def test_an_append_model_that_leaves_rows_out_below_its_filter_is_refused(
+    tmp_path: Path, inner: str
+) -> None:
+    # #183: a row left out at or before the watermark is never read again.
+    sql = f"SELECT * FROM ({inner}) WHERE read_at > $since"
+    found = config_problems(sql_model(tmp_path, MANUAL_APPEND, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+    assert "keep every row they read" in found[0].message
+
+
+@pytest.mark.parametrize(
+    "inner",
+    [
+        "SELECT DISTINCT id, read_at FROM src",
+        "SELECT read_at, count(*) AS n FROM src GROUP BY read_at",
+        "SELECT r.*, m.zone FROM src AS r JOIN m USING (id)",
+        "SELECT * FROM src ORDER BY read_at",
+    ],
+    ids=["distinct", "grouped-by-it", "join", "order-by"],
+)
+def test_an_append_model_that_keeps_every_row_is_accepted(tmp_path: Path, inner: str) -> None:
+    sql = f"SELECT * FROM ({inner}) WHERE read_at > $since"
+    assert config_problems(sql_model(tmp_path, MANUAL_APPEND, sql)) == []
+
+
+def nested(levels: int, bound: str) -> str:
+    sql = f"SELECT * FROM src WHERE {bound}"
+    for _ in range(levels):
+        sql = f"SELECT * FROM ({sql})"
+    return sql
+
+
+@pytest.mark.parametrize(
+    ("sidecar", "bound"), [("append", "read_at > $since"), ("day", "day >= $since")]
+)
+def test_a_deeply_nested_model_is_refused_not_crashed(
+    tmp_path: Path, sidecar: str, bound: str
+) -> None:
+    # #183: 300 nested subqueries raised RecursionError.
+    chosen = MANUAL_APPEND if sidecar == "append" else BY_DAY
+    deep = config_problems(sql_model(tmp_path / "deep", chosen, nested(300, bound)))
+    assert [item.code.root for item in deep] == ["INVALID_MODEL_SQL"]
+    assert "too deeply nested" in deep[0].message
+    assert config_problems(sql_model(tmp_path / "ok", chosen, nested(30, bound))) == []

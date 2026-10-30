@@ -1742,16 +1742,33 @@ def describe_model(
             and since is not None
             else ""
         )
-        if (
+        checked = (
             incremental is not None
             and incremental.strategy in {"partition_overwrite", "append"}
             and since is not None
-            and (
-                found.spaced_name
-                or writes_since_mark(plain)
-                or not since_is_a_lower_bound(marked, incremental.time_column.root, strict=append)
-                or limits_rows(source.explain(found.text, since, "QUERY TREE"))
-                or (append and not _stable(source, marked, incremental.time_column.root))
+        )
+        if checked and query_depth(marked) > MAX_QUERY_DEPTH:
+            return problem(
+                "INVALID_MODEL_SQL",
+                f"{model.name}: queries nested more than {MAX_QUERY_DEPTH} levels deep: too "
+                "deeply nested to check where {since:…} bounds the time column.",
+                file,
+                model=model.name,
+            )
+        if (
+            checked
+            and incremental is not None
+            and _refused(
+                lambda: (
+                    found.spaced_name
+                    or writes_since_mark(plain)
+                    or not since_is_a_lower_bound(
+                        marked, incremental.time_column.root, strict=append
+                    )
+                    or limits_rows(source.explain(found.text, since, "QUERY TREE"))
+                    or (append and not keeps_rows(marked))
+                    or (append and not _stable(source, marked, incremental.time_column.root))
+                )
             )
         ):
             column = incremental.time_column.root
@@ -1781,6 +1798,54 @@ def describe_model(
         return problem(error.code, f"{model.name}: {error.message}", file, model=model.name)
     finally:
         source.close()
+
+
+# How deeply queries may nest in a model whose `{since:…}` is checked (#183).
+MAX_QUERY_DEPTH = 64
+
+
+def query_depth(tree: str) -> int:
+    """How deeply `SelectQuery` nodes nest in an `EXPLAIN AST` text, read from the indentation
+    (no recursion, so any depth can be measured)."""
+    open_queries: list[int] = []
+    deepest = 0
+    for line in tree.split("\n"):
+        stripped = line.lstrip(" ")
+        if not stripped:
+            continue
+        indent = len(line) - len(stripped)
+        while open_queries and open_queries[-1] >= indent:
+            open_queries.pop()
+        if stripped.split(" ", 1)[0] == "SelectQuery":
+            open_queries.append(indent)
+            deepest = max(deepest, len(open_queries))
+    return deepest
+
+
+def keeps_rows(tree: str) -> bool:
+    """Whether an `append` model keeps every row its queries read (#183): no `SAMPLE`, and no
+    subquery used as a condition (`IN (SELECT …)`) rather than as a table. `LIMIT`, `OFFSET`,
+    `LIMIT … BY` and `DISTINCT ON` (read as `LIMIT 1 BY`) are refused by `limits_rows`."""
+    root = _ast(tree)
+    if root is None:
+        return False
+    stack: list[tuple[_Node, str]] = [(root, "")]
+    while stack:
+        node, parent = stack.pop()
+        if node.kind.startswith("Sample"):
+            return False
+        if node.kind == "Subquery" and parent != "TableExpression":
+            return False
+        stack.extend((child, node.kind) for child in node.children)
+    return True
+
+
+def _refused(check: Callable[[], bool]) -> bool:
+    """`check()`, or True when the tree is too deep to follow (#183)."""
+    try:
+        return check()
+    except RecursionError:
+        return True
 
 
 def _stable(source: Source, tree: str, time_column: str) -> bool:

@@ -914,3 +914,50 @@ def test_an_append_time_column_that_changes_every_run_is_refused(
     assert code == 1, out
     assert "INVALID_MODEL_SQL" in out
     assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+
+
+@pytest.mark.parametrize(
+    "inner",
+    [
+        "SELECT * FROM events LIMIT 1 BY event_id",
+        "SELECT * FROM events LIMIT 10",
+        "SELECT * FROM events WHERE event_id IN (SELECT event_id FROM events)",
+    ],
+    ids=["limit-by", "limit", "in-subquery"],
+)
+def test_an_append_model_that_leaves_rows_out_is_refused_before_anything_runs(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str], inner: str
+) -> None:
+    # #183: rows left out at or before the watermark are never read again.
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_events.sql": (
+                f"SELECT event_id, event_time AS t FROM ({inner}) "
+                "WHERE t > {since:DateTime64(6, 'UTC')}"
+            ),
+            "models/raw/ch_events.yaml": APPEND_SIDECAR,
+        },
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created
+
+
+def test_a_deeply_nested_extraction_model_is_refused(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    sql = "SELECT event_id, event_time AS t FROM events WHERE t > {since:DateTime64(6, 'UTC')}"
+    for _ in range(300):
+        sql = f"SELECT * FROM ({sql})"
+    folder = project(
+        tmp_path,
+        source,
+        {"models/raw/ch_events.sql": sql, "models/raw/ch_events.yaml": APPEND_SIDECAR},
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert "Traceback" not in out

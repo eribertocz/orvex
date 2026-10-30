@@ -172,6 +172,10 @@ The time column must also have the same value for a row in every run, or a row r
 
 The check reads the model's own SQL: a time column the source computes on each read (a `now()` in an upstream view or model, a source view, or a ClickHouse `ALIAS` column) is out of its reach. Anything else is `INVALID_MODEL_SQL` at the model's SQL file before anything runs; the message says what to write (`WHERE <time_column> > $since`, or a `{since:…}` type as precise as the column) and points to `strategy: merge` when rows can be read again. `filter: auto` already writes `time_column > $since`.
 
+**Rows kept** (#183). A row left out of a run, at or before the watermark, is never read again, so the queries the time column's trace passes through (DuckDB SQL), or every query of the model (ClickHouse SQL), must keep every row they read: no `LIMIT`, `OFFSET` or sample, no `DISTINCT ON`, `QUALIFY` or `LIMIT … BY`, and no subquery that chooses rows by reading others (in `WHERE`/`HAVING`; in ClickHouse SQL any subquery outside `FROM`, such as `IN (SELECT …)`). Plain `DISTINCT`, `GROUP BY` of the time column passed through, joins and `ORDER BY` are accepted. For "the latest row per key", use `merge`.
+
+**Depth.** A model whose queries nest more than 64 levels deep is refused (`INVALID_MODEL_SQL`, "too deeply nested to check"), for `append` and `partition_overwrite`, rather than checked until a limit is hit. ClickHouse itself refuses SQL nested beyond its parser's depth.
+
 Limit: a row that reaches the source later with a time equal to or older than the watermark (late data) is not read by an `append` model under any filter. Use `merge` with a `lookback` for such sources.
 
 ## Partitions cut by `$since` (`partition_overwrite`)

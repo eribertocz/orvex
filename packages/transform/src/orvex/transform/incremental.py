@@ -557,6 +557,8 @@ def since_is_a_lower_bound(
         """How a query produces the output column `name`."""
         if not isinstance(node, dict) or node.get("type") != "SELECT_NODE":
             return refused  # set operations name columns by position: not traced
+        if not keeps_rows(node):
+            return refused  # rows it leaves out are never read again (#183)
         scope = scope_of(node, outer)
         if scope is None:
             return refused
@@ -596,6 +598,31 @@ def since_is_a_lower_bound(
             return refused if found else absent
         return found[0]
 
+    def keeps_rows(node: Node) -> bool:
+        """Whether a query on the time column's trace keeps every row it reads (#183): no
+        `LIMIT`/`OFFSET`, sample, `DISTINCT ON`, `QUALIFY`, nor a subquery in `WHERE` or `HAVING`
+        that chooses rows by reading others. An `append` model never reads again a row it left
+        out at or before the watermark."""
+        modifiers = node.get("modifiers")
+        for modifier in modifiers if isinstance(modifiers, list) else []:
+            if not isinstance(modifier, dict):
+                return False
+            kind = modifier.get("type")
+            if kind in {"LIMIT_MODIFIER", "LIMIT_PERCENT_MODIFIER"}:
+                return False
+            if kind == "DISTINCT_MODIFIER" and modifier.get("distinct_on_targets"):
+                return False
+        source = node.get("from_table")
+        if node.get("sample") is not None or node.get("qualify") is not None:
+            return False
+        if isinstance(source, dict) and source.get("sample") is not None:
+            return False
+        return not any(
+            item.get("class") == "SUBQUERY"
+            for key in ("where_clause", "having")
+            for item in nodes(node.get(key))
+        )
+
     def stable(tree: object) -> bool:
         """Whether the time column of the model's rows gets the same value for a row in every
         run (#135, Reviewer passes 1 and 2): it is traced from the model's output down to table
@@ -610,7 +637,49 @@ def since_is_a_lower_bound(
         except RecursionError:
             return False  # too deep to follow: refused
 
-    return check(statements, None) and (not strict or stable(statements))
+    if query_depth(statements) > MAX_QUERY_DEPTH:
+        return False
+    try:
+        return check(statements, None) and (not strict or stable(statements))
+    except RecursionError:
+        return False  # too deep to follow: refused (#183)
+
+
+# How deeply queries may nest in a model whose `$since` is checked: deeper is refused, rather
+# than followed until Python's recursion limit (#183).
+MAX_QUERY_DEPTH = 64
+
+
+def query_depth(tree: object) -> int:
+    """How deeply queries nest in a parse tree (a query in a query counts 2), walked without
+    recursion so any depth can be measured."""
+    deepest = 0
+    stack: list[tuple[object, int]] = [(tree, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, dict):
+            if str(node.get("type")) in {"SELECT_NODE", "SET_OPERATION_NODE"}:
+                depth += 1
+                deepest = max(deepest, depth)
+            stack.extend((value, depth) for value in node.values())
+        elif isinstance(node, list):
+            stack.extend((value, depth) for value in node)
+    return deepest
+
+
+def sql_depth(sql: str) -> int:
+    """`query_depth` of a DuckDB-SQL statement; 0 when it does not parse."""
+    connection = duckdb.connect()
+    try:
+        connection.execute("SET enable_external_access = false")
+        connection.execute("SET autoload_known_extensions = false")
+        row = connection.execute("SELECT json_serialize_sql($sql)", {"sql": sql}).fetchone()
+    except duckdb.Error:
+        return 0
+    finally:
+        connection.close()
+    tree = json.loads(str(row[0])) if row else {}
+    return query_depth(tree.get("statements"))
 
 
 # Functions DuckDB marks `CONSISTENT` whose value still changes between runs (the session's
@@ -708,6 +777,14 @@ def since_bound_problem(model: Model, columns_of: ColumnsOf | None = None) -> Mo
         return None
     append = incremental.strategy == "append"
     column = incremental.time_column.root
+    if sql_depth(model.sql) > MAX_QUERY_DEPTH:
+        return problem(
+            "INVALID_MODEL_SQL",
+            f"{model.sql_file}: queries nested more than {MAX_QUERY_DEPTH} levels deep: too "
+            "deeply nested to check where $since bounds the time column.",
+            model.sql_file,
+            model=model.name,
+        )
     if since_is_a_lower_bound(model.sql, column, columns_of, strict=append):
         return None
     if append:
@@ -716,7 +793,9 @@ def since_bound_problem(model: Model, columns_of: ColumnsOf | None = None) -> Mo
             f"{model.sql_file}: an append model inserts every row it reads, so its filter must "
             f"read each row once: write WHERE {column} > $since (not >=, no expression around "
             f"$since, no OR {column} IS NULL), in queries that return {column} unchanged and "
-            "keep their rows. Use strategy merge when rows can be read again.",
+            "keep every row they read (no LIMIT, DISTINCT ON, QUALIFY or row-choosing subquery "
+            "below the filter). Use strategy merge when rows can be read again, or for the "
+            "latest row per key.",
             model.sql_file,
             model=model.name,
         )
