@@ -234,15 +234,27 @@ class SinceType:
     text: str  # as written, normalized
 
     def lowest(self) -> str:
-        """The lowest value of the type, as ClickHouse reads it for a parameter: what a first
-        run and a full refresh bind (transformation.md §3.3)."""
+        """What a first run and a full refresh bind (transformation.md §3.3): a value no later
+        than the first instant the type holds, whatever zone ClickHouse reads it in, so the run
+        reads every row the type can compare (#179). Measured on ClickHouse 26.9:
+
+        - `Date` holds days from 1970-01-01, its first value.
+        - `Date32` holds days from 0000-01-01.
+        - `DateTime` holds seconds from 1970-01-01 00:00:00 UTC; a local time before it is read
+          as that first second in every zone, so 1900 binds it even where midnight of
+          1970-01-01 comes later (west of UTC).
+        - `DateTime64(p)` holds instants from 0000-01-01 00:00:00 UTC, or from
+          1677-09-21 00:12:43.145224192 UTC (the lowest 64-bit count of nanoseconds) when p is 9;
+          a number is read as seconds since 1970-01-01 UTC, so the instant is the same in every
+          zone.
+        """
         if self.family == "Date":
             return "1970-01-01"
         if self.family == "Date32":
-            return "1900-01-01"
+            return "0000-01-01"
         if self.family == "DateTime":
-            return "1970-01-01 00:00:00"
-        return "1900-01-01 00:00:00"
+            return "1900-01-01 00:00:00"
+        return "-9223372036.854775808" if self.precision == 9 else "-62167219200"
 
 
 _ZONE = r"'([A-Za-z0-9_+\-/]+)'"
@@ -345,6 +357,71 @@ def since_precision_problems(model: Model, columns: tuple[Column, ...]) -> list[
             f"{found.name} ({found.clickhouse}): an append model would read again, and insert "
             "twice, rows it already loaded. Declare {since:…} at least as precise as the "
             "column ({since:Date} or {since:Date32} for a date column), or use strategy merge.",
+            model.sql_file,
+            model=model.name,
+        )
+    ]
+
+
+def _kind(clickhouse_type: str) -> str | None:
+    """The date or time family of a type, wrappers read through, with `DateTime64(9)` apart:
+    its range starts in 1677, the other precisions' in year 0. None for anything else."""
+    text = clickhouse_type
+    while (inner := re.fullmatch(r"(?:Nullable|LowCardinality)\((.*)\)", text)) is not None:
+        text = inner.group(1)
+    if text in {"Date", "Date32"}:
+        return text
+    if text == "DateTime" or text.startswith("DateTime("):
+        return "DateTime"
+    found = re.fullmatch(r"DateTime64\((\d+)(?:,.*)?\)", text)
+    if found is None:
+        return None
+    return "DateTime64(9)" if found.group(1) == "9" else "DateTime64"
+
+
+# The time columns a first run reads in full, for each `{since:…}` family: `time_column >=
+# lowest()` holds for the column's first value, in every zone of the column, the parameter and
+# the server. Measured on ClickHouse 26.9 (UTC, America/Lima, Etc/GMT-14 and none for the
+# column and the parameter; servers in America/La_Paz, UTC and Asia/Tokyo). Elsewhere the
+# parameter's first value is later than the column's, or later in some zone (a date compared
+# with a time, at midnight where the comparison takes it), or the comparison fails: a
+# `DateTime64(9)` and another precision cannot be compared at year 0 (decimal overflow).
+# A time column is never a `DateTime64(9)` (`map_type` maps at most 6 digits), so no set lists
+# one; the contract lists the same pairs (Reviewer pass 3 on #187).
+_FIRST_RUN_READS = {
+    "Date": frozenset({"Date"}),
+    "Date32": frozenset({"Date", "Date32", "DateTime"}),
+    "DateTime": frozenset({"Date", "DateTime"}),
+    "DateTime64": frozenset({"Date", "Date32", "DateTime", "DateTime64"}),
+    # Not `Date32`: it holds dates from year 0, before 1677; with `>` a first run would skip
+    # them (Reviewer pass 2 on #187).
+    "DateTime64(9)": frozenset({"Date", "DateTime"}),
+}
+
+
+def since_range_problems(model: Model, columns: tuple[Column, ...]) -> list[ModelError]:
+    """An incremental extraction model whose `{since:…}` type cannot start a first run (or a
+    full refresh) at its time column's first value (#179): the run would skip the column's
+    oldest rows for good, under any strategy, or fail. The column's own type always can."""
+    incremental = model.config.incremental
+    since = declared_since(model)
+    if incremental is None or since is None:
+        return []
+    time_column = incremental.time_column.root.lower()
+    found = next((column for column in columns if column.name.lower() == time_column), None)
+    if found is None:
+        return []
+    column = _kind(found.clickhouse)
+    declared = "DateTime64(9)" if since.precision == 9 else since.family
+    if column is None or column in _FIRST_RUN_READS[declared]:
+        return []
+    return [
+        problem(
+            "INVALID_MODEL_SQL",
+            f"{model.sql_file}: {{since:{since.text}}} cannot start a first run at the oldest "
+            f"value of the time_column {found.name} ({found.clickhouse}): a first run or a full "
+            "refresh would skip its oldest rows for good, or fail. Declare {since:…} with the "
+            "column's own type.",
             model.sql_file,
             model=model.name,
         )
@@ -2083,12 +2160,12 @@ def load_columns(columns: tuple[Column, ...]) -> list[tuple[str, str]]:
     ]
 
 
-# The lowest instant `$since` can take for each family, as a naive local date and time.
-_LOWEST = {
-    "Date": dt.datetime(1970, 1, 1),
-    "Date32": dt.datetime(1900, 1, 1),
-    "DateTime": dt.datetime(1970, 1, 1),
-    "DateTime64": dt.datetime(1900, 1, 1),
+# The first instant of the types whose range starts after Python's year 1 (see
+# `SinceType.lowest`): a value before it is bound as `lowest()`. `DateTime64(9)`'s first
+# instant, 1677-09-21 00:12:43.145224192 UTC, is rounded up to a microsecond.
+_FIRST_INSTANT = {
+    "DateTime": dt.datetime(1970, 1, 1, tzinfo=dt.UTC),
+    "DateTime64(9)": dt.datetime(1677, 9, 21, 0, 12, 43, 145225, tzinfo=dt.UTC),
 }
 
 
@@ -2120,6 +2197,9 @@ def since_bound(since: SinceType, text: str, server: str) -> tuple[str, str]:
     with this value, not with the stored watermark: `since_value` truncates to the declared type,
     so rows between the two are read again (#98). A date's instant is kept as its earliest
     midnight, the value no row ClickHouse did not read is ever after."""
+    if text == since.lowest():
+        # A first run or a full refresh: every row of the time column was read (#179).
+        return "-infinity", "-infinity"
     local = dt.datetime.fromisoformat(text)
     zone = _since_zone(since, server, earliest=True)
     instant = local.replace(tzinfo=zone).astimezone(dt.UTC)
@@ -2148,19 +2228,28 @@ def since_value(since: SinceType, watermark: str | None, lookback: str | None, s
         )
     zone = _since_zone(since, server)
     back = dt.timedelta(microseconds=lookback_microseconds(lookback))
-    if "T" not in watermark and " " not in watermark:
-        # A date: midnight of that day in the parameter's zone.
-        moment = dt.datetime.combine(dt.date.fromisoformat(watermark), dt.time(), zone)
-    else:
-        moment = dt.datetime.fromisoformat(watermark).astimezone(zone)
-    # The lookback is subtracted from the instant (UTC), never from wall-clock time, so a
-    # daylight-saving change inside it cannot shorten it.
-    local = (moment.astimezone(dt.UTC) - back).astimezone(zone).replace(tzinfo=None)
-    if local < _LOWEST[since.family]:
+    try:
+        if "T" not in watermark and " " not in watermark:
+            # A date: midnight of that day in the parameter's zone.
+            moment = dt.datetime.combine(dt.date.fromisoformat(watermark), dt.time(), zone)
+        else:
+            moment = dt.datetime.fromisoformat(watermark).astimezone(zone)
+        # The lookback is subtracted from the instant (UTC), never from wall-clock time, so a
+        # daylight-saving change inside it cannot shorten it.
+        instant = moment.astimezone(dt.UTC) - back
+        local = instant.astimezone(zone).replace(tzinfo=None)
+    except OverflowError:
+        return since.lowest()  # before year 1: the first value of every type is earlier
+    kind = "DateTime64(9)" if since.precision == 9 else since.family
+    first = _FIRST_INSTANT.get(kind)
+    if (first is not None and instant < first) or (
+        since.family == "Date" and local.date() < dt.date(1970, 1, 1)
+    ):
         return since.lowest()
     if since.family in {"Date", "Date32"}:
         return local.date().isoformat()
-    text = local.strftime("%Y-%m-%d %H:%M:%S")
+    # `isoformat` writes the year in four digits, as ClickHouse reads it (`strftime` may not).
+    text = local.isoformat(sep=" ", timespec="seconds")
     if since.family == "DateTime64" and since.precision:
         text += "." + f"{local.microsecond:06d}"[: since.precision].ljust(since.precision, "0")
     return text

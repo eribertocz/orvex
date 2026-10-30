@@ -114,11 +114,12 @@ def test_scan() -> None:
     ("text", "lowest"),
     [
         ("Date", "1970-01-01"),
-        ("Date32", "1900-01-01"),
-        ("DateTime", "1970-01-01 00:00:00"),
-        ("DateTime('UTC')", "1970-01-01 00:00:00"),
-        ("DateTime64(3)", "1900-01-01 00:00:00"),
-        ("DateTime64(6, 'America/La_Paz')", "1900-01-01 00:00:00"),
+        ("Date32", "0000-01-01"),
+        ("DateTime", "1900-01-01 00:00:00"),
+        ("DateTime('UTC')", "1900-01-01 00:00:00"),
+        ("DateTime64(3)", "-62167219200"),
+        ("DateTime64(6, 'America/La_Paz')", "-62167219200"),
+        ("DateTime64(9, 'UTC')", "-9223372036.854775808"),
     ],
 )
 def test_since_types(text: str, lowest: str) -> None:
