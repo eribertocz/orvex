@@ -488,6 +488,25 @@ def test_a_long_pattern_is_checked_quickly_without_error(tmp_path: Path, shape: 
     assert time.monotonic() - started < 1.0
 
 
+def test_each_folder_read_costs_more_than_an_entry(tmp_path: Path) -> None:
+    # #178: a cold disk cache makes each folder read slow (about 2 ms on the CI runner), so
+    # folders are counted apart from the entries they hold: 250 empty folders pass the budget.
+    for index in range(250):
+        (tmp_path / f"d{index}").mkdir()
+    with pytest.raises(StoreError) as raised:
+        _guarded(f"SELECT '{tmp_path}/*/zz*' AS p", table_functions())
+    assert raised.value.code == "STORE_STATEMENT_INVALID"
+    for index in range(150, 250):
+        (tmp_path / f"d{index}").rmdir()
+    _guarded(f"SELECT '{tmp_path}/*/zz*' AS p", table_functions())  # 150 folders: within it
+
+
+def test_text_naming_missing_folders_costs_little() -> None:
+    # A missing folder costs one entry, so ordinary text such as 'N/A*' stays allowed.
+    sql = "SELECT " + ", ".join(f"'N/A*{index}' AS c{index}" for index in range(1000))
+    _guarded(sql, table_functions())
+
+
 @pytest.mark.parametrize("length", [280, 5000])
 def test_text_whose_folder_name_is_too_long_to_exist_is_allowed(length: int) -> None:
     # #178 Reviewer pass 3: ordinary text with a `/` and a `?` was refused when a part before

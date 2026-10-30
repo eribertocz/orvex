@@ -880,6 +880,11 @@ def _refuse_show_statements(
 # broad to check within it counts as naming a file, so the statement is refused.
 PATTERN_BUDGET = 10_000
 
+# What reading one folder costs, in entries: far more than an entry when the disk cache is
+# cold (the CI runner took about 2 ms per folder of /usr, so 455 folders took 1 s), so at
+# most 200 folders are read for one statement whatever they hold.
+FOLDER_COST = 50
+
 
 class _Budget:
     """The directory entries a statement's file checks may still read."""
@@ -900,12 +905,14 @@ def _spend(budget: _Budget, units: int = 1) -> None:
 
 def _listed(folder: str, budget: _Budget) -> list[tuple[str, bool]]:
     """A folder's entries as (name, is a folder), each read counted against the budget, the
-    read itself too. A folder that does not exist, is not one, or whose name is too long to
-    exist has none; one that cannot be listed, or an entry whose kind cannot be told (a
-    symbolic-link loop), cannot be checked."""
+    read itself as one entry, or as `FOLDER_COST` when the folder is there to be read. A folder
+    that does not exist, is not one, or whose name is too long to exist has none; one that
+    cannot be listed, or an entry whose kind cannot be told (a symbolic-link loop), cannot be
+    checked."""
     _spend(budget)
     try:
         with os.scandir(folder or ".") as found:
+            _spend(budget, FOLDER_COST - 1)  # a folder that is there and is read
             entries = []
             for entry in found:
                 _spend(budget)
