@@ -56,6 +56,7 @@ New cross-field rules are added by the issues that implement those behaviors, as
 | `UNSUPPORTED_SOURCE_VALUE` | An extraction model sent text that is not valid UTF-8; the message names the column and the row's position in the stream. The value is never stored altered or dropped: the run rolls back |
 | `SOURCE_NOT_READ_ONLY` | An extraction model's ClickHouse user whose profile fixes `readonly` to `0` or `2`: its queries cannot be made read-only (`readonly = 1`) |
 | `SOURCE_LIMITS_REFUSED` | An extraction model's ClickHouse user that does not accept the validation limits (`max_execution_time`, `max_rows_to_read`, `read_overflow_mode`), or whose queries could lift them; the message gives the configuration (decision #114). At run time: a profile that does not let the run set its own settings (below) |
+| `LINEAGE_NOT_SENT` | Run output only, not a `ModelError`: a warning printed after the run when its OpenLineage events could not be built, written to `.<slug>/lineage/`, or posted to the configured collector (an unset key variable, a collector that cannot be reached, a refused or redirected request). The run's outcome does not change. The message names where the problem is (the events file, the lineage folder or `project.yaml`) and the kind of failure, never the key or the collector's address |
 
 ## Extraction models (ClickHouse)
 

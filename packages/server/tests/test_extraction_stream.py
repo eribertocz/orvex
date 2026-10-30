@@ -39,7 +39,9 @@ from orvex.transform.clickhouse import (
 from orvex.transform.incremental import Check
 from orvex.transform.models import Model, discover_models
 
-SERVER = os.environ.get("TRANSFORM_TEST_CLICKHOUSE")
+from tests.support.services import required_in_ci
+
+SERVER = required_in_ci("TRANSFORM_TEST_CLICKHOUSE")  # fails in CI when unset (#173)
 live = pytest.mark.skipif(SERVER is None, reason="no ClickHouse server for tests")
 READER_PASSWORD = "reader-" + uuid.uuid4().hex
 

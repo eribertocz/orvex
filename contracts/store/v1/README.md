@@ -198,6 +198,10 @@ Preconditions:
 | `STORE_TYPE_UNSUPPORTED` | A result column has a type with no JSON encoding yet |
 | `STORE_CATALOG_UNAVAILABLE` | The lake cannot be opened: its catalog (a DuckDB or SQLite file, or PostgreSQL) cannot be reached or refused the credentials, its data files cannot be reached, or DuckDB refused the object storage settings; DuckDB's message is in `details`, never a credential |
 | `STORE_LOCATION_INVALID` | The data location is not a local path or an `s3://` prefix, or an `s3://` path and the storage settings do not come together (new in #126, compatible) |
+| `SOURCE_NOT_FOUND` | A declared file source matches no file, or a SQLite source file does not exist, when the lake opens; `details` names the source |
+| `STORE_SOURCE_INVALID` | A source the lake cannot attach safely: two sources with the same name, a DuckDB source that defines views or macros, a SQLite source that defines views; `details` names the source |
+| `STORE_CONNECTION_FAILED` | A database source (PostgreSQL, SQLite) cannot be reached or refuses the credentials; `details` names the source, the password redacted |
+| `UNSUPPORTED_SOURCE_TYPE` | A write reads a source column DuckDB cannot carry exactly (see "Exact types" above); the message names `<source>.<table>.<column>` |
 
 ## Compatibility
 
