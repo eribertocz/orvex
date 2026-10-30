@@ -732,3 +732,92 @@ def test_every_open_of_an_existing_lake_checks_again_under_the_lock(tmp_path: Pa
         commands.open_existing(home(folder), stale)
     assert raised.value.code == "LAKE_LOCATION_CHANGED"
     assert not (folder / "other").exists()  # nothing opened or created
+
+
+# --- a missing catalog file (#192) ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("lake", "file"),
+    [
+        ("lake:\n  catalog:\n    type: duckdb\n    path: c/lake.ducklake\n", "c/lake.ducklake"),
+        (SQLITE, "c/l.sqlite"),
+    ],
+    ids=["duckdb", "sqlite"],
+)
+def test_a_lake_whose_catalog_file_is_missing_is_refused_everywhere(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], lake: str, file: str
+) -> None:
+    from orvex.server import maintenance, scheduler
+    from orvex.store.errors import StoreError
+
+    project(tmp_path, lake)
+    feed(tmp_path, 3)
+    code, out = run(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    catalog = tmp_path / file
+    kept = tmp_path / "kept"
+    catalog.rename(kept)  # a deleted file, or a disk that is not mounted
+    for command in ("run", "runs", "maintain"):
+        code, out = run(capsys, command, str(tmp_path))
+        assert code == 1, (command, out)
+        assert "STORE_CATALOG_UNAVAILABLE" in out, (command, out)
+        assert "Traceback" not in out
+        assert not catalog.exists(), command  # no new, empty lake in its place
+    out_buffer = io.StringIO()
+    assert maintenance.history(tmp_path, load_identity(), 10, out_buffer) == 1
+    assert "STORE_CATALOG_UNAVAILABLE" in out_buffer.getvalue()
+    with pytest.raises(StoreError) as raised:
+        scheduler._records(home(tmp_path), chosen(tmp_path))
+    assert raised.value.code == "STORE_CATALOG_UNAVAILABLE"
+    assert not catalog.exists()
+    assert lake_place.exists(home(tmp_path))  # still a lake: reported, not "no lake yet"
+    # Restored: the lake opens again with its history.
+    kept.rename(catalog)
+    feed(tmp_path, 5)
+    code, out = run(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    code, out = run(capsys, "runs", str(tmp_path))
+    assert code == 0, out
+    assert out.count("success") == 2
+    assert count(tmp_path) == 5
+
+
+def test_a_creating_record_whose_file_is_missing_is_not_a_lake_yet(tmp_path: Path) -> None:
+    folder = bare(tmp_path / "proj", SQLITE)
+    lake_place.begin(home(folder), chosen(folder))
+    assert lake_place.missing_catalog(home(folder)) is None
+    assert not lake_place.exists(home(folder))
+
+
+@pytest.mark.parametrize("failing", [1, 2], ids=["begin", "confirm"])
+def test_a_record_that_cannot_be_written_is_reported(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    failing: int,
+) -> None:
+    # #192: a full disk or a read-only folder while writing the record.
+    project(tmp_path, SQLITE)
+    feed(tmp_path, 3)
+    calls: list[int] = []
+    replace = os.replace
+
+    def flaky(source: str | os.PathLike[str], target: str | os.PathLike[str]) -> None:
+        calls.append(1)
+        if len(calls) == failing:
+            raise OSError(28, "No space left on device")
+        replace(source, target)
+
+    monkeypatch.setattr(lake_place.os, "replace", flaky)
+    code, out = run(capsys, "run", str(tmp_path))
+    assert code == 1, out
+    assert "LAKE_LOCATION_CHANGED" in out
+    assert "cannot be written (OSError)" in out
+    assert "Traceback" not in out
+    assert not list(home(tmp_path).glob(".lake.location.*"))  # no half-written file
+    monkeypatch.setattr(lake_place.os, "replace", replace)
+    # The lake was closed (or never opened): the next run opens it.
+    code, out = run(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    assert count(tmp_path) == 3
