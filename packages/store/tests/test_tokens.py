@@ -666,7 +666,8 @@ def test_names_next_to_a_unicode_space_are_refused(space: str) -> None:
 )
 def test_strings_and_quoted_names_keep_their_unicode_spaces(sql: str) -> None:
     # #213: only the spaces between tokens are rewritten; values and names stay as written.
-    spaced = sql.replace("SELECT ", "SELECT\u2003", 1).replace(" AS", "\ufeffAS", 1)
+    # A space before `AS`: DuckDB reads a `$` followed by a non-ASCII byte as a new dollar tag.
+    spaced = sql.replace("SELECT ", "SELECT\u2003", 1).replace(" AS", " \ufeffAS", 1)
     plain = _plain(spaced)
     assert len(plain) == len(spaced)
     connection = duckdb.connect()
@@ -695,3 +696,88 @@ def test_a_file_named_after_a_unicode_space_is_refused(a_file: str) -> None:
     with pytest.raises(StoreError) as refused:
         _single_statement(f"SELECT * FROM\u00a0'{a_file}'", table_functions())
     assert refused.value.code == "STORE_STATEMENT_INVALID"
+
+
+_DESYNCS = [
+    # (first select item, whether DuckDB's prepass then rewrites the U+00A0 in the file name)
+    ("/*'*/ 1", True),
+    ("/* it's */ 1", True),
+    ("E'\\''", True),
+    ('/*"*/ 1', False),
+    ("1 -- '\n", False),
+    ("$t$'$t$", False),
+    ('$$"$$', False),
+]
+
+
+@pytest.mark.parametrize(("before", "rewritten"), _DESYNCS)
+def test_a_file_named_after_a_quote_duckdb_tracks_differently_is_refused(
+    tmp_path: Path, before: str, rewritten: bool
+) -> None:
+    # Reviewer pass 1 on #214: DuckDB's prepass tracks quotes without block comments or
+    # backslash escapes, so after `/*'*/` it rewrites the U+00A0 inside the next string; the
+    # guard must check the name DuckDB opens (`lake dir`), which names an existing file.
+    folder = tmp_path / "lake dir"
+    folder.mkdir()
+    (folder / "s.csv").write_text("a\n42\n", encoding="utf-8")
+    named = (tmp_path / "lake\u00a0dir" / "s.csv").as_posix()
+    sql = f"CREATE TABLE x AS SELECT {before} AS one, * FROM '{named}'"
+    connection = duckdb.connect()
+    try:
+        opened = connection.execute(sql.replace("CREATE TABLE x AS ", "")).fetchall()
+    except duckdb.IOException:
+        opened = []  # DuckDB kept the U+00A0: no file of that name
+    connection.close()
+    assert bool(opened) is rewritten  # pins DuckDB's prepass
+    if not opened:
+        _single_statement(sql, table_functions())  # nothing to refuse: no such file
+        return
+    with pytest.raises(StoreError) as refused:
+        _single_statement(sql, table_functions())
+    assert refused.value.code == "STORE_STATEMENT_INVALID"
+
+
+_FRAGMENTS = [
+    "/*'*/",
+    '/*"*/',
+    "E'\\''",
+    "-- '\n",
+    "$t$'$t$",
+    "'a\u00a0b'",
+    "'c\u3000d'",
+    "\u00a0",
+    "\u200b",
+    " ",
+    "$$x\u2003y$$",
+    "'it''s\u00a0'",
+]
+
+
+def test_the_text_checked_is_what_duckdb_runs() -> None:
+    # #213: `_plain` reproduces DuckDB's prepass, so DuckDB reads each string constant exactly as
+    # the guard does: the value it returns is spelled, quoted, in the checked text.
+    import itertools
+
+    connection = duckdb.connect()
+    for first, second, third in itertools.product(_FRAGMENTS, repeat=3):
+        sql = f"SELECT {first} {second} 'v\u00a0w' AS v {third}"
+        plain = _plain(sql)
+        assert _plain(plain) == plain, sql
+        try:
+            expected = connection.execute(sql).fetchall()
+        except duckdb.Error:
+            continue
+        assert connection.execute(plain).fetchall() == expected, sql
+        value = expected[0][-1] if expected else None
+        if isinstance(value, str) and value.startswith("v"):
+            assert f"'{value}'" in plain, (sql, plain, value)
+    connection.close()
+
+
+def test_the_last_two_bytes_are_left_as_duckdb_leaves_them() -> None:
+    # DuckDB's prepass stops two bytes before the end: a final U+00A0 stays part of the name.
+    sql = "SELECT 1 AS a\u00a0"
+    assert _plain(sql) == sql
+    connection = duckdb.connect()
+    assert connection.execute(sql).description[0][0] == "a\u00a0"
+    connection.close()

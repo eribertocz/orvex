@@ -625,34 +625,133 @@ PARSER_SPACES = (
     "\u00a0\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u200b"
     "\u202f\u205f\u2060\u3000\ufeff"
 )
-_AS_SPACE = str.maketrans(dict.fromkeys(PARSER_SPACES, " "))
 
 
 def _plain(sql: str) -> str:
-    """`sql` with every character in `PARSER_SPACES` written as a space, except inside string
-    constants and quoted names.
+    """`sql` as DuckDB 2.0.0's parser reads it: every character in `PARSER_SPACES` that its
+    prepass (`Parser::StripUnicodeSpaces`) rewrites is written as a space, and only those.
 
-    DuckDB already reads these characters as spaces, so the statement means the same; the
-    rewritten text is the one checked and the one run, so the checks see the tokens DuckDB sees
-    (#213). Strings and quoted names keep their characters, so values and file names reach the
-    checks as written.
+    The prepass decides what is quoted with its own simple tracker, not with the scanner:
+    `'…'` and `"…"` with doubled quotes, `$tag$…$tag$`, `--` comments up to a line break, no
+    block comments, no backslash escapes, and none of the last two bytes. A copy that used the
+    scanner's view (`duckdb.tokenize`) kept a character inside `'…'` after `/*'*/` or an
+    escaped quote in `E'…'` that DuckDB then rewrote, so the guard checked another file name
+    than DuckDB opened (#213, Reviewer pass 1). This text is the prepass's own fixed point:
+    DuckDB changes nothing in it after the checks, so the text checked is the text run.
     """
-    if sql.isascii() or not any(character in sql for character in PARSER_SPACES):
+    if sql.isascii():
         return sql
-    spaced = sql.translate(_AS_SPACE)
-    every = _tokens(spaced)
-    positions = [position for position, _ in every] + [len(spaced)]
-    kept = list(spaced)
-    for (position, kind), end in zip(every, positions[1:], strict=True):
-        quoted = kind == duckdb.token_type.string_const or (
-            kind == duckdb.token_type.identifier and spaced[position] == '"'
-        )
-        if quoted:
-            # The token runs to the next one: the constant itself ends at its last non-space
-            # character (its closing quote).
-            stop = position + len(spaced[position:end].rstrip())
-            kept[position:stop] = sql[position:stop]
-    return "".join(kept)
+    try:
+        data = sql.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise StoreError(
+            "STORE_QUERY_FAILED", "The SQL could not be parsed.", {"duckdb": "invalid UTF-8"}
+        ) from error
+    spaces = _prepass_spaces(data)
+    if not spaces:
+        return sql
+    parts: list[bytes] = []
+    previous = 0
+    for position, length in spaces:
+        parts.append(data[previous:position])
+        parts.append(b" ")
+        previous = position + length
+    parts.append(data[previous:])
+    return b"".join(parts).decode("utf-8")
+
+
+def _tag_start(byte: int) -> bool:
+    return 65 <= byte <= 90 or 97 <= byte <= 122 or byte == 95 or byte >= 0x80
+
+
+def _tag_byte(byte: int) -> bool:
+    return _tag_start(byte) or 48 <= byte <= 57
+
+
+def _prepass_spaces(data: bytes) -> list[tuple[int, int]]:
+    """The (byte position, length) of each Unicode space DuckDB 2.0.0's
+    `Parser::StripUnicodeSpaces` rewrites, a line-by-line port of its states (`regular`,
+    `in_quotes`, `in_dollar_quotes`, `in_comment`), bounds included."""
+    size = len(data)
+    found: list[tuple[int, int]] = []
+    position = 0
+    state = "regular"
+    quote = 0
+    tag = b""
+    while state != "end":
+        if state == "regular":
+            state = "end"
+            while position + 2 < size:
+                byte, second, third = data[position], data[position + 1], data[position + 2]
+                if byte == 0xC2 and second == 0xA0:
+                    found.append((position, 2))
+                if byte == 0xE2:
+                    if (second == 0x80 and (0x80 <= third <= 0x8B or third == 0xAF)) or (
+                        second == 0x81 and third in {0x9F, 0xA0}
+                    ):
+                        found.append((position, 3))
+                elif byte == 0xE3:
+                    if second == 0x80 and third == 0x80:
+                        found.append((position, 3))
+                elif byte == 0xEF:
+                    if second == 0xBB and third == 0xBF:
+                        found.append((position, 3))
+                elif byte in {0x22, 0x27}:
+                    quote = byte
+                    position += 1
+                    state = "quotes"
+                    break
+                elif byte == 0x24 and (second == 0x24 or _tag_start(second)):
+                    position += 1
+                    start = position
+                    state = "end"
+                    while position + 2 < size:
+                        if data[position] == 0x24:
+                            tag = data[start:position]
+                            state = "dollar"
+                            break
+                        if not _tag_byte(data[position]):
+                            state = "regular"  # not a tag: read on from this byte
+                            break
+                        position += 1
+                    break
+                elif byte == 0x2D and second == 0x2D:
+                    state = "comment"
+                    break
+                position += 1
+        elif state == "quotes":
+            state = "end"
+            while position + 1 < size:
+                if data[position] == quote:
+                    if data[position + 1] == quote:
+                        position += 2  # a doubled quote
+                        continue
+                    position += 1
+                    state = "regular"
+                    break
+                position += 1
+        elif state == "dollar":
+            state = "end"
+            length = len(tag)
+            while position + 2 < size:
+                if (
+                    data[position] == 0x24
+                    and size - (position + 1) >= length + 1
+                    and data[position + length + 1] == 0x24
+                    and data[position + 1 : position + 1 + length] == tag
+                ):
+                    position += length + 1  # on the closing `$`, read again as regular
+                    state = "regular"
+                    break
+                position += 1
+        else:  # comment
+            state = "end"
+            while position < size:
+                if data[position] in {0x0A, 0x0D}:
+                    state = "regular"
+                    break
+                position += 1
+    return found
 
 
 def _guarded(sql: str, table_functions: frozenset[str]) -> None:
