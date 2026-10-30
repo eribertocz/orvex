@@ -14,6 +14,7 @@ from orvex.transform.incremental import (
     Count,
     Refuse,
     Watermark,
+    append_rows_problem,
     column_problems,
     config_problems,
     schema_statements,
@@ -1068,7 +1069,6 @@ def test_an_append_time_column_that_changes_every_run_is_refused(tmp_path: Path,
         "WHERE read_at > $since",
         "SELECT * FROM (SELECT id, t AS read_at, now() AS seen FROM src) WHERE read_at > $since",
         "WITH c AS (SELECT id, t AS read_at FROM src) SELECT * FROM c WHERE read_at > $since",
-        "SELECT * FROM (SELECT r.*, m.zone FROM src AS r JOIN m USING (id)) WHERE read_at > $since",
         "SELECT e.id, e.read_at FROM src AS e WHERE e.read_at > $since",
         "WITH src AS (SELECT * FROM src) SELECT * FROM src WHERE read_at > $since",
         "SELECT * FROM (SELECT read_at, count(*) AS n FROM src GROUP BY read_at) "
@@ -1079,7 +1079,6 @@ def test_an_append_time_column_that_changes_every_run_is_refused(tmp_path: Path,
         "date-trunc",
         "other-column-volatile",
         "cte",
-        "join-star",
         "qualified",
         "cte-reading-its-own-name",
         "grouped-by-it",
@@ -1316,11 +1315,6 @@ def test_a_cte_read_again_by_name_at_run_time_is_not_followed(tmp_path: Path, re
         # Reviewer pass 1 on #188: the same choices, written another way.
         "SELECT * FROM (SELECT *, row_number() OVER (PARTITION BY id ORDER BY read_at DESC) "
         "AS rn FROM src) WHERE rn = 1",
-        "SELECT s.* FROM src AS s JOIN m ON m.id = s.id "
-        "AND s.read_at = (SELECT max(read_at) FROM src AS s2 WHERE s2.id = s.id)",
-        # Reviewer pass 2 on #188: a sample on either side of a join.
-        "SELECT r.* FROM src AS r TABLESAMPLE 10% JOIN m USING (id)",
-        "SELECT r.* FROM src AS r JOIN m TABLESAMPLE 10% USING (id)",
         # Reviewer pass 3 on #188: a select-list subquery filtered by a query above.
         "SELECT * FROM (SELECT s.*, (SELECT max(read_at) FROM src AS s2 WHERE s2.id = s.id) "
         "AS m FROM src AS s) WHERE read_at = m",
@@ -1333,9 +1327,6 @@ def test_a_cte_read_again_by_name_at_run_time_is_not_followed(tmp_path: Path, re
         "qualify",
         "row-choosing-subquery",
         "window-then-where",
-        "subquery-in-join-on",
-        "sample-on-joined-left",
-        "sample-on-joined-right",
         "select-list-subquery-below",
     ],
 )
@@ -1354,10 +1345,9 @@ def test_an_append_model_that_leaves_rows_out_below_its_filter_is_refused(
     [
         "SELECT DISTINCT id, read_at FROM src",
         "SELECT read_at, count(*) AS n FROM src GROUP BY read_at",
-        "SELECT r.*, m.zone FROM src AS r JOIN m USING (id)",
         "SELECT * FROM src ORDER BY read_at",
     ],
-    ids=["distinct", "grouped-by-it", "join", "order-by"],
+    ids=["distinct", "grouped-by-it", "order-by"],
 )
 def test_an_append_model_that_keeps_every_row_is_accepted(tmp_path: Path, inner: str) -> None:
     sql = f"SELECT * FROM ({inner}) WHERE read_at > $since"
@@ -1478,18 +1468,168 @@ def test_an_append_time_column_traced_through_a_join_that_can_change_it_is_refus
     assert config_problems(sql_model(tmp_path / "merge", MANUAL_MERGE, sql)) == []
 
 
-@pytest.mark.parametrize(
-    "inner",
-    [
-        "SELECT o.id, o.read_at FROM o JOIN d USING (id)",
-        "SELECT o.id, o.read_at FROM o INNER JOIN d ON o.id = d.id",
-        "SELECT o.id, o.read_at FROM o CROSS JOIN d",
-        "SELECT o.id, o.read_at FROM o NATURAL JOIN d",
-    ],
-    ids=["join", "inner", "cross", "natural"],
-)
-def test_an_append_time_column_traced_through_an_inner_join_is_accepted(
+# Every join form, on the time column's trace (#194, decision #217 A). Before #194 all but semi,
+# anti and the last three were accepted; the last three were refused for leaving rows out (#183,
+# Reviewer passes 2 and 3 on #188) and now get the join message.
+JOINS = {
+    "join": "SELECT o.id, o.read_at FROM o JOIN d USING (id)",
+    "inner": "SELECT o.id, o.read_at FROM o INNER JOIN d ON o.id = d.id",
+    "cross": "SELECT o.id, o.read_at FROM o CROSS JOIN d",
+    "natural": "SELECT o.id, o.read_at FROM o NATURAL JOIN d",
+    "semi": "SELECT o.id, o.read_at FROM o SEMI JOIN d USING (id)",
+    "anti": "SELECT o.id, o.read_at FROM o ANTI JOIN d USING (id)",
+    "lateral": "SELECT o.id, o.read_at FROM o, "
+    "LATERAL (SELECT d.x FROM d WHERE d.id = o.id LIMIT 1)",
+    "comma": "SELECT o.id, o.read_at FROM o, d WHERE o.id = d.id",
+    "latest-per-key": "SELECT o.id, o.read_at FROM o "
+    "JOIN (SELECT id, max(read_at) AS last FROM o GROUP BY id) AS l ON l.id = o.id",
+    "join-star": "SELECT r.*, m.zone FROM src AS r JOIN m USING (id)",
+    "subquery-in-join-on": "SELECT s.* FROM src AS s JOIN m ON m.id = s.id "
+    "AND s.read_at = (SELECT max(read_at) FROM src AS s2 WHERE s2.id = s.id)",
+    "sample-on-joined-left": "SELECT r.* FROM src AS r TABLESAMPLE 10% JOIN m USING (id)",
+    "sample-on-joined-right": "SELECT r.* FROM src AS r JOIN m TABLESAMPLE 10% USING (id)",
+}
+
+
+@pytest.mark.parametrize("inner", JOINS.values(), ids=JOINS.keys())
+def test_an_append_model_that_joins_is_refused_and_a_merge_model_is_not(
     tmp_path: Path, inner: str
 ) -> None:
+    # #194: a row whose match arrives after the run is behind the watermark, never read again.
     sql = f"SELECT * FROM ({inner}) WHERE read_at > $since"
+    auto = MANUAL_APPEND.replace(", filter: manual", "")
+    for name, sidecar, text in [("manual", MANUAL_APPEND, sql), ("auto", auto, inner)]:
+        found = config_problems(sql_model(tmp_path / name, sidecar, text))
+        assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"], name
+        for words in ["no join of any kind", "merge with a lookback", "partition_overwrite"]:
+            assert words in found[0].message, name
+        assert "own append model and join them downstream" in found[0].message
+    # Out of the rule, unchanged: merge replaces a row read again.
+    assert config_problems(sql_model(tmp_path / "merge", MANUAL_MERGE, sql)) == []
+
+
+def test_an_append_model_whose_filtering_query_joins_gets_the_join_message(
+    tmp_path: Path,
+) -> None:
+    sql = "SELECT o.* FROM o JOIN d USING (id) WHERE o.read_at > $since"
+    found = config_problems(sql_model(tmp_path, MANUAL_APPEND, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+    assert "no join of any kind" in found[0].message
+
+
+@pytest.mark.parametrize(
+    ("sidecar", "sql"),
+    [
+        ("manual", "SELECT * FROM src WHERE read_at > $since"),
+        ("auto", "SELECT * FROM src"),
+        (
+            "manual",
+            "SELECT * FROM (SELECT id, read_at FROM src WHERE status = 'ok') "
+            "WHERE read_at > $since",
+        ),
+        ("auto", "SELECT * FROM (SELECT id, read_at FROM src WHERE status = 'ok') AS s"),
+        (
+            "auto",
+            "SELECT range AS id, TIMESTAMP '2024-01-01' + to_days(range) AS read_at FROM range(3)",
+        ),
+    ],
+    ids=["one-table", "one-table-auto", "subquery", "subquery-auto", "range-auto"],
+)
+def test_an_append_model_reading_one_table_or_generator_is_accepted(
+    tmp_path: Path, sidecar: str, sql: str
+) -> None:
+    chosen = MANUAL_APPEND if sidecar == "manual" else MANUAL_APPEND.replace(", filter: manual", "")
+    assert config_problems(sql_model(tmp_path, chosen, sql)) == []
+
+
+def test_a_generator_keeps_todays_rules_in_an_append_model(tmp_path: Path) -> None:
+    # #194: a table function is not a join; with filter: manual it is still not traced (#135).
+    sql = (
+        "SELECT * FROM (SELECT range AS id, TIMESTAMP '2024-01-01' + to_days(range) AS read_at "
+        "FROM range(3)) WHERE read_at > $since"
+    )
+    chosen = sql_model(tmp_path, MANUAL_APPEND, sql)
+    assert append_rows_problem(chosen) is None
+    found = config_problems(chosen)
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+    assert "append model inserts every row it reads" in found[0].message
+
+
+@pytest.mark.parametrize(
+    ("sidecar", "sql"),
+    [
+        ("manual", "SELECT * FROM src WHERE read_at > $since AND random() < 0.5"),
+        ("auto", "SELECT * FROM src WHERE random() < 0.5"),
+        ("auto", "SELECT * FROM src WHERE read_at < now()"),
+        ("auto", "SELECT * FROM src WHERE read_at < current_timestamp"),
+        (
+            "manual",
+            "SELECT * FROM (SELECT *, random() AS r FROM src) WHERE read_at > $since AND r < 0.5",
+        ),
+        ("auto", "SELECT *, random() AS r FROM src WHERE r < 0.5"),
+        ("auto", "SELECT id, read_at FROM src GROUP BY ALL HAVING random() < 0.5"),
+        ("auto", "SELECT * FROM src QUALIFY random() < 0.5"),
+    ],
+    ids=[
+        "where",
+        "where-auto",
+        "now",
+        "current-timestamp",
+        "column-below",
+        "alias",
+        "having",
+        "qualify",
+    ],
+)
+def test_an_append_condition_that_changes_between_runs_is_refused(
+    tmp_path: Path, sidecar: str, sql: str
+) -> None:
+    # #194: `random()` in a WHERE samples the rows, and an append model never reads again a row
+    # it left out.
+    chosen = MANUAL_APPEND if sidecar == "manual" else MANUAL_APPEND.replace(", filter: manual", "")
+    found = config_problems(sql_model(tmp_path, chosen, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+    assert "WHERE, HAVING and QUALIFY may not use" in found[0].message
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM src WHERE read_at > $since AND id % 2 = 0",
+        "SELECT *, now() AS seen FROM src WHERE read_at > $since AND status LIKE 'o%'",
+    ],
+    ids=["modulo", "changing-column-not-filtered"],
+)
+def test_an_append_condition_that_is_the_same_every_run_is_accepted(
+    tmp_path: Path, sql: str
+) -> None:
     assert config_problems(sql_model(tmp_path, MANUAL_APPEND, sql)) == []
+
+
+def test_a_random_condition_stays_accepted_in_a_merge_model(tmp_path: Path) -> None:
+    sql = "SELECT * FROM src WHERE read_at > $since AND random() < 0.5"
+    assert config_problems(sql_model(tmp_path, MANUAL_MERGE, sql)) == []
+
+
+def test_the_append_message_names_offset_and_sample(tmp_path: Path) -> None:
+    found = config_problems(
+        sql_model(
+            tmp_path,
+            MANUAL_APPEND,
+            "SELECT * FROM (SELECT * FROM src OFFSET 5) WHERE read_at > $since",
+        )
+    )
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+    assert "LIMIT, OFFSET, USING SAMPLE" in found[0].message
+
+
+def test_a_select_list_subquery_at_the_bound_filtered_above_is_refused(tmp_path: Path) -> None:
+    # #188 test gap: the subquery is in the query holding the bound, and a query above chooses
+    # rows with it.
+    sql = (
+        "SELECT * FROM (SELECT s.*, (SELECT max(read_at) FROM src AS s2 WHERE s2.id = s.id) AS m "
+        "FROM src AS s WHERE read_at > $since) WHERE read_at = m"
+    )
+    found = config_problems(sql_model(tmp_path, MANUAL_APPEND, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+    assert "keep every row they read" in found[0].message
