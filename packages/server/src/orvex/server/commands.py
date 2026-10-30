@@ -311,11 +311,6 @@ def _columns_of(lake: Lake, parts: tuple[str, ...]) -> frozenset[str] | None:
         return None
 
 
-def _relation_sql(model: Model) -> str:
-    schema, table = (part.replace('"', '""') for part in (model.schema, model.table))
-    return f'SELECT * FROM "{schema}"."{table}"'
-
-
 def _automatic(model: Model) -> bool:
     incremental_config = model.config.incremental
     return (
