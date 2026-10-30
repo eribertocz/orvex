@@ -396,9 +396,15 @@ def _endpoint(storage: ObjectStorage) -> str:
 
 
 def _normalized_endpoint(endpoint: str) -> str:
-    text = endpoint.strip().lower()
-    text = text.split("://", 1)[1] if "://" in text else text
-    return text.rstrip("/")
+    """`host[:port][/path]`, lowercased, without scheme, credentials, query, fragment or trailing
+    `/`: the record and its messages never hold a user, password or SAS token an Azure
+    `BlobEndpoint` may carry (#147, Reviewer pass 1)."""
+    text = endpoint.strip()
+    address = text.split("://", 1)[1] if "://" in text else text
+    for mark in ("?", "#"):
+        address = address.split(mark, 1)[0]
+    # `user:password@host`: everything up to the last `@` goes, even a `/` in a password.
+    return address.rpartition("@")[2].lower().rstrip("/")
 
 
 def endpoint_host(endpoint: str) -> str:

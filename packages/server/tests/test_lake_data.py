@@ -608,3 +608,73 @@ def test_a_record_written_before_147_matches_and_gets_its_endpoint(tmp_path: Pat
     assert json.loads(path.read_text(encoding="utf-8"))["endpoint"] == "localhost:9000"
     bare(folder, s3_lake("127.0.0.1:9000"))
     assert "endpoint was localhost:9000" in problems(folder)[0]  # recorded from then on
+
+
+def without_endpoint(folder: Path) -> Path:
+    """Rewrite the lake's record in its layout before #147 (no endpoint)."""
+    path = home(folder) / lake_place.RECORD_FILE
+    identity = json.loads(path.read_text(encoding="utf-8"))
+    del identity["endpoint"]
+    path.write_text(json.dumps(identity), encoding="utf-8")
+    return path
+
+
+@pytest.mark.usefixtures("credentials")
+@pytest.mark.parametrize("command", ["run", "runs", "maintain"])
+def test_opening_a_record_written_before_147_records_its_endpoint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], endpoint: str, command: str
+) -> None:
+    # Reviewer pass 1 on #211: through a real open, `run` (`_open_recorded`) and `runs` and
+    # `maintain` (`open_existing`), not `complete` alone.
+    request = urllib.request.Request(f"http://{endpoint}/bi-lake", method="PUT")
+    _HTTP.open(request, timeout=30).close()
+    project(tmp_path, s3_lake(endpoint))
+    feed(tmp_path, 10)
+    code, out = run(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    path = without_endpoint(tmp_path)
+    code, out = run(capsys, command, str(tmp_path))
+    assert code == 0, out
+    assert json.loads(path.read_text(encoding="utf-8"))["endpoint"] == endpoint
+
+
+@pytest.mark.parametrize(
+    ("blob", "recorded"),
+    [
+        (
+            "https://acct.blob.core.windows.net/?sv=2024&sig=" + ACCOUNT_KEY,
+            "acct.blob.core.windows.net",
+        ),
+        ("https://u:" + ACCOUNT_KEY + "@Acct.Blob.Core.Windows.Net/", "acct.blob.core.windows.net"),
+        (
+            "https://u:a/" + ACCOUNT_KEY + "@acct.blob.core.windows.net",
+            "acct.blob.core.windows.net",
+        ),
+        (
+            "http://127.0.0.1:10000/devstoreaccount1#" + ACCOUNT_KEY,
+            "127.0.0.1:10000/devstoreaccount1",
+        ),
+    ],
+)
+def test_the_azure_record_holds_no_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blob: str, recorded: str
+) -> None:
+    # Reviewer pass 1 on #211: a `BlobEndpoint` may carry a user, password or SAS token; the
+    # identity keeps host, port and path only, so the record and its messages never show them.
+    monkeypatch.setenv(AZURE_ENV, f"AccountName=acct;AccountKey={ACCOUNT_KEY};BlobEndpoint={blob}")
+    folder = bare(tmp_path / "proj", azure_lake())
+    assert problems(folder) == []
+    chosen = commands.lake_location(load_project(folder), home(folder))
+    lake_place.begin(home(folder), chosen)
+    lake_place.confirm(home(folder), chosen)
+    text = (home(folder) / lake_place.RECORD_FILE).read_text(encoding="utf-8")
+    assert json.loads(text)["endpoint"] == recorded
+    assert ACCOUNT_KEY not in text
+    monkeypatch.setenv(
+        AZURE_ENV,
+        f"AccountName=acct;AccountKey={ACCOUNT_KEY};BlobEndpoint=https://other.example.com/?sig={ACCOUNT_KEY}",
+    )
+    found = problems(folder)
+    assert found[0].startswith("LAKE_LOCATION_CHANGED project.yaml"), found
+    assert ACCOUNT_KEY not in found[0]
+    assert f"endpoint was {recorded}, now other.example.com" in found[0]
