@@ -439,6 +439,28 @@ def test_a_pattern_too_broad_to_check_is_refused_quickly(pattern: str) -> None:
         _guarded(f"SELECT '{pattern}' AS p", table_functions())
     assert raised.value.code == "STORE_STATEMENT_INVALID"
     assert time.monotonic() - started < 1.0
+    # #193: `/**` may meet a folder the user cannot list before the budget runs out (the CI
+    # runner does); `/usr` holds none.
+    reasons = (
+        {"pattern_too_broad", "pattern_unreadable"}
+        if pattern == "/**/zz_none*"
+        else {"pattern_too_broad"}
+    )
+    assert raised.value.details["reason"] in reasons
+
+
+def test_many_strings_over_one_large_folder_are_bounded(tmp_path: Path) -> None:
+    # #193 Reviewer pass 1: 34,000 'big/zz*' over a kept listing of 9,000 names took 104 s.
+    big = tmp_path / "big"
+    big.mkdir()
+    for index in range(9000):
+        (big / f"f{index}").write_text("")
+    sql = "SELECT " + ", ".join(f"'{big}/zz*' AS c{index}" for index in range(34000))
+    started = time.monotonic()
+    with pytest.raises(StoreError) as raised:
+        _guarded(sql, table_functions())
+    assert time.monotonic() - started < 1.0
+    assert raised.value.details == {"reason": "pattern_too_broad"}
 
 
 def test_a_pattern_in_a_small_folder_is_checked_as_before(tmp_path: Path) -> None:

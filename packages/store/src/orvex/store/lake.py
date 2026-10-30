@@ -890,9 +890,9 @@ PATTERN_BUDGET = 10_000
 # statement: a pattern that lists it again reads the kept listing, at no cost (#193).
 FOLDER_COST = 50
 
-# How many steps the walks of one statement may take together: the work done without reading
-# the disk (matching names, following kept listings). It bounds the time apart from the
-# entries, so patterns over folders already read cannot add up without limit (#193).
+# How many steps the walks of one statement may take together: every place a walk visits and
+# every entry it goes through, from a kept listing too. It bounds the work done without reading
+# the disk, so patterns over folders already read cannot add up without limit (#193).
 STEP_BUDGET = 100_000
 
 
@@ -980,6 +980,7 @@ def _expanded(pattern: str, budget: _Budget) -> Iterator[str]:
         if head == "**":
             stack.append((base, index + 1))  # no folder at all
             for name, folder in _listed(base, budget):
+                _step(budget)  # each entry, from a kept listing too (#193, Reviewer pass 1)
                 below = os.path.join(base, name)
                 if index + 1 == len(parts):
                     yield below
@@ -987,6 +988,7 @@ def _expanded(pattern: str, budget: _Budget) -> Iterator[str]:
                     stack.append((below, index))
         elif _GLOB.search(head):
             for name, _ in _listed(base, budget):
+                _step(budget)
                 if fnmatch.fnmatchcase(name, head):
                     stack.append((os.path.join(base, name), index + 1))
         else:
