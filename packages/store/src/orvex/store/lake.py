@@ -2056,6 +2056,10 @@ class Lake:
             oldest_snapshot=oldest,
         )
 
+    def tables(self) -> set[tuple[str, str]]:
+        """(schema, table) of every table of the lake now, lower-cased."""
+        return self._tables_at(self.current_snapshot().id)
+
     def current_snapshot(self) -> Snapshot:
         snapshot = self._snapshot(None)
         if snapshot is None:

@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import signal
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import duckdb
 import pytest
+from orvex.server import commands
 from orvex.server.cli import main
 from orvex.server.commands import project_lock
 from orvex.server.identity import load_identity
+from orvex.store.errors import StoreError
+from orvex.store.lake import Lake
 
 REPOSITORY = Path(__file__).resolve().parents[3]
 SLUG = load_identity().slug
@@ -369,3 +375,188 @@ def test_synthetic_dataset_runs_end_to_end(
         "credit_notes": 100,
     }.items():
         assert f"built raw.{table}: {rows} rows" in out
+
+
+# --- #88: leftovers, output after the commit, two real processes ----------------------------------
+
+
+def lake_tables(folder: Path, writable: bool = False) -> duckdb.DuckDBPyConnection:
+    lake = duckdb.connect()
+    lake.execute("INSTALL ducklake")
+    lake.execute("LOAD ducklake")
+    catalog = folder / f".{SLUG}" / "lake" / "catalog.ducklake"
+    lake.execute(f"ATTACH 'ducklake:{catalog}' AS lake {'' if writable else '(READ_ONLY)'}")
+    return lake
+
+
+def stored(folder: Path) -> list[str]:
+    lake = lake_tables(folder)
+    try:
+        rows = lake.execute(
+            "SELECT schema_name || '.' || table_name FROM duckdb_tables() "
+            "WHERE database_name = 'lake' AND schema_name <> '_meta' ORDER BY 1"
+        ).fetchall()
+    finally:
+        lake.close()
+    return [str(row[0]) for row in rows]
+
+
+def with_leftovers(folder: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A run that stores `staging.extra` and `marts.consumption`, then a project where one is
+    removed and the other became a view, and a watermark left for the removed one."""
+    full_project(folder)
+    write(folder, {"models/staging/extra.sql": "SELECT 1 AS x"})
+    code, out = command(capsys, "run", str(folder))
+    assert code == 0, out
+    (folder / "models/staging/extra.sql").unlink()
+    write(folder, {"models/marts/consumption.yaml": "version: 1\nmaterialized: view\n"})
+    lake = lake_tables(folder, writable=True)
+    try:
+        lake.execute("CREATE SCHEMA IF NOT EXISTS lake._meta")
+        lake.execute(
+            "CREATE TABLE IF NOT EXISTS lake._meta.watermarks (model VARCHAR, watermark VARCHAR)"
+        )
+        lake.execute(
+            "INSERT INTO lake._meta.watermarks VALUES ('staging.extra', '1'), ('a.b', '2')"
+        )
+    finally:
+        lake.close()
+
+
+def test_a_run_reports_leftover_tables_and_keeps_them(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with_leftovers(tmp_path, capsys)
+    before = stored(tmp_path)
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    assert (
+        "leftover marts.consumption: no model stores it; kept as it was "
+        "(remove it with --drop-leftovers)"
+    ) in out.splitlines()
+    assert any(line.startswith("leftover staging.extra:") for line in out.splitlines())
+    assert not any(
+        line.startswith(("leftover staging.readings", "leftover _")) for line in out.splitlines()
+    )
+    assert stored(tmp_path) == before
+
+
+def test_drop_leftovers_drops_only_them_and_their_watermarks(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with_leftovers(tmp_path, capsys)
+    code, out = command(capsys, "run", str(tmp_path), "--drop-leftovers")
+    assert code == 0, out
+    assert "dropped marts.consumption" in out.splitlines()
+    assert "dropped staging.extra" in out.splitlines()
+    assert stored(tmp_path) == ["staging.consumers", "staging.readings"]
+    lake = lake_tables(tmp_path)
+    try:
+        marks = lake.execute("SELECT model FROM lake._meta.watermarks ORDER BY 1").fetchall()
+    finally:
+        lake.close()
+    assert marks == [("a.b",)]
+
+
+def test_a_failing_run_drops_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    with_leftovers(tmp_path, capsys)
+    before = stored(tmp_path)
+    write(tmp_path, {"models/staging/zbad.sql": "SELECT CAST('x' AS INTEGER) AS v"})
+    code, out = command(capsys, "run", str(tmp_path), "--drop-leftovers")
+    assert code == 1, out
+    assert "dropped" not in out
+    assert stored(tmp_path) == before
+
+
+def test_drop_leftovers_is_refused_in_a_scheduled_run(tmp_path: Path) -> None:
+    full_project(tmp_path)
+    out = io.StringIO()
+    selection = commands.Selection(models=("staging.readings",), trigger="schedule")
+    code = commands.run(tmp_path, load_identity(), out, selection=selection, drop_leftovers=True)
+    assert code == 1
+    assert out.getvalue().startswith("RUN_OPTION_INVALID . ")
+    assert not (tmp_path / f".{SLUG}" / "lake").exists()
+
+
+def test_a_commit_failure_is_blamed_on_the_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    full_project(tmp_path)
+    real = Lake.transaction
+    calls: list[int] = []
+
+    @contextlib.contextmanager
+    def failing_commit(self: Lake) -> Iterator[object]:
+        calls.append(1)
+        with real(self) as transaction:
+            yield transaction
+            if len(calls) == 1:  # the models' transaction, not the records'
+                raise StoreError("STORE_QUERY_FAILED", "commit failed", {})
+
+    monkeypatch.setattr(Lake, "transaction", failing_commit)
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 1
+    assert out.splitlines()[1] == "STORE_QUERY_FAILED . commit failed"
+    assert "models/" not in out
+
+
+def test_a_read_failing_after_the_commit_still_reports_the_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    full_project(tmp_path)
+
+    def unreadable(lake: Lake, model: object, snapshot: int) -> int:
+        raise StoreError("STORE_QUERY_FAILED", "count failed", {})
+
+    monkeypatch.setattr(commands, "_count", unreadable)
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    lines = out.splitlines()
+    assert any(line.startswith("STORE_QUERY_FAILED . ") for line in lines)
+    snapshot = next(line for line in lines if line.startswith("snapshot "))
+    assert snapshot.removeprefix("snapshot ").isdigit()
+    assert "built marts.consumption: unknown rows" in lines
+
+
+def test_a_snapshot_unreadable_after_the_commit_prints_a_dash(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    full_project(tmp_path)
+    real_transaction, real_snapshot = Lake.transaction, Lake.current_snapshot
+    committed: list[bool] = []
+
+    @contextlib.contextmanager
+    def marking(self: Lake) -> Iterator[object]:
+        with real_transaction(self) as transaction:
+            yield transaction
+        committed.append(True)
+
+    def snapshot(self: Lake) -> object:
+        if committed:
+            raise StoreError("STORE_SNAPSHOT_NOT_FOUND", "no snapshot", {})
+        return real_snapshot(self)
+
+    monkeypatch.setattr(Lake, "transaction", marking)
+    monkeypatch.setattr(Lake, "current_snapshot", snapshot)
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    assert "snapshot -" in out.splitlines()
+    assert any(line.startswith("STORE_SNAPSHOT_NOT_FOUND . ") for line in out.splitlines())
+
+
+def test_a_real_second_orvex_run_process_is_locked_out(tmp_path: Path) -> None:
+    full_project(tmp_path)
+    holder = hold_lock(tmp_path / f".{SLUG}")
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "orvex.server", "run", str(tmp_path)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    finally:
+        kill(holder)
+    assert result.returncode == 1
+    assert result.stdout.startswith(f"PROJECT_LOCKED .{SLUG}/lake.lock")
+    assert not (tmp_path / f".{SLUG}" / "lake").exists()

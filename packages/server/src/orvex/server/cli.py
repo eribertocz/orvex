@@ -138,6 +138,11 @@ def command_parser(identity: Identity) -> argparse.ArgumentParser:
         default=None,
         help="rebuild incremental models from every row (the named ones, or all of them)",
     )
+    run.add_argument(
+        "--drop-leftovers",
+        action="store_true",
+        help="also drop the lake tables no model stores now (removed, renamed or now a view)",
+    )
     scheduled = commands.add_parser(
         "schedule",
         help="keep a project's models as fresh as they declare (SIGTERM or Ctrl+C stops)",
@@ -190,7 +195,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             return runs(command.project, identity, command.limit, sys.stdout)
         if command.command == "maintain":
             return maintain(command.project, identity, sys.stdout)
-        return run(command.project, identity, sys.stdout, command.full_refresh)
+        return run(
+            command.project,
+            identity,
+            sys.stdout,
+            command.full_refresh,
+            drop_leftovers=command.drop_leftovers,
+        )
     arguments = parser_for(identity).parse_args(given)
     try:
         declarations = installed_declarations(identity)
