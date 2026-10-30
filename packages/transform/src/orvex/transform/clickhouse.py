@@ -363,6 +363,39 @@ def since_precision_problems(model: Model, columns: tuple[Column, ...]) -> list[
     ]
 
 
+def since_default_problems(model: Model, columns: tuple[Column, ...]) -> list[ModelError]:
+    """An `append` extraction model whose `{since:…}` starts at its `Date` or `DateTime` time
+    column's default value (#191, decision #206): its strict `>` filter would never load the
+    rows at 1970-01-01 (or 1970-01-01 00:00:00 UTC), which sources often use for "no date". A
+    type whose first value is earlier (`Date32`, `DateTime64(0, …)`) reads them."""
+    incremental = model.config.incremental
+    since = declared_since(model)
+    if incremental is None or incremental.strategy != "append" or since is None:
+        return []
+    time_column = incremental.time_column.root.lower()
+    found = next((column for column in columns if column.name.lower() == time_column), None)
+    if found is None:
+        return []
+    column = _kind(found.clickhouse)
+    if (column, since.family) == ("Date", "Date"):
+        moment, wider = "1970-01-01", "Date32"
+    elif (column, since.family) == ("DateTime", "DateTime"):
+        moment, wider = "1970-01-01 00:00:00 UTC", f"DateTime64(0, '{since.zone or 'UTC'}')"
+    else:
+        return []
+    return [
+        problem(
+            "INVALID_MODEL_SQL",
+            f"{model.sql_file}: {{since:{since.text}}} starts at {moment}, the default value of "
+            f"the time_column {found.name} ({found.clickhouse}): an append model's first run "
+            f"reads only rows after it, so rows at {moment} would never be loaded. Declare "
+            f"{{since:{wider}}}, which starts earlier.",
+            model.sql_file,
+            model=model.name,
+        )
+    ]
+
+
 def _kind(clickhouse_type: str) -> str | None:
     """The date or time family of a type, wrappers read through, with `DateTime64(9)` apart:
     its range starts in 1677, the other precisions' in year 0. None for anything else."""

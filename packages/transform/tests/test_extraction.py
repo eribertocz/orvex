@@ -599,3 +599,64 @@ def test_a_since_without_zone_needs_a_known_connection_zone() -> None:
         declared = since_type(text)
         assert declared is not None
         source.zone_of(declared)  # a date needs no connection zone
+
+
+@pytest.mark.parametrize(
+    ("strategy", "declared", "column_type", "wider"),
+    [
+        ("append", "Date", "Date", "{since:Date32}"),
+        ("append", "Date", "Nullable(Date)", "{since:Date32}"),
+        ("append", "DateTime", "DateTime('UTC')", "{since:DateTime64(0, 'UTC')}"),
+        ("append", "DateTime('UTC')", "DateTime('UTC')", "{since:DateTime64(0, 'UTC')}"),
+        (
+            "append",
+            "DateTime('America/La_Paz')",
+            "DateTime",
+            "{since:DateTime64(0, 'America/La_Paz')}",
+        ),
+        ("append", "Date32", "Date", None),
+        ("append", "DateTime64(0, 'UTC')", "DateTime('UTC')", None),
+        ("append", "DateTime64(3, 'UTC')", "DateTime64(3, 'UTC')", None),
+        ("merge", "Date", "Date", None),
+        ("merge", "DateTime('UTC')", "DateTime('UTC')", None),
+    ],
+)
+def test_an_append_since_must_start_before_the_columns_default_value(
+    tmp_path: Path, strategy: str, declared: str, column_type: str, wider: str | None
+) -> None:
+    # #191 (decision #206): Date's and DateTime's first value is also their default value.
+    from orvex.contracts.project.v1 import ClickhouseConnection
+    from orvex.transform.clickhouse import map_type, since_default_problems
+    from orvex.transform.models import discover_models
+
+    connection = ClickhouseConnection.model_validate(
+        {
+            "type": "clickhouse",
+            "host": "h",
+            "port": 8123,
+            "database": "d",
+            "user": "u",
+            "password": "${env:UNUSED}",
+            "read_only": True,
+        }
+    )
+    (tmp_path / "models" / "raw").mkdir(parents=True)
+    (tmp_path / "models" / "raw" / "e.sql").write_text(
+        f"SELECT id, t FROM events WHERE t > {{since:{declared}}}", encoding="utf-8"
+    )
+    unique = "  unique_key: [id]\n" if strategy == "merge" else ""
+    (tmp_path / "models" / "raw" / "e.yaml").write_text(
+        "version: 1\nconnection: ch\nmaterialized: incremental\nincremental:\n"
+        f"  strategy: {strategy}\n  time_column: t\n{unique}  filter: manual\n",
+        encoding="utf-8",
+    )
+    found = discover_models(tmp_path, {"ch": connection})
+    assert found.problems == ()
+    mapped = map_type(column_type)
+    assert mapped is not None
+    problems = since_default_problems(found.models[0], (Column("t", column_type, mapped),))
+    if wider is None:
+        assert problems == []
+        return
+    assert [item.code.root for item in problems] == ["INVALID_MODEL_SQL"]
+    assert wider in problems[0].message

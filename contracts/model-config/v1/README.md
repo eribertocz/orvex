@@ -159,9 +159,12 @@ In ClickHouse SQL, the declared type must also tell apart every instant the time
 
 | `{since:…}` type | Allowed for a time column of type |
 |---|---|
-| `Date`, `Date32` | `Date`, `Date32` |
-| `DateTime` | `DateTime` |
+| `Date` | `Date32` (see below for `Date`) |
+| `Date32` | `Date`, `Date32` |
+| `DateTime` | none (see below) |
 | `DateTime64(p)` | `DateTime`, `DateTime64(q)` with `p ≥ q` |
+
+**Rows at the default value** (#191, decision #206). A first run binds the type's first value (see "First run, full refresh"), and `>` leaves out the rows equal to it. For `Date` and `DateTime` that first value, `1970-01-01` and `1970-01-01 00:00:00 UTC`, is also ClickHouse's default value, which sources often use for "no date". So an `append` model refuses `{since:Date}` on a `Date` column and `{since:DateTime…}` on a `DateTime` column (`INVALID_MODEL_SQL`, the message naming the type to declare): declare `{since:Date32}` or `{since:DateTime64(0, 'zone')}`, whose first value is earlier, so those rows are loaded. `merge` and `partition_overwrite` may use `>=` and are not affected.
 
 A date column takes a date parameter only: ClickHouse compares a `Date32` with a time at midnight in the connection's zone (the server's, or the user profile's), whatever the parameter's zone, so the watermark's day could be read again.
 
