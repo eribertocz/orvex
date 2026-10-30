@@ -315,6 +315,9 @@ def _azure(settings: AzureStorage) -> StoreAzureStorage:
             file=PROJECT_FILE,
             path=pointer,
         )
+    blob = _connection_pairs(os.environ[variable]).get("BlobEndpoint")
+    if blob is not None:
+        _without_userinfo(blob, f"lake.data.azure: the BlobEndpoint in {variable}", pointer)
     return StoreAzureStorage(type="azure", connection_string_env=variable)
 
 
@@ -382,11 +385,7 @@ def _endpoint(storage: ObjectStorage) -> str:
     (`BlobEndpoint`, else `<AccountName>.blob.<EndpointSuffix>`)."""
     settings = storage.root
     if isinstance(settings, StoreAzureStorage):
-        pairs = dict(
-            part.partition("=")[::2]
-            for part in os.environ.get(settings.connection_string_env, "").split(";")
-            if part
-        )
+        pairs = _connection_pairs(os.environ.get(settings.connection_string_env, ""))
         blob = pairs.get("BlobEndpoint")
         if blob is None:
             suffix = pairs.get("EndpointSuffix", "core.windows.net")
@@ -395,16 +394,39 @@ def _endpoint(storage: ObjectStorage) -> str:
     return _normalized_endpoint(settings.endpoint or "")
 
 
+def _connection_pairs(connection_string: str) -> dict[str, str]:
+    """An Azure connection string's `key=value` pairs (its shape is checked by
+    `_azure_over_https`)."""
+    return dict(part.partition("=")[::2] for part in connection_string.split(";") if part)
+
+
 def _normalized_endpoint(endpoint: str) -> str:
     """`host[:port][/path]`, lowercased, without scheme, credentials, query, fragment or trailing
     `/`: the record and its messages never hold a user, password or SAS token an Azure
     `BlobEndpoint` may carry (#147, Reviewer pass 1)."""
     text = endpoint.strip()
     address = text.split("://", 1)[1] if "://" in text else text
+    # `user:password@host`: everything up to the last `@` goes first, even a `/`, `?` or `#`
+    # in a password (Reviewer pass 2). An endpoint with `@` is refused before it is recorded
+    # (`_without_userinfo`); this keeps the record clean whatever reaches it.
+    address = address.rpartition("@")[2]
     for mark in ("?", "#"):
         address = address.split(mark, 1)[0]
-    # `user:password@host`: everything up to the last `@` goes, even a `/` in a password.
-    return address.rpartition("@")[2].lower().rstrip("/")
+    return address.lower().rstrip("/")
+
+
+def _without_userinfo(endpoint: str, where: str, pointer: str) -> None:
+    """Refuse an endpoint that carries a user or password (`user:password@host`): no object
+    store needs one there, and the lake's record and messages show the endpoint (#147,
+    Reviewer pass 2). Credentials belong in their own `${env:NAME}` fields."""
+    if "@" in endpoint:
+        raise ProjectLoadError(
+            "LAKE_LOCATION_INVALID",
+            f"{where}: the endpoint carries a user or password (an @); give only the host, "
+            "port and path, and the credentials in their own variables.",
+            file=PROJECT_FILE,
+            path=pointer,
+        )
 
 
 def endpoint_host(endpoint: str) -> str:
@@ -686,7 +708,12 @@ def check_unchanged(home: Path, chosen: Place) -> None:
         changes.append(f"lake.catalog was {_describe(existing)}, now {_describe(current)}")
     if existing.get("data") != current.get("data"):
         changes.append(f"lake.data.path was {_data_text(existing)}, now {_data_text(current)}")
-    if existing.get("endpoint") != current.get("endpoint"):
+    # Only between two object stores: a move to or from a local folder is the data path's line.
+    if (
+        "endpoint" in existing
+        and "endpoint" in current
+        and existing.get("endpoint") != current.get("endpoint")
+    ):
         changes.append(
             f"lake.data's object-storage endpoint was {existing.get('endpoint') or 'AWS S3'}, "
             f"now {current.get('endpoint') or 'AWS S3'}"

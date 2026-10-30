@@ -645,11 +645,6 @@ def test_opening_a_record_written_before_147_records_its_endpoint(
             "https://acct.blob.core.windows.net/?sv=2024&sig=" + ACCOUNT_KEY,
             "acct.blob.core.windows.net",
         ),
-        ("https://u:" + ACCOUNT_KEY + "@Acct.Blob.Core.Windows.Net/", "acct.blob.core.windows.net"),
-        (
-            "https://u:a/" + ACCOUNT_KEY + "@acct.blob.core.windows.net",
-            "acct.blob.core.windows.net",
-        ),
         (
             "http://127.0.0.1:10000/devstoreaccount1#" + ACCOUNT_KEY,
             "127.0.0.1:10000/devstoreaccount1",
@@ -678,3 +673,51 @@ def test_the_azure_record_holds_no_credential(
     assert found[0].startswith("LAKE_LOCATION_CHANGED project.yaml"), found
     assert ACCOUNT_KEY not in found[0]
     assert f"endpoint was {recorded}, now other.example.com" in found[0]
+
+
+@pytest.mark.parametrize(
+    "blob",
+    [
+        "https://u:" + ACCOUNT_KEY + "@Acct.Blob.Core.Windows.Net/",
+        "https://u:a/" + ACCOUNT_KEY + "@acct.blob.core.windows.net",
+        "https://u:ab?" + ACCOUNT_KEY + "@acct.blob.core.windows.net",
+        "https://u:ab#" + ACCOUNT_KEY + "@acct.blob.core.windows.net",
+        "https://" + ACCOUNT_KEY + "?x@acct.blob.core.windows.net",
+    ],
+)
+def test_an_endpoint_with_a_user_or_password_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blob: str
+) -> None:
+    # Reviewer pass 2 on #211: a `?` or `#` in a password cut the endpoint before its `@`, so a
+    # user and part of the password reached the record. An endpoint with `@` is refused before
+    # anything is recorded, and the refusal shows no part of it.
+    monkeypatch.setenv(AZURE_ENV, f"AccountName=acct;AccountKey={ACCOUNT_KEY};BlobEndpoint={blob}")
+    folder = bare(tmp_path / "proj", azure_lake())
+    found = problems(folder)
+    assert len(found) == 1
+    assert found[0].startswith("LAKE_LOCATION_INVALID project.yaml"), found
+    assert ACCOUNT_KEY not in found[0]
+    assert "u:" not in found[0]
+    assert not (home(folder) / lake_place.RECORD_FILE).exists()
+    assert lake_place._normalized_endpoint(blob) == "acct.blob.core.windows.net"
+
+
+@pytest.mark.usefixtures("credentials")
+def test_an_s3_endpoint_with_a_user_or_password_is_refused(tmp_path: Path) -> None:
+    # The schema allows only `host[:port]` for an S3 endpoint; its message shows no value.
+    folder = bare(tmp_path / "proj", s3_lake("u:" + SECRET + "@127.0.0.1:9000"))
+    found = problems(folder)
+    assert found[0].startswith("PROJECT_SCHEMA_INVALID project.yaml"), found
+    assert SECRET not in found[0]
+
+
+@pytest.mark.usefixtures("credentials")
+def test_moving_object_storage_data_to_a_local_folder_names_the_path_only(tmp_path: Path) -> None:
+    # Reviewer pass 2 on #211: "endpoint … now AWS S3" was printed for a move to a local folder.
+    folder = tmp_path / "proj"
+    recorded_lake(folder, s3_lake("127.0.0.1:9000"))
+    bare(folder, "")
+    found = problems(folder)
+    assert found[0].startswith("LAKE_LOCATION_CHANGED project.yaml"), found
+    assert "lake.data.path was" in found[0]
+    assert "endpoint" not in found[0]
