@@ -139,6 +139,96 @@ def record(folder: Path, payload: dict[str, object]) -> None:
     heartbeat.write(home(folder), heartbeat.Heartbeat(**(base | payload)))  # type: ignore[arg-type]
 
 
+class Watching(Clock):
+    """A clock that also keeps every last decision the heartbeat held, and the line `runs`
+    showed for it, while the scheduler ran; `change` edits the project at a given minute."""
+
+    def __init__(
+        self, folder: Path, until: dt.datetime, change: tuple[int, dict[str, str]] | None = None
+    ) -> None:
+        super().__init__(folder, until)
+        self.decisions: list[tuple[object, object]] = []
+        self.shown: list[str] = []
+        self.change = change
+
+    def sleep(self, seconds: float) -> None:
+        super().sleep(seconds)
+        found = beat(self.folder)
+        if found["state"] == "running":
+            pair = (found.get("last_decision_at"), found.get("last_decision"))
+            if not self.decisions or self.decisions[-1] != pair:
+                self.decisions.append(pair)
+            self.shown.append(heartbeat.describe(home(self.folder), "UTC", self.now))
+        if self.change is not None and self.now >= START + dt.timedelta(minutes=self.change[0]):
+            write(self.folder, self.change[1])
+            self.change = None
+
+
+def watched(folder: Path, monkeypatch: pytest.MonkeyPatch, clock: Watching) -> str:
+    monkeypatch.setattr(commands, "_now", clock.text)
+    out = io.StringIO()
+    code = schedule(
+        folder,
+        load_identity(),
+        out,
+        sleep=clock.sleep,
+        should_stop=clock.done,
+        monotonic=clock.monotonic,
+    )
+    assert code == 0, out.getvalue()
+    return out.getvalue()
+
+
+def test_waiting_for_the_project_is_the_last_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #166: `runs` says why a blocked scheduler runs nothing, at the time it was first printed.
+    write(
+        tmp_path,
+        {
+            "project.yaml": PROJECT,
+            "models/s/m.sql": "SELECT 1 AS n",
+            "models/s/m.yaml": "version: 1\nfreshness: 5m\n",
+        },
+    )
+    clock = Watching(tmp_path, START + dt.timedelta(minutes=5))
+    with commands.project_lock(home(tmp_path)):
+        out = watched(tmp_path, monkeypatch, clock)
+    waiting = "waiting: another process holds the project"
+    assert out.count(waiting) == 1, out  # printed once while it lasts
+    assert clock.decisions == [(START.isoformat(), waiting)], clock.decisions
+    assert clock.shown[-1].startswith(
+        f"scheduler: running since 2026-10-28 09:50:00, last decision at 2026-10-28 09:50:00 "
+        f"({waiting}), next at "
+    ), clock.shown[-1]
+
+
+def test_a_project_that_does_not_check_is_the_last_decision_until_fixed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write(
+        tmp_path,
+        {
+            "project.yaml": PROJECT,
+            "models/s/m.sql": "SELECT * FROM s.nowhere",
+            "models/s/m.yaml": "version: 1\nfreshness: 5m\n",
+        },
+    )
+    clock = Watching(
+        tmp_path,
+        START + dt.timedelta(minutes=12),
+        change=(3, {"models/s/m.sql": "SELECT 1 AS n"}),
+    )
+    out = watched(tmp_path, monkeypatch, clock)
+    problem = out.splitlines()[0]
+    assert problem.startswith("MODEL_REFERENCE_UNKNOWN models/s/m.sql"), out
+    assert clock.decisions[0] == (START.isoformat(), problem), clock.decisions
+    # Fixed: the next decision (the run) replaces it.
+    assert any(str(text).startswith("running s.m") for _, text in clock.decisions[1:]), (
+        clock.decisions
+    )
+
+
 @pytest.mark.parametrize(
     ("payload", "expected"),
     [
