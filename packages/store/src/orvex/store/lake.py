@@ -10,6 +10,7 @@ from __future__ import annotations
 import collections
 import contextlib
 import datetime as dt
+import errno
 import fnmatch
 import itertools
 import json
@@ -899,8 +900,9 @@ def _spend(budget: _Budget, units: int = 1) -> None:
 
 def _listed(folder: str, budget: _Budget) -> list[tuple[str, bool]]:
     """A folder's entries as (name, is a folder), each read counted against the budget, the
-    read itself too. A folder that does not exist (or is not one) has none; one that cannot be
-    listed, or an entry whose kind cannot be told (a symbolic-link loop), cannot be checked."""
+    read itself too. A folder that does not exist, is not one, or whose name is too long to
+    exist has none; one that cannot be listed, or an entry whose kind cannot be told (a
+    symbolic-link loop), cannot be checked."""
     _spend(budget)
     try:
         with os.scandir(folder or ".") as found:
@@ -911,7 +913,11 @@ def _listed(folder: str, budget: _Budget) -> list[tuple[str, bool]]:
             return entries
     except FileNotFoundError, NotADirectoryError:
         return []
-    except OSError:
+    except OSError as error:
+        # A name too long for the file system names no file DuckDB could open: ordinary text
+        # such as "… and/or estimated?" (#178, Reviewer pass 3).
+        if error.errno == errno.ENAMETOOLONG:
+            return []
         raise _Unchecked from None
 
 

@@ -488,6 +488,15 @@ def test_a_long_pattern_is_checked_quickly_without_error(tmp_path: Path, shape: 
     assert time.monotonic() - started < 1.0
 
 
+@pytest.mark.parametrize("length", [280, 5000])
+def test_text_whose_folder_name_is_too_long_to_exist_is_allowed(length: int) -> None:
+    # #178 Reviewer pass 3: ordinary text with a `/` and a `?` was refused when a part before
+    # the `/` was longer than a file name can be.
+    words = "x" * length
+    sql = f"SELECT CASE WHEN a > 0 THEN '{words} and/or estimated?' END AS note FROM m"
+    _guarded(sql, table_functions())
+
+
 def test_a_symbolic_link_loop_is_refused_not_crashed(tmp_path: Path) -> None:
     (tmp_path / "loop").symlink_to(".")
     with pytest.raises(StoreError) as raised:

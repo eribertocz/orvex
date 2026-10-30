@@ -702,7 +702,9 @@ def test_a_pattern_too_broad_to_check_is_refused_through_the_lake(lake: Lake, pa
     before = lake.current_snapshot().id
     started = time.monotonic()
     assert code_of(lambda: read(lake, f"SELECT '{pattern}' AS p")) == "STORE_STATEMENT_INVALID"
+    assert time.monotonic() - started < 1.0  # each in under 1 s (#178)
     sql = f"CREATE TABLE x AS SELECT '{pattern}' AS p"
+    started = time.monotonic()
     assert code_of(lambda: write(lake, statement(sql))) == "STORE_STATEMENT_INVALID"
-    assert time.monotonic() - started < 5.0
+    assert time.monotonic() - started < 1.0
     assert lake.current_snapshot().id == before
