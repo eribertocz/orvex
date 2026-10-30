@@ -1333,11 +1333,20 @@ def test_an_append_since_starting_at_the_default_value_is_refused(
     ("declared", "connection_zone", "strategy"),
     [
         ("DateTime('localtime')", None, "merge"),
+        ("DateTime('localtime')", None, "append"),
+        ("DateTime64(3, 'posixrules')", None, "merge"),
         ("DateTime64(3, 'posixrules')", None, "append"),
         ("DateTime", "localtime", "append"),
         ("DateTime", "Mars/Olympus", "append"),
     ],
-    ids=["declared-localtime", "declared-posixrules", "connection-localtime", "connection-unknown"],
+    ids=[
+        "declared-localtime-merge",
+        "declared-localtime-append",
+        "declared-posixrules-merge",
+        "declared-posixrules-append",
+        "connection-localtime",
+        "connection-unknown",
+    ],
 )
 def test_a_zone_the_machine_resolves_on_its_own_is_refused_before_anything_runs(
     tmp_path: Path,

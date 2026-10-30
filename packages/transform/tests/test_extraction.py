@@ -751,3 +751,25 @@ def test_a_zone_the_machine_resolves_on_its_own_is_unknown() -> None:
         assert since is not None
         found = source.zone_of(since)
         assert zone is None or found == zone
+
+
+def test_a_since_zone_is_read_from_the_bundled_database() -> None:
+    # Reviewer pass 1 on #216: Ubuntu's own `EET` and `WET` keep old rules; IANA and ClickHouse
+    # read `EET` as Europe/Athens and `WET` as Europe/Lisbon. The value must not depend on the
+    # machine's zone files.
+    from orvex.transform.clickhouse import bundled_zone, since_type, since_value
+
+    eet = since_type("DateTime('EET')")
+    wet = since_type("DateTime('WET')")
+    assert eet is not None
+    assert wet is not None
+    assert since_value(eet, "1978-09-24T01:30:00+00:00", None, "UTC") == "1978-09-24 03:30:00"
+    assert since_value(wet, "1977-09-25T00:30:00+00:00", None, "UTC") == "1977-09-25 00:30:00"
+    connection = since_type("DateTime")
+    assert connection is not None
+    assert since_value(connection, "1978-09-24T01:30:00+00:00", None, "EET") == (
+        "1978-09-24 03:30:00"
+    )
+    assert bundled_zone("EET").key == "EET"
+    with pytest.raises(KeyError):
+        bundled_zone("localtime")
