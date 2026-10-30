@@ -604,6 +604,40 @@ def test_explain_is_refused_at_every_entry_point(lake: Lake, sql: str) -> None:
     assert code_of(value) == "STORE_STATEMENT_INVALID"
 
 
+@pytest.mark.parametrize("space", ["\u00a0", "\u200b", "\u3000", "\ufeff"])
+def test_table_functions_after_a_unicode_space_are_refused_at_every_entry_point(
+    lake: Lake, space: str
+) -> None:
+    # #213: DuckDB reads these characters as spaces; the store checks and runs the same text.
+    write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(3)"))
+    before = lake.current_snapshot().id
+    for sql in (
+        f"SELECT * FROM{space}read_text('/etc/hostname')",
+        f"SELECT * FROM read_text{space}('/etc/hostname')",
+        f"SELECT * FROM{space}query('SELECT 1')",
+    ):
+        assert code_of(lambda sql=sql: read(lake, sql)) == "STORE_STATEMENT_INVALID", sql
+        assert code_of(lambda sql=sql: lake.describe(sql)) == "STORE_STATEMENT_INVALID", sql
+        created = f"CREATE TABLE x AS {sql}"
+        assert code_of(lambda sql=created: write(lake, statement(sql))) == (
+            "STORE_STATEMENT_INVALID"
+        ), sql
+
+        def value(sql: str = sql) -> None:
+            with lake.transaction() as transaction:
+                transaction.value(statement(sql))
+
+        assert code_of(value) == "STORE_STATEMENT_INVALID", sql
+    assert lake.current_snapshot().id == before  # nothing was written
+
+
+def test_unicode_spaces_in_values_reach_the_lake_unchanged(lake: Lake) -> None:
+    # #213: only spaces between tokens are rewritten.
+    write(lake, statement("CREATE\u00a0TABLE t AS SELECT 'a\u00a0b' AS \"c\u3000d\""))
+    assert lake.describe("SELECT\u2003* FROM t") == [("c\u3000d", "VARCHAR")]
+    assert read(lake, "SELECT * FROM\u200bt").to_pylist() == [{"c\u3000d": "a\u00a0b"}]
+
+
 @pytest.mark.parametrize("sql", ["SELECT * FROM m desc", "SELEC 1", "SELECT ("])
 def test_sql_that_does_not_parse_fails_with_the_parser_message(lake: Lake, sql: str) -> None:
     # #158: as before #154, whatever the statement checks would say.

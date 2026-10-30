@@ -719,3 +719,57 @@ def test_every_suggestion_is_a_type_an_append_model_accepts(tmp_path: Path) -> N
     zone = refusal("DateTime", "DateTime", "zone")
     assert "{since:DateTime64(0, 'UTC')}" in zone
     assert "{since:DateTime('UTC')}" not in zone
+
+
+def test_a_zone_the_machine_resolves_on_its_own_is_unknown() -> None:
+    # #212: `localtime` and `posixrules` name the engine machine's zone; ClickHouse resolves them
+    # on its own machine, so a watermark written in them would be read at another instant.
+    from orvex.transform.clickhouse import Source, SourceError, known_zone
+
+    for name in ("localtime", "posixrules", "Factory", "Mars/Olympus"):
+        assert not known_zone(name), name
+    for name in ("UTC", "Etc/GMT+4", "America/La_Paz", "US/Eastern", "Asia/Calcutta"):
+        assert known_zone(name), name
+    source = Source.__new__(Source)
+    source.name = "ch"
+    for declared in ("DateTime('localtime')", "DateTime64(3, 'posixrules')"):
+        source._zone = "UTC"
+        since = since_type(declared)
+        assert since is not None
+        with pytest.raises(SourceError) as raised:
+            source.zone_of(since)
+        assert raised.value.code == "SOURCE_ZONE_UNKNOWN"
+    source._zone = "localtime"  # the connection's zone
+    for text in ("DateTime", "DateTime64(3)"):
+        since = since_type(text)
+        assert since is not None
+        with pytest.raises(SourceError) as raised:
+            source.zone_of(since)
+        assert raised.value.code == "SOURCE_ZONE_UNKNOWN"
+    for text, zone in (("DateTime('UTC')", "UTC"), ("Date", None), ("Date32", None)):
+        since = since_type(text)
+        assert since is not None
+        found = source.zone_of(since)
+        assert zone is None or found == zone
+
+
+def test_a_since_zone_is_read_from_the_bundled_database() -> None:
+    # Reviewer pass 1 on #216: Ubuntu's own `EET` and `WET` keep old rules; IANA and ClickHouse
+    # read `EET` as Europe/Athens and `WET` as Europe/Lisbon. The value must not depend on the
+    # machine's zone files.
+    from orvex.transform.clickhouse import bundled_zone, since_type, since_value
+
+    eet = since_type("DateTime('EET')")
+    wet = since_type("DateTime('WET')")
+    assert eet is not None
+    assert wet is not None
+    assert since_value(eet, "1978-09-24T01:30:00+00:00", None, "UTC") == "1978-09-24 03:30:00"
+    assert since_value(wet, "1977-09-25T00:30:00+00:00", None, "UTC") == "1977-09-25 00:30:00"
+    connection = since_type("DateTime")
+    assert connection is not None
+    assert since_value(connection, "1978-09-24T01:30:00+00:00", None, "EET") == (
+        "1978-09-24 03:30:00"
+    )
+    assert bundled_zone("EET").key == "EET"
+    with pytest.raises(KeyError):
+        bundled_zone("localtime")
