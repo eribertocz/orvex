@@ -563,14 +563,71 @@ def test_summarize_and_dollar_quoted_files_are_refused_through_the_lake(
     lake: Lake, tmp_path: Path
 ) -> None:
     # #153: a read of SUMMARIZE would be unpinned, and a dollar-quoted file name was read as a file.
-    write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(3)"))
+    # #158: the file named is one of the lake's own data files (enough rows to be written to a
+    # file rather than kept in the catalog).
+    write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(200000)"))
     before = lake.current_snapshot().id
-    target = tmp_path / "x.csv"
-    target.write_text("a\n1\n", encoding="utf-8")
+    target = next(tmp_path.rglob("ducklake-*.parquet"))
     assert code_of(lambda: read(lake, "SELECT * FROM (SUMMARIZE m)")) == "STORE_STATEMENT_INVALID"
-    created = statement(f"CREATE TABLE x AS SUMMARIZE $${target.as_posix()}$$")
-    assert code_of(lambda: write(lake, created)) == "STORE_STATEMENT_INVALID"
+    for sql in (
+        f"CREATE TABLE x AS SUMMARIZE $${target.as_posix()}$$",
+        f"CREATE TABLE x AS SUMMARIZE '{target.as_posix()}'",
+    ):
+        assert code_of(lambda sql=sql: write(lake, statement(sql))) == "STORE_STATEMENT_INVALID"
+    # A dollar-quoted name in FROM does not parse in DuckDB 2.0: it fails before any check, and
+    # nothing is read (#158).
+    unparsable = f"CREATE TABLE x AS SELECT * FROM $tag${target.as_posix()}$tag$"
+    assert code_of(lambda: write(lake, statement(unparsable))) == "STORE_QUERY_FAILED"
     assert lake.current_snapshot().id == before  # nothing was created
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "EXPLAIN CREATE TABLE y AS SUMMARIZE m",
+        "EXPLAIN SUMMARIZE m",
+        "EXPLAIN ANALYZE SELECT 1",
+    ],
+)
+def test_explain_is_refused_at_every_entry_point(lake: Lake, sql: str) -> None:
+    # #158: refused by statement type wherever SQL enters the store.
+    write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(3)"))
+    assert code_of(lambda: read(lake, sql)) == "STORE_STATEMENT_INVALID"
+    assert code_of(lambda: write(lake, statement(sql))) == "STORE_STATEMENT_INVALID"
+    assert code_of(lambda: lake.describe(sql)) == "STORE_STATEMENT_INVALID"
+
+    def value() -> None:
+        with lake.transaction() as transaction:
+            transaction.value(statement(sql))
+
+    assert code_of(value) == "STORE_STATEMENT_INVALID"
+
+
+@pytest.mark.parametrize("sql", ["SELECT * FROM m desc", "SELEC 1", "SELECT ("])
+def test_sql_that_does_not_parse_fails_with_the_parser_message(lake: Lake, sql: str) -> None:
+    # #158: as before #154, whatever the statement checks would say.
+    write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(3)"))
+    for action in (lambda: read(lake, sql), lambda: write(lake, statement(sql))):
+        with pytest.raises(StoreError) as raised:
+            action()
+        assert raised.value.code == "STORE_QUERY_FAILED"
+        assert "syntax error" in str(raised.value.details.get("duckdb", ""))
+
+
+def test_sql_naming_a_lake_data_file_that_does_not_parse_fails_before_any_check(
+    lake: Lake, tmp_path: Path
+) -> None:
+    # #158: it does not parse, so nothing runs and the file is never named to a check.
+    write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(200000)"))
+    before = lake.current_snapshot().id
+    target = next(tmp_path.rglob("ducklake-*.parquet")).as_posix()
+    sql = f"SELECT * FROM '{target}' desc"
+    for action in (lambda: read(lake, sql), lambda: write(lake, statement(sql))):
+        with pytest.raises(StoreError) as raised:
+            action()
+        assert raised.value.code == "STORE_QUERY_FAILED"
+        assert "syntax error" in str(raised.value.details.get("duckdb", ""))
+    assert lake.current_snapshot().id == before
 
 
 def test_histogram_ducklake_macros_and_table_options_are_refused_through_the_lake(

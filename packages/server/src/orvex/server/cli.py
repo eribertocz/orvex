@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import signal
 import socket
 import sys
@@ -158,8 +159,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if command.command == "validate":
             return validate(command.project, sys.stdout, command.show_sql)
         if command.command == "schedule":
-            if command.stop_grace < 0:
-                print("--stop-grace must be at least 0", file=sys.stderr)
+            if not (math.isfinite(command.stop_grace) and 0 <= command.stop_grace <= 86_400):
+                # `nan` and `inf` parse as floats, but no grace period can be waited out (#166).
+                print("--stop-grace must be a number of seconds from 0 to 86400", file=sys.stderr)
                 return 2
             return schedule(command.project, identity, sys.stdout, stop_grace=command.stop_grace)
         if command.command == "runs":

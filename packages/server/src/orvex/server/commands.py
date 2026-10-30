@@ -68,7 +68,14 @@ from orvex.transform import (
     schedule,
 )
 from orvex.transform.extraction import Extract
-from orvex.transform.graph import Graph, build_graph, compiled_sql, plan_run, test_relations
+from orvex.transform.graph import (
+    Graph,
+    build_graph,
+    compiled_sql,
+    known_output_names,
+    plan_run,
+    test_relations,
+)
 from orvex.transform.incremental import (
     Columns,
     Count,
@@ -169,7 +176,18 @@ def check_project(folder: Path, identity: Identity | None = None) -> Checked:
     differences: dict[str, list[Comparison]] = {}
     filtered: dict[str, str] = {}
     extracted: dict[str, tuple[clickhouse.Column, ...]] = {}
-    needs_binding = any(
+    # A repeated output name (#113): found from the text when it decides the names; otherwise
+    # the model is bound, as below.
+    unknown_names = False
+    for model in discovery.models:
+        if model.extraction:
+            continue
+        names = known_output_names(model.sql)
+        if names is None:
+            unknown_names = True
+        else:
+            problems += _repeated_names(model, names)
+    needs_binding = unknown_names or any(
         m.config.materialized == "incremental"
         or m.config.tests
         or m.config.reconciliation
@@ -244,6 +262,11 @@ def _bind(
                         failed.add(name)
                         problems += [_from_model_error(item) for item in refused]
                         continue
+                    repeated = _repeated_names(model, [column.name for column in described])
+                    if repeated:
+                        failed.add(name)
+                        problems += repeated
+                        continue
                     extracted[name] = described
                     _stand_in(lake, model, [(c.name, c.mapped.duckdb) for c in described])
                     # DuckDB's own names for the mapped types, as for every other model.
@@ -261,6 +284,11 @@ def _bind(
                                 f"{name}: {_store_message(error)}",
                             )
                         )
+                        continue
+                    repeated = _repeated_names(model, [column for column, _ in output])
+                    if repeated:
+                        failed.add(name)
+                        problems += repeated
                         continue
                     columns[name] = output
                     # A computed time column bounded by its alias: only now are the tables'
@@ -290,6 +318,27 @@ def _bind(
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     return columns, differences, filtered, extracted, problems
+
+
+def _repeated_names(model: Model, names: list[str]) -> list[Problem]:
+    """One problem per output column name the model repeats, in output order (#113).
+
+    Names are compared as DuckDB does, without letter case: a table cannot hold `a` and `A`,
+    and `CREATE TABLE … AS` would silently store the second as `A_1`."""
+    spellings: dict[str, list[str]] = {}
+    for name in names:
+        spellings.setdefault(name.casefold(), []).append(name)
+    return [
+        Problem(
+            "INVALID_MODEL_SQL",
+            model.sql_file,
+            None,
+            f"{model.name}: the output repeats the column name {found[0]} "
+            f"({', '.join(found)}); column names are not case-sensitive.",
+        )
+        for found in spellings.values()
+        if len(found) > 1
+    ]
 
 
 def _columns_of(lake: Lake, parts: tuple[str, ...]) -> frozenset[str] | None:

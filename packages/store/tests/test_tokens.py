@@ -6,6 +6,7 @@ token each check must find.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import duckdb
@@ -392,3 +393,29 @@ def test_table_options_are_refused(sql: str, clause: str) -> None:
 )
 def test_ctes_updates_and_columns_named_like_the_macros_stay_allowed(sql: str) -> None:
     _guarded(sql, table_functions())
+
+
+def wide(columns: int) -> str:
+    """A generated wide model: one CASE expression with a string constant per column."""
+    items = ", ".join(
+        f"CASE WHEN a{i} > {i} THEN 'x{i}' ELSE b{i} END AS c{i}" for i in range(columns)
+    )
+    return f"CREATE TABLE t AS SELECT {items} FROM src"
+
+
+def guard_seconds(sql: str) -> float:
+    functions = table_functions()
+    started = time.perf_counter()
+    _guarded(sql, functions)
+    return time.perf_counter() - started
+
+
+def test_the_statement_checks_take_time_in_proportion_to_the_statement() -> None:
+    # #158: each token's end was found by scanning every position, quadratic in the length
+    # (116 KB took 15 s). About 1 MB is checked well within 2 s, 116 KB within 0.5 s.
+    large = wide(18_000)
+    assert len(large) > 1_000_000
+    assert guard_seconds(large) < 2.0
+    assert guard_seconds(wide(2_000)) < 0.5
+    small, big = guard_seconds(wide(2_000)), guard_seconds(wide(8_000))
+    assert big < 8 * small + 0.2, (small, big)

@@ -406,3 +406,24 @@ def test_reader_profiles(
             client.command(f"DROP USER IF EXISTS {user}")
         client.command(f"DROP SETTINGS PROFILE IF EXISTS {profile}")
         client.close()
+
+
+@pytest.mark.usefixtures("password")
+def test_an_extraction_model_that_repeats_a_column_name_is_refused(
+    tmp_path: Path, source: dict[str, str]
+) -> None:
+    # #113: ClickHouse names are case-sensitive, so it describes `a` and `A`; the lake's are not,
+    # and the stand-in table could not hold both (validation crashed before).
+    folder = project(
+        tmp_path,
+        source,
+        {
+            "models/raw/ch_repeated.sql": "SELECT 1 AS a, 2 AS A",
+            "models/raw/ch_repeated.yaml": TABLE,
+            "models/marts/after.sql": "SELECT * FROM raw.ch_repeated",
+        },
+    )
+    assert problems(folder) == [
+        "INVALID_MODEL_SQL models/raw/ch_repeated.sql raw.ch_repeated: the output repeats the "
+        "column name a (a, A); column names are not case-sensitive."
+    ]

@@ -155,10 +155,12 @@ def test_a_read_queries_the_lake_only_once_admitted(
         original_cursor = lake._cursor
         original_acquire = lake._admission.acquire
 
-        def one_recorded(sql: str, parameters: dict[str, object]) -> tuple[object, ...] | None:
+        def one_recorded(
+            sql: str, parameters: dict[str, object], cursor: object = None
+        ) -> tuple[object, ...] | None:
             if recording.is_set() and not maintaining.is_set():
                 events.append("query")
-            return original_one(sql, parameters)
+            return original_one(sql, parameters, cursor)  # type: ignore[arg-type]
 
         def cursor_recorded() -> object:
             if recording.is_set() and not maintaining.is_set():
