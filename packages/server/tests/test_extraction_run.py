@@ -826,6 +826,7 @@ def appended(tmp_path: Path, source: dict[str, str], column: str, bound: str) ->
         ("DateTime64(3, 'UTC')", "t >= {since:DateTime64(3, 'UTC')}"),
         ("DateTime64(3, 'UTC')", "t > {since:DateTime64(3, 'UTC')} OR t IS NULL"),
         ("DateTime64(3, 'UTC')", "t > {since:DateTime64(3, 'UTC')} - INTERVAL 1 SECOND"),
+        ("Date", "t > {since:DateTime('UTC')}"),
     ],
     ids=[
         "date-on-datetime",
@@ -834,6 +835,7 @@ def appended(tmp_path: Path, source: dict[str, str], column: str, bound: str) ->
         "inclusive",
         "or-null",
         "widened",
+        "datetime-on-date",
     ],
 )
 def test_an_append_filter_that_reads_rows_again_is_refused_before_anything_runs(
@@ -877,3 +879,28 @@ def test_an_append_filter_that_reads_each_row_once_inserts_it_once(
     code, out = run(capsys, folder)  # nothing changed at the source: nothing read again
     assert code == 0, out
     assert lake_value(folder, ids) == [(1,), (2,), (3,)]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT n AS id, now64(3, 'UTC') AS t FROM (SELECT number + 1 AS n FROM numbers(3)) "
+        "WHERE t > {since:DateTime64(3, 'UTC')}",
+        "SELECT * FROM (SELECT number + 1 AS id, now64(3, 'UTC') AS t FROM numbers(3)) "
+        "WHERE t > {since:DateTime64(3, 'UTC')}",
+    ],
+    ids=["computed-here", "computed-below"],
+)
+def test_an_append_time_column_that_changes_every_run_is_refused(
+    tmp_path: Path, source: dict[str, str], capsys: pytest.CaptureFixture[str], sql: str
+) -> None:
+    # #135 Reviewer pass 1: every row would come back with a later time and be inserted again.
+    folder = project(
+        tmp_path,
+        source,
+        {"models/raw/ch_events.sql": sql, "models/raw/ch_events.yaml": APPEND_SIDECAR},
+    )
+    code, out = run(capsys, folder)
+    assert code == 1, out
+    assert "INVALID_MODEL_SQL" in out
+    assert not (folder / f".{SLUG}" / "lake").exists()  # nothing created

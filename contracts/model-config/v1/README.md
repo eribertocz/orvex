@@ -159,10 +159,14 @@ In ClickHouse SQL, the declared type must also tell apart every instant the time
 | `{since:…}` type | Allowed for a time column of type |
 |---|---|
 | `Date`, `Date32` | `Date`, `Date32` |
-| `DateTime` | `Date`, `Date32`, `DateTime` |
-| `DateTime64(p)` | `Date`, `Date32`, `DateTime`, `DateTime64(q)` with `p ≥ q` |
+| `DateTime` | `DateTime` |
+| `DateTime64(p)` | `DateTime`, `DateTime64(q)` with `p ≥ q` |
 
-`Nullable(…)` and `LowCardinality(…)` are read through. Anything else is `INVALID_MODEL_SQL` at the model's SQL file before anything runs; the message says what to write (`WHERE <time_column> > $since`, or a `{since:…}` type as precise as the column) and points to `strategy: merge` when rows can be read again. `filter: auto` already writes `time_column > $since`.
+A date column takes a date parameter only: ClickHouse compares a `Date32` with a time at midnight in the server's zone, whatever the parameter's zone, so the watermark's day could be read again.
+
+`Nullable(…)` and `LowCardinality(…)` are read through.
+
+The time column must also have the same value for a row in every run, or a row read once comes back with a later time and is inserted again: every expression that may compute it, followed through aliases (and `REPLACE`), may use only functions the engine marks as such (DuckDB's `CONSISTENT` functions, ClickHouse's `deterministic` ones), no window function, no subquery, and none of `now()`, `random()`, `current_timestamp`, `now64()`, `rand()` and the like. An alias with the same name elsewhere in the model is checked too. Anything else is `INVALID_MODEL_SQL` at the model's SQL file before anything runs; the message says what to write (`WHERE <time_column> > $since`, or a `{since:…}` type as precise as the column) and points to `strategy: merge` when rows can be read again. `filter: auto` already writes `time_column > $since`.
 
 Limit: a row that reaches the source later with a time equal to or older than the watermark (late data) is not read by an `append` model under any filter. Use `merge` with a `lookback` for such sources.
 

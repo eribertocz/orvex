@@ -31,6 +31,7 @@ it commits or rolls back with the rows — never the clock, and never a separate
 from __future__ import annotations
 
 import datetime as dt
+import functools
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
@@ -470,7 +471,71 @@ def since_is_a_lower_bound(
             for key, value in node.items()
         )
 
-    return check(statements, None)
+    def stable(tree: object) -> bool:
+        """Whether every expression that may compute the time column, followed by name through
+        every alias and `REPLACE` in the SQL, gives each row the same value in every run: only
+        functions DuckDB marks `CONSISTENT`, no window, subquery or special name such as
+        `current_timestamp` (#135, Reviewer pass 1). By name, so an unrelated alias with the
+        same name is also checked: it fails closed."""
+        definitions: dict[str, list[object]] = {}
+        for node in nodes(tree):
+            replaced = node.get("replace_list") if node.get("class") == "STAR" else None
+            if isinstance(replaced, list):
+                for entry in replaced:
+                    if isinstance(entry, dict):
+                        key = str(entry.get("key", "")).lower()
+                        definitions.setdefault(key, []).append(entry.get("value"))
+            items = node.get("select_list") if "select_list" in node else None
+            for item in items if isinstance(items, list) else []:
+                if not isinstance(item, dict) or item.get("class") == "STAR":
+                    continue
+                alias = str(item.get("alias") or "").lower()
+                parts = column_parts(item)
+                if alias and parts[-1:] != [alias]:
+                    definitions.setdefault(alias, []).append(item)
+        pending, seen = [wanted], {wanted}
+        while pending:
+            for expression in definitions.get(pending.pop(), []):
+                for node in nodes(expression):
+                    kind = node.get("class")
+                    if kind in {"WINDOW", "SUBQUERY", "STAR", "LAMBDA"}:
+                        return False
+                    if kind == "FUNCTION" and not _consistent(str(node.get("function_name"))):
+                        return False
+                    name = column_parts(node)[-1:]
+                    if name and name[0] in _SPECIAL_NAMES:
+                        return False
+                    if name and name[0] not in seen:
+                        seen.add(name[0])
+                        pending.append(name[0])
+        return True
+
+    return check(statements, None) and (not strict or stable(statements))
+
+
+# Names DuckDB reads as functions of the moment although they parse as column references.
+_SPECIAL_NAMES = frozenset(
+    {"current_timestamp", "current_date", "current_time", "localtimestamp", "localtime"}
+)
+
+
+@functools.cache
+def _consistent_functions() -> frozenset[str]:
+    """The functions whose every overload DuckDB marks `CONSISTENT`: the same arguments give the
+    same value in every query (not `now()`, `random()`, `nextval()`, …)."""
+    connection = duckdb.connect()
+    try:
+        rows = connection.execute(
+            "SELECT lower(function_name) FROM duckdb_functions() GROUP BY 1 "
+            "HAVING bool_and(coalesce(stability = 'CONSISTENT', false))"
+        ).fetchall()
+    finally:
+        connection.close()
+    return frozenset(str(row[0]) for row in rows)
+
+
+def _consistent(name: str) -> bool:
+    return name.lower() in _consistent_functions()
 
 
 def since_bound_problem(model: Model, columns_of: ColumnsOf | None = None) -> ModelError | None:

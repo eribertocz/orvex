@@ -995,6 +995,41 @@ def test_an_append_filter_that_reads_each_row_once_is_accepted(tmp_path: Path, s
     assert config_problems(sql_model(tmp_path, MANUAL_APPEND, sql)) == []
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT id, now() AS read_at FROM src WHERE read_at > $since",
+        "SELECT * FROM (SELECT id, now() AS read_at FROM src) WHERE read_at > $since",
+        "SELECT * FROM (SELECT id, current_timestamp AS read_at FROM src) WHERE read_at > $since",
+        "SELECT * FROM (SELECT id, x AS read_at FROM (SELECT id, random() AS x FROM src)) "
+        "WHERE read_at > $since",
+        "SELECT * REPLACE (now() AS read_at) FROM (SELECT * FROM src) WHERE read_at > $since",
+        "SELECT * FROM (SELECT id, max(t) OVER () AS read_at FROM src) WHERE read_at > $since",
+    ],
+    ids=["computed-here", "computed-below", "current-timestamp", "renamed", "replace", "window"],
+)
+def test_an_append_time_column_that_changes_every_run_is_refused(tmp_path: Path, sql: str) -> None:
+    # #135 Reviewer pass 1: two runs inserted ids [1, 1, 2, 2].
+    found = config_problems(sql_model(tmp_path, MANUAL_APPEND, sql))
+    assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM (SELECT id, CAST(t AS DATE) AS read_at FROM src) WHERE read_at > $since",
+        "SELECT * FROM (SELECT id, date_trunc('hour', t) AS read_at FROM src) "
+        "WHERE read_at > $since",
+        "SELECT * FROM (SELECT id, t AS read_at, now() AS seen FROM src) WHERE read_at > $since",
+    ],
+    ids=["cast", "date-trunc", "other-column-volatile"],
+)
+def test_an_append_time_column_computed_the_same_way_every_run_is_accepted(
+    tmp_path: Path, sql: str
+) -> None:
+    assert config_problems(sql_model(tmp_path, MANUAL_APPEND, sql)) == []
+
+
 def test_an_append_model_with_the_automatic_filter_is_accepted(tmp_path: Path) -> None:
     auto = MANUAL_APPEND.replace(", filter: manual", "")
     assert config_problems(sql_model(tmp_path, auto, "SELECT * FROM src")) == []

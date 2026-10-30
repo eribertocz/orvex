@@ -298,7 +298,12 @@ def test_a_date_since_is_refused_for_partition_overwrite_on_a_datetime_column(
         ("append", "DateTime64(3, 'UTC')", "Nullable(DateTime64(6, 'UTC'))", True),
         ("append", "Date", "Date", False),
         ("append", "Date", "Date32", False),
-        ("append", "DateTime('UTC')", "Date", False),
+        # A date column takes a date parameter only: ClickHouse compares Date32 with a time at
+        # midnight in the server's zone (#135, Reviewer pass 1).
+        ("append", "DateTime('UTC')", "Date", True),
+        ("append", "DateTime('UTC')", "Date32", True),
+        ("append", "DateTime64(3, 'UTC')", "Date32", True),
+        ("append", "Date32", "Date", False),
         ("append", "DateTime('UTC')", "DateTime('UTC')", False),
         ("append", "DateTime64(0, 'UTC')", "DateTime('UTC')", False),
         ("append", "DateTime64(3, 'UTC')", "DateTime64(3, 'UTC')", False),
@@ -345,4 +350,4 @@ def test_an_append_since_must_be_as_precise_as_the_time_column(
     problems = since_precision_problems(found.models[0], (Column("t", column_type, mapped),))
     assert [item.code.root for item in problems] == (["INVALID_MODEL_SQL"] if refused else [])
     if refused:
-        assert "coarser than the time_column t" in problems[0].message
+        assert "does not match the time_column t" in problems[0].message

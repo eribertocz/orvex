@@ -332,15 +332,18 @@ def since_precision_problems(model: Model, columns: tuple[Column, ...]) -> list[
         return []
     column = _precision(found.clickhouse)
     declared = _precision(since.text)
-    if column is None or declared is None or declared >= column:
+    # A date column takes a date parameter only: ClickHouse compares `Date32` with a time at
+    # midnight in the server's zone, whatever the parameter's zone, so the watermark's day could
+    # be read again (#135, Reviewer pass 1).
+    if column is None or declared is None or (declared >= column and (column > 0 or declared == 0)):
         return []
     return [
         problem(
             "INVALID_MODEL_SQL",
-            f"{model.sql_file}: {{since:{since.text}}} is coarser than the time_column "
+            f"{model.sql_file}: {{since:{since.text}}} does not match the time_column "
             f"{found.name} ({found.clickhouse}): an append model would read again, and insert "
-            "twice, the rows between the truncated value and the last loaded one. Declare "
-            "{since:…} at least as precise as the column, or use strategy merge.",
+            "twice, rows it already loaded. Declare {since:…} at least as precise as the "
+            "column ({since:Date} or {since:Date32} for a date column), or use strategy merge.",
             model.sql_file,
             model=model.name,
         )
@@ -814,6 +817,56 @@ def _aliased(node: _Node) -> str:
     return found.group(1) if found is not None else ""
 
 
+def time_column_functions(tree: str, time_column: str) -> frozenset[str] | None:
+    """The functions of every expression that may compute the time column, followed by name
+    through every alias in the `EXPLAIN AST` (an alias with the same name elsewhere is also
+    followed: it fails closed); None when such an expression has a subquery or cannot be read.
+    An append model needs them all deterministic, so a row's time is the same in every run
+    (#135, Reviewer pass 1)."""
+    root = _ast(tree)
+    if root is None:
+        return None
+    definitions: dict[str, list[_Node]] = {}
+
+    def collect(node: _Node) -> None:
+        alias = _aliased(node)
+        if alias and not (node.kind == "Identifier" and _identifier(node) == alias):
+            definitions.setdefault(alias, []).append(node)
+        for child in node.children:
+            collect(child)
+
+    collect(root)
+    functions: set[str] = set()
+    pending, seen = [time_column], {time_column}
+    while pending:
+        for expression in definitions.get(pending.pop(), []):
+            stack = [expression]
+            while stack:
+                node = stack.pop()
+                if node.kind in {
+                    "Subquery",
+                    "Asterisk",
+                    "QualifiedAsterisk",
+                    "ColumnsRegexpMatcher",
+                }:
+                    return None
+                if node.kind == "Function":
+                    functions.add(_function_name(node))
+                if node.kind == "Identifier":
+                    name = _identifier(node)
+                    if name not in seen:
+                        seen.add(name)
+                        pending.append(name)
+                stack.extend(node.children)
+    return frozenset(functions)
+
+
+def _identifier(node: _Node) -> str:
+    """The last part of an `Identifier` node's name (`t` for `s.t`), its alias left out."""
+    text = re.sub(r" \(alias [^)]+\)$", "", node.detail)
+    return text.rsplit(".", 1)[-1]
+
+
 def since_is_a_lower_bound(tree: str, time_column: str, strict: bool = False) -> bool:
     """Whether, in the `EXPLAIN AST` of `mark_since`'s SQL, every marked `{since:…}` is in a
     lower bound of the time column of the rows the model returns, as `incremental.
@@ -1195,6 +1248,28 @@ class Source:
         except ClickHouseError as error:
             raise self._error(error, "INVALID_MODEL_SQL") from None
         return [tuple(row) for row in result.result_rows]
+
+    def deterministic(self, functions: frozenset[str]) -> bool:
+        """Whether ClickHouse marks every one of these functions deterministic (the same
+        arguments give the same value in every query); an unknown name is not."""
+        if not functions:
+            return True
+        try:
+            found = self._client.query(
+                "SELECT name, case_insensitive FROM system.functions WHERE deterministic = 1 "
+                "AND (has({names:Array(String)}, name) OR (case_insensitive AND "
+                "has({lowered:Array(String)}, lower(name))))",
+                parameters={
+                    "names": sorted(functions),
+                    "lowered": sorted({name.lower() for name in functions}),
+                },
+                settings=self.settings(),
+            ).result_rows
+        except ClickHouseError as error:
+            raise self._error(error, "INVALID_MODEL_SQL") from None
+        exact = {str(row[0]) for row in found}
+        lowered = {str(row[0]).lower() for row in found if row[1]}
+        return all(name in exact or name.lower() in lowered for name in functions)
 
     def explain(self, text: str, since: SinceType | None, kind: str = "AST") -> str:
         """ClickHouse's `EXPLAIN AST` (or `QUERY TREE`, which resolves names against the tables)
@@ -1605,6 +1680,13 @@ def describe_model(
     try:
         plain = source.check_select(found.text, since)
         append = incremental is not None and incremental.strategy == "append"
+        marked = (
+            source.explain(mark_since(found), since)
+            if incremental is not None
+            and incremental.strategy in {"partition_overwrite", "append"}
+            and since is not None
+            else ""
+        )
         if (
             incremental is not None
             and incremental.strategy in {"partition_overwrite", "append"}
@@ -1612,12 +1694,9 @@ def describe_model(
             and (
                 found.spaced_name
                 or writes_since_mark(plain)
-                or not since_is_a_lower_bound(
-                    source.explain(mark_since(found), since),
-                    incremental.time_column.root,
-                    strict=append,
-                )
+                or not since_is_a_lower_bound(marked, incremental.time_column.root, strict=append)
                 or limits_rows(source.explain(found.text, since, "QUERY TREE"))
+                or (append and not _stable(source, marked, incremental.time_column.root))
             )
         ):
             column = incremental.time_column.root
@@ -1647,6 +1726,13 @@ def describe_model(
         return problem(error.code, f"{model.name}: {error.message}", file, model=model.name)
     finally:
         source.close()
+
+
+def _stable(source: Source, tree: str, time_column: str) -> bool:
+    """Whether the time column gets the same value for a row in every run: only deterministic
+    functions compute it (`time_column_functions`)."""
+    functions = time_column_functions(tree, time_column)
+    return functions is not None and source.deterministic(functions)
 
 
 def read_password(connection: ClickhouseConnection) -> str | None:
