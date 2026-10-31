@@ -28,6 +28,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import duckdb
+from orvex.store.errors import StoreError
 from orvex.store.sql_text import identifier, literal
 
 # The types a CSV text column may take, in order: the first that gives back every value wins.
@@ -82,17 +83,15 @@ def _parquet_view(
     reader = reader_of(forced)
     united = _columns(connection, reader)
     union = {fold(name): kind for name, kind in united}
-    folders = {fold(key) for file in files for key in _folder_names(file)}
-    for name, _ in united:
-        # A name DuckDB made itself (x_1 for a duplicate, a_1 beside A, C0 for an empty name),
-        # or one two columns of a file share: no check can tell which file column it is.
-        key = fold(name)
-        if key in duplicated or (key not in kinds and key not in folders):
-            messages[key] = (
-                f"UNSUPPORTED_SOURCE_TYPE: column {name} of source {source} has no name of its "
-                "own in the files (a duplicate, a name differing only in case, or an empty "
-                "name), so it cannot be checked."
-            )
+    if duplicated:
+        # DuckDB renames such columns (x_1, a_1, C0), and a made-up name can be a real column
+        # of another file: no check could tell which values a name stands for.
+        raise StoreError(
+            "STORE_SOURCE_INVALID",
+            f"Source {source} has a file with two columns of the same name (ignoring case) or "
+            "a column without a name; rename them in the file.",
+            {"source": source},
+        )
     for key, name in int96.items():
         messages.setdefault(
             key,
@@ -239,8 +238,22 @@ def _csv_view(
             )
         else:
             parts.append(column)  # exact text, or a folder value proven by `_folders`
-    where = f" WHERE true{folder_guard}" if folder_guard else ""
-    return f"SELECT {', '.join(parts)} FROM {reader}{where}"
+    # Every read first checks that no file's header changed since the source was attached: a
+    # column added later could take a folder's name and be served the folder's value.
+    header = (
+        "(SELECT md5(CAST(list(column_name) AS VARCHAR)) FROM "
+        f"(DESCRIBE SELECT * FROM {reader_of(', hive_partitioning = false')}))"
+    )
+    attached = _row(connection, f"SELECT {header}")
+    changed = (
+        f"UNSUPPORTED_SOURCE_TYPE: a file of source {source} changed its header after the "
+        "source was attached; attach the source again."
+    )
+    guard = (
+        f"CASE WHEN {header} = {literal(str(attached[0]) if attached else '')} THEN true "
+        f"ELSE error({literal(changed)}) END"
+    )
+    return f"SELECT {', '.join(parts)} FROM {reader} WHERE {guard}{folder_guard}"
 
 
 def _keeps(name: str, target: str) -> str:

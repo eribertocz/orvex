@@ -20,6 +20,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from orvex.store.errors import StoreError
 from orvex.store.file_sources import view_query
 
 D = decimal.Decimal
@@ -455,26 +456,46 @@ def test_a_csv_view_does_not_read_the_whole_file_again_on_every_query(tmp_path: 
 
 
 @pytest.mark.parametrize(
-    "names",
-    [["x", "x"], ["A", "a"], [""]],
-    ids=["duplicate", "case-only", "empty"],
+    ("first", "second"),
+    [
+        (["x", "x"], None),
+        (["A", "a"], None),
+        ([""], None),
+        (["x", "x"], ["x_1"]),
+        (["A", "a"], ["a_1"]),
+    ],
+    ids=["duplicate", "case-only", "empty", "renamed-like-another-file", "case-like-another"],
 )
-def test_a_column_duckdb_renames_is_refused_not_read_unchecked(
-    tmp_path: Path, names: list[str]
+def test_a_file_with_columns_duckdb_would_rename_is_refused(
+    tmp_path: Path, first: list[str], second: list[str] | None
 ) -> None:
-    # DuckDB renames duplicate, case-colliding or empty names (x_1, a_1, C0): no check can
-    # know which file column such a name stands for, so it is refused.
-    wide = pa.array([D("1234567890123456789012345678901234567890.12")], pa.decimal256(42, 2))
-    columns = [pa.array([1], pa.int64()), wide][-len(names) :]
-    path = tmp_path / "f.parquet"
-    pq.write_table(pa.table([*columns, pa.array([7], pa.int64())], names=[*names, "k"]), path)
+    # DuckDB renames duplicate, case-colliding or empty names (x_1, a_1, C0), and a made-up
+    # name can be a real column of another file: such a source is refused when attached.
+    values = [pa.array([1], pa.int64()), pa.array([D("1.1234567890")], pa.decimal128(38, 10))]
+    paths = [tmp_path / "a.parquet"]
+    pq.write_table(pa.table(values[-len(first) :], names=first), paths[0])
+    if second is not None:
+        paths.append(tmp_path / "b.parquet")
+        pq.write_table(
+            pa.table([pa.array([D("1.25")], pa.decimal128(38, 2))], names=second), paths[1]
+        )
+    with pytest.raises(StoreError) as raised:
+        _view(duckdb.connect(), "parquet", paths)
+    assert raised.value.code == "STORE_SOURCE_INVALID"
+
+
+def test_a_csv_column_added_after_attach_with_a_folder_name_fails(tmp_path: Path) -> None:
+    file = tmp_path / "year=2026" / "a.csv"
+    file.parent.mkdir()
+    file.write_text("v\n1\n")
     connection = duckdb.connect()
-    _view(connection, "parquet", [path])
-    served = [row[0] for row in connection.execute("DESCRIBE data").fetchall()]
-    for column in served[:-1]:
-        with pytest.raises(duckdb.Error, match="UNSUPPORTED_SOURCE_TYPE"):
-            connection.execute(f'SELECT "{column}" FROM data').fetchall()
-    assert connection.execute("SELECT k FROM data").fetchall() == [(7,)]
+    _view(connection, "csv", [file])
+    assert connection.execute(
+        "SELECT CAST(v AS VARCHAR), CAST(year AS VARCHAR) FROM data"
+    ).fetchall() == [("1", "2026")]
+    file.write_text("v,year\n1,2025\n")  # the file now has its own `year`, which DuckDB hides
+    with pytest.raises(duckdb.Error, match="UNSUPPORTED_SOURCE_TYPE"):
+        connection.execute("SELECT v FROM data").fetchall()
 
 
 def test_an_int96_timestamp_is_refused_at_any_depth(tmp_path: Path) -> None:
