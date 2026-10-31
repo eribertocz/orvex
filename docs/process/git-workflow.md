@@ -25,6 +25,16 @@ The Agent prepares the exact settings in P0-01 (as a checklist and a script usin
 
 Pull requests that touch any of these paths are **merged only by the Owner**. The Agent prepares them, labels them `owner-merge`, and asks for review. A required CI check (`governance`, created in P0-01) fails while a pull request touching governed paths lacks the `owner-merge` label, so such pull requests are always visible to the Owner. The check runs as defined on the **base branch** at the time it runs (workflow, script and the block below), so a pull request cannot weaken its own check.
 
+**Decision records (exception, Owner decision of 2026-10-31).** The Agent may merge an `owner-merge` pull request only when **all** of these hold:
+1. It touches only `docs/architecture/` or `docs/modules/`.
+2. It never touches `docs/architecture/security.md`, `docs/process/`, `docs/product/`, `docs/adr/` or any other governed path.
+3. It only writes down what a `type:decision` issue that the Owner already approved says. The body links that issue and quotes the approved text.
+4. It adds no rule, invariant, behaviour or scope beyond that decision.
+5. A Reviewer pass confirms points 3 and 4 against the decision issue, with verdict APPROVE.
+6. The required checks are green.
+
+The label stays, so the Owner sees every such pull request. If any of these points is in doubt, the Owner merges.
+
 Format (machine-read): one pattern per line; the first token is the pattern, the rest of the line is a comment. A pattern ending in `/` matches every path under it; any other pattern matches one file exactly. A leading `!` marks an exclusion, which wins over inclusions.
 
 ```
@@ -82,7 +92,7 @@ A `[Reviewer]` verdict of **changes requested** blocks the merge until a new Rev
 ### 3.6 Merging
 
 - The Agent merges (squash) its own pull requests when: required checks are green, the tier's verification is complete, and the pull request does **not** touch governed paths.
-- The Owner merges every pull request labeled `owner-merge`.
+- The Owner merges every pull request labeled `owner-merge`, except decision records (§2).
 - The issue closes automatically through `Closes #<n>`.
 - A Dependabot pull request that fails CI becomes a `type:chore` issue for the Agent.
 
@@ -99,7 +109,7 @@ A `[Reviewer]` verdict of **changes requested** blocks the merge until a new Rev
 | Branch, commit, push, open pull requests | — | **R** |
 | Reviewer pass on tier A pull requests | I | **R** (independent subagent) |
 | Merge pull requests outside governed paths | I | **R** |
-| Merge pull requests touching governed paths (`owner-merge`) | **R** | prepares |
+| Merge pull requests touching governed paths (`owner-merge`) | **R** | prepares; merges decision records only (§2) |
 | Explain a merged usable feature in plain Spanish | I | **R** |
 | Validate usable features (phase demos) | **A/R** | I |
 | Prepare releases (release issue, release pull request) | I | **R** |
