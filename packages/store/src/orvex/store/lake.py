@@ -1696,14 +1696,23 @@ class Lake:
         folder = Path(self._spill) / "sources"
         folder.mkdir(exist_ok=True)
         catalog = (folder / f"{source.name}.duckdb").as_posix()
-        reader = "read_parquet" if source.type == "parquet" else "read_csv"
         builder = duckdb.connect(catalog)
         try:
             # The files matched now, listed one by one: the sandbox allows exactly these.
             listed = ", ".join(_quote(str(file)) for file in matched_files)
-            builder.sql(
-                f"CREATE VIEW data AS SELECT * FROM {reader}([{listed}], union_by_name = true)"
-            )
+            if source.type == "parquet":
+                reader = f"read_parquet([{listed}], union_by_name = true)"
+                replaced = _wide_decimals(builder, source.name, listed)
+            else:
+                # Detection never yields floating point: decimal text stays exact text, and the
+                # model casts it explicitly (law 11). A DECIMAL(38,9) candidate would round
+                # longer fractions silently (measured on 2.0.0).
+                reader = (
+                    f"read_csv([{listed}], union_by_name = true, "
+                    f"auto_type_candidates = {_CSV_TYPE_CANDIDATES})"
+                )
+                replaced = ""
+            builder.sql(f"CREATE VIEW data AS SELECT *{replaced} FROM {reader}")
         except duckdb.Error as error:
             raise StoreError(
                 "STORE_SOURCE_INVALID",
@@ -3070,6 +3079,31 @@ def _utc_schema(schema: pa.Schema) -> pa.Schema:
         for field in schema
     ]
     return pa.schema(fields, metadata=schema.metadata)
+
+
+_CSV_TYPE_CANDIDATES = "['BOOLEAN', 'BIGINT', 'DATE', 'TIMESTAMP', 'TIMESTAMPTZ', 'VARCHAR']"
+
+
+def _wide_decimals(connection: duckdb.DuckDBPyConnection, source: str, listed: str) -> str:
+    """` REPLACE (…)` for every Parquet column, in any listed file, that is a DECIMAL wider
+    than 38 digits: DuckDB reads such a column as DOUBLE, so reading it fails instead (law 11).
+    Queries that do not read it are unaffected. "" when there is none."""
+    row = connection.execute(
+        "SELECT list(DISTINCT [name, CAST(precision AS VARCHAR)] ORDER BY [name, "
+        f"CAST(precision AS VARCHAR)]) FROM parquet_schema([{listed}]) "
+        "WHERE converted_type = 'DECIMAL' AND precision > 38"
+    ).fetchone()
+    columns = row[0] if row and row[0] else []
+    if not columns:
+        return ""
+    parts = []
+    for name, digits in columns:
+        message = (
+            f"UNSUPPORTED_SOURCE_TYPE: column {name} of source {source} is a DECIMAL with "
+            f"{digits} digits, which cannot be read exactly."
+        )
+        parts.append(f"error({_quote(message)}) AS {_identifier(str(name))}")
+    return f" REPLACE ({', '.join(parts)})"
 
 
 class Inexact(NamedTuple):
