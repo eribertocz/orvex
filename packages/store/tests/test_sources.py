@@ -548,3 +548,35 @@ def test_a_wide_decimal_with_only_the_logical_annotation_is_refused(location: Lo
         assert "column w " in text
     finally:
         lake.close()
+
+
+def test_a_column_whose_types_across_files_would_round_is_refused(
+    location: Location, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    # #253: DECIMAL(38,2) and DECIMAL(38,10) in two files unite as DECIMAL(38,2), rounding
+    # 1.1234567890 to 1.12; a DECIMAL beside a DOUBLE unites as DOUBLE. Both are refused.
+    # A BIGINT beside a DECIMAL(10,1) unites exactly as DECIMAL(20,1) and stays readable.
+    folder = tmp_path_factory.mktemp("unions")
+    rows = {
+        "a.parquet": {"r": pa.array([decimal.Decimal("1.00")], pa.decimal128(38, 2))},
+        "b.parquet": {"r": pa.array([decimal.Decimal("1.1234567890")], pa.decimal128(38, 10))},
+    }
+    rows["a.parquet"] |= {
+        "f": pa.array([decimal.Decimal("1.5")], pa.decimal128(10, 1)),
+        "e": pa.array([decimal.Decimal("1.5")], pa.decimal128(10, 1)),
+    }
+    rows["b.parquet"] |= {"f": pa.array([2.5], pa.float64()), "e": pa.array([7], pa.int64())}
+    for name, columns in rows.items():
+        pq.write_table(pa.table(columns), folder / name)
+    lake = open_lake(location, LIMITS, [source("parts", "parquet", folder / "*.parquet")])
+    try:
+        write(lake, "CREATE TABLE exact AS SELECT CAST(e AS VARCHAR) AS e FROM parts.data")
+        assert sorted(row["e"] for row in read(lake, "SELECT e FROM exact")) == ["1.5", "7.0"]
+        for column in ("r", "f"):
+            with pytest.raises(StoreError) as caught:
+                write(lake, f"CREATE TABLE united_{column} AS SELECT {column} FROM parts.data")
+            text = f"{caught.value} {caught.value.details}"
+            assert "UNSUPPORTED_SOURCE_TYPE" in text
+            assert f"column {column} " in text
+    finally:
+        lake.close()
