@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime as dt
 import decimal
 import itertools
+import urllib.parse
 from pathlib import Path
 from typing import NamedTuple
 
@@ -285,6 +286,8 @@ CSV_TEXTS = [
     "2026-01-31 10:00:00+02",
     "2026-01-31 10:00:00.123456+02:00",
     "2026-01-31 10:00:00Z",
+    "2026-01-31 10:00:00+25",
+    "2026-01-31 10:00:00+05:99",
     "abc",
 ]
 
@@ -366,9 +369,9 @@ def test_a_file_rewritten_after_the_view_was_made_fails_instead_of_changing(
     connection = duckdb.connect()
     _view(connection, "parquet", [parquet])
     pq.write_table(pa.table({"m": pa.array([D("1.10")], pa.decimal256(50, 2)), "k": [1]}), parquet)
-    with pytest.raises(duckdb.Error, match="UNSUPPORTED_SOURCE_TYPE"):
-        connection.execute("SELECT m FROM data").fetchall()
-    assert connection.execute("SELECT k FROM data").fetchall() == [(1,)]
+    for column in ("m", "k"):  # the schema changed: nothing is served until attached again
+        with pytest.raises(duckdb.Error, match="UNSUPPORTED_SOURCE_TYPE"):
+            connection.execute(f"SELECT {column} FROM data").fetchall()
     csv = tmp_path / "f.csv"
     csv.write_text("n\n7\n")
     _view(connection, "csv", [csv])
@@ -376,3 +379,76 @@ def test_a_file_rewritten_after_the_view_was_made_fails_instead_of_changing(
     csv.write_text("n\n007\n")
     with pytest.raises(duckdb.Error, match="UNSUPPORTED_SOURCE_TYPE"):
         connection.execute("SELECT n FROM data").fetchall()
+
+
+@pytest.mark.parametrize("rewritten", sorted(set(TYPES) - {"d10_1"}))
+def test_any_file_of_several_rewritten_with_another_type_fails_every_read(
+    tmp_path: Path, rewritten: str
+) -> None:
+    # Each file is checked, not only the type the files unite in: DECIMAL(38,2) beside
+    # DECIMAL(10,2) unites as DECIMAL(38,2), and so it does after the second file becomes
+    # DECIMAL(38,10), which would round its values.
+    first, _ = _write(tmp_path, "d38_2", 0, "a")
+    second, _ = _write(tmp_path, "d10_1", 500, "b")
+    connection = duckdb.connect()
+    _view(connection, "parquet", [first, second])
+    assert connection.execute("SELECT count(m) FROM data").fetchall() == [(2,)]
+    _write(tmp_path, rewritten, 500, "b")
+    (tmp_path / f"b_{rewritten}.parquet").replace(second)
+    with pytest.raises(duckdb.Error, match="UNSUPPORTED_SOURCE_TYPE"):
+        connection.execute("SELECT k FROM data").fetchall()
+
+
+# Folder values, raw as in the path: DuckDB decodes %XX and may type them (`year=2026`).
+FOLDER_TEXTS = [
+    *(text for text in CSV_TEXTS if "/" not in text),
+    "a%20b",
+    "San%20Jos%C3%A9",
+    "a%2Fb",
+    " 5",
+    "-0",
+]
+
+
+@pytest.mark.parametrize("kind", ["parquet", "csv"])
+def test_every_folder_value_comes_back_as_duckdb_decodes_it_or_typed_exactly(
+    tmp_path: Path, kind: str
+) -> None:
+    connection = duckdb.connect()
+    changed = {}
+    for index, raw in enumerate(FOLDER_TEXTS):
+        file = tmp_path / str(index) / f"x={raw}" / f"f.{kind}"
+        (_parquet_file if kind == "parquet" else _csv_file)(file, {"k": index})
+        _view(connection, kind, [file])
+        text = urllib.parse.unquote(raw)
+        row = connection.execute(
+            "SELECT typeof(x), CAST(x AS VARCHAR), "
+            "CASE WHEN typeof(x) = 'TIMESTAMP WITH TIME ZONE' THEN x = CAST($t AS TIMESTAMPTZ) "
+            "ELSE CAST(x AS VARCHAR) = $t END FROM data",
+            {"t": text},
+        ).fetchone()
+        if row is None or row[2] is not True:
+            changed[raw] = row
+    assert not changed, changed
+
+
+def test_a_folder_value_is_compared_as_duckdb_decodes_it(tmp_path: Path) -> None:
+    # Folder `name=a%20b` is served as 'a b': a file holding 'a%20b' would change silently.
+    encoded = tmp_path / "1" / "name=a%20b" / "f.parquet"
+    _parquet_file(encoded, {"name": "a%20b", "k": 1})
+    accented = tmp_path / "2" / "city=San%20Jos%C3%A9" / "f.parquet"
+    _parquet_file(accented, {"city": "San José", "k": 2})
+    connection = duckdb.connect()
+    _view(connection, "parquet", [encoded])
+    with pytest.raises(duckdb.Error, match="UNSUPPORTED_SOURCE_TYPE"):
+        connection.execute("SELECT name FROM data").fetchall()
+    _view(connection, "parquet", [accented])
+    assert connection.execute("SELECT city FROM data").fetchall() == [("San José",)]
+
+
+def test_a_csv_view_does_not_read_the_whole_file_again_on_every_query(tmp_path: Path) -> None:
+    # Detection reads every row once, when the source is attached; the view's reader keeps
+    # DuckDB's default sniffing, so `count(*)` or `LIMIT 5` do not scan the file twice.
+    (tmp_path / "f.csv").write_text("v\n7\n")
+    query = view_query(duckdb.connect(), "csv", "src", [str(tmp_path / "f.csv")])
+    assert "sample_size" not in query

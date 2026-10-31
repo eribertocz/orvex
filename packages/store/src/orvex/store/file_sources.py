@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import re
 import string
+from collections.abc import Callable
 from pathlib import Path
 
 import duckdb
@@ -40,7 +41,9 @@ _CSV_TYPES = {
     "TIMESTAMP WITH TIME ZONE": "TIMESTAMPTZ",
 }
 # A timestamp DuckDB reads to the microsecond with an explicit offset: its instant is exact.
-_OFFSET_TIMESTAMP = r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}(:?\d{2})?)"
+_OFFSET_TIMESTAMP = (
+    r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-](0\d|1[0-4])(:?[0-5]\d)?)"
+)
 _DECIMAL_TYPE = re.compile(r"DECIMAL\((\d+),(\d+)\)", re.ASCII)
 _ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
 _INTEGER_RANGES: dict[str, tuple[int, int]] = {
@@ -76,34 +79,53 @@ def fold(name: str) -> str:
 def _parquet_view(
     connection: duckdb.DuckDBPyConnection, source: str, listed: str, files: list[str]
 ) -> str:
-    reader = f"read_parquet([{listed}], union_by_name = true)"
+    def reader_of(extra: str) -> str:
+        return f"read_parquet([{listed}], union_by_name = true{extra})"
+
+    widest, kinds = _parquet_schema(connection, listed)
+    in_files = {key: name for key, (name, _) in kinds.items()}
+    messages, forced, shared = _folders(connection, source, reader_of, files, in_files)
+    reader = reader_of(forced)
     united = _columns(connection, reader)
     union = {fold(name): kind for name, kind in united}
-    widest, kinds = _parquet_schema(connection, listed)
-    messages = {
-        key: f"UNSUPPORTED_SOURCE_TYPE: column {name} of source {source} holds a DECIMAL with "
-        f"{digits} digits, which cannot be read exactly."
-        for key, (name, digits) in widest.items()
-    }
+    for key, (name, digits) in widest.items():
+        messages.setdefault(
+            key,
+            f"UNSUPPORTED_SOURCE_TYPE: column {name} of source {source} holds a DECIMAL with "
+            f"{digits} digits, which cannot be read exactly.",
+        )
     for key, (name, types) in kinds.items():
         target = union.get(key, "")
         lossy = sorted(kind for kind in types if not _exactly_in(kind, target))
-        if key not in messages and target and lossy:
+        # A column shared with a folder serves the folder's value, proven equal by `_folders`.
+        if key not in messages and key not in shared and target and lossy:
             messages[key] = (
                 f"UNSUPPORTED_SOURCE_TYPE: column {name} of source {source} has the types "
                 f"{', '.join(sorted(types))} in different files; read together as {target}, "
                 f"values of {', '.join(lossy)} would change."
             )
-    in_files = {key: name for key, (name, _) in kinds.items()}
-    opening = f"read_parquet([{listed}], union_by_name = true, hive_partitioning = false"
-    messages.update(_folder_conflicts(connection, source, opening, files, in_files, messages))
     parts = [
         f"error({literal(messages[fold(name)])}) AS {identifier(name)}"
         if fold(name) in messages
-        else _pinned(name, kind, source)
-        for name, kind in united
+        else identifier(name)
+        for name, _ in united
     ]
-    return f"SELECT {', '.join(parts)} FROM {reader}"
+    # Every read first checks that no file's schema changed since the source was attached; the
+    # check is one metadata scan, and filters still reach the reader (file pruning included).
+    schema = (
+        "(SELECT md5(CAST(list(s ORDER BY s.file_name, s.column_id) AS VARCHAR)) "
+        f"FROM parquet_schema([{listed}]) AS s)"
+    )
+    attached = _row(connection, f"SELECT {schema}")
+    changed = (
+        f"UNSUPPORTED_SOURCE_TYPE: a file of source {source} changed its schema after the source "
+        "was attached; attach the source again."
+    )
+    guard = (
+        f"CASE WHEN {schema} = {literal(str(attached[0]) if attached else '')} THEN true "
+        f"ELSE error({literal(changed)}) END"
+    )
+    return f"SELECT {', '.join(parts)} FROM {reader} WHERE {guard}"
 
 
 def _parquet_schema(
@@ -148,13 +170,23 @@ def _parquet_schema(
 def _csv_view(
     connection: duckdb.DuckDBPyConnection, source: str, listed: str, files: list[str]
 ) -> str:
-    # The whole file is read for detection (`sample_size = -1`): with a sample, a value after
-    # it could not change the detected type. Detection never yields floating point.
-    options = f"[{listed}], union_by_name = true, sample_size = -1"
+    # Detection reads every row of every file once, here (`sample_size = -1`): with a sample, a
+    # value after it could not change the detected type. It never yields floating point. The
+    # view reads text with DuckDB's default sniffing, so a query does not scan the files twice;
+    # every check below runs on that same reader.
     detected = _columns(
-        connection, f"read_csv({options}, auto_type_candidates = {CSV_TYPE_CANDIDATES})"
+        connection,
+        f"read_csv([{listed}], union_by_name = true, sample_size = -1, "
+        f"auto_type_candidates = {CSV_TYPE_CANDIDATES})",
     )
-    reader = f"read_csv({options}, all_varchar = true)"
+
+    def reader_of(extra: str) -> str:
+        return f"read_csv([{listed}], union_by_name = true, all_varchar = true{extra})"
+
+    plain = _columns(connection, reader_of(", hive_partitioning = false"))
+    in_files = {fold(name): name for name, _ in plain}
+    messages, forced, _ = _folders(connection, source, reader_of, files, in_files)
+    reader = reader_of(forced)
     columns = _columns(connection, reader)
     if [name for name, _ in detected] != [name for name, _ in columns]:
         raise StoreError(
@@ -163,16 +195,13 @@ def _csv_view(
             "check its header row.",
             {"source": source},
         )
-    plain = _columns(
-        connection, f"read_csv({options}, all_varchar = true, hive_partitioning = false)"
-    )
-    in_files = {fold(name): name for name, _ in plain}
-    opening = f"read_csv({options}, all_varchar = true, hive_partitioning = false"
-    messages = _folder_conflicts(connection, source, opening, files, in_files, {})
     candidates = [
         (name, _CSV_TYPES[target])
         for (name, kind), (_, target) in zip(columns, detected, strict=True)
-        if kind == "VARCHAR" and target in _CSV_TYPES and fold(name) not in messages
+        if kind == "VARCHAR"
+        and target in _CSV_TYPES
+        and fold(name) in in_files
+        and fold(name) not in messages
     ]
     proven: dict[str, str] = {}
     if candidates:
@@ -184,7 +213,7 @@ def _csv_view(
         pairs = zip(candidates, kept, strict=True)
         proven = {name: target for (name, target), ok in pairs if ok is True}
     parts = []
-    for name, kind in columns:
+    for name, _ in columns:
         column = identifier(name)
         if fold(name) in messages:
             parts.append(f"error({literal(messages[fold(name)])}) AS {column}")
@@ -198,10 +227,8 @@ def _csv_view(
                 f"CASE WHEN {_keeps(name, target)} THEN TRY_CAST({column} AS {target}) "
                 f"ELSE error({literal(message)}) END AS {column}"
             )
-        elif kind == "VARCHAR":
-            parts.append(column)
         else:
-            parts.append(_pinned(name, kind, source))  # a folder value DuckDB typed itself
+            parts.append(column)  # exact text, or a folder value proven by `_folders`
     return f"SELECT {', '.join(parts)} FROM {reader}"
 
 
@@ -219,79 +246,97 @@ def _keeps(name: str, target: str) -> str:
     return f"({column} IS NULL OR coalesce({converted} = {text}, false))"
 
 
-def _pinned(name: str, kind: str, source: str) -> str:
-    """Column `name` as long as DuckDB still reads it as `kind`; a file rewritten after the
-    source was attached fails instead of serving another type. DuckDB folds the test away when
-    planning, so filters still reach the reader."""
-    column = identifier(name)
-    message = (
-        f"UNSUPPORTED_SOURCE_TYPE: column {name} of source {source} was {kind} when the source "
-        "was attached and its files now give another type; attach the source again."
-    )
-    return (
-        f"CASE WHEN typeof({column}) = {literal(kind)} THEN {column} "
-        f"ELSE error({literal(message)}) END AS {column}"
-    )
-
-
-def _folder_conflicts(
+def _folders(
     connection: duckdb.DuckDBPyConnection,
     source: str,
-    opening: str,
+    reader_of: Callable[[str], str],
     files: list[str],
     in_files: dict[str, str],
-    refused: dict[str, str],
-) -> dict[str, str]:
-    """Messages for the file columns that are also folder names (`name=value` in a file's
-    directories) and hold, in some file, another value than that folder's. `opening` is the
-    reader without folder columns, missing its closing parenthesis."""
-    folders = [_folder_values(file) for file in files]
-    keys = sorted(key for key in {key for values in folders for key in values} if key in in_files)
-    keys = [key for key in keys if key not in refused]
-    if not keys:
-        return {}
+) -> tuple[dict[str, str], str, set[str]]:
+    """The columns DuckDB makes from `name=value` folders (Hive partitioning), checked against
+    the values DuckDB itself serves: it decodes `%XX` in a value and may type it (`2026` as
+    BIGINT). `reader_of(extra)` is the source's reader with `extra` options.
+
+    Returns: messages for file columns that are also folder names and hold, in some file, other
+    values than their folder's (DuckDB would serve the folder's); the `hive_types` option that
+    keeps as text every folder value whose DuckDB type does not give its text back; and the
+    folded names of the file columns shared with a folder, kept because their values agree.
+    """
+    keys = {fold(key) for file in files for key in _folder_names(file)}
+    served = [name for name, _ in _columns(connection, reader_of(""))]
+    folder = [name for name in served if fold(name) in keys]
+    if not folder:
+        return {}, "", set()
     marker = "source_file"
-    while fold(marker) in in_files:
+    while fold(marker) in {fold(name) for name in served}:
         marker = "_" + marker
-    checks = []
-    for key in keys:
-        column = f"CAST({identifier(in_files[key])} AS VARCHAR)"
-        cases = " ".join(
-            f"WHEN {literal(file)} THEN "
-            + (
-                f"{column} IS NOT DISTINCT FROM {literal(values[key][1])}"
-                if key in values
-                else "true"
-            )
-            for file, values in zip(files, folders, strict=True)
-        )
-        # A file DuckDB names otherwise is counted as a conflict (fail closed).
-        checks.append(f"coalesce(bool_and(CASE {identifier(marker)} {cases} ELSE false END), true)")
-    row = _row(
-        connection, f"SELECT [{', '.join(checks)}] FROM {opening}, filename = {literal(marker)})"
+    tag = f", filename = {literal(marker)}"
+    by_file = identifier(marker)
+    # Per file: the text DuckDB serves for each folder column (one value per file, or the
+    # column is not a folder value there), and the same value as DuckDB types it.
+    texts = ", ".join(
+        f"max({identifier(name)}) AS t{index}, min({identifier(name)}) AS l{index}"
+        for index, name in enumerate(folder)
     )
-    agree = row[0] if row and isinstance(row[0], list) else []
-    messages = {}
-    for index, key in enumerate(keys):
-        if index < len(agree) and agree[index] is True:
-            continue
-        folder = next(values[key][0] for values in folders if key in values)
-        messages[key] = (
-            f"UNSUPPORTED_SOURCE_TYPE: column {in_files[key]} of source {source} is also the "
-            f"folder name {folder}=…, and some file holds other values than its folder's: "
-            "DuckDB would serve the folder's."
+    typed = ", ".join(
+        f"max(CAST({identifier(name)} AS VARCHAR)) AS d{index}" for index, name in enumerate(folder)
+    )
+    text_rows = (
+        f"(SELECT {by_file}, {texts} FROM "
+        f"{reader_of(', hive_types_autocast = false' + tag)} GROUP BY {by_file})"
+    )
+    typed_rows = f"(SELECT {by_file}, {typed} FROM {reader_of(tag)} GROUP BY {by_file})"
+    keeps = ", ".join(
+        f"coalesce(bool_and(t.t{index} = t.l{index} AND t.t{index} = d.d{index}), false)"
+        for index in range(len(folder))
+    )
+    shared = [(index, name) for index, name in enumerate(folder) if fold(name) in in_files]
+    agree = ", ".join(
+        f"coalesce(bool_and(t.t{index} = t.l{index} AND CAST(f.{identifier(in_files[fold(name)])} "
+        f"AS VARCHAR) IS NOT DISTINCT FROM t.t{index}), true)"
+        for index, name in shared
+    )
+    row = _row(
+        connection,
+        f"SELECT [{keeps}] FROM {text_rows} AS t JOIN {typed_rows} AS d USING ({by_file})",
+    )
+    kept = row[0] if row and isinstance(row[0], list) else []
+    agreed: list[object] = []
+    if shared:  # every row of every file, against its folder's value
+        files_rows = reader_of(", hive_partitioning = false" + tag)
+        found = _row(
+            connection,
+            f"SELECT [{agree}] FROM {files_rows} AS f JOIN {text_rows} AS t USING ({by_file})",
         )
-    return messages
+        agreed = found[0] if found and isinstance(found[0], list) else []
+    messages = {}
+    for position, (_, name) in enumerate(shared):
+        if not (position < len(agreed) and agreed[position] is True):
+            messages[fold(name)] = (
+                f"UNSUPPORTED_SOURCE_TYPE: column {in_files[fold(name)]} of source {source} is "
+                f"also the folder name {name}=…, and some file holds other values than its "
+                "folder's: DuckDB would serve the folder's."
+            )
+    texts_only = [
+        name for index, name in enumerate(folder) if not (index < len(kept) and kept[index] is True)
+    ]
+    forced = ""
+    if texts_only:
+        listed = ", ".join(f"{literal(name)}: 'VARCHAR'" for name in texts_only)
+        forced = f", hive_types = {{{listed}}}"
+    agreeing = {fold(name) for _, name in shared} - set(messages)
+    return messages, forced, agreeing
 
 
-def _folder_values(file: str) -> dict[str, tuple[str, str]]:
-    """The `name=value` folders of `file`, by folded name: (name, value)."""
-    values = {}
+def _folder_names(file: str) -> list[str]:
+    """The names of the `name=value` folders of `file`, as DuckDB names their columns (it
+    decodes the values, not the names)."""
+    names = []
     for part in Path(file).parent.parts:
-        name, equals, value = part.partition("=")
+        name, equals, _ = part.partition("=")
         if equals and name:
-            values[fold(name)] = (name, value)
-    return values
+            names.append(name)
+    return names
 
 
 def _columns(connection: duckdb.DuckDBPyConnection, reader: str) -> list[tuple[str, str]]:
