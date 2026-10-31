@@ -3088,12 +3088,14 @@ def _wide_decimals(connection: duckdb.DuckDBPyConnection, source: str, listed: s
     """` REPLACE (…)` for every Parquet column, in any listed file, that is a DECIMAL wider
     than 38 digits: DuckDB reads such a column as DOUBLE, so reading it fails instead (law 11).
     Queries that do not read it are unaffected. "" when there is none."""
-    row = connection.execute(
+    result = connection.execute(
         "SELECT list(DISTINCT [name, CAST(precision AS VARCHAR)] ORDER BY [name, "
         f"CAST(precision AS VARCHAR)]) FROM parquet_schema([{listed}]) "
         "WHERE converted_type = 'DECIMAL' AND precision > 38"
-    ).fetchall()  # the whole one-row result, so the connection is free for the view
-    columns = row[0][0] if row and row[0][0] else []
+    )
+    row = result.fetchone()  # one metadata row: the wide columns as a list
+    result.fetchone()  # reaches the end of the result, so the connection is free for the view
+    columns = row[0] if row and row[0] else []
     if not columns:
         return ""
     parts = []
