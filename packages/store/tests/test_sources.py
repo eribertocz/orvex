@@ -536,7 +536,7 @@ def test_a_wide_decimal_behind_arrow_metadata_is_still_refused(
 def test_a_wide_decimal_with_only_the_logical_annotation_is_refused(location: Location) -> None:
     # #253 Reviewer pass 3: DuckDB's parquet_schema leaves `precision` empty when a decimal
     # carries only Parquet's logical annotation; the width is read from `logical_type` then.
-    fixture = Path(__file__).parent / "data" / "decimal_logical_only.parquet"
+    fixture = Path(__file__).parent / "fixtures" / "decimal_logical_only.parquet"
     lake = open_lake(location, LIMITS, [source("logical", "parquet", fixture)])
     try:
         write(lake, "CREATE TABLE logical_keys AS SELECT k FROM logical.data")
