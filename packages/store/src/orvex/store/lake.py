@@ -3093,13 +3093,16 @@ def _wide_decimals(connection: duckdb.DuckDBPyConnection, source: str, listed: s
     that do not read it are unaffected. "" when there is none.
 
     DuckDB's own `parquet_schema` reads each file's Parquet schema from its footer (metadata,
-    no rows), the schema its reader uses: decimal annotations, converted or logical, and never
-    Arrow metadata stored in the file (#253). Nodes come in schema order (`column_id`), each
-    group followed by its `num_children` children, so every leaf maps to its top-level column.
+    no rows), the schema its reader uses: decimal annotations, converted or logical (the
+    precision of a logical-only one is read from `logical_type`, as `precision` is empty
+    then), and never Arrow metadata stored in the file (#253). Nodes come in schema order
+    (`column_id`), each group followed by its `num_children` children, so every leaf maps to its
+    top-level column.
     """
     result = connection.execute(
         "SELECT list(nodes) FROM (SELECT list([name, CAST(coalesce(num_children, 0) AS VARCHAR), "
-        "CAST(coalesce(precision, 0) AS VARCHAR), CAST((converted_type = 'DECIMAL' "
+        "CAST(coalesce(precision, TRY_CAST(regexp_extract(logical_type, 'precision=(\\d+)', 1) "
+        "AS INTEGER), 0) AS VARCHAR), CAST((converted_type = 'DECIMAL' "
         "OR logical_type LIKE 'DecimalType(%') IS TRUE AS VARCHAR)] ORDER BY column_id) AS nodes "
         f"FROM parquet_schema([{listed}]) GROUP BY file_name)"
     )
