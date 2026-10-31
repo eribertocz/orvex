@@ -571,7 +571,7 @@ def test_a_column_whose_types_across_files_would_round_is_refused(
     lake = open_lake(location, LIMITS, [source("parts", "parquet", folder / "*.parquet")])
     try:
         write(lake, "CREATE TABLE exact AS SELECT CAST(e AS VARCHAR) AS e FROM parts.data")
-        assert sorted(row["e"] for row in read(lake, "SELECT e FROM exact")) == ["1.5", "7.0"]
+        assert sorted(str(row["e"]) for row in read(lake, "SELECT e FROM exact")) == ["1.5", "7.0"]
         for column in ("r", "f"):
             with pytest.raises(StoreError) as caught:
                 write(lake, f"CREATE TABLE united_{column} AS SELECT {column} FROM parts.data")

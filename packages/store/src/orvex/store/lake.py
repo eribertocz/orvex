@@ -57,6 +57,9 @@ from orvex.contracts.store.v1 import (
     StatementRequest,
 )
 from orvex.store.errors import StoreError, register_secret
+from orvex.store.file_sources import view_query
+from orvex.store.sql_text import identifier as _identifier
+from orvex.store.sql_text import literal as _quote
 
 LAKE = "lake"
 MAX_TIMEOUT_MS = 3_600_000
@@ -271,10 +274,6 @@ class ReadHandle:
 
 # A DuckDB type name as `load_arrow` accepts it: a name, optionally with numeric arguments.
 _ARROW_LOAD_TYPE = re.compile(r"[A-Z][A-Z0-9_]*(?: [A-Z][A-Z0-9_]*)*(?:\([0-9]+(?:,[0-9]+)?\))?")
-
-
-def _quote(text: str) -> str:
-    return "'" + text.replace("'", "''") + "'"
 
 
 def _conninfo(text: str) -> dict[str, str]:
@@ -1699,22 +1698,9 @@ class Lake:
         builder = duckdb.connect(catalog)
         try:
             # The files matched now, listed one by one: the sandbox allows exactly these.
-            listed = ", ".join(_quote(str(file)) for file in matched_files)
-            if source.type == "parquet":
-                reader = f"read_parquet([{listed}], union_by_name = true)"
-                replaced = _unreadable_columns(builder, source.name, listed)
-            else:
-                # Detection never yields floating point: decimal text stays exact text, and the
-                # model casts it explicitly (law 11). A DECIMAL(38,9) candidate would round
-                # longer fractions silently (measured on 2.0.0).
-                # The whole file is sniffed (`sample_size = -1`): with a sample, a decimal after
-                # it would be rounded into an integer column inferred from the sample.
-                reader = (
-                    f"read_csv([{listed}], union_by_name = true, sample_size = -1, "
-                    f"auto_type_candidates = {_CSV_TYPE_CANDIDATES})"
-                )
-                replaced = ""
-            builder.sql(f"CREATE VIEW data AS SELECT *{replaced} FROM {reader}")
+            # Every column carries the files' values exactly or fails when read (law 11).
+            query = view_query(builder, source.type, source.name, [str(f) for f in matched_files])
+            builder.sql(f"CREATE VIEW data AS {query}")
         except duckdb.Error as error:
             raise StoreError(
                 "STORE_SOURCE_INVALID",
@@ -3056,10 +3042,6 @@ def exact_select(sql: str, names: list[str], types: list[str]) -> str | None:
     return f"SELECT {columns} FROM ({sql})"
 
 
-def _identifier(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
-
-
 def _with_duckdb_types(schema: pa.Schema, types: list[str]) -> pa.Schema:
     """Record each column's DuckDB type in its field metadata (`duckdb_type`).
 
@@ -3081,132 +3063,6 @@ def _utc_schema(schema: pa.Schema) -> pa.Schema:
         for field in schema
     ]
     return pa.schema(fields, metadata=schema.metadata)
-
-
-_CSV_TYPE_CANDIDATES = "['BOOLEAN', 'BIGINT', 'DATE', 'TIMESTAMP', 'TIMESTAMPTZ', 'VARCHAR']"
-
-
-def _unreadable_columns(connection: duckdb.DuckDBPyConnection, source: str, listed: str) -> str:
-    """` REPLACE (…)` for every top-level Parquet column DuckDB cannot read exactly from the
-    listed files, so reading it fails instead (law 11); queries that do not read it are
-    unaffected. "" when there is none. Two cases (#253):
-
-    - **Wide decimal.** The column holds, at any depth (struct field, list element, map key or
-      value), a DECIMAL wider than 38 digits in some file: DuckDB reads it as DOUBLE.
-    - **Lossy union.** Files give the column different types, and the type DuckDB unites them
-      in (`union_by_name`) cannot hold some file's values exactly: DECIMAL(38,2) and
-      DECIMAL(38,10) unite as DECIMAL(38,2), rounding 1.1234567890 to 1.12 (measured on 2.0.0).
-
-    Everything comes from DuckDB itself, as metadata only (no rows): `parquet_schema` reads each
-    file's footer, the schema its reader uses (decimal annotations, converted or logical: the
-    precision of a logical-only one is read from `logical_type`, as `precision` is empty then;
-    never Arrow metadata stored in the file), and `DESCRIBE` gives the united types. Nodes come
-    in schema order (`column_id`), each group followed by its `num_children` children, so every
-    leaf maps to its top-level column.
-    """
-    result = connection.execute(
-        "SELECT list(nodes) FROM (SELECT list([name, CAST(coalesce(num_children, 0) AS VARCHAR), "
-        "CAST(coalesce(precision, TRY_CAST(regexp_extract(logical_type, 'precision=(\\d+)', 1) "
-        "AS INTEGER), 0) AS VARCHAR), CAST((converted_type = 'DECIMAL' "
-        "OR logical_type LIKE 'DecimalType(%') IS TRUE AS VARCHAR), coalesce(duckdb_type, '')] "
-        f"ORDER BY column_id) AS nodes FROM parquet_schema([{listed}]) GROUP BY file_name)"
-    )
-    row = result.fetchone()  # one metadata row: every file's schema nodes, in order
-    result.fetchone()  # reaches the end of the result, so the connection is free
-    united = connection.execute(
-        "SELECT list([column_name, column_type]) FROM (DESCRIBE SELECT * FROM "
-        f"read_parquet([{listed}], union_by_name = true))"
-    )
-    types_row = united.fetchone()  # one metadata row: the united type of every column
-    united.fetchone()
-    union = {str(name).lower(): str(kind) for name, kind in (types_row[0] if types_row else [])}
-    widest: dict[str, tuple[str, int]] = {}
-    seen: dict[str, tuple[str, set[str]]] = {}  # top-level column -> (name, types in files)
-    for nodes in row[0] if row and row[0] else []:
-        remaining = [int(nodes[0][1])]  # children still to visit, per open group (root first)
-        top = ""
-        for name, children, digits, is_decimal, kind in nodes[1:]:
-            if len(remaining) == 1:
-                top = str(name)  # a child of the root: a top-level column
-                seen.setdefault(top.lower(), (top, set()))[1].add(str(kind))
-            if is_decimal == "true" and int(digits) > 38:
-                key = top.lower()
-                if int(digits) > widest.get(key, ("", 0))[1]:
-                    widest[key] = (top, int(digits))
-            remaining[-1] -= 1
-            if int(children) > 0:
-                remaining.append(int(children))
-            while remaining and remaining[-1] == 0:
-                remaining.pop()
-    messages: dict[str, tuple[str, str]] = {}
-    for key, (name, digits) in widest.items():
-        messages[key] = (
-            name,
-            f"UNSUPPORTED_SOURCE_TYPE: column {name} of source {source} holds a DECIMAL with "
-            f"{digits} digits, which cannot be read exactly.",
-        )
-    for key, (name, kinds) in seen.items():
-        target = union.get(key, "")
-        if key in messages or not target:
-            continue
-        lossy = sorted(kind for kind in kinds if not _exactly_in(kind, target))
-        if lossy:
-            messages[key] = (
-                name,
-                f"UNSUPPORTED_SOURCE_TYPE: column {name} of source {source} has the types "
-                f"{', '.join(sorted(kinds))} in different files; read together as {target}, "
-                f"values of {', '.join(lossy)} would change.",
-            )
-    if not messages:
-        return ""
-    parts = [
-        f"error({_quote(message)}) AS {_identifier(name)}"
-        for name, message in sorted(messages.values())
-    ]
-    return f" REPLACE ({', '.join(parts)})"
-
-
-_INTEGER_RANGES: dict[str, tuple[int, int]] = {
-    "TINYINT": (-(2**7), 2**7 - 1),
-    "SMALLINT": (-(2**15), 2**15 - 1),
-    "INTEGER": (-(2**31), 2**31 - 1),
-    "BIGINT": (-(2**63), 2**63 - 1),
-    "HUGEINT": (-(2**127), 2**127 - 1),
-    "UTINYINT": (0, 2**8 - 1),
-    "USMALLINT": (0, 2**16 - 1),
-    "UINTEGER": (0, 2**32 - 1),
-    "UBIGINT": (0, 2**64 - 1),
-    "UHUGEINT": (0, 2**128 - 1),
-}
-_DECIMAL_TYPE = re.compile(r"DECIMAL\((\d+),(\d+)\)")
-
-
-def _exactly_in(kind: str, target: str) -> bool:
-    """Whether every value of DuckDB type `kind` converts to `target` without change. Proven
-    cases only (same type, wider integer, integer or decimal into a decimal with enough
-    integer and fraction digits, DATE into TIMESTAMP, anything into VARCHAR text); every other
-    pair counts as lossy (fail closed)."""
-    if kind == target or target == "VARCHAR":
-        return True
-    if kind == "DATE" and target == "TIMESTAMP":
-        return True
-    decimal_target = _DECIMAL_TYPE.fullmatch(target)
-    if kind in _INTEGER_RANGES:
-        low, high = _INTEGER_RANGES[kind]
-        if target in _INTEGER_RANGES:
-            target_low, target_high = _INTEGER_RANGES[target]
-            return target_low <= low and high <= target_high
-        if decimal_target:
-            precision, scale = int(decimal_target[1]), int(decimal_target[2])
-            # 10**digits > bound exactly when digits covers every digit of the bound.
-            return precision - scale >= len(str(max(-low, high)))
-        return False
-    decimal_kind = _DECIMAL_TYPE.fullmatch(kind)
-    if decimal_kind and decimal_target:
-        precision, scale = int(decimal_kind[1]), int(decimal_kind[2])
-        target_precision, target_scale = int(decimal_target[1]), int(decimal_target[2])
-        return target_scale >= scale and target_precision - target_scale >= precision - scale
-    return False
 
 
 class Inexact(NamedTuple):
