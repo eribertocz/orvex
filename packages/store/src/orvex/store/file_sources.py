@@ -28,18 +28,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 import duckdb
-from orvex.store.errors import StoreError
 from orvex.store.sql_text import identifier, literal
 
-CSV_TYPE_CANDIDATES = "['BOOLEAN', 'BIGINT', 'DATE', 'TIMESTAMP', 'TIMESTAMPTZ', 'VARCHAR']"
-# Detected type, as DESCRIBE names it -> the type a column keeps when every text survives it.
-_CSV_TYPES = {
-    "BOOLEAN": "BOOLEAN",
-    "BIGINT": "BIGINT",
-    "DATE": "DATE",
-    "TIMESTAMP": "TIMESTAMP",
-    "TIMESTAMP WITH TIME ZONE": "TIMESTAMPTZ",
-}
+# The types a CSV text column may take, in order: the first that gives back every value wins.
+_CSV_ORDER = ("BOOLEAN", "BIGINT", "DATE", "TIMESTAMP", "TIMESTAMPTZ")
 # A timestamp DuckDB reads to the microsecond with an explicit offset: its instant is exact.
 _OFFSET_TIMESTAMP = (
     r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-](0\d|1[0-4])(:?[0-5]\d)?)"
@@ -200,16 +192,10 @@ def _parquet_schema(
 def _csv_view(
     connection: duckdb.DuckDBPyConnection, source: str, listed: str, files: list[str]
 ) -> str:
-    # Detection reads every row of every file once, here (`sample_size = -1`): with a sample, a
-    # value after it could not change the detected type. It never yields floating point. The
-    # view reads text with DuckDB's default sniffing, so a query does not scan the files twice;
-    # every check below runs on that same reader.
-    detected = _columns(
-        connection,
-        f"read_csv([{listed}], union_by_name = true, sample_size = -1, "
-        f"auto_type_candidates = {CSV_TYPE_CANDIDATES})",
-    )
-
+    # One reader, with DuckDB's own sniffing (dialect, header): the view reads with it, and every
+    # check below runs on it, so what is checked is what is served. Types are not sniffed: each
+    # text column takes the first type of `_CSV_ORDER` that gives back every one of its values,
+    # checked over every row of every file in one scan; it never takes floating point.
     def reader_of(extra: str) -> str:
         return f"read_csv([{listed}], union_by_name = true, all_varchar = true{extra})"
 
@@ -218,30 +204,24 @@ def _csv_view(
     messages, forced, _, folder_guard = _folders(connection, source, reader_of, files, in_files)
     reader = reader_of(forced)
     columns = _columns(connection, reader)
-    if [name for name, _ in detected] != [name for name, _ in columns]:
-        raise StoreError(
-            "STORE_SOURCE_INVALID",
-            f"Source {source} is read with different columns when its types are detected: "
-            "check its header row.",
-            {"source": source},
-        )
     candidates = [
-        (name, _CSV_TYPES[target])
-        for (name, kind), (_, target) in zip(columns, detected, strict=True)
-        if kind == "VARCHAR"
-        and target in _CSV_TYPES
-        and fold(name) in in_files
-        and fold(name) not in messages
+        (name, target)
+        for name, kind in columns
+        if kind == "VARCHAR" and fold(name) in in_files and fold(name) not in messages
+        for target in _CSV_ORDER
     ]
     proven: dict[str, str] = {}
     if candidates:
+        # A column with no value at all keeps its text: no value proves a type.
         checks = ", ".join(
-            f"coalesce(bool_and({_keeps(name, target)}), false)" for name, target in candidates
+            f"count({identifier(name)}) > 0 AND coalesce(bool_and({_keeps(name, target)}), false)"
+            for name, target in candidates
         )
         row = _row(connection, f"SELECT [{checks}] FROM {reader}")
         kept = row[0] if row and isinstance(row[0], list) else [False] * len(candidates)
-        pairs = zip(candidates, kept, strict=True)
-        proven = {name: target for (name, target), ok in pairs if ok is True}
+        for (name, target), ok in zip(candidates, kept, strict=True):
+            if ok is True and name not in proven:
+                proven[name] = target
     parts = []
     for name, _ in columns:
         column = identifier(name)

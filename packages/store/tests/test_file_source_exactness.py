@@ -533,3 +533,32 @@ def test_an_all_null_column_beside_a_typed_one_reads_exactly(tmp_path: Path) -> 
     assert connection.execute(
         "SELECT list(CAST(m AS VARCHAR) ORDER BY k) FROM data"
     ).fetchall() == [([None, "1.25"],)]
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        ["1.5,2.5\n3.5,4.5\n"],
+        ["A1,1.5\nB2,2.5\n"],
+        ["1\n" * 30000 + "x\n"],
+        ["a,b\n1.5,2.5\n", "1.5,2.5\n"],
+    ],
+    ids=["decimals", "text-and-decimals", "late-text", "beside-a-header"],
+)
+def test_a_headerless_csv_is_read_with_one_header_decision(
+    tmp_path: Path, files: list[str]
+) -> None:
+    # The view's reader decides the header once; types are checked on that same reader, so a
+    # headerless file of decimals is attached and its values arrive as their exact text.
+    paths = []
+    for index, text in enumerate(files):
+        paths.append(tmp_path / f"{index}.csv")
+        paths[-1].write_text(text)
+    connection = duckdb.connect()
+    _view(connection, "csv", paths)
+    reader = ", ".join(f"'{path}'" for path in paths)
+    expected = connection.execute(
+        f"SELECT * FROM read_csv([{reader}], union_by_name = true, all_varchar = true)"
+    ).fetchall()
+    served = connection.execute("SELECT * FROM data").fetchall()
+    assert [tuple(None if v is None else str(v) for v in row) for row in served] == expected
