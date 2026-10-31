@@ -452,3 +452,84 @@ def test_a_csv_view_does_not_read_the_whole_file_again_on_every_query(tmp_path: 
     (tmp_path / "f.csv").write_text("v\n7\n")
     query = view_query(duckdb.connect(), "csv", "src", [str(tmp_path / "f.csv")])
     assert "sample_size" not in query
+
+
+@pytest.mark.parametrize(
+    "names",
+    [["x", "x"], ["A", "a"], [""]],
+    ids=["duplicate", "case-only", "empty"],
+)
+def test_a_column_duckdb_renames_is_refused_not_read_unchecked(
+    tmp_path: Path, names: list[str]
+) -> None:
+    # DuckDB renames duplicate, case-colliding or empty names (x_1, a_1, C0): no check can
+    # know which file column such a name stands for, so it is refused.
+    wide = pa.array([D("1234567890123456789012345678901234567890.12")], pa.decimal256(42, 2))
+    columns = [pa.array([1], pa.int64()), wide][-len(names) :]
+    path = tmp_path / "f.parquet"
+    pq.write_table(pa.table([*columns, pa.array([7], pa.int64())], names=[*names, "k"]), path)
+    connection = duckdb.connect()
+    _view(connection, "parquet", [path])
+    served = [row[0] for row in connection.execute("DESCRIBE data").fetchall()]
+    for column in served[:-1]:
+        with pytest.raises(duckdb.Error, match="UNSUPPORTED_SOURCE_TYPE"):
+            connection.execute(f'SELECT "{column}" FROM data').fetchall()
+    assert connection.execute("SELECT k FROM data").fetchall() == [(7,)]
+
+
+def test_an_int96_timestamp_is_refused_at_any_depth(tmp_path: Path) -> None:
+    # DuckDB reads INT96 to the microsecond: 1767261600123456789 ns would lose its 789.
+    nanos = pa.array([1767261600123456789], pa.timestamp("ns"))
+    table = pa.table(
+        {"t": nanos, "s": pa.StructArray.from_arrays([nanos], ["t"]), "k": pa.array([1])}
+    )
+    path = tmp_path / "f.parquet"
+    pq.write_table(table, path, use_deprecated_int96_timestamps=True)
+    connection = duckdb.connect()
+    _view(connection, "parquet", [path])
+    for column in ("t", "s"):
+        with pytest.raises(duckdb.Error, match="UNSUPPORTED_SOURCE_TYPE"):
+            connection.execute(f"SELECT {column} FROM data").fetchall()
+    assert connection.execute("SELECT k FROM data").fetchall() == [(1,)]
+
+
+@pytest.mark.parametrize("kind", ["parquet", "csv"])
+def test_a_folder_named_null_beside_typed_siblings_stays_text(tmp_path: Path, kind: str) -> None:
+    # DuckDB's autocast serves `k=NULL` as SQL NULL beside `k=5`; its decoded text is 'NULL'.
+    files = []
+    for value, key in (("NULL", 1), ("5", 2), ("6", 3)):
+        files.append(tmp_path / f"k={value}" / f"f.{kind}")
+        (_parquet_file if kind == "parquet" else _csv_file)(files[-1], {"x": key})
+    connection = duckdb.connect()
+    _view(connection, kind, files)
+    assert connection.execute(
+        "SELECT list(CAST(k AS VARCHAR) ORDER BY CAST(x AS VARCHAR)), any_value(typeof(k)) "
+        "FROM data"
+    ).fetchall() == [(["NULL", "5", "6"], "VARCHAR")]
+
+
+@pytest.mark.parametrize("kind", ["parquet", "csv"])
+def test_a_file_column_shared_with_its_folder_is_checked_on_every_read(
+    tmp_path: Path, kind: str
+) -> None:
+    file = tmp_path / "year=2026" / f"f.{kind}"
+    write = _parquet_file if kind == "parquet" else _csv_file
+    write(file, {"year": 2026, "v": 1})
+    connection = duckdb.connect()
+    _view(connection, kind, [file])
+    assert connection.execute("SELECT CAST(year AS VARCHAR) FROM data").fetchall() == [("2026",)]
+    write(file, {"year": 2025, "v": 1})  # the file now disagrees with its folder
+    with pytest.raises(duckdb.Error, match="UNSUPPORTED_SOURCE_TYPE"):
+        connection.execute("SELECT year, v FROM data").fetchall()
+
+
+def test_an_all_null_column_beside_a_typed_one_reads_exactly(tmp_path: Path) -> None:
+    # pyarrow and pandas write a column with only nulls as Parquet's null type.
+    first, second = tmp_path / "a.parquet", tmp_path / "b.parquet"
+    pq.write_table(pa.table({"m": pa.array([None], pa.null()), "k": [1]}), first)
+    pq.write_table(pa.table({"m": pa.array([D("1.25")], pa.decimal128(10, 2)), "k": [2]}), second)
+    connection = duckdb.connect()
+    _view(connection, "parquet", [first, second])
+    assert connection.execute(
+        "SELECT list(CAST(m AS VARCHAR) ORDER BY k) FROM data"
+    ).fetchall() == [([None, "1.25"],)]

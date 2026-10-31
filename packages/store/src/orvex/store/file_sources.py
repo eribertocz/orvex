@@ -82,12 +82,31 @@ def _parquet_view(
     def reader_of(extra: str) -> str:
         return f"read_parquet([{listed}], union_by_name = true{extra})"
 
-    widest, kinds = _parquet_schema(connection, listed)
+    widest, kinds, duplicated, int96 = _parquet_schema(connection, listed)
     in_files = {key: name for key, (name, _) in kinds.items()}
-    messages, forced, shared = _folders(connection, source, reader_of, files, in_files)
+    messages, forced, shared, folder_guard = _folders(
+        connection, source, reader_of, files, in_files
+    )
     reader = reader_of(forced)
     united = _columns(connection, reader)
     union = {fold(name): kind for name, kind in united}
+    folders = {fold(key) for file in files for key in _folder_names(file)}
+    for name, _ in united:
+        # A name DuckDB made itself (x_1 for a duplicate, a_1 beside A, C0 for an empty name),
+        # or one two columns of a file share: no check can tell which file column it is.
+        key = fold(name)
+        if key in duplicated or (key not in kinds and key not in folders):
+            messages[key] = (
+                f"UNSUPPORTED_SOURCE_TYPE: column {name} of source {source} has no name of its "
+                "own in the files (a duplicate, a name differing only in case, or an empty "
+                "name), so it cannot be checked."
+            )
+    for key, name in int96.items():
+        messages.setdefault(
+            key,
+            f"UNSUPPORTED_SOURCE_TYPE: column {name} of source {source} holds an INT96 "
+            "timestamp, which DuckDB reads only to the microsecond.",
+        )
     for key, (name, digits) in widest.items():
         messages.setdefault(
             key,
@@ -125,14 +144,16 @@ def _parquet_view(
         f"CASE WHEN {schema} = {literal(str(attached[0]) if attached else '')} THEN true "
         f"ELSE error({literal(changed)}) END"
     )
-    return f"SELECT {', '.join(parts)} FROM {reader} WHERE {guard}"
+    return f"SELECT {', '.join(parts)} FROM {reader} WHERE {guard}{folder_guard}"
 
 
 def _parquet_schema(
     connection: duckdb.DuckDBPyConnection, listed: str
-) -> tuple[dict[str, tuple[str, int]], dict[str, tuple[str, set[str]]]]:
+) -> tuple[dict[str, tuple[str, int]], dict[str, tuple[str, set[str]]], set[str], dict[str, str]]:
     """Per top-level column (by folded name): the widest DECIMAL wider than 38 digits at any
-    depth (struct field, list element, map key or value), and its type in each file.
+    depth (struct field, list element, map key or value), and its type in each file; the
+    folded names two top-level columns of one file share (or that are empty); and the columns
+    holding an INT96 timestamp at any depth.
 
     From DuckDB's `parquet_schema`, the schema its reader uses (decimal annotations, converted
     or logical: the precision of a logical-only one is read from `logical_type`, as `precision`
@@ -145,26 +166,35 @@ def _parquet_schema(
         "SELECT list(nodes) FROM (SELECT list([name, CAST(coalesce(num_children, 0) AS VARCHAR), "
         "CAST(coalesce(precision, TRY_CAST(regexp_extract(logical_type, 'precision=(\\d+)', 1) "
         "AS INTEGER), 0) AS VARCHAR), CAST((converted_type = 'DECIMAL' "
-        "OR logical_type LIKE 'DecimalType(%') IS TRUE AS VARCHAR), coalesce(duckdb_type, '')] "
+        "OR logical_type LIKE 'DecimalType(%') IS TRUE AS VARCHAR), coalesce(duckdb_type, ''), "
+        "coalesce(type, '')] "
         f"ORDER BY column_id) AS nodes FROM parquet_schema([{listed}]) GROUP BY file_name)",
     )
     widest: dict[str, tuple[str, int]] = {}
     kinds: dict[str, tuple[str, set[str]]] = {}
+    duplicated: set[str] = set()
+    int96: dict[str, str] = {}
     for nodes in row[0] if row and isinstance(row[0], list) else []:
         remaining = [int(nodes[0][1])]  # children still to visit, per open group (root first)
         top = ""
-        for name, children, digits, is_decimal, kind in nodes[1:]:
+        in_file: set[str] = set()
+        for name, children, digits, is_decimal, kind, physical in nodes[1:]:
             if len(remaining) == 1:
                 top = str(name)  # a child of the root: a top-level column
+                if fold(top) in in_file or not top:
+                    duplicated.add(fold(top))
+                in_file.add(fold(top))
                 kinds.setdefault(fold(top), (top, set()))[1].add(str(kind))
             if is_decimal == "true" and int(digits) > widest.get(fold(top), ("", 38))[1]:
                 widest[fold(top)] = (top, int(digits))
+            if physical == "INT96":
+                int96[fold(top)] = top
             remaining[-1] -= 1
             if int(children) > 0:
                 remaining.append(int(children))
             while remaining and remaining[-1] == 0:
                 remaining.pop()
-    return widest, kinds
+    return widest, kinds, duplicated, int96
 
 
 def _csv_view(
@@ -185,7 +215,7 @@ def _csv_view(
 
     plain = _columns(connection, reader_of(", hive_partitioning = false"))
     in_files = {fold(name): name for name, _ in plain}
-    messages, forced, _ = _folders(connection, source, reader_of, files, in_files)
+    messages, forced, _, folder_guard = _folders(connection, source, reader_of, files, in_files)
     reader = reader_of(forced)
     columns = _columns(connection, reader)
     if [name for name, _ in detected] != [name for name, _ in columns]:
@@ -229,7 +259,8 @@ def _csv_view(
             )
         else:
             parts.append(column)  # exact text, or a folder value proven by `_folders`
-    return f"SELECT {', '.join(parts)} FROM {reader}"
+    where = f" WHERE true{folder_guard}" if folder_guard else ""
+    return f"SELECT {', '.join(parts)} FROM {reader}{where}"
 
 
 def _keeps(name: str, target: str) -> str:
@@ -252,21 +283,24 @@ def _folders(
     reader_of: Callable[[str], str],
     files: list[str],
     in_files: dict[str, str],
-) -> tuple[dict[str, str], str, set[str]]:
+) -> tuple[dict[str, str], str, set[str], str]:
     """The columns DuckDB makes from `name=value` folders (Hive partitioning), checked against
     the values DuckDB itself serves: it decodes `%XX` in a value and may type it (`2026` as
     BIGINT). `reader_of(extra)` is the source's reader with `extra` options.
 
     Returns: messages for file columns that are also folder names and hold, in some file, other
     values than their folder's (DuckDB would serve the folder's); the `hive_types` option that
-    keeps as text every folder value whose DuckDB type does not give its text back; and the
-    folded names of the file columns shared with a folder, kept because their values agree.
+    keeps as text every folder value whose DuckDB type does not give its text back; the folded
+    names of the file columns shared with a folder, kept because their values agree; and
+    ` AND …`, the condition that checks those agreeing columns again on every read, so a file
+    rewritten afterwards fails instead of being served its folder's value. Every comparison
+    treats NULL as a value (`IS NOT DISTINCT FROM`), never as a pass.
     """
     keys = {fold(key) for file in files for key in _folder_names(file)}
     served = [name for name, _ in _columns(connection, reader_of(""))]
     folder = [name for name in served if fold(name) in keys]
     if not folder:
-        return {}, "", set()
+        return {}, "", set(), ""
     marker = "source_file"
     while fold(marker) in {fold(name) for name in served}:
         marker = "_" + marker
@@ -287,13 +321,15 @@ def _folders(
     )
     typed_rows = f"(SELECT {by_file}, {typed} FROM {reader_of(tag)} GROUP BY {by_file})"
     keeps = ", ".join(
-        f"coalesce(bool_and(t.t{index} = t.l{index} AND t.t{index} = d.d{index}), false)"
+        f"coalesce(bool_and(t.t{index} IS NOT DISTINCT FROM t.l{index} "
+        f"AND t.t{index} IS NOT DISTINCT FROM d.d{index}), false)"
         for index in range(len(folder))
     )
     shared = [(index, name) for index, name in enumerate(folder) if fold(name) in in_files]
     agree = ", ".join(
-        f"coalesce(bool_and(t.t{index} = t.l{index} AND CAST(f.{identifier(in_files[fold(name)])} "
-        f"AS VARCHAR) IS NOT DISTINCT FROM t.t{index}), true)"
+        f"coalesce(bool_and(t.t{index} IS NOT DISTINCT FROM t.l{index} AND "
+        f"CAST(f.{identifier(in_files[fold(name)])} AS VARCHAR) IS NOT DISTINCT FROM "
+        f"t.t{index}), true)"
         for index, name in shared
     )
     row = _row(
@@ -324,8 +360,36 @@ def _folders(
     if texts_only:
         listed = ", ".join(f"{literal(name)}: 'VARCHAR'" for name in texts_only)
         forced = f", hive_types = {{{listed}}}"
-    agreeing = {fold(name) for _, name in shared} - set(messages)
-    return messages, forced, agreeing
+    agreeing = [(index, name) for index, name in shared if fold(name) not in messages]
+    guard = ""
+    if agreeing:
+        columns = ", ".join(f"t{index}" for index, _ in agreeing)
+        values = _row(
+            connection,
+            f"SELECT list({{'file': {by_file}, 'texts': [{columns}]}}) FROM {text_rows}",
+        )
+        per_file = values[0] if values and isinstance(values[0], list) else []
+        conditions = []
+        for position, (_, name) in enumerate(agreeing):
+            column = f"CAST({identifier(in_files[fold(name)])} AS VARCHAR)"
+            cases = " ".join(
+                f"WHEN {literal(str(entry['file']))} THEN {column} IS NOT DISTINCT FROM "
+                + (
+                    "NULL"
+                    if entry["texts"][position] is None
+                    else literal(str(entry["texts"][position]))
+                )
+                for entry in per_file
+            )
+            conditions.append(f"CASE {by_file} {cases} ELSE false END")
+        message = (
+            f"UNSUPPORTED_SOURCE_TYPE: a file of source {source} now holds, in a column shared "
+            "with its folder name, another value than its folder's; attach the source again."
+        )
+        files_rows = reader_of(", hive_partitioning = false" + tag)
+        check = f"(SELECT coalesce(bool_and({' AND '.join(conditions)}), true) FROM {files_rows})"
+        guard = f" AND CASE WHEN {check} THEN true ELSE error({literal(message)}) END"
+    return messages, forced, {fold(name) for _, name in agreeing}, guard
 
 
 def _folder_names(file: str) -> list[str]:
@@ -362,7 +426,9 @@ def _exactly_in(kind: str, target: str) -> bool:
     cases only (same type, wider integer, integer or decimal into a decimal with enough
     integer and fraction digits, DATE into TIMESTAMP, anything into VARCHAR text); every other
     pair counts as lossy (fail closed)."""
-    if kind == target or target == "VARCHAR":
+    if kind in (target, "NULL", '"NULL"') or target == "VARCHAR":
+        return True  # a column of only NULLs (Parquet's null type) holds no value to change
+    if kind == "FLOAT" and target == "DOUBLE":
         return True
     if kind == "DATE" and target == "TIMESTAMP":
         return True
