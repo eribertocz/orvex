@@ -73,7 +73,12 @@ Properties:
 
 - Every intermediate representation is immutable and typed, with a canonical fingerprint: SHA-256 over the JSON Canonicalization Scheme (RFC 8785).
 - Deterministic: same model fingerprint + same query fingerprint + same security fingerprint + same snapshot ⇒ same result. On live engines (after v1.0.0) the data version is the read instant, so the result is explainable, not replayable (ADR-0027 §5).
-- Engine-independent up to the adapter: adding an engine requires a new adapter only, enabled once the whole corpus passes on it with results identical to the managed-lake reference, and offered in a release only once the security suite passes too (ADR-0027 §4).
+- Engine-independent up to the adapter (ADR-0029):
+  - Expressions and plans use an Orvex IR that no stage after the Ossie adapter ties to an engine.
+  - The IR types each expression by its level (row, aggregated, windowed), in a dependency graph.
+  - Functions come from a versioned registry with reference semantics.
+  - Adding an engine requires an output adapter and its capability table. It is enabled only within a certified engine profile, with every construct proven exact, approximate or unsupported (ADR-0030), and offered in a release only once the security suite passes too (ADR-0027 §4).
+- Fingerprints and receipts are versioned. A receipt reports fingerprint match, authenticated integrity, issuer authenticity (when signed), rule verifiability and reproducibility separately (ADR-0029 §8).
 - **Two data routes (ADR-0027):** datasets come from the managed DuckLake (route A) or from an existing engine queried in place (route B: an existing DuckLake and ClickHouse in v1.0.0, ADR-0028; a remote DuckDB through Quack after v1.0.0). Each dataset belongs to one engine; a relationship or a query spanning two engines is rejected with `CROSS_ENGINE_QUERY`.
 
 ## 5. Correctness core (parity with SEF)
@@ -103,7 +108,7 @@ Every relationship cardinality, dataset uniqueness, temporal non-overlap and bri
 
 | Status | Meaning | Engine behavior |
 |---|---|---|
-| `declared` | Stated in the model, not yet checked | Usable; the receipt marks the result as relying on unverified evidence |
+| `declared` | Stated in the model, not yet checked | Never used unchecked. A join relying on it isolates the fact and runs an in-statement uniqueness guard. A duplicate fails the query with `EVIDENCE_VIOLATED`, and no partial result is released. Where the engine cannot guarantee that the guard and the result read one state, the query is rejected with `EVIDENCE_NOT_VERIFIABLE` (ADR-0029 §4) |
 | `verified` | Checked against the data of a specific DuckLake snapshot, or, on a live engine after v1.0.0, at a recorded instant (ADR-0027 §7) | Usable; the receipt references the verification run or instant |
 | `violated` | The check failed on the current snapshot | **Not usable.** Queries depending on it are rejected with `EVIDENCE_VIOLATED` and the reason (for example "consumer_id is not unique in dim_consumers: 37 duplicates") |
 
@@ -117,6 +122,15 @@ Because `transform` and `semantic` live in the same product, the engine **re-ver
 - **Non-broadening property:** no user filter, LOD expression, context modifier or comparison state can widen the rows a mandatory policy allows. Verified with property-based tests.
 - Missing required policy attributes ⇒ the caller sees **no rows** (fail closed), never all rows.
 - **Other engines (ADR-0027 §6).** Policies are placed in the plan, before the dialect adapter, so every engine receives the same placement. For a dataset outside the managed lake, a policy's subquery on a mapping table is evaluated first on the managed lake at a pinned snapshot (recorded in the receipt), and its values are bound as parameters of the engine's query, with their exact types and `NULL` semantics, within a per-project cap (ADR-0025 rule 6). A caller with no mapping sees zero rows under allow-list and deny-list policies alike (`security.md` §3.3); the predicate is never dropped. A value set above the cap, or a policy that cannot be placed safely, makes the dataset unusable for that query (`POLICY_NOT_SUPPORTED_ON_ENGINE`, without revealing the mapping's size).
+- **Layered protection (ADR-0029 §7).** No single layer is claimed to prove the absence of leaks. The layers are:
+  - `SecureScan` as the only entry of a policy dataset, with immovable propagation joins;
+  - a closed catalog of rewrites proven to preserve visible rows;
+  - an independent plan validator;
+  - checks on the physical SQL;
+  - engine-side policies where they exist;
+  - metamorphic tests on the real engines.
+
+  No error, in any category, reveals unauthorized names, expressions, SQL or values.
 - Policies are declared in `security.yaml` (`contracts/security-policies/v1`) and evaluated by the engine's own evaluator; the contract is designed so a future Cedar-based evaluator can implement it (ADR-0011).
 
 ## 8. Capabilities beyond SEF (S1–S6)

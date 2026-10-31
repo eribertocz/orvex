@@ -34,3 +34,5 @@ Records 0001–0026 were approved by the Owner during the design session of 2026
 | [0026](0026-one-dialect-per-engine.md) | One SQL dialect per engine; no transpilation (no SQLGlot) | Accepted; rules 1, 3 and 4 superseded in part by 0028 |
 | [0027](0027-two-data-routes.md) | Two data routes: managed DuckLake and Direct Query, one semantic engine | Accepted; superseded in part by 0028 (ClickHouse); Quack: direction only, after v1.0.0 |
 | [0028](0028-clickhouse-by-direct-query-only.md) | ClickHouse by Direct Query only; extraction retired | Accepted |
+| [0029](0029-engine-independent-semantic-ir.md) | Engine-independent semantic IR, function registry, evidence guards and versioned receipts | Proposed |
+| [0030](0030-cross-engine-semantic-equivalence.md) | Cross-engine semantic equivalence: exact, approximate and unsupported classes | Proposed |

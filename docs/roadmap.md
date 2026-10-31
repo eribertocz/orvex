@@ -106,7 +106,7 @@
 | P2-01 | `ossie-extensions` contract v1 (`ORVEX` payload JSON Schema, including geographic semantic types and pre-aggregation declarations) | semantic |
 | P2-02 | `semantic-error` contract v1 and the stable error catalog (codes, i18n messages, details) | semantic |
 | P2-03 | Ossie adapter: parse and validate the pinned specification, resolve references (`OSSIE_INVALID`, `UNSUPPORTED_OSSIE_VERSION`) | semantic |
-| P2-04 | `CompiledModel`: typed expressions, semantic types, units and currencies; canonical fingerprints (own RFC 8785 implementation tested with the RFC's examples) + SHA-256 | semantic |
+| P2-04 | `CompiledModel`: typed expressions, semantic types, units and currencies; canonical fingerprints: RFC 8785 canonicalization (own implementation or the `rfc8785` package, chosen by the P2 experiment of ADR-0029, criterion FP-3) + SHA-256; IR per ADR-0029 | semantic |
 | P2-05 | `semantic-query` contract v1 (aggregate and detail-row modes); query binding and canonicalization | semantic |
 | P2-06 | `semantic-result` contract v1 and result envelope (Arrow schema, exact values as strings, masked columns) | semantic |
 | P2-07 | `receipt` contract v1 and receipt builder; every result from P2-12 on carries one, later issues extend its fields | semantic |

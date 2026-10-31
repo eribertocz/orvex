@@ -31,7 +31,13 @@ Rules:
 - No module imports another module's internals. Cross-module communication uses contract types only. CI enforces this with an import-boundary check written with the standard library (`ast`).
 - Errors are explicit, typed per module, and carry a stable `code` (for example `AMBIGUOUS_RELATIONSHIP_PATH`), a human message and structured details. No bare `except`, no swallowed exceptions.
 - **Data stays in DuckDB (ADR-0025).** Rows never pass through Python between steps: compose SQL or lazy DuckDB relations, write with `INSERT … SELECT`, `MERGE`, `CREATE TABLE … AS` or `COPY`, and read each final result **exactly once** into Arrow. A lazy relation reruns its query on every read, so a second read, `str(rel)` or `fetchall` on it is a defect. Every DuckLake read pins its snapshot. `DuckDBPyRelation` never crosses a module boundary; contracts exchange Arrow.
-- SQL sent to DuckDB is generated from a plan or written as plain SQL with bound parameters. **Never** concatenate user input into SQL. Session variables (`SET VARIABLE`) are never used on shared connections; values are passed as explicit prepared-statement parameters.
+- SQL sent to DuckDB is generated from a plan or written as plain SQL with bound parameters. **Never** concatenate user input into SQL.
+- **Semantic-engine SQL generation (ADR-0029 §9):**
+  - values are bound parameters;
+  - identifiers come only from the validated IR, through one quoting function;
+  - template strings (PEP 750) are allowed only through the Orvex processor that enforces both rules;
+  - `f`-strings, `%` and `.format` are forbidden in adapter SQL code, and a lint rule enforces it.
+- **Golden fingerprints:** CI fails when a fingerprint changes without a version bump (ADR-0029 §8). Session variables (`SET VARIABLE`) are never used on shared connections; values are passed as explicit prepared-statement parameters.
 
 ## 3. Typing
 

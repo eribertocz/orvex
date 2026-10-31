@@ -94,6 +94,21 @@ column_policies:
   - a `hidden` member does not exist for the caller: it is absent from the catalog, and referencing it fails with `MEMBER_NOT_FOUND` (never a different error that confirms it exists).
 - Policies apply before aggregation on every level: details, subtotals, totals, distinct counts, possible values, pre-aggregations, exports and MCP.
 
+### 3.4 Protection across planning, execution and errors
+
+Policies stay effective through every transformation (ADR-0029 §7):
+- A policy dataset enters a plan only through `SecureScan`, and joins that propagate a policy are immovable.
+- Rewrites come from a closed catalog, each proven to keep every `SecureScan`'s visible rows unchanged.
+- An independent validator checks the plan, and a second check inspects the generated SQL.
+- Engine-side row policies receive the same values where the engine has them.
+- Metamorphic tests on the real engines show that rows invisible to the caller change nothing the caller sees, across optimizer settings.
+
+**No error reveals anything unauthorized:**
+- not the names of models, datasets, tables, columns, members, policies or expressions;
+- not SQL text or values.
+
+Validation errors name only members the caller can see. Data-dependent execution errors are shown in full only when the caller's effective permissions cover every row and column the statement read; otherwise the caller gets a generic message with a correlation id, and the detail goes to the audit log.
+
 ## 4. Audit log
 
 - Records authentication events, page views, every semantic query (with its receipt, not raw values), exports, MCP calls, permission changes and model certifications.
