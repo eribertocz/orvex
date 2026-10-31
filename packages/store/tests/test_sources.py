@@ -358,7 +358,7 @@ def test_csv_decimals_arrive_as_exact_text(
     # #252: detection never yields floating point; 0.1 + 0.2 stays 0.30 after an explicit cast.
     folder = tmp_path_factory.mktemp("csv-exact")
     (folder / "amounts.csv").write_text(
-        "id,amount,flag,day,at,at_tz,big\n"
+        "id,amount,flag,on_day,local_at,offset_at,big\n"
         "1,0.1,true,2026-01-01,2026-01-01 10:00:00,2026-01-01 10:00:00-04,"
         "123456789012345678901234\n"
         "2,0.2,false,2026-01-02,2026-01-02 11:00:00,2026-01-02 11:00:00-04,"
@@ -370,8 +370,8 @@ def test_csv_decimals_arrive_as_exact_text(
         write(
             lake,
             "CREATE TABLE kinds AS SELECT typeof(id) AS id, typeof(amount) AS amount, "
-            "typeof(flag) AS flag, typeof(day) AS day, typeof(at) AS at, "
-            "typeof(at_tz) AS at_tz, typeof(big) AS big FROM bills.data LIMIT 1",
+            "typeof(flag) AS flag, typeof(on_day) AS on_day, typeof(local_at) AS local_at, "
+            "typeof(offset_at) AS offset_at, typeof(big) AS big FROM bills.data LIMIT 1",
         )
         write(
             lake,
@@ -383,9 +383,9 @@ def test_csv_decimals_arrive_as_exact_text(
                 "id": "BIGINT",
                 "amount": "VARCHAR",
                 "flag": "BOOLEAN",
-                "day": "DATE",
-                "at": "TIMESTAMP",
-                "at_tz": "TIMESTAMP WITH TIME ZONE",
+                "on_day": "DATE",
+                "local_at": "TIMESTAMP",
+                "offset_at": "TIMESTAMP WITH TIME ZONE",
                 "big": "VARCHAR",
             }
         ]
