@@ -3092,8 +3092,8 @@ def _wide_decimals(connection: duckdb.DuckDBPyConnection, source: str, listed: s
         "SELECT list(DISTINCT [name, CAST(precision AS VARCHAR)] ORDER BY [name, "
         f"CAST(precision AS VARCHAR)]) FROM parquet_schema([{listed}]) "
         "WHERE converted_type = 'DECIMAL' AND precision > 38"
-    ).fetchone()
-    columns = row[0] if row and row[0] else []
+    ).fetchall()  # the whole one-row result, so the connection is free for the view
+    columns = row[0][0] if row and row[0][0] else []
     if not columns:
         return ""
     parts = []
