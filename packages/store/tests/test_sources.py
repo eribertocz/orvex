@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import decimal
 import hashlib
 import subprocess
 import sys
@@ -9,6 +10,8 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import duckdb
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from orvex.contracts.store.v1 import (
     FileSourceAttachment,
@@ -345,5 +348,80 @@ def test_braces_spaces_and_accents_stay_readable(
         write(lake, "CREATE TABLE fine_rows AS SELECT a FROM fine.data")
         rows = read(lake, "SELECT a FROM fine_rows ORDER BY a")
         assert rows == [{"a": 0}, {"a": 1}]
+    finally:
+        lake.close()
+
+
+def test_csv_decimals_arrive_as_exact_text(
+    location: Location, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    # #252: detection never yields floating point; 0.1 + 0.2 stays 0.30 after an explicit cast.
+    folder = tmp_path_factory.mktemp("csv-exact")
+    (folder / "amounts.csv").write_text(
+        "id,amount,flag,day,at,at_tz,big\n"
+        "1,0.1,true,2026-01-01,2026-01-01 10:00:00,2026-01-01 10:00:00-04,"
+        "123456789012345678901234\n"
+        "2,0.2,false,2026-01-02,2026-01-02 11:00:00,2026-01-02 11:00:00-04,"
+        "223456789012345678901234\n",
+        encoding="utf-8",
+    )
+    lake = open_lake(location, LIMITS, [source("bills", "csv", folder / "amounts.csv")])
+    try:
+        write(
+            lake,
+            "CREATE TABLE kinds AS SELECT typeof(id) AS id, typeof(amount) AS amount, "
+            "typeof(flag) AS flag, typeof(day) AS day, typeof(at) AS at, "
+            "typeof(at_tz) AS at_tz, typeof(big) AS big FROM bills.data LIMIT 1",
+        )
+        write(
+            lake,
+            "CREATE TABLE total AS "
+            "SELECT CAST(sum(CAST(amount AS DECIMAL(10, 2))) AS VARCHAR) AS amount FROM bills.data",
+        )
+        assert read(lake, "SELECT * FROM kinds") == [
+            {
+                "id": "BIGINT",
+                "amount": "VARCHAR",
+                "flag": "BOOLEAN",
+                "day": "DATE",
+                "at": "TIMESTAMP",
+                "at_tz": "TIMESTAMP WITH TIME ZONE",
+                "big": "VARCHAR",
+            }
+        ]
+        assert read(lake, "SELECT amount FROM total") == [{"amount": "0.30"}]
+    finally:
+        lake.close()
+
+
+def test_a_parquet_decimal_wider_than_38_digits_is_refused_not_rounded(
+    location: Location, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    # #252: DuckDB reads DECIMAL(50, 2) as DOUBLE; reading that column fails instead.
+    folder = tmp_path_factory.mktemp("wide")
+    pq.write_table(
+        pa.table(
+            {
+                "wide": pa.array(
+                    [decimal.Decimal("123456789012345678901234567890123456789012.10")],
+                    pa.decimal256(50, 2),
+                ),
+                "fine": pa.array([decimal.Decimal("1.10")], pa.decimal128(10, 2)),
+            }
+        ),
+        folder / "w.parquet",
+    )
+    lake = open_lake(location, LIMITS, [source("ledger", "parquet", folder / "w.parquet")])
+    try:
+        write(
+            lake, "CREATE TABLE fine_only AS SELECT CAST(fine AS VARCHAR) AS fine FROM ledger.data"
+        )
+        assert read(lake, "SELECT fine FROM fine_only") == [{"fine": "1.10"}]
+        with pytest.raises(StoreError) as caught:
+            write(lake, "CREATE TABLE wide_copy AS SELECT wide FROM ledger.data")
+        text = f"{caught.value} {caught.value.details}"
+        assert "UNSUPPORTED_SOURCE_TYPE" in text
+        assert "wide" in text
+        assert "ledger" in text
     finally:
         lake.close()
