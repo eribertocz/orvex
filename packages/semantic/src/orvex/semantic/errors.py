@@ -110,7 +110,8 @@ class SemanticError(Exception):
         self, locale: str | None = None, audience: str | None = None
     ) -> SemanticErrorMessage:
         """The contract message for `locale` and `audience`. Any audience but `builder` gets
-        the generic template and the public details only."""
+        the generic template and the public details only. Serialize it with `to_json`, or with
+        `exclude_none=True`: an optional detail left out is `None` here and absent on the wire."""
         codes, messages = _catalog()
         language = resolve_locale(locale)
         # Exactly the text "builder"; anything else, a look-alike included, is the other view.
