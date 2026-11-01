@@ -78,7 +78,10 @@ class Registry:
     def active(self, specification_version: str) -> Entry | None:
         """The entry that reads documents declaring this version, if any."""
         for entry in self.entries:
-            if entry.state in ACTIVE_STATES and entry.specification_version == specification_version:
+            if (
+                entry.state in ACTIVE_STATES
+                and entry.specification_version == specification_version
+            ):
                 return entry
         return None
 

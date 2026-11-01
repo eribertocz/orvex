@@ -59,7 +59,7 @@ class Parsed:
     lines: dict[Path, int]
 
 
-def parse(text: str, format: Format) -> Parsed:  # noqa: A002 - the word the spec uses
+def parse(text: str, format: Format) -> Parsed:
     if format == "json":
         return _Json(text).document()
     return _parse_yaml(text)
@@ -107,7 +107,7 @@ class _Json:
         self.lines[path] = self.line()
         char = self.text[self.at] if self.at < len(self.text) else ""
         if char == "{":
-            return self.object(path, depth)
+            return self.members(path, depth)
         if char == "[":
             return self.array(path, depth)
         if char == '"':
@@ -122,12 +122,12 @@ class _Json:
             raise self.fail("not a JSON value", path)
         self.at = match.end()
         written = match.group()
-        if match.group(1) is None and match.group(2) is None:
-            if len(written.lstrip("-")) <= _INT_DIGITS:
-                return int(written)
+        integral = match.group(1) is None and match.group(2) is None
+        if integral and len(written.lstrip("-")) <= _INT_DIGITS:
+            return int(written)
         return Decimal(written)  # exact, as written; never a float
 
-    def object(self, path: Path, depth: int) -> dict[str, object]:
+    def members(self, path: Path, depth: int) -> dict[str, object]:
         self.at += 1
         members: dict[str, object] = {}
         self.skip()
@@ -225,9 +225,7 @@ def _parse_yaml(text: str) -> Parsed:
         documents = list(yaml.compose_all(text, Loader=yaml.SafeLoader))
     except yaml.MarkedYAMLError as error:
         mark = error.problem_mark or error.context_mark
-        raise ParseProblem(
-            "invalid YAML", (), None if mark is None else mark.line + 1
-        ) from None
+        raise ParseProblem("invalid YAML", (), None if mark is None else mark.line + 1) from None
     except yaml.YAMLError:
         raise ParseProblem("invalid YAML") from None
     except RecursionError:
@@ -239,7 +237,7 @@ def _parse_yaml(text: str) -> Parsed:
     try:
         data = _yaml_value(documents[0], (), 0, lines, loader)
     finally:
-        loader.dispose()  # type: ignore[no-untyped-call]
+        loader.dispose()
     return Parsed(data, lines)
 
 
@@ -289,8 +287,8 @@ def _yaml_value(
     if node.tag == "tag:yaml.org,2002:int":
         return _yaml_integer(node, path, line, loader)
     try:
-        return loader.construct_object(node)  # type: ignore[no-untyped-call]
-    except (ValueError, OverflowError):
+        return loader.construct_object(node)
+    except ValueError, OverflowError:
         raise ParseProblem("a value that cannot be read", path, line) from None
 
 
@@ -311,7 +309,7 @@ def _yaml_integer(
     if _YAML_INTEGER.fullmatch(node.value) and len(node.value) > _INT_DIGITS:
         return Decimal(node.value.replace("_", ""))  # exact beyond Python's int limit
     try:
-        value: int = loader.construct_object(node)  # type: ignore[no-untyped-call]
-    except (ValueError, OverflowError):
+        value: int = loader.construct_object(node)
+    except ValueError, OverflowError:
         raise ParseProblem("a number that cannot be read", path, line) from None
     return value
