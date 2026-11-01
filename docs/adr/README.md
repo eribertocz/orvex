@@ -14,10 +14,10 @@ Records 0001–0026 were approved by the Owner during the design session of 2026
 | [0006](0006-duckdb-and-ducklake.md) | DuckDB as the only analytical engine; DuckLake as the warehouse | Accepted; superseded in part by 0027 and 0028 |
 | [0007](0007-projects-as-files.md) | Projects as files in Git; module state separate | Accepted |
 | [0008](0008-sql-models-with-yaml-sidecar.md) | Transformation models: pure SQL plus YAML sidecar | Accepted |
-| [0009](0009-apache-ossie-native-format.md) | Apache Ossie as the native semantic format with `ORVEX` extensions | Accepted; pinning amended by 0030 once accepted |
+| [0009](0009-apache-ossie-native-format.md) | Apache Ossie as the native semantic format with `ORVEX` extensions | Accepted; pinning amended by 0030 |
 | [0010](0010-semantic-engine-scope.md) | Semantic engine scope: SEF parity plus S1–S6; normative corpus | Accepted; scope amended by 0029 once accepted |
 | [0011](0011-security-model.md) | Security model: roles, groups, row and column policies, own evaluator | Accepted |
-| [0012](0012-result-cache.md) | Result cache keyed by permission fingerprint, invalidated by runs | Accepted; amended in part by 0027, and by 0030 once accepted |
+| [0012](0012-result-cache.md) | Result cache keyed by permission fingerprint, invalidated by runs | Accepted; amended in part by 0027 and 0030 |
 | [0013](0013-dashboards-as-yaml.md) | Dashboards as YAML validated by JSON Schema | Accepted |
 | [0014](0014-frontend-stack-and-design-system.md) | Frontend stack, design system and own matrix component | Accepted |
 | [0015](0015-traceability.md) | Receipts, OpenLineage, run records and write–audit–publish | Accepted |
@@ -35,4 +35,4 @@ Records 0001–0026 were approved by the Owner during the design session of 2026
 | [0027](0027-two-data-routes.md) | Two data routes: managed DuckLake and Direct Query, one semantic engine | Accepted; superseded in part by 0028 (ClickHouse); Quack: direction only, after v1.0.0 |
 | [0028](0028-clickhouse-by-direct-query-only.md) | ClickHouse by Direct Query only; extraction retired | Accepted |
 | [0029](0029-semantic-engine-scope-s1-s14.md) | Semantic engine scope for v1.0.0: S1–S14 (amends 0010) | Proposed |
-| [0030](0030-ossie-version-evolution.md) | Evolving with Apache Ossie: version registry, staged reading and three identities (amends 0009 and 0012) | Proposed |
+| [0030](0030-ossie-version-evolution.md) | Evolving with Apache Ossie: version registry, staged reading, three identities and the Ossie-first policy (amends 0009 and 0012) | Accepted |

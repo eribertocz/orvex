@@ -1,6 +1,6 @@
 # 0030 — Evolving with Apache Ossie: version registry, staged reading and three identities
 
-**Status:** Proposed (2026-11-01). Owner direction recorded in the conversation of 2026-11-01: plan A1–A4 and B1 approved. The Ossie-first policy (§8) and the separation of conformance and executability (§2) were approved by the Owner on 2026-11-01.
+**Status:** Accepted (2026-11-01). Owner direction recorded in the conversation of 2026-11-01: plan A1–A4 and B1 approved; the Ossie-first policy (§8) and the separation of conformance and executability (§2) approved, and the record accepted, by the Owner on 2026-11-01.
 
 This record amends **ADR-0009** and **ADR-0012**.
 
