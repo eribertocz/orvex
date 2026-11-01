@@ -492,21 +492,41 @@ def test_dialect_selection() -> None:
         )
 
 
-def test_an_expression_only_in_the_product_dialect_is_not_selected() -> None:
-    """Ossie expressions cannot name metrics; an entry under the product's token is kept in
-    the document, never selected by this revision's reader (Owner policy of 2026-11-01)."""
-    model = base()
-    model["metrics"].append(
-        {
-            "name": "twice",
-            "expression": {"dialects": [{"dialect": CURRENT, "expression": "revenue * 2"}]},
-        }
-    )
-    error = failure(as_yaml(model), "yaml", {"sales": "DUCKDB", "customers": "DUCKDB"})
-    assert (error.code, dict(error.details)) == (
-        "UNSUPPORTED_OPERATION",
-        {"operation": "expression_dialect"},
-    )
+def derived(model: Model, declare: bool) -> Model:
+    metric: Model = {
+        "name": "twice",
+        "expression": {"dialects": [{"dialect": CURRENT, "expression": "revenue * 2"}]},
+    }
+    if declare:
+        over = {"expression": "revenue * 2", "align": {"grain": ["region"], "time": "month"}}
+        put(metric, {"version": 1, "element": "metric", "over_metrics": over})
+    model["metrics"].append(metric)
+    return model
+
+
+def test_the_product_dialect_needs_an_explicit_derived_declaration() -> None:
+    """Ossie expressions cannot name metrics. An expression over metrics is read only as the
+    product's explicit construct (`over_metrics` or `window` plus the product's dialect token),
+    never by reinterpreting a standard expression (Owner policy of 2026-11-01)."""
+    for form in ("yaml", "json"):
+        model = derived(base(), declare=False)
+        content = as_yaml(model) if form == "yaml" else as_json(model)
+        (problem,) = problems(failure(content, form))
+        assert (problem["rule"], problem["pointer"]) == (
+            "extension",
+            "/metrics/1/expression/dialects/0/dialect",
+        )
+        model = derived(base(), declare=True)
+        content = as_yaml(model) if form == "yaml" else as_json(model)
+        (selected,) = [e for e in load(content, form).expressions if e.element == "/metrics/1"]
+        assert (selected.dialect, selected.text) == (CURRENT, "revenue * 2")
+
+
+def test_a_declared_derived_metric_still_cannot_name_metrics_in_ossie_sql() -> None:
+    model = derived(base(), declare=True)
+    model["metrics"][1]["expression"] = {"sql": "revenue * 2"}
+    (problem,) = problems(failure(as_yaml(model), "yaml"))
+    assert (problem["rule"], problem["pointer"]) == ("reference", "/metrics/1/expression/sql")
 
 
 # --- temporal relationships (Owner decision of 2026-11-01, CASE-013) ---------------------------

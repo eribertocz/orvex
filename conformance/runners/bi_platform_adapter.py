@@ -339,11 +339,20 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
         for metric in metrics:
             metric_data = _own(metric)
             if metric_data is not None:
-                put(
-                    metric,
-                    "metric",
-                    _translate_metric(metric, metric_data, time_dimensions, bridge_datasets),
-                )
+                members = _translate_metric(metric, metric_data, time_dimensions, bridge_datasets)
+                if "over_metrics" in members:
+                    # An expression over metrics is no Ossie expression (spec L424): it moves,
+                    # text unchanged, under the product's dialect token, which the declared
+                    # `over_metrics` makes explicit (ossie-extensions v1 README).
+                    metric["expression"] = {
+                        "dialects": [
+                            {
+                                "dialect": vendor_name,
+                                "expression": members["over_metrics"]["expression"],
+                            }
+                        ]
+                    }
+                put(metric, "metric", members)
 
     def replace(node: object) -> None:
         if isinstance(node, dict):

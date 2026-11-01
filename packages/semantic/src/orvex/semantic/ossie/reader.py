@@ -628,7 +628,13 @@ def _dialects(
     index: _Index,
     problems: _Problems,
     engines: Mapping[str, str],
+    vendor_names: Sequence[str],
+    derived: frozenset[str],
 ) -> list[SelectedExpression]:
+    """Two entries for one dialect are `schema`. An entry under the product's own token is a
+    product construct, so it is explicit only on a metric whose product entry declares a derived
+    form (`over_metrics` or `window`, ossie-extensions v1); anywhere else it is `extension`, never
+    read silently (Owner policy of 2026-11-01). Then one expression is selected per member."""
     members: list[tuple[Path, Json, str | None]] = []
     shared = {engines.get(normalize(d["name"])) for d in _list(document, "datasets")}
     for at, dataset in enumerate(_list(document, "datasets")):
@@ -647,23 +653,31 @@ def _dialects(
     for path, member, _ in members:
         seen: set[str] = set()
         for at, entry in enumerate(_list(member["expression"], "dialects")):
+            at_dialect: Path = (*path, "expression", "dialects", at, "dialect")
             if entry["dialect"] in seen:
-                problems.add((*path, "expression", "dialects", at, "dialect"), "schema")
+                problems.add(at_dialect, "schema")
             seen.add(entry["dialect"])
+            if entry["dialect"] in vendor_names and _pointer(path) not in derived:
+                problems.add(at_dialect, "extension")
     problems.raise_if_any()
     selected: list[SelectedExpression] = []
     for path, member, engine in members:
-        choice = _select(member["expression"], path, (PORTABLE, engine))
+        product = vendor_names if _pointer(path) in derived else ()
+        choice = _select(member["expression"], path, (PORTABLE, *product, engine))
         if choice is None:
             raise SemanticError("UNSUPPORTED_OPERATION", {"operation": NO_DIALECT})
         selected.append(choice)
     return selected
 
 
+def _pointer(path: Path) -> str:
+    return "".join("/" + _escape(part) for part in path)
+
+
 def _select(expression: Json, path: Path, order: Sequence[str | None]) -> SelectedExpression | None:
-    """`sql` first; else the dialect entries in `order`: OSSIE_SQL_2026, then the dataset's
-    engine token (#278 step 7). Any other entry, the product's own token included, is kept in
-    the document and never selected here."""
+    """`sql` first; else the dialect entries in `order`: OSSIE_SQL_2026 (a portable form always
+    wins), the product's token on a declared derived metric, then the dataset's engine token.
+    Any other entry is kept in the document and never selected here."""
     element = "".join("/" + _escape(part) for part in path)
     if "sql" in expression:
         return SelectedExpression(element, f"{element}/expression/sql", PORTABLE, expression["sql"])
@@ -708,7 +722,12 @@ def read(
     index = _Index.of(document)
     _references(document, index, problems, vendor_names)
     found = _extensions(document, index, problems, vendor_names)
-    selected = _dialects(document, index, problems, engines_by_name)
+    derived = frozenset(
+        extension.pointer.rsplit("/custom_extensions/", 1)[0]
+        for extension in found.product
+        if "over_metrics" in extension.payload or "window" in extension.payload
+    )
+    selected = _dialects(document, index, problems, engines_by_name, vendor_names, derived)
     return OssieModel(
         path=path,
         format=written,

@@ -8,6 +8,17 @@ three ways against the pinned revision (`c721ffc`, Owner policy of 2026-11-01):
 - **Future** (4): a metric expression names another metric, which this revision does not support
   ("a metric expression that refers to another metric", spec L692-L699; L424). They are refused
   with `reference` at that expression, unchanged, until a revision specifies derived metrics.
+  The product's explicit construct for them is a derived metric (ossie-extensions v1:
+  `over_metrics` or `window`, with the expression under the product's dialect token):
+  - CASE-010: `over_metrics`, aligned on the grain bi-platform declares. The conformance
+    adapter's translation writes it explicitly, so the translated model loads.
+  - CASE-009: `over_metrics` (`gross_revenue - refunds`, the contract's own example) needs a
+    declared alignment that the corpus does not give.
+  - CASE-006: a ratio of two metrics of one dataset. It has a standard form,
+    `CAST(SUM(orders.amount) / COUNT(orders.order_id) AS DECIMAL(18, 2))`, but the original
+    is kept, never substituted. As a product construct it needs a declared alignment too.
+  - CASE-021: `window` (`running_total` of `daily_revenue` by `date`), not declared in the
+    corpus.
 - **CASE-013**: a valid Ossie document (the official validator only warns when `to_columns`
   cover no key of `to`) that the product refuses, because `from` is the many side only if `to` is
   unique. It loads only with the product's own as-of declaration, a product capability that is
@@ -35,6 +46,8 @@ _PRODUCT = tomllib.loads((ROOT / "identity.toml").read_text("utf-8"))["product"]
 VENDORS = (_PRODUCT["ossie_vendor_name"], *_PRODUCT["previous_vendor_names"])
 
 # Case -> the metric expression that names another metric.
+# Translated by the adapter into an explicit product construct.
+EXPLICIT_EXTENSION = {"CASE-010"}
 FUTURE = {
     "CASE-006": "/metrics/2/expression/dialects/0/expression",
     "CASE-009": "/metrics/2/expression/dialects/0/expression",
@@ -130,10 +143,10 @@ def test_case_013_is_refused_as_written_and_loads_with_the_product_declaration()
 
 
 @pytest.mark.parametrize("path", MODELS, ids=lambda path: path.stem)
-def test_translated_models_follow_the_same_split(path: Path) -> None:
+def test_translated_models_follow_the_split_except_explicit_extensions(path: Path) -> None:
     translated, _ = adapter.translate(raw(path), VENDORS[0])
     content = json.dumps(translated).encode()
-    if path.stem in FUTURE:
+    if path.stem in FUTURE and path.stem not in EXPLICIT_EXTENSION:
         with pytest.raises(SemanticError) as caught:
             read(content, f"semantic/{path.stem}.ossie.json", VENDORS)
         (problem,) = cast(list[dict[str, str]], caught.value.details["problems"])
@@ -142,3 +155,8 @@ def test_translated_models_follow_the_same_split(path: Path) -> None:
     result = read(content, f"semantic/{path.stem}.ossie.json", VENDORS)
     assert result.foreign_extensions == ()
     assert result.product_extensions
+    if path.stem in EXPLICIT_EXTENSION:
+        (derived,) = [
+            e for e in result.expressions if e.element == FUTURE[path.stem].split("/expression")[0]
+        ]
+        assert derived.dialect == VENDORS[0]
