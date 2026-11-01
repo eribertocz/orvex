@@ -67,7 +67,15 @@ def test_ossie_pin() -> None:
     schema = json.loads((ROOT / OSSIE / "ossie-schema.json").read_text("utf-8"))
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert schema["properties"]["version"]["const"] == pin["specification_version"] == "0.2.0.dev0"
-    assert sorted(pin["sha256"]) == ["LICENSE", "NOTICE", "ossie-schema.json"]
+    assert sorted(pin["sha256"]) == [
+        "LICENSE",
+        "NOTICE",
+        "dialects.md",
+        "expression_language.md",
+        "ossie-schema.json",
+        "spec.md",
+        "vendors.md",
+    ]
     assert check_vendored(ROOT / OSSIE) == []
 
 

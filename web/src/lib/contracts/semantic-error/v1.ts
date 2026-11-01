@@ -892,7 +892,15 @@ export interface Problem {
 	 */
 	pointer: string;
 	line: Count;
-	rule: 'syntax' | 'schema' | 'duplicate_name' | 'reference' | 'extension' | 'extension_duplicate';
+	rule:
+		| 'syntax'
+		| 'schema'
+		| 'duplicate_name'
+		| 'reference'
+		| 'extension'
+		| 'extension_duplicate'
+		| 'extension_conflict'
+		| 'unsupported_capability';
 }
 /**
  * OSSIE_INVALID as any other audience sees it: the generic message and public details only.

@@ -74,6 +74,8 @@ class Problem(BaseModel):
         "reference",
         "extension",
         "extension_duplicate",
+        "extension_conflict",
+        "unsupported_capability",
     ]
 
 
