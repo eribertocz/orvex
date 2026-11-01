@@ -2977,8 +2977,7 @@
       "additionalProperties": false,
       "required": [
         "budget",
-        "limit",
-        "estimate"
+        "limit"
       ],
       "properties": {
         "budget": {

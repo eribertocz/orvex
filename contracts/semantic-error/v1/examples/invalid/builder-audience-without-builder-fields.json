@@ -1,13 +1,13 @@
 {
   "kind": "semantic_error",
-  "code": "QUERY_BUDGET_EXCEEDED",
+  "code": "EVIDENCE_VIOLATED",
   "severity": "error",
-  "category": "budget",
+  "category": "correctness",
   "audience": "builder",
-  "message": "The query exceeds the rows_scanned budget (37); add a filter or a coarser level.",
+  "message": "The data of sales.amount breaks what is declared (unique); the query does not run.",
   "locale": "en",
   "details": {
-    "budget": "rows_scanned",
-    "limit": "37"
+    "dataset": "sales.amount",
+    "evidence": "unique"
   }
 }

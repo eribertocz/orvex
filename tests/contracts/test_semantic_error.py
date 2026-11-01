@@ -91,7 +91,15 @@ def test_each_code_has_severity_category_details_disclosure_and_both_templates(c
         builder_view = variant["properties"]["audience"] != {"const": "other"}
         expected = set(entry["details"]) if builder_view else public_fields
         assert set(details["properties"]) == expected
-        assert set(details["required"]) == expected
+        assert set(details["required"]) == expected - set(entry["optional"])
+    assert set(entry["optional"]) <= builder_fields, "only a builder field may be optional"
+
+
+def test_only_the_budget_estimate_is_optional() -> None:
+    # #238 rule 12: left out when the query reads a dataset with a row policy.
+    assert {code: e["optional"] for code, e in CODES.items() if e["optional"]} == {
+        "QUERY_BUDGET_EXCEEDED": ["estimate"]
+    }
 
 
 def test_severity_is_error_except_the_warning_and_the_notice() -> None:

@@ -183,3 +183,14 @@ def test_a_look_alike_of_the_builder_audience_gets_the_other_view() -> None:
 def test_an_invalid_detail_is_named_in_a_short_message() -> None:
     with pytest.raises(ValueError, match=r"^MEMBER_MASKED: invalid details \['operation'\]$"):
         SemanticError("MEMBER_MASKED", {"member": "m", "operation": "peek"})
+
+
+def test_an_estimate_left_out_for_a_row_policy_gives_the_generic_text_to_everyone() -> None:
+    error = SemanticError("QUERY_BUDGET_EXCEEDED", {"budget": "rows_scanned", "limit": "1000000"})
+    builder = error.to_message("en", "builder").root
+    assert builder.details.model_dump(exclude_none=True) == {
+        "budget": "rows_scanned",
+        "limit": "1000000",
+    }
+    assert builder.message == error.to_message("en").root.message
+    assert "estimate" not in builder.message

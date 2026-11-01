@@ -1536,7 +1536,7 @@ class QueryBudgetExceededDetails(BaseModel):
     )
     budget: Literal["rows_scanned", "result_rows", "matrix_cells", "time_ms", "memory_bytes"]
     limit: Count
-    estimate: Count
+    estimate: Count | None = None
 
 
 class QueryBudgetExceededPublicDetails(BaseModel):

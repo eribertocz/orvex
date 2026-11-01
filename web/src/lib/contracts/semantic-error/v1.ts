@@ -1011,7 +1011,7 @@ export interface QueryBudgetExceededError {
 export interface QueryBudgetExceededDetails {
 	budget: 'rows_scanned' | 'result_rows' | 'matrix_cells' | 'time_ms' | 'memory_bytes';
 	limit: Count;
-	estimate: Count;
+	estimate?: Count;
 }
 /**
  * QUERY_BUDGET_EXCEEDED as any other audience sees it: the generic message and public details only.

@@ -9,7 +9,7 @@ Every rejection, warning or notice of the semantic engine (`docs/architecture/se
 | File | Holds |
 |---|---|
 | `schema.json` | The message: one closed variant per code and audience (below) |
-| `codes.json` | Per code: `severity`, `category` and, per detail field, its disclosure (`public` or `builder`) |
+| `codes.json` | Per code: `severity`, `category`, per detail field its disclosure (`public` or `builder`), and the fields a raise site may leave out (`optional`) |
 | `messages/es.json`, `messages/en.json` | Per code: a `generic` and a `builder` template |
 | `examples/` | A builder view of every code, an `other` view of every code with builder details, and one invalid example per rule |
 
@@ -20,7 +20,7 @@ Every rejection, warning or notice of the semantic engine (`docs/architecture/se
 `kind` (`semantic_error`), `code`, `severity`, `category`, `audience`, `message`, `locale` (`es` or `en`) and `details`, all required; nothing else is allowed.
 
 - **Severity and category are fixed per code.** Severity is `error`, except `DEPRECATED_METRIC` (`warning`) and `POLICY_ATTRIBUTE_MISSING` (`notice`: the result has zero rows for that policy). The category (`model`, `query`, `correctness`, `security`, `budget`, `engine`) lets an answerability check report a rejection before execution (#239).
-- **Details are a closed object per code**, every field required. Exact numbers (counts, limits, estimates, lines) are decimal text without leading zeros. A detail holds names from the model or the query, enumerated values, counts and versions: never a data value, a secret or SQL.
+- **Details are a closed object per code**, every field required except those `codes.json` lists as `optional`. Exact numbers (counts, limits, estimates, lines) are decimal text without leading zeros. A detail holds names from the model or the query, enumerated values, counts and versions: never a data value, a secret or SQL.
 - **Wording is not stable meaning.** A template may be reworded; the code, severity, category and details are the contract.
 
 ## Disclosure (#238 rule 12)
@@ -32,10 +32,12 @@ Each detail field is `public` or `builder` (`codes.json`).
 - The schema enforces the pairing: a code with builder fields has two variants, one with `audience: builder` and every field, one with `audience: other` and only the public fields. So an `other` message that carries a builder field, or a builder message that lacks one, is invalid.
 - The audience decides only how much of the **error's explanation** is shown. It is never a data permission: a builder sees no data value, member or row that its own data policies hide. No administrative role is a builder audience by itself; administrative and data permissions are independent (Owner, 2026-11-01). Roles arrive with `security-context` (P2-09, P3); until then the audience is a parameter.
 - **A public field names only what the caller may see.** A public name (a member, dataset, dimension or element) is always one the caller referenced or one visible to the caller. When the member at fault is not visible to the caller (a hidden base metric under a visible derived one, say), the raise site names the visible member the caller referenced, never the hidden one: a hidden member is never confirmed to exist (security.md §3.3). Every raise site (P2-03 onward) tests this.
+- **Estimates and row policies (#238 rule 12).** `QUERY_BUDGET_EXCEEDED.estimate` is the only optional field. An estimate made from a whole table's statistics would reveal the size of rows a row policy hides, so a raise site leaves it out whenever the query reads a dataset with a row policy, for every audience: row policies bind builders too (Owner, 2026-11-01). The builder message then falls back to the generic template.
 - `MEMBER_NOT_FOUND` names only what the caller wrote, so a hidden member and a missing one give the same message. `MEMBER_MASKED` and `POLICY_ATTRIBUTE_MISSING` carry no builder field: their builder message reveals nothing a policy hides.
 
 ## Messages
 
+- A builder template that names an optional field left out falls back to the generic template.
 - Templates use `{field}` placeholders, which must be detail fields of the code; a `generic` template uses public fields only.
 - Rendering: text as it is; a list of names joined with `, `; a list of objects (`OSSIE_INVALID.problems`) as its count. A value is inserted as text and never read as a template.
 - Locale: `es` by default; `en` on request; any other locale (or only its primary subtag, `en-US` → `en`) renders `es`, and `locale` reports the language actually used.
@@ -74,7 +76,7 @@ Each detail field is `public` or `builder` (`codes.json`).
 | `PARAMETER_INVALID` | error | query | `parameter`, `expected` |
 | `POLICY_ATTRIBUTE_MISSING` | notice | security | `policy` |
 | `POLICY_NOT_SUPPORTED_ON_ENGINE` | error | security | `dataset`, `policy` (builder), `reason` (builder) |
-| `QUERY_BUDGET_EXCEEDED` | error | budget | `budget`, `limit`, `estimate` (builder) |
+| `QUERY_BUDGET_EXCEEDED` | error | budget | `budget`, `limit`, `estimate` (builder, optional) |
 | `REAGGREGATION_NOT_ALLOWED` | error | correctness | `metric`, `class` |
 | `TEMPORAL_MATCH_NOT_UNIQUE` | error | correctness | `relationship` (builder), `violations` (builder) |
 | `UNSUPPORTED_OPERATION` | error | engine | `operation` |

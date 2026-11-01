@@ -6,14 +6,16 @@
       "from": "public",
       "to": "public",
       "roles": "builder"
-    }
+    },
+    "optional": []
   },
   "AS_KNOWN_AT_UNSUPPORTED": {
     "severity": "error",
     "category": "query",
     "details": {
       "dataset": "public"
-    }
+    },
+    "optional": []
   },
   "BRIDGE_WEIGHTS_INVALID": {
     "severity": "error",
@@ -21,21 +23,24 @@
     "details": {
       "bridge": "public",
       "groups": "builder"
-    }
+    },
+    "optional": []
   },
   "CONTEXT_CONFLICT": {
     "severity": "error",
     "category": "query",
     "details": {
       "scopes": "builder"
-    }
+    },
+    "optional": []
   },
   "COVERAGE_POLICY_REQUIRED": {
     "severity": "error",
     "category": "correctness",
     "details": {
       "dimension": "public"
-    }
+    },
+    "optional": []
   },
   "CROSS_ENGINE_QUERY": {
     "severity": "error",
@@ -43,21 +48,24 @@
     "details": {
       "datasets": "public",
       "engines": "builder"
-    }
+    },
+    "optional": []
   },
   "DEPRECATED_METRIC": {
     "severity": "warning",
     "category": "model",
     "details": {
       "metric": "public"
-    }
+    },
+    "optional": []
   },
   "DIVISION_POLICY_VIOLATION": {
     "severity": "error",
     "category": "correctness",
     "details": {
       "metric": "public"
-    }
+    },
+    "optional": []
   },
   "ENGINE_VERSION_UNTESTED": {
     "severity": "error",
@@ -66,7 +74,8 @@
       "engine": "public",
       "found": "builder",
       "tested": "builder"
-    }
+    },
+    "optional": []
   },
   "EVIDENCE_VIOLATED": {
     "severity": "error",
@@ -76,7 +85,8 @@
       "evidence": "public",
       "fields": "builder",
       "violations": "builder"
-    }
+    },
+    "optional": []
   },
   "FANOUT_NOT_ISOLATABLE": {
     "severity": "error",
@@ -84,14 +94,16 @@
     "details": {
       "metric": "public",
       "relationship": "builder"
-    }
+    },
+    "optional": []
   },
   "FILTER_CYCLE": {
     "severity": "error",
     "category": "query",
     "details": {
       "filters": "builder"
-    }
+    },
+    "optional": []
   },
   "ILLEGAL_GRAIN_TRANSITION": {
     "severity": "error",
@@ -99,7 +111,8 @@
     "details": {
       "metric": "public",
       "grain": "builder"
-    }
+    },
+    "optional": []
   },
   "ILLEGAL_TEMPORAL_REAGGREGATION": {
     "severity": "error",
@@ -107,14 +120,16 @@
     "details": {
       "metric": "public",
       "axis": "builder"
-    }
+    },
+    "optional": []
   },
   "INCOMPATIBLE_UNITS": {
     "severity": "error",
     "category": "correctness",
     "details": {
       "units": "public"
-    }
+    },
+    "optional": []
   },
   "MATRIX_TOO_WIDE": {
     "severity": "error",
@@ -123,7 +138,8 @@
       "limit": "public",
       "maximum": "public",
       "requested": "builder"
-    }
+    },
+    "optional": []
   },
   "MEMBER_MASKED": {
     "severity": "error",
@@ -131,14 +147,16 @@
     "details": {
       "member": "public",
       "operation": "public"
-    }
+    },
+    "optional": []
   },
   "MEMBER_NOT_FOUND": {
     "severity": "error",
     "category": "query",
     "details": {
       "member": "public"
-    }
+    },
+    "optional": []
   },
   "METRIC_ALIGNMENT_AMBIGUOUS": {
     "severity": "error",
@@ -146,14 +164,16 @@
     "details": {
       "metric": "public",
       "missing": "public"
-    }
+    },
+    "optional": []
   },
   "METRIC_CYCLE": {
     "severity": "error",
     "category": "model",
     "details": {
       "cycle": "builder"
-    }
+    },
+    "optional": []
   },
   "METRIC_IN_USE": {
     "severity": "error",
@@ -161,21 +181,24 @@
     "details": {
       "metric": "public",
       "dependents": "builder"
-    }
+    },
+    "optional": []
   },
   "MISSING_ADDITIVITY_DECLARATION": {
     "severity": "error",
     "category": "model",
     "details": {
       "metric": "public"
-    }
+    },
+    "optional": []
   },
   "MISSING_CARDINALITY_DECLARATION": {
     "severity": "error",
     "category": "model",
     "details": {
       "relationship": "builder"
-    }
+    },
+    "optional": []
   },
   "MISSING_EXTENSION_DECLARATION": {
     "severity": "error",
@@ -184,7 +207,8 @@
       "element": "public",
       "name": "public",
       "declaration": "public"
-    }
+    },
+    "optional": []
   },
   "NO_RELATIONSHIP_PATH": {
     "severity": "error",
@@ -192,7 +216,8 @@
     "details": {
       "from": "public",
       "to": "public"
-    }
+    },
+    "optional": []
   },
   "OSSIE_INVALID": {
     "severity": "error",
@@ -201,7 +226,8 @@
       "file": "public",
       "problems": "builder",
       "problems_omitted": "builder"
-    }
+    },
+    "optional": []
   },
   "PARAMETER_INVALID": {
     "severity": "error",
@@ -209,14 +235,16 @@
     "details": {
       "parameter": "public",
       "expected": "public"
-    }
+    },
+    "optional": []
   },
   "POLICY_ATTRIBUTE_MISSING": {
     "severity": "notice",
     "category": "security",
     "details": {
       "policy": "public"
-    }
+    },
+    "optional": []
   },
   "POLICY_NOT_SUPPORTED_ON_ENGINE": {
     "severity": "error",
@@ -225,7 +253,8 @@
       "dataset": "public",
       "policy": "builder",
       "reason": "builder"
-    }
+    },
+    "optional": []
   },
   "QUERY_BUDGET_EXCEEDED": {
     "severity": "error",
@@ -234,7 +263,10 @@
       "budget": "public",
       "limit": "public",
       "estimate": "builder"
-    }
+    },
+    "optional": [
+      "estimate"
+    ]
   },
   "REAGGREGATION_NOT_ALLOWED": {
     "severity": "error",
@@ -242,7 +274,8 @@
     "details": {
       "metric": "public",
       "class": "public"
-    }
+    },
+    "optional": []
   },
   "TEMPORAL_MATCH_NOT_UNIQUE": {
     "severity": "error",
@@ -250,14 +283,16 @@
     "details": {
       "relationship": "builder",
       "violations": "builder"
-    }
+    },
+    "optional": []
   },
   "UNSUPPORTED_OPERATION": {
     "severity": "error",
     "category": "engine",
     "details": {
       "operation": "public"
-    }
+    },
+    "optional": []
   },
   "UNSUPPORTED_OSSIE_VERSION": {
     "severity": "error",
@@ -265,7 +300,8 @@
     "details": {
       "found": "public",
       "supported": "public"
-    }
+    },
+    "optional": []
   },
   "WINDOW_UNDEFINED_AT_TOTAL": {
     "severity": "error",
@@ -273,6 +309,7 @@
     "details": {
       "metric": "public",
       "level": "public"
-    }
+    },
+    "optional": []
   }
 }

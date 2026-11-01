@@ -50,6 +50,10 @@ def _shown(value: object) -> str:
     return str(value)
 
 
+def _placeholders(template: str) -> set[str]:
+    return {field for _, field, _, _ in string.Formatter().parse(template) if field is not None}
+
+
 def _render(template: str, details: Mapping[str, object]) -> str:
     # Only the template is parsed: a value is inserted as text, never read as a template.
     parts = []
@@ -68,12 +72,14 @@ class SemanticError(Exception):
         entry = codes.get(code)
         if entry is None:
             raise ValueError(f"unknown semantic error code {code!r}")
-        expected = set(entry["details"])
+        allowed = set(entry["details"])
+        required = allowed - set(entry["optional"])
         given = set(details)
-        if given != expected:
+        if not required <= given <= allowed:
             raise ValueError(
-                f"{code}: details must be exactly {sorted(expected)}; "
-                f"missing {sorted(expected - given)}, extra {sorted(given - expected)}"
+                f"{code}: details must be {sorted(required)}, "
+                f"optionally {sorted(entry['optional'])}; "
+                f"missing {sorted(required - given)}, extra {sorted(given - allowed)}"
             )
         super().__init__(code)
         self.code = code
@@ -115,7 +121,10 @@ class SemanticError(Exception):
             for name, value in self.details.items()
             if view == "builder" or disclosure[name] == "public"
         }
-        template = messages[language][self.code]["builder" if view == "builder" else "generic"]
+        templates = messages[language][self.code]
+        template = templates["builder" if view == "builder" else "generic"]
+        if not _placeholders(template) <= set(shown):
+            template = templates["generic"]  # an optional detail was left out
         return SemanticErrorMessage.model_validate(
             {
                 "kind": "semantic_error",
