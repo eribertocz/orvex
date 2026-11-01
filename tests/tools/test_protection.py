@@ -107,6 +107,11 @@ def test_classic_checks_with_enforcement_off_do_not_count() -> None:
         {BRANCH: branch(False), RULES: protection.ProtectionError("500")},
         {BRANCH: branch(False), RULES: [status_rule(1)]},  # the ruleset itself is unreadable
         {BRANCH: branch(False), RULES: {"message": "Not Found"}},
+        # Protected, but the protection is not reported: never read as "none".
+        {BRANCH: {"protected": True}, RULES: []},
+        {BRANCH: {"protected": True, "protection": {"enabled": True}}, RULES: []},
+        # More rules than one page holds.
+        {BRANCH: branch(False), RULES: [{"type": "deletion", "ruleset_id": 1}] * 100},
     ],
 )
 def test_a_source_that_cannot_be_read_fails_closed(broken: dict[str, Any]) -> None:

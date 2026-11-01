@@ -14,7 +14,8 @@
 #   the drift test refuses every way such a job could be skipped, and tools/ci/protection.py
 #   compares the required names with main's rulesets and branch protection. `conditions` lists
 #   step conditions allowed in a required job or a job it needs, each with its reason;
-#   `permissions` lists a job's permissions when they are not read-only.
+#   `permissions` lists a job's permissions when they are not read-only; `reports` lists the
+#   trailing steps that run only on a failure (`if: failure()`) and check nothing.
 #   A check job also records `digest`, a digest of the whole job in its workflow: when the job
 #   changes in any way, the drift test fails until its entries here are compared with it again
 #   and the digest updated (`python -m tools.ci.checks` prints the new one).
@@ -152,8 +153,9 @@ setup = [
   "python -m pip install --quiet pip==26.2.2",
   'dir="$RUNNER_TEMP/postgres-tls"',
   "docker run --detach --name azurite --publish 10000:10000 \\",
-  "python -m tools.ci.junit_annotations junit.xml",
 ]
+# Trailing steps that run only on a failure and check nothing (#267).
+reports = ["python -m tools.ci.junit_annotations junit.xml"]
 [[job.check]]
 # Locally: the whole suite on each Python of the matrix, in one part. Tests that need the
 # PostgreSQL, ClickHouse or Azurite services CI starts are reported as not run, by reason.

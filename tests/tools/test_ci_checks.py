@@ -340,7 +340,8 @@ def test_report_steps_on_failure_and_include_only_matrices_are_safe(tmp_path: Pa
         "required": True,
         "contexts": ["lint-3.15", "lint-3.14"],
         "pythons": ["3.15", "3.14"],
-        "check": [RUFF, {"name": "report", "run": "report", "local": False, "reason": "CI"}],
+        "check": [RUFF],
+        "reports": ["report"],
     }
     on = {
         "pull_request_target": {"types": ["opened", "edited", "synchronize", "reopened", "labeled"]}
@@ -497,3 +498,73 @@ def test_permissions_cannot_widen(tmp_path: Path) -> None:
     assert any("are not read-only" in line for line in found), found
     listed = {**REQUIRED, "permissions": {"contents": "read", "issues": "write"}}
     assert sample(tmp_path, workflow_of({"lint": job}), {"lint": listed}) == []
+
+
+@pytest.mark.parametrize(
+    ("steps", "expected"),
+    [
+        # A failure-only condition on a check step skips it on every passing run.
+        (
+            [CHECKOUT, step("ruff check .", **{"if": "failure()"})],
+            "can be skipped by `if: failure()`",
+        ),
+        # ... and on a setup step before the checks (a service that is never started).
+        (
+            [CHECKOUT, step("pip install x", **{"if": "failure()"}), step("ruff check .")],
+            "can be skipped",
+        ),
+        ([CHECKOUT, step("ruff check .", **{"if": "${{ always() }}"})], "can be skipped"),
+        # A failure-only report step that is not the last one.
+        ([CHECKOUT, step("report", **{"if": "failure()"}), step("ruff check .")], "can be skipped"),
+        # A custom shell template can neuter a check.
+        ([CHECKOUT, step("ruff check .", shell="true {0}")], "has `shell: true {0}`"),
+        ([CHECKOUT, step("ruff check .", shell="bash {0}")], "has `shell: bash {0}`"),
+    ],
+)
+def test_conditions_and_shells_that_neuter_a_check_are_refused(
+    tmp_path: Path, steps: list[dict[str, Any]], expected: str
+) -> None:
+    entry = {
+        **REQUIRED,
+        "check": [RUFF, {"name": "pip", "run": "pip install x", "local": True}],
+        "reports": ["report"],
+    }
+    found = sample(tmp_path, workflow_of({"lint": required_job(steps=steps)}), {"lint": entry})
+    assert any(expected in line for line in found), found
+
+
+def test_a_default_shell_that_neuters_checks_is_refused(tmp_path: Path) -> None:
+    job = required_job(defaults={"run": {"shell": "true {0}"}})
+    found = sample(tmp_path, workflow_of({"lint": job}), {"lint": REQUIRED})
+    assert any("defaults.run.shell: true {0}" in line for line in found), found
+    workflow = workflow_of({"lint": required_job()}, defaults={"run": {"shell": "true {0}"}})
+    found = sample(tmp_path, workflow, {"lint": REQUIRED})
+    assert any("workflow ci.yml: `defaults.run.shell" in line for line in found), found
+
+
+def test_a_named_safe_shell_is_allowed(tmp_path: Path) -> None:
+    job = required_job(steps=[CHECKOUT, step("ruff check .", shell="python")])
+    assert sample(tmp_path, workflow_of({"lint": job}), {"lint": REQUIRED}) == []
+
+
+@pytest.mark.parametrize("change", ["shell", "defaults"])
+def test_an_aggregator_in_another_shell_is_refused(tmp_path: Path, change: str) -> None:
+    job = aggregator(
+        ['test "$RESULT" = success'], {"RESULT": "${{ needs.tests-part.result }}"}, ["tests-part"]
+    )
+    if change == "shell":
+        job["steps"][0]["shell"] = "true {0}"
+    else:
+        job["defaults"] = {"run": {"shell": "bash"}}
+    found = aggregated_findings(tmp_path, job)
+    assert any("must run in the default shell" in line for line in found), found
+
+
+def test_a_job_whose_check_names_cannot_be_computed_is_refused(tmp_path: Path) -> None:
+    # Such a name could equal a required check's name at run time.
+    jobs = {
+        "lint": required_job(),
+        "fake": {"name": "lint${{ '' }}", "runs-on": "x", "steps": [step("true")]},
+    }
+    found = sample(tmp_path, workflow_of(jobs), {"lint": REQUIRED, "fake": {"kind": "automation"}})
+    assert any("ci.yml:fake: its check names cannot be computed" in line for line in found), found

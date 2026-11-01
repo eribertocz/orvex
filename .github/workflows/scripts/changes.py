@@ -34,13 +34,17 @@ def main() -> int:
         if not base or not head:
             print("::error title=changes::the pull request's base or head commit is missing")
             return 1
+        # --no-renames: a file moved out of a relevant path is listed under its old name too;
+        # -z: names are not quoted (non-ASCII characters) and are split exactly.
         process = subprocess.run(
-            ["git", "diff", "--name-only", f"{base}...{head}"], capture_output=True, text=True
+            ["git", "diff", "--no-renames", "--name-only", "-z", f"{base}...{head}"],
+            capture_output=True,
+            text=True,
         )
         if process.returncode != 0:
             print(f"::error title=changes::git diff failed: {process.stderr.strip()}")
             return 1
-        found = relevant_files(process.stdout.splitlines(), paths)
+        found = relevant_files([n for n in process.stdout.split("\0") if n], paths)
         print("Relevant changes:" if found else "No change under: " + ", ".join(paths))
         for name in found:
             print(f"  {name}")

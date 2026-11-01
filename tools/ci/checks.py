@@ -27,8 +27,13 @@ PULL_REQUEST_EVENTS = ("pull_request", "pull_request_target")
 # A required check must run on every update of a pull request.
 PULL_REQUEST_TYPES = frozenset({"opened", "synchronize", "reopened"})
 TRIGGER_FILTERS = ("paths", "paths-ignore", "branches", "branches-ignore")
-# Step conditions that never skip a step on a run that can fail: they only add runs.
-SAFE_STEP_CONDITIONS = frozenset({"failure()", "always()"})
+# `always()` only adds runs. `failure()` skips a step on a passing run, so it is allowed only on
+# the trailing steps of a job, after every other step (reporting a failure).
+ALWAYS = "always()"
+ON_FAILURE = "failure()"
+# Shells GitHub runs failing on the first error (bash with -eo pipefail); a custom template
+# such as `bash {0}` or `true {0}` can neuter a check, so it is refused in a protected job.
+SAFE_SHELLS = frozenset({"bash", "sh", "python"})
 SCOPED_CONDITION = "needs.changes.outputs.relevant == 'true'"
 AGGREGATE = "python3 .github/workflows/scripts/aggregate.py"
 CHANGES = "changes"
@@ -129,7 +134,14 @@ def drift(root: Path = REPOSITORY_ROOT) -> list[str]:
             found.extend(_job_drift(label, listed[key], body, scoped=scoped))
         found.extend(_skips(path.name, workflow, events, listed))
         for name, body in workflow.get("jobs", {}).items():
-            for context in _contexts(body, name) or []:
+            names = _contexts(body, name)
+            if names is None:
+                # A name with any other expression could equal a required check's name.
+                found.append(
+                    f"job {path.name}:{name}: its check names cannot be computed; use a literal "
+                    "name or one built from matrix values only"
+                )
+            for context in names or []:
                 producers.setdefault(context, []).append(f"{path.name}:{name}")
     for workflow_name, job_name in sorted(set(listed) - seen):
         found.append(f"job {workflow_name}:{job_name} is listed but not in the workflows")
@@ -186,6 +198,8 @@ def _aggregator(body: dict[str, Any], jobs: dict[str, Any], listed: dict[str, An
         "if" in step or "continue-on-error" in step for step in body.get("steps", [])
     ):
         return "an aggregator's steps must run unconditionally"
+    if "defaults" in body or any("shell" in step for step in runs):
+        return "an aggregator's steps must run in the default shell"
     if len(runs) == 1 and str(runs[0]["run"]).strip() == AGGREGATE:
         env = runs[0].get("env", {})
         scoped = needs - {CHANGES}
@@ -290,6 +304,11 @@ def _skips(
                 for step in body.get("steps", [])
             ):
                 found.append(f"job {workflow_name}:{job} is scoped and no aggregator reports it")
+    shell = workflow.get("defaults", {}).get("run", {}).get("shell")
+    if shell is not None and shell not in SAFE_SHELLS and here:
+        found.append(
+            f"workflow {workflow_name}: `defaults.run.shell: {shell}` can neuter its checks"
+        )
     if not required:
         return found
     for event in PULL_REQUEST_EVENTS:
@@ -322,14 +341,32 @@ def _skips(
         conditions = set(here.get(name, {}).get("conditions", []))
         if "continue-on-error" in body:
             found.append(f"job {label}: `continue-on-error` hides a failure of a required check")
-        for step in body.get("steps", []):
+        shell = body.get("defaults", {}).get("run", {}).get("shell")
+        if shell is not None and shell not in SAFE_SHELLS:
+            found.append(f"job {label}: `defaults.run.shell: {shell}` can neuter its checks")
+        steps = body.get("steps", [])
+        # The trailing steps that run only on a failure; every step before them must run.
+        trailing = len(steps)
+        while trailing > 0 and steps[trailing - 1].get("if") == ON_FAILURE:
+            trailing -= 1
+        for position, step in enumerate(steps):
             title = step.get("name") or step.get("run", step.get("uses", "?"))
             title = str(title).splitlines()[0]
             if "continue-on-error" in step:
                 found.append(f"job {label}: step `{title}` has `continue-on-error`")
+            if "shell" in step and step["shell"] not in SAFE_SHELLS:
+                found.append(f"job {label}: step `{title}` has `shell: {step['shell']}`")
             condition = step.get("if")
-            if condition is not None and condition not in SAFE_STEP_CONDITIONS | conditions:
-                found.append(f"job {label}: step `{title}` can be skipped by `if: {condition}`")
+            if condition is None or condition == ALWAYS or condition in conditions:
+                continue
+            # Only a trailing step listed as a report (it checks nothing) may run on failure only.
+            reports = here.get(name, {}).get("reports", [])
+            trailing_report = (
+                position >= trailing and "run" in step and _first_line(step) in reports
+            )
+            if condition == ON_FAILURE and trailing_report:
+                continue
+            found.append(f"job {label}: step `{title}` can be skipped by `if: {condition}`")
         matrix = body.get("strategy", {}).get("matrix", {})
         if "exclude" in matrix:
             found.append(f"job {label}: `strategy.matrix.exclude` can remove a required run")
@@ -371,7 +408,7 @@ def _job_drift(label: str, job: dict[str, Any], body: dict[str, Any], *, scoped:
         found.append(f"job {label}: pythons {job.get('pythons', [])} differ from matrix {matrix}")
     default = body.get("defaults", {}).get("run", {}).get("working-directory")
     steps = [s for s in body.get("steps", []) if "run" in s]
-    setup = list(job.get("setup", []))
+    setup = list(job.get("setup", [])) + list(job.get("reports", []))
     checks = list(job.get("check", []))
     for step in steps:
         line = _first_line(step)

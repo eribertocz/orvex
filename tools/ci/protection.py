@@ -47,8 +47,13 @@ def effective_required(repository: str, fetch: Fetch) -> set[str]:
     """Every status-check context `main` requires, from its rulesets and classic protection."""
     contexts: set[str] = set()
     branch = fetch(f"repos/{repository}/branches/{BRANCH}")
-    protection = branch.get("protection") or {}
+    protection = branch.get("protection")
+    if branch.get("protected") and not isinstance(protection, dict):
+        raise ProtectionError("the branch is protected but its protection is not reported")
+    protection = protection or {}
     if protection.get("enabled"):
+        if not isinstance(protection.get("required_status_checks"), dict):
+            raise ProtectionError("classic protection is on but its checks are not reported")
         checks = protection.get("required_status_checks") or {}
         if checks.get("enforcement_level", "off") != "off":
             contexts |= set(checks.get("contexts") or [])
@@ -56,6 +61,8 @@ def effective_required(repository: str, fetch: Fetch) -> set[str]:
     rules = fetch(f"repos/{repository}/rules/branches/{BRANCH}?per_page=100")
     if not isinstance(rules, list):
         raise ProtectionError("the branch rules are not a list")
+    if len(rules) >= 100:
+        raise ProtectionError("100 or more branch rules: read the next page before comparing")
     rulesets = {r["ruleset_id"] for r in rules if r.get("type") == "required_status_checks"}
     for ruleset_id in sorted(rulesets):
         ruleset = fetch(f"repos/{repository}/rulesets/{ruleset_id}")

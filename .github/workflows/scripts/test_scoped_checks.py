@@ -80,6 +80,42 @@ class ChangesScriptTest(unittest.TestCase):
             )
             self.assertEqual((code, out.strip()), (0, "relevant=false"))
 
+    def changed_by(self, folder: Path, change: str) -> tuple[int, str]:
+        def git(*arguments: str) -> str:
+            return subprocess.run(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@t", *arguments],
+                cwd=folder,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+        _, head = self.repository(folder)
+        if change == "rename":
+            git("mv", "Dockerfile", "docker.old")
+        else:
+            (folder / "tools" / "benchmarks").mkdir(parents=True)
+            (folder / "tools" / "benchmarks" / "café.py").write_text("x")
+        git("add", "-A")
+        git("commit", "--quiet", "-m", change)
+        return self.run_script(
+            {
+                "EVENT": "pull_request",
+                "BASE": head,
+                "HEAD": git("rev-parse", "HEAD"),
+                "RELEVANT_PATHS": "Dockerfile\ntools/benchmarks/**",
+            },
+            folder,
+        )
+
+    def test_a_file_moved_out_of_a_relevant_path_applies(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            self.assertEqual(self.changed_by(Path(name), "rename")[1].strip(), "relevant=true")
+
+    def test_a_name_with_non_ascii_characters_applies(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            self.assertEqual(self.changed_by(Path(name), "non-ascii")[1].strip(), "relevant=true")
+
     def test_an_unreadable_base_fails_and_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             folder = Path(name)
