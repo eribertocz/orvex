@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "element": "field",
+  "numeric": {
+    "precision": 18,
+    "scale": "2"
+  }
+}

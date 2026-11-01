@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "element": "relationship",
+  "cardinality": "many_to_many"
+}

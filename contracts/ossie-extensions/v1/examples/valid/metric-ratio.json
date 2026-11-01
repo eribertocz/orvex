@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "element": "metric",
+  "additivity": "recomputable",
+  "components": {
+    "numerator": "sales.revenue",
+    "denominator": "sales.units"
+  },
+  "zero_denominator": "null",
+  "unit": "1",
+  "format": "0.00%"
+}

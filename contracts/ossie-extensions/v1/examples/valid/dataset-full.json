@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "element": "dataset",
+  "entity": "sale",
+  "entity_keys": [
+    {
+      "entity": "sale",
+      "fields": [
+        "sale_id"
+      ]
+    },
+    {
+      "entity": "customer",
+      "fields": [
+        "customer_id"
+      ],
+      "coarser": true
+    }
+  ],
+  "grain": {
+    "dimensions": [
+      "day",
+      "customer"
+    ]
+  },
+  "time_roles": {
+    "event": "sale_date",
+    "validity": {
+      "from": "valid_from",
+      "to": "valid_to"
+    },
+    "snapshot": "snapshot_date"
+  },
+  "history": {
+    "mode": "versioned",
+    "entity_key": [
+      "sale_id"
+    ],
+    "version": "row_version",
+    "recorded_at": "recorded_at",
+    "deleted": "is_deleted"
+  },
+  "evidence": [
+    "unique",
+    "append_only"
+  ],
+  "cache": {
+    "enabled": true,
+    "ttl": "PT1H"
+  },
+  "certification": {
+    "status": "certified",
+    "owner": "finance"
+  }
+}

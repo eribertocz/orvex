@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "element": "metric",
+  "over_metrics": {
+    "expression": "a - b"
+  }
+}

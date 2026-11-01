@@ -1,0 +1,4673 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.invalid/ossie-extensions/v1/schema.json",
+  "title": "OssieExtensionPayload",
+  "description": "The decoded payload of one product `custom_extensions` entry on an Apache Ossie element (model, dataset, field, metric or relationship). `element` names the element it attaches to.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ModelPayload"
+    },
+    {
+      "$ref": "#/$defs/DatasetPayload"
+    },
+    {
+      "$ref": "#/$defs/FieldPayload"
+    },
+    {
+      "$ref": "#/$defs/MetricPayload"
+    },
+    {
+      "$ref": "#/$defs/RelationshipPayload"
+    }
+  ],
+  "$defs": {
+    "AggregateMeasure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "expression"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "expression": {
+          "$ref": "#/$defs/Expression"
+        }
+      }
+    },
+    "AggregateTable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "measures"
+      ],
+      "properties": {
+        "measures": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/AggregateMeasure"
+          }
+        }
+      },
+      "description": "S5: this dataset is an existing aggregate table at its `grain`; its measures replace base execution only when proven equivalent (C8)."
+    },
+    "Align": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "grain",
+        "time"
+      ],
+      "properties": {
+        "grain": {
+          "$ref": "#/$defs/Names"
+        },
+        "time": {
+          "$ref": "#/$defs/Name"
+        }
+      },
+      "description": "S7: the grain and time axis on which the composed metrics are aligned before they combine."
+    },
+    "Approximate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error_bound"
+      ],
+      "properties": {
+        "error_bound": {
+          "$ref": "#/$defs/Decimal"
+        }
+      }
+    },
+    "Axis": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "dimension",
+            "behavior"
+          ],
+          "properties": {
+            "dimension": {
+              "$ref": "#/$defs/Name"
+            },
+            "behavior": {
+              "enum": [
+                "additive",
+                "forbidden",
+                "period_end",
+                "recompute"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "entity",
+            "behavior"
+          ],
+          "properties": {
+            "entity": {
+              "$ref": "#/$defs/Name"
+            },
+            "behavior": {
+              "enum": [
+                "additive",
+                "forbidden",
+                "period_end",
+                "recompute"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "Bridge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "left",
+        "right",
+        "weight",
+        "total",
+        "tolerance",
+        "normalization_scope"
+      ],
+      "properties": {
+        "left": {
+          "$ref": "#/$defs/Name"
+        },
+        "right": {
+          "$ref": "#/$defs/Name"
+        },
+        "weight": {
+          "$ref": "#/$defs/Name"
+        },
+        "total": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "tolerance": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "normalization_scope": {
+          "$ref": "#/$defs/NormalizationScope"
+        }
+      },
+      "description": "C7: this dataset bridges two datasets through the relationships `left` and `right`; `weight` allocates and sums to `total` within `tolerance`."
+    },
+    "Cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "ttl": {
+          "$ref": "#/$defs/Duration"
+        }
+      }
+    },
+    "Calculated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expression",
+        "max_cardinality"
+      ],
+      "properties": {
+        "expression": {
+          "$ref": "#/$defs/Expression"
+        },
+        "max_cardinality": {
+          "$ref": "#/$defs/Count"
+        }
+      },
+      "description": "S10: a calculated dimension over fields of the same row."
+    },
+    "CalculationGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "precedence",
+        "items"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "precedence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/CalculationItem"
+          }
+        }
+      }
+    },
+    "CalculationItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "expression"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "expression": {
+          "$ref": "#/$defs/Expression"
+        }
+      }
+    },
+    "Calendar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "kind": {
+          "enum": [
+            "gregorian",
+            "fiscal",
+            "business"
+          ]
+        },
+        "year_start_month": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 12
+        },
+        "dataset": {
+          "$ref": "#/$defs/Name"
+        },
+        "date": {
+          "$ref": "#/$defs/Name"
+        },
+        "business_day": {
+          "$ref": "#/$defs/Name"
+        }
+      },
+      "allOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/Name"
+            },
+            "kind": {
+              "enum": [
+                "gregorian",
+                "fiscal",
+                "business"
+              ]
+            },
+            "year_start_month": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            },
+            "dataset": {
+              "$ref": "#/$defs/Name"
+            },
+            "date": {
+              "$ref": "#/$defs/Name"
+            },
+            "business_day": {
+              "$ref": "#/$defs/Name"
+            }
+          },
+          "if": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/Name"
+              },
+              "kind": {
+                "const": "fiscal"
+              },
+              "year_start_month": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 12
+              },
+              "dataset": {
+                "$ref": "#/$defs/Name"
+              },
+              "date": {
+                "$ref": "#/$defs/Name"
+              },
+              "business_day": {
+                "$ref": "#/$defs/Name"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/Name"
+              },
+              "kind": {
+                "enum": [
+                  "gregorian",
+                  "fiscal",
+                  "business"
+                ]
+              },
+              "year_start_month": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 12
+              },
+              "dataset": {
+                "$ref": "#/$defs/Name"
+              },
+              "date": {
+                "$ref": "#/$defs/Name"
+              },
+              "business_day": {
+                "$ref": "#/$defs/Name"
+              }
+            },
+            "required": [
+              "year_start_month"
+            ]
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/Name"
+            },
+            "kind": {
+              "enum": [
+                "gregorian",
+                "fiscal",
+                "business"
+              ]
+            },
+            "year_start_month": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            },
+            "dataset": {
+              "$ref": "#/$defs/Name"
+            },
+            "date": {
+              "$ref": "#/$defs/Name"
+            },
+            "business_day": {
+              "$ref": "#/$defs/Name"
+            }
+          },
+          "if": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/Name"
+              },
+              "kind": {
+                "const": "business"
+              },
+              "year_start_month": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 12
+              },
+              "dataset": {
+                "$ref": "#/$defs/Name"
+              },
+              "date": {
+                "$ref": "#/$defs/Name"
+              },
+              "business_day": {
+                "$ref": "#/$defs/Name"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "$ref": "#/$defs/Name"
+              },
+              "kind": {
+                "enum": [
+                  "gregorian",
+                  "fiscal",
+                  "business"
+                ]
+              },
+              "year_start_month": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 12
+              },
+              "dataset": {
+                "$ref": "#/$defs/Name"
+              },
+              "date": {
+                "$ref": "#/$defs/Name"
+              },
+              "business_day": {
+                "$ref": "#/$defs/Name"
+              }
+            },
+            "required": [
+              "dataset",
+              "date",
+              "business_day"
+            ]
+          }
+        }
+      ]
+    },
+    "Certification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "owner"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "draft",
+            "certified",
+            "deprecated"
+          ]
+        },
+        "owner": {
+          "$ref": "#/$defs/Owner"
+        }
+      }
+    },
+    "Cohort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "entity",
+        "event",
+        "period"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "entity": {
+          "$ref": "#/$defs/Name"
+        },
+        "event": {
+          "$ref": "#/$defs/FieldRef"
+        },
+        "period": {
+          "enum": [
+            "day",
+            "week",
+            "month",
+            "quarter",
+            "year"
+          ]
+        }
+      }
+    },
+    "Components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "properties": {
+        "numerator": {
+          "$ref": "#/$defs/Expression"
+        },
+        "denominator": {
+          "$ref": "#/$defs/Expression"
+        }
+      }
+    },
+    "ContextStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation"
+      ],
+      "properties": {
+        "operation": {
+          "enum": [
+            "all",
+            "all_selected",
+            "keep",
+            "remove"
+          ]
+        },
+        "targets": {
+          "$ref": "#/$defs/Names"
+        }
+      }
+    },
+    "Count": {
+      "description": "A non-negative integer as text.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "Currency": {
+      "description": "An ISO 4217 alphabetic code.",
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "DatasetPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "element"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "element": {
+          "const": "dataset"
+        },
+        "entity": {
+          "$ref": "#/$defs/Name"
+        },
+        "entity_keys": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/EntityKey"
+          }
+        },
+        "grain": {
+          "$ref": "#/$defs/Grain"
+        },
+        "time_roles": {
+          "$ref": "#/$defs/TimeRoles"
+        },
+        "history": {
+          "$ref": "#/$defs/History"
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "unique",
+              "non_overlap",
+              "append_only"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "cache": {
+          "$ref": "#/$defs/Cache"
+        },
+        "certification": {
+          "$ref": "#/$defs/Certification"
+        },
+        "bridge": {
+          "$ref": "#/$defs/Bridge"
+        },
+        "aggregate_table": {
+          "$ref": "#/$defs/AggregateTable"
+        }
+      },
+      "dependentRequired": {
+        "aggregate_table": [
+          "grain"
+        ]
+      }
+    },
+    "Date": {
+      "description": "An ISO 8601 calendar date.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$"
+    },
+    "Decimal": {
+      "description": "An exact decimal as text, never a JSON number.",
+      "type": "string",
+      "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+    },
+    "Deprecation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "date"
+      ],
+      "properties": {
+        "date": {
+          "$ref": "#/$defs/Date"
+        },
+        "replacement": {
+          "$ref": "#/$defs/MetricRef"
+        }
+      }
+    },
+    "DrillPath": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "levels"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "levels": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/FieldRef"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "Duration": {
+      "description": "An ISO 8601 duration.",
+      "type": "string",
+      "pattern": "^P(?!$)([0-9]+Y)?([0-9]+M)?([0-9]+W)?([0-9]+D)?(T(?=[0-9])([0-9]+H)?([0-9]+M)?([0-9]+S)?)?$"
+    },
+    "EntityKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity",
+        "fields"
+      ],
+      "properties": {
+        "entity": {
+          "$ref": "#/$defs/Name"
+        },
+        "fields": {
+          "$ref": "#/$defs/Names"
+        },
+        "coarser": {
+          "type": "boolean"
+        }
+      }
+    },
+    "Expression": {
+      "description": "An expression in the product's expression language: the OSSIE_SQL_2026 subset plus references to fields (`dataset.field`) and metrics (`metric`, `dataset.metric`). Parsed, typed and checked for cycles by P2-04.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536
+    },
+    "FieldPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "element"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "element": {
+          "const": "field"
+        },
+        "semantic_type": {
+          "enum": [
+            "identifier",
+            "category",
+            "quantity",
+            "amount",
+            "ratio",
+            "geo_region",
+            "latitude",
+            "longitude"
+          ]
+        },
+        "currency": {
+          "$ref": "#/$defs/Currency"
+        },
+        "unit": {
+          "$ref": "#/$defs/Unit"
+        },
+        "numeric": {
+          "$ref": "#/$defs/Numeric"
+        },
+        "geo_source": {
+          "$ref": "#/$defs/GeoSource"
+        },
+        "conformed_dimension": {
+          "$ref": "#/$defs/Name"
+        },
+        "time_zone": {
+          "$ref": "#/$defs/TimeZoneDecl"
+        },
+        "nullability": {
+          "enum": [
+            "nullable",
+            "not_null"
+          ]
+        },
+        "calendar": {
+          "$ref": "#/$defs/Name"
+        },
+        "pii": {
+          "enum": [
+            "none",
+            "personal",
+            "sensitive"
+          ]
+        },
+        "calculated": {
+          "$ref": "#/$defs/Calculated"
+        },
+        "business_time": {
+          "type": "boolean",
+          "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+        }
+      },
+      "allOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "element": {
+              "const": "field"
+            },
+            "semantic_type": {
+              "enum": [
+                "identifier",
+                "category",
+                "quantity",
+                "amount",
+                "ratio",
+                "geo_region",
+                "latitude",
+                "longitude"
+              ]
+            },
+            "currency": {
+              "$ref": "#/$defs/Currency"
+            },
+            "unit": {
+              "$ref": "#/$defs/Unit"
+            },
+            "numeric": {
+              "$ref": "#/$defs/Numeric"
+            },
+            "geo_source": {
+              "$ref": "#/$defs/GeoSource"
+            },
+            "conformed_dimension": {
+              "$ref": "#/$defs/Name"
+            },
+            "time_zone": {
+              "$ref": "#/$defs/TimeZoneDecl"
+            },
+            "nullability": {
+              "enum": [
+                "nullable",
+                "not_null"
+              ]
+            },
+            "calendar": {
+              "$ref": "#/$defs/Name"
+            },
+            "pii": {
+              "enum": [
+                "none",
+                "personal",
+                "sensitive"
+              ]
+            },
+            "calculated": {
+              "$ref": "#/$defs/Calculated"
+            },
+            "business_time": {
+              "type": "boolean",
+              "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+            }
+          },
+          "if": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "field"
+              },
+              "semantic_type": {
+                "const": "amount"
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "numeric": {
+                "$ref": "#/$defs/Numeric"
+              },
+              "geo_source": {
+                "$ref": "#/$defs/GeoSource"
+              },
+              "conformed_dimension": {
+                "$ref": "#/$defs/Name"
+              },
+              "time_zone": {
+                "$ref": "#/$defs/TimeZoneDecl"
+              },
+              "nullability": {
+                "enum": [
+                  "nullable",
+                  "not_null"
+                ]
+              },
+              "calendar": {
+                "$ref": "#/$defs/Name"
+              },
+              "pii": {
+                "enum": [
+                  "none",
+                  "personal",
+                  "sensitive"
+                ]
+              },
+              "calculated": {
+                "$ref": "#/$defs/Calculated"
+              },
+              "business_time": {
+                "type": "boolean",
+                "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+              }
+            },
+            "required": [
+              "semantic_type"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "field"
+              },
+              "semantic_type": {
+                "enum": [
+                  "identifier",
+                  "category",
+                  "quantity",
+                  "amount",
+                  "ratio",
+                  "geo_region",
+                  "latitude",
+                  "longitude"
+                ]
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "numeric": {
+                "$ref": "#/$defs/Numeric"
+              },
+              "geo_source": {
+                "$ref": "#/$defs/GeoSource"
+              },
+              "conformed_dimension": {
+                "$ref": "#/$defs/Name"
+              },
+              "time_zone": {
+                "$ref": "#/$defs/TimeZoneDecl"
+              },
+              "nullability": {
+                "enum": [
+                  "nullable",
+                  "not_null"
+                ]
+              },
+              "calendar": {
+                "$ref": "#/$defs/Name"
+              },
+              "pii": {
+                "enum": [
+                  "none",
+                  "personal",
+                  "sensitive"
+                ]
+              },
+              "calculated": {
+                "$ref": "#/$defs/Calculated"
+              },
+              "business_time": {
+                "type": "boolean",
+                "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+              }
+            },
+            "required": [
+              "currency"
+            ]
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "element": {
+              "const": "field"
+            },
+            "semantic_type": {
+              "enum": [
+                "identifier",
+                "category",
+                "quantity",
+                "amount",
+                "ratio",
+                "geo_region",
+                "latitude",
+                "longitude"
+              ]
+            },
+            "currency": {
+              "$ref": "#/$defs/Currency"
+            },
+            "unit": {
+              "$ref": "#/$defs/Unit"
+            },
+            "numeric": {
+              "$ref": "#/$defs/Numeric"
+            },
+            "geo_source": {
+              "$ref": "#/$defs/GeoSource"
+            },
+            "conformed_dimension": {
+              "$ref": "#/$defs/Name"
+            },
+            "time_zone": {
+              "$ref": "#/$defs/TimeZoneDecl"
+            },
+            "nullability": {
+              "enum": [
+                "nullable",
+                "not_null"
+              ]
+            },
+            "calendar": {
+              "$ref": "#/$defs/Name"
+            },
+            "pii": {
+              "enum": [
+                "none",
+                "personal",
+                "sensitive"
+              ]
+            },
+            "calculated": {
+              "$ref": "#/$defs/Calculated"
+            },
+            "business_time": {
+              "type": "boolean",
+              "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+            }
+          },
+          "if": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "field"
+              },
+              "semantic_type": {
+                "const": "quantity"
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "numeric": {
+                "$ref": "#/$defs/Numeric"
+              },
+              "geo_source": {
+                "$ref": "#/$defs/GeoSource"
+              },
+              "conformed_dimension": {
+                "$ref": "#/$defs/Name"
+              },
+              "time_zone": {
+                "$ref": "#/$defs/TimeZoneDecl"
+              },
+              "nullability": {
+                "enum": [
+                  "nullable",
+                  "not_null"
+                ]
+              },
+              "calendar": {
+                "$ref": "#/$defs/Name"
+              },
+              "pii": {
+                "enum": [
+                  "none",
+                  "personal",
+                  "sensitive"
+                ]
+              },
+              "calculated": {
+                "$ref": "#/$defs/Calculated"
+              },
+              "business_time": {
+                "type": "boolean",
+                "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+              }
+            },
+            "required": [
+              "semantic_type"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "field"
+              },
+              "semantic_type": {
+                "enum": [
+                  "identifier",
+                  "category",
+                  "quantity",
+                  "amount",
+                  "ratio",
+                  "geo_region",
+                  "latitude",
+                  "longitude"
+                ]
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "numeric": {
+                "$ref": "#/$defs/Numeric"
+              },
+              "geo_source": {
+                "$ref": "#/$defs/GeoSource"
+              },
+              "conformed_dimension": {
+                "$ref": "#/$defs/Name"
+              },
+              "time_zone": {
+                "$ref": "#/$defs/TimeZoneDecl"
+              },
+              "nullability": {
+                "enum": [
+                  "nullable",
+                  "not_null"
+                ]
+              },
+              "calendar": {
+                "$ref": "#/$defs/Name"
+              },
+              "pii": {
+                "enum": [
+                  "none",
+                  "personal",
+                  "sensitive"
+                ]
+              },
+              "calculated": {
+                "$ref": "#/$defs/Calculated"
+              },
+              "business_time": {
+                "type": "boolean",
+                "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+              }
+            },
+            "required": [
+              "unit"
+            ]
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "element": {
+              "const": "field"
+            },
+            "semantic_type": {
+              "enum": [
+                "identifier",
+                "category",
+                "quantity",
+                "amount",
+                "ratio",
+                "geo_region",
+                "latitude",
+                "longitude"
+              ]
+            },
+            "currency": {
+              "$ref": "#/$defs/Currency"
+            },
+            "unit": {
+              "$ref": "#/$defs/Unit"
+            },
+            "numeric": {
+              "$ref": "#/$defs/Numeric"
+            },
+            "geo_source": {
+              "$ref": "#/$defs/GeoSource"
+            },
+            "conformed_dimension": {
+              "$ref": "#/$defs/Name"
+            },
+            "time_zone": {
+              "$ref": "#/$defs/TimeZoneDecl"
+            },
+            "nullability": {
+              "enum": [
+                "nullable",
+                "not_null"
+              ]
+            },
+            "calendar": {
+              "$ref": "#/$defs/Name"
+            },
+            "pii": {
+              "enum": [
+                "none",
+                "personal",
+                "sensitive"
+              ]
+            },
+            "calculated": {
+              "$ref": "#/$defs/Calculated"
+            },
+            "business_time": {
+              "type": "boolean",
+              "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+            }
+          },
+          "if": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "field"
+              },
+              "semantic_type": {
+                "const": "geo_region"
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "numeric": {
+                "$ref": "#/$defs/Numeric"
+              },
+              "geo_source": {
+                "$ref": "#/$defs/GeoSource"
+              },
+              "conformed_dimension": {
+                "$ref": "#/$defs/Name"
+              },
+              "time_zone": {
+                "$ref": "#/$defs/TimeZoneDecl"
+              },
+              "nullability": {
+                "enum": [
+                  "nullable",
+                  "not_null"
+                ]
+              },
+              "calendar": {
+                "$ref": "#/$defs/Name"
+              },
+              "pii": {
+                "enum": [
+                  "none",
+                  "personal",
+                  "sensitive"
+                ]
+              },
+              "calculated": {
+                "$ref": "#/$defs/Calculated"
+              },
+              "business_time": {
+                "type": "boolean",
+                "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+              }
+            },
+            "required": [
+              "semantic_type"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "field"
+              },
+              "semantic_type": {
+                "enum": [
+                  "identifier",
+                  "category",
+                  "quantity",
+                  "amount",
+                  "ratio",
+                  "geo_region",
+                  "latitude",
+                  "longitude"
+                ]
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "numeric": {
+                "$ref": "#/$defs/Numeric"
+              },
+              "geo_source": {
+                "$ref": "#/$defs/GeoSource"
+              },
+              "conformed_dimension": {
+                "$ref": "#/$defs/Name"
+              },
+              "time_zone": {
+                "$ref": "#/$defs/TimeZoneDecl"
+              },
+              "nullability": {
+                "enum": [
+                  "nullable",
+                  "not_null"
+                ]
+              },
+              "calendar": {
+                "$ref": "#/$defs/Name"
+              },
+              "pii": {
+                "enum": [
+                  "none",
+                  "personal",
+                  "sensitive"
+                ]
+              },
+              "calculated": {
+                "$ref": "#/$defs/Calculated"
+              },
+              "business_time": {
+                "type": "boolean",
+                "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+              }
+            },
+            "required": [
+              "geo_source"
+            ]
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "element": {
+              "const": "field"
+            },
+            "semantic_type": {
+              "enum": [
+                "identifier",
+                "category",
+                "quantity",
+                "amount",
+                "ratio",
+                "geo_region",
+                "latitude",
+                "longitude"
+              ]
+            },
+            "currency": {
+              "$ref": "#/$defs/Currency"
+            },
+            "unit": {
+              "$ref": "#/$defs/Unit"
+            },
+            "numeric": {
+              "$ref": "#/$defs/Numeric"
+            },
+            "geo_source": {
+              "$ref": "#/$defs/GeoSource"
+            },
+            "conformed_dimension": {
+              "$ref": "#/$defs/Name"
+            },
+            "time_zone": {
+              "$ref": "#/$defs/TimeZoneDecl"
+            },
+            "nullability": {
+              "enum": [
+                "nullable",
+                "not_null"
+              ]
+            },
+            "calendar": {
+              "$ref": "#/$defs/Name"
+            },
+            "pii": {
+              "enum": [
+                "none",
+                "personal",
+                "sensitive"
+              ]
+            },
+            "calculated": {
+              "$ref": "#/$defs/Calculated"
+            },
+            "business_time": {
+              "type": "boolean",
+              "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+            }
+          },
+          "if": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "field"
+              },
+              "semantic_type": {
+                "enum": [
+                  "identifier",
+                  "category",
+                  "quantity",
+                  "amount",
+                  "ratio",
+                  "latitude",
+                  "longitude"
+                ]
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "numeric": {
+                "$ref": "#/$defs/Numeric"
+              },
+              "geo_source": {
+                "$ref": "#/$defs/GeoSource"
+              },
+              "conformed_dimension": {
+                "$ref": "#/$defs/Name"
+              },
+              "time_zone": {
+                "$ref": "#/$defs/TimeZoneDecl"
+              },
+              "nullability": {
+                "enum": [
+                  "nullable",
+                  "not_null"
+                ]
+              },
+              "calendar": {
+                "$ref": "#/$defs/Name"
+              },
+              "pii": {
+                "enum": [
+                  "none",
+                  "personal",
+                  "sensitive"
+                ]
+              },
+              "calculated": {
+                "$ref": "#/$defs/Calculated"
+              },
+              "business_time": {
+                "type": "boolean",
+                "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+              }
+            },
+            "required": [
+              "semantic_type"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "field"
+              },
+              "semantic_type": {
+                "enum": [
+                  "identifier",
+                  "category",
+                  "quantity",
+                  "amount",
+                  "ratio",
+                  "geo_region",
+                  "latitude",
+                  "longitude"
+                ]
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "numeric": {
+                "$ref": "#/$defs/Numeric"
+              },
+              "geo_source": false,
+              "conformed_dimension": {
+                "$ref": "#/$defs/Name"
+              },
+              "time_zone": {
+                "$ref": "#/$defs/TimeZoneDecl"
+              },
+              "nullability": {
+                "enum": [
+                  "nullable",
+                  "not_null"
+                ]
+              },
+              "calendar": {
+                "$ref": "#/$defs/Name"
+              },
+              "pii": {
+                "enum": [
+                  "none",
+                  "personal",
+                  "sensitive"
+                ]
+              },
+              "calculated": {
+                "$ref": "#/$defs/Calculated"
+              },
+              "business_time": {
+                "type": "boolean",
+                "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "element": {
+              "const": "field"
+            },
+            "semantic_type": {
+              "enum": [
+                "identifier",
+                "category",
+                "quantity",
+                "amount",
+                "ratio",
+                "geo_region",
+                "latitude",
+                "longitude"
+              ]
+            },
+            "currency": {
+              "$ref": "#/$defs/Currency"
+            },
+            "unit": {
+              "$ref": "#/$defs/Unit"
+            },
+            "numeric": {
+              "$ref": "#/$defs/Numeric"
+            },
+            "geo_source": {
+              "$ref": "#/$defs/GeoSource"
+            },
+            "conformed_dimension": {
+              "$ref": "#/$defs/Name"
+            },
+            "time_zone": {
+              "$ref": "#/$defs/TimeZoneDecl"
+            },
+            "nullability": {
+              "enum": [
+                "nullable",
+                "not_null"
+              ]
+            },
+            "calendar": {
+              "$ref": "#/$defs/Name"
+            },
+            "pii": {
+              "enum": [
+                "none",
+                "personal",
+                "sensitive"
+              ]
+            },
+            "calculated": {
+              "$ref": "#/$defs/Calculated"
+            },
+            "business_time": {
+              "type": "boolean",
+              "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+            }
+          },
+          "if": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "field"
+              },
+              "semantic_type": {
+                "enum": [
+                  "identifier",
+                  "category",
+                  "quantity",
+                  "ratio",
+                  "geo_region",
+                  "latitude",
+                  "longitude"
+                ]
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "numeric": {
+                "$ref": "#/$defs/Numeric"
+              },
+              "geo_source": {
+                "$ref": "#/$defs/GeoSource"
+              },
+              "conformed_dimension": {
+                "$ref": "#/$defs/Name"
+              },
+              "time_zone": {
+                "$ref": "#/$defs/TimeZoneDecl"
+              },
+              "nullability": {
+                "enum": [
+                  "nullable",
+                  "not_null"
+                ]
+              },
+              "calendar": {
+                "$ref": "#/$defs/Name"
+              },
+              "pii": {
+                "enum": [
+                  "none",
+                  "personal",
+                  "sensitive"
+                ]
+              },
+              "calculated": {
+                "$ref": "#/$defs/Calculated"
+              },
+              "business_time": {
+                "type": "boolean",
+                "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+              }
+            },
+            "required": [
+              "semantic_type"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "field"
+              },
+              "semantic_type": {
+                "enum": [
+                  "identifier",
+                  "category",
+                  "quantity",
+                  "amount",
+                  "ratio",
+                  "geo_region",
+                  "latitude",
+                  "longitude"
+                ]
+              },
+              "currency": false,
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "numeric": {
+                "$ref": "#/$defs/Numeric"
+              },
+              "geo_source": {
+                "$ref": "#/$defs/GeoSource"
+              },
+              "conformed_dimension": {
+                "$ref": "#/$defs/Name"
+              },
+              "time_zone": {
+                "$ref": "#/$defs/TimeZoneDecl"
+              },
+              "nullability": {
+                "enum": [
+                  "nullable",
+                  "not_null"
+                ]
+              },
+              "calendar": {
+                "$ref": "#/$defs/Name"
+              },
+              "pii": {
+                "enum": [
+                  "none",
+                  "personal",
+                  "sensitive"
+                ]
+              },
+              "calculated": {
+                "$ref": "#/$defs/Calculated"
+              },
+              "business_time": {
+                "type": "boolean",
+                "description": "This field is a business-time bucket (a local day, month...) derived in its `time_zone`."
+              }
+            }
+          }
+        }
+      ],
+      "dependentRequired": {
+        "geo_source": [
+          "semantic_type"
+        ],
+        "business_time": [
+          "time_zone"
+        ]
+      }
+    },
+    "FieldRef": {
+      "description": "A field: `name` within its dataset, or `dataset.field`.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 257,
+      "pattern": "^[^\\s.]+(\\.[^\\s.]+)?$"
+    },
+    "FieldRefs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/FieldRef"
+      },
+      "uniqueItems": true
+    },
+    "Frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "preceding",
+        "following"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "rows",
+            "range"
+          ]
+        },
+        "preceding": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Count"
+            },
+            {
+              "const": "unbounded"
+            }
+          ]
+        },
+        "following": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Count"
+            },
+            {
+              "const": "unbounded"
+            }
+          ]
+        }
+      }
+    },
+    "Funnel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "entity",
+        "steps",
+        "window",
+        "order"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "entity": {
+          "$ref": "#/$defs/Name"
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/Expression"
+          }
+        },
+        "window": {
+          "$ref": "#/$defs/Duration"
+        },
+        "order": {
+          "enum": [
+            "strict",
+            "flexible"
+          ]
+        }
+      }
+    },
+    "GeoSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "key_property"
+      ],
+      "properties": {
+        "file": {
+          "type": "string",
+          "pattern": "^assets/geo/([A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\\.geojson$"
+        },
+        "key_property": {
+          "$ref": "#/$defs/Name"
+        }
+      },
+      "description": "The GeoJSON boundaries of a `geo_region` field, inside the project's `assets/geo/`."
+    },
+    "Grain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dimensions"
+      ],
+      "properties": {
+        "dimensions": {
+          "$ref": "#/$defs/Names"
+        }
+      }
+    },
+    "History": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "snapshots",
+            "versioned"
+          ]
+        },
+        "entity_key": {
+          "$ref": "#/$defs/Names"
+        },
+        "version": {
+          "$ref": "#/$defs/Name"
+        },
+        "recorded_at": {
+          "$ref": "#/$defs/Name"
+        },
+        "deleted": {
+          "$ref": "#/$defs/Name"
+        }
+      },
+      "description": "S12: how the dataset keeps what was known when.",
+      "allOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "snapshots",
+                "versioned"
+              ]
+            },
+            "entity_key": {
+              "$ref": "#/$defs/Names"
+            },
+            "version": {
+              "$ref": "#/$defs/Name"
+            },
+            "recorded_at": {
+              "$ref": "#/$defs/Name"
+            },
+            "deleted": {
+              "$ref": "#/$defs/Name"
+            }
+          },
+          "if": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "const": "versioned"
+              },
+              "entity_key": {
+                "$ref": "#/$defs/Names"
+              },
+              "version": {
+                "$ref": "#/$defs/Name"
+              },
+              "recorded_at": {
+                "$ref": "#/$defs/Name"
+              },
+              "deleted": {
+                "$ref": "#/$defs/Name"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "enum": [
+                  "snapshots",
+                  "versioned"
+                ]
+              },
+              "entity_key": {
+                "$ref": "#/$defs/Names"
+              },
+              "version": {
+                "$ref": "#/$defs/Name"
+              },
+              "recorded_at": {
+                "$ref": "#/$defs/Name"
+              },
+              "deleted": {
+                "$ref": "#/$defs/Name"
+              }
+            },
+            "required": [
+              "entity_key",
+              "version",
+              "recorded_at",
+              "deleted"
+            ]
+          }
+        }
+      ]
+    },
+    "LevelOfDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "dimensions"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "fixed",
+            "include",
+            "exclude"
+          ]
+        },
+        "dimensions": {
+          "$ref": "#/$defs/Names"
+        }
+      }
+    },
+    "MetricPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "element"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "element": {
+          "const": "metric"
+        },
+        "additivity": {
+          "enum": [
+            "additive",
+            "semi_additive",
+            "non_additive",
+            "recomputable",
+            "ordered"
+          ]
+        },
+        "non_additive_axes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/Axis"
+          }
+        },
+        "period_end": {
+          "$ref": "#/$defs/PeriodEnd"
+        },
+        "components": {
+          "$ref": "#/$defs/Components"
+        },
+        "aggregate_class": {
+          "enum": [
+            "distributive",
+            "algebraic",
+            "holistic",
+            "sketch"
+          ],
+          "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+        },
+        "approximate": {
+          "$ref": "#/$defs/Approximate"
+        },
+        "reaggregable_state": {
+          "enum": [
+            "exact_bitmap",
+            "exact_sorted_set"
+          ],
+          "description": "S11/S13: an exact state that re-aggregates across groups."
+        },
+        "zero_denominator": {
+          "enum": [
+            "null",
+            "reject"
+          ]
+        },
+        "rounding": {
+          "$ref": "#/$defs/Rounding"
+        },
+        "unit": {
+          "$ref": "#/$defs/Unit"
+        },
+        "currency": {
+          "$ref": "#/$defs/Currency"
+        },
+        "format": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "owner": {
+          "$ref": "#/$defs/Owner"
+        },
+        "status": {
+          "enum": [
+            "draft",
+            "certified",
+            "deprecated"
+          ]
+        },
+        "deprecation": {
+          "$ref": "#/$defs/Deprecation"
+        },
+        "over_metrics": {
+          "$ref": "#/$defs/OverMetrics"
+        },
+        "context": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/ContextStep"
+          }
+        },
+        "level_of_detail": {
+          "$ref": "#/$defs/LevelOfDetail"
+        },
+        "window": {
+          "$ref": "#/$defs/Window"
+        },
+        "allocation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bridge"
+          ],
+          "properties": {
+            "bridge": {
+              "$ref": "#/$defs/Name"
+            }
+          }
+        },
+        "home_dataset": {
+          "$ref": "#/$defs/Name",
+          "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+        }
+      },
+      "allOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "element": {
+              "const": "metric"
+            },
+            "additivity": {
+              "enum": [
+                "additive",
+                "semi_additive",
+                "non_additive",
+                "recomputable",
+                "ordered"
+              ]
+            },
+            "non_additive_axes": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/Axis"
+              }
+            },
+            "period_end": {
+              "$ref": "#/$defs/PeriodEnd"
+            },
+            "components": {
+              "$ref": "#/$defs/Components"
+            },
+            "aggregate_class": {
+              "enum": [
+                "distributive",
+                "algebraic",
+                "holistic",
+                "sketch"
+              ],
+              "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+            },
+            "approximate": {
+              "$ref": "#/$defs/Approximate"
+            },
+            "reaggregable_state": {
+              "enum": [
+                "exact_bitmap",
+                "exact_sorted_set"
+              ],
+              "description": "S11/S13: an exact state that re-aggregates across groups."
+            },
+            "zero_denominator": {
+              "enum": [
+                "null",
+                "reject"
+              ]
+            },
+            "rounding": {
+              "$ref": "#/$defs/Rounding"
+            },
+            "unit": {
+              "$ref": "#/$defs/Unit"
+            },
+            "currency": {
+              "$ref": "#/$defs/Currency"
+            },
+            "format": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "owner": {
+              "$ref": "#/$defs/Owner"
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "certified",
+                "deprecated"
+              ]
+            },
+            "deprecation": {
+              "$ref": "#/$defs/Deprecation"
+            },
+            "over_metrics": {
+              "$ref": "#/$defs/OverMetrics"
+            },
+            "context": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/ContextStep"
+              }
+            },
+            "level_of_detail": {
+              "$ref": "#/$defs/LevelOfDetail"
+            },
+            "window": {
+              "$ref": "#/$defs/Window"
+            },
+            "allocation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "bridge"
+              ],
+              "properties": {
+                "bridge": {
+                  "$ref": "#/$defs/Name"
+                }
+              }
+            },
+            "home_dataset": {
+              "$ref": "#/$defs/Name",
+              "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+            }
+          },
+          "if": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "metric"
+              },
+              "additivity": {
+                "const": "semi_additive"
+              },
+              "non_additive_axes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/Axis"
+                }
+              },
+              "period_end": {
+                "$ref": "#/$defs/PeriodEnd"
+              },
+              "components": {
+                "$ref": "#/$defs/Components"
+              },
+              "aggregate_class": {
+                "enum": [
+                  "distributive",
+                  "algebraic",
+                  "holistic",
+                  "sketch"
+                ],
+                "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+              },
+              "approximate": {
+                "$ref": "#/$defs/Approximate"
+              },
+              "reaggregable_state": {
+                "enum": [
+                  "exact_bitmap",
+                  "exact_sorted_set"
+                ],
+                "description": "S11/S13: an exact state that re-aggregates across groups."
+              },
+              "zero_denominator": {
+                "enum": [
+                  "null",
+                  "reject"
+                ]
+              },
+              "rounding": {
+                "$ref": "#/$defs/Rounding"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "owner": {
+                "$ref": "#/$defs/Owner"
+              },
+              "status": {
+                "enum": [
+                  "draft",
+                  "certified",
+                  "deprecated"
+                ]
+              },
+              "deprecation": {
+                "$ref": "#/$defs/Deprecation"
+              },
+              "over_metrics": {
+                "$ref": "#/$defs/OverMetrics"
+              },
+              "context": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/ContextStep"
+                }
+              },
+              "level_of_detail": {
+                "$ref": "#/$defs/LevelOfDetail"
+              },
+              "window": {
+                "$ref": "#/$defs/Window"
+              },
+              "allocation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bridge"
+                ],
+                "properties": {
+                  "bridge": {
+                    "$ref": "#/$defs/Name"
+                  }
+                }
+              },
+              "home_dataset": {
+                "$ref": "#/$defs/Name",
+                "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+              }
+            },
+            "required": [
+              "additivity"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "metric"
+              },
+              "additivity": {
+                "enum": [
+                  "additive",
+                  "semi_additive",
+                  "non_additive",
+                  "recomputable",
+                  "ordered"
+                ]
+              },
+              "non_additive_axes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/Axis"
+                }
+              },
+              "period_end": {
+                "$ref": "#/$defs/PeriodEnd"
+              },
+              "components": {
+                "$ref": "#/$defs/Components"
+              },
+              "aggregate_class": {
+                "enum": [
+                  "distributive",
+                  "algebraic",
+                  "holistic",
+                  "sketch"
+                ],
+                "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+              },
+              "approximate": {
+                "$ref": "#/$defs/Approximate"
+              },
+              "reaggregable_state": {
+                "enum": [
+                  "exact_bitmap",
+                  "exact_sorted_set"
+                ],
+                "description": "S11/S13: an exact state that re-aggregates across groups."
+              },
+              "zero_denominator": {
+                "enum": [
+                  "null",
+                  "reject"
+                ]
+              },
+              "rounding": {
+                "$ref": "#/$defs/Rounding"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "owner": {
+                "$ref": "#/$defs/Owner"
+              },
+              "status": {
+                "enum": [
+                  "draft",
+                  "certified",
+                  "deprecated"
+                ]
+              },
+              "deprecation": {
+                "$ref": "#/$defs/Deprecation"
+              },
+              "over_metrics": {
+                "$ref": "#/$defs/OverMetrics"
+              },
+              "context": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/ContextStep"
+                }
+              },
+              "level_of_detail": {
+                "$ref": "#/$defs/LevelOfDetail"
+              },
+              "window": {
+                "$ref": "#/$defs/Window"
+              },
+              "allocation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bridge"
+                ],
+                "properties": {
+                  "bridge": {
+                    "$ref": "#/$defs/Name"
+                  }
+                }
+              },
+              "home_dataset": {
+                "$ref": "#/$defs/Name",
+                "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+              }
+            },
+            "required": [
+              "non_additive_axes"
+            ]
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "element": {
+              "const": "metric"
+            },
+            "additivity": {
+              "enum": [
+                "additive",
+                "semi_additive",
+                "non_additive",
+                "recomputable",
+                "ordered"
+              ]
+            },
+            "non_additive_axes": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/Axis"
+              }
+            },
+            "period_end": {
+              "$ref": "#/$defs/PeriodEnd"
+            },
+            "components": {
+              "$ref": "#/$defs/Components"
+            },
+            "aggregate_class": {
+              "enum": [
+                "distributive",
+                "algebraic",
+                "holistic",
+                "sketch"
+              ],
+              "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+            },
+            "approximate": {
+              "$ref": "#/$defs/Approximate"
+            },
+            "reaggregable_state": {
+              "enum": [
+                "exact_bitmap",
+                "exact_sorted_set"
+              ],
+              "description": "S11/S13: an exact state that re-aggregates across groups."
+            },
+            "zero_denominator": {
+              "enum": [
+                "null",
+                "reject"
+              ]
+            },
+            "rounding": {
+              "$ref": "#/$defs/Rounding"
+            },
+            "unit": {
+              "$ref": "#/$defs/Unit"
+            },
+            "currency": {
+              "$ref": "#/$defs/Currency"
+            },
+            "format": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "owner": {
+              "$ref": "#/$defs/Owner"
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "certified",
+                "deprecated"
+              ]
+            },
+            "deprecation": {
+              "$ref": "#/$defs/Deprecation"
+            },
+            "over_metrics": {
+              "$ref": "#/$defs/OverMetrics"
+            },
+            "context": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/ContextStep"
+              }
+            },
+            "level_of_detail": {
+              "$ref": "#/$defs/LevelOfDetail"
+            },
+            "window": {
+              "$ref": "#/$defs/Window"
+            },
+            "allocation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "bridge"
+              ],
+              "properties": {
+                "bridge": {
+                  "$ref": "#/$defs/Name"
+                }
+              }
+            },
+            "home_dataset": {
+              "$ref": "#/$defs/Name",
+              "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+            }
+          },
+          "if": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "metric"
+              },
+              "additivity": {
+                "const": "recomputable"
+              },
+              "non_additive_axes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/Axis"
+                }
+              },
+              "period_end": {
+                "$ref": "#/$defs/PeriodEnd"
+              },
+              "components": {
+                "$ref": "#/$defs/Components"
+              },
+              "aggregate_class": {
+                "enum": [
+                  "distributive",
+                  "algebraic",
+                  "holistic",
+                  "sketch"
+                ],
+                "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+              },
+              "approximate": {
+                "$ref": "#/$defs/Approximate"
+              },
+              "reaggregable_state": {
+                "enum": [
+                  "exact_bitmap",
+                  "exact_sorted_set"
+                ],
+                "description": "S11/S13: an exact state that re-aggregates across groups."
+              },
+              "zero_denominator": {
+                "enum": [
+                  "null",
+                  "reject"
+                ]
+              },
+              "rounding": {
+                "$ref": "#/$defs/Rounding"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "owner": {
+                "$ref": "#/$defs/Owner"
+              },
+              "status": {
+                "enum": [
+                  "draft",
+                  "certified",
+                  "deprecated"
+                ]
+              },
+              "deprecation": {
+                "$ref": "#/$defs/Deprecation"
+              },
+              "over_metrics": {
+                "$ref": "#/$defs/OverMetrics"
+              },
+              "context": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/ContextStep"
+                }
+              },
+              "level_of_detail": {
+                "$ref": "#/$defs/LevelOfDetail"
+              },
+              "window": {
+                "$ref": "#/$defs/Window"
+              },
+              "allocation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bridge"
+                ],
+                "properties": {
+                  "bridge": {
+                    "$ref": "#/$defs/Name"
+                  }
+                }
+              },
+              "home_dataset": {
+                "$ref": "#/$defs/Name",
+                "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+              }
+            },
+            "required": [
+              "additivity"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "metric"
+              },
+              "additivity": {
+                "enum": [
+                  "additive",
+                  "semi_additive",
+                  "non_additive",
+                  "recomputable",
+                  "ordered"
+                ]
+              },
+              "non_additive_axes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/Axis"
+                }
+              },
+              "period_end": {
+                "$ref": "#/$defs/PeriodEnd"
+              },
+              "components": {
+                "$ref": "#/$defs/Components"
+              },
+              "aggregate_class": {
+                "enum": [
+                  "distributive",
+                  "algebraic",
+                  "holistic",
+                  "sketch"
+                ],
+                "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+              },
+              "approximate": {
+                "$ref": "#/$defs/Approximate"
+              },
+              "reaggregable_state": {
+                "enum": [
+                  "exact_bitmap",
+                  "exact_sorted_set"
+                ],
+                "description": "S11/S13: an exact state that re-aggregates across groups."
+              },
+              "zero_denominator": {
+                "enum": [
+                  "null",
+                  "reject"
+                ]
+              },
+              "rounding": {
+                "$ref": "#/$defs/Rounding"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "owner": {
+                "$ref": "#/$defs/Owner"
+              },
+              "status": {
+                "enum": [
+                  "draft",
+                  "certified",
+                  "deprecated"
+                ]
+              },
+              "deprecation": {
+                "$ref": "#/$defs/Deprecation"
+              },
+              "over_metrics": {
+                "$ref": "#/$defs/OverMetrics"
+              },
+              "context": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/ContextStep"
+                }
+              },
+              "level_of_detail": {
+                "$ref": "#/$defs/LevelOfDetail"
+              },
+              "window": {
+                "$ref": "#/$defs/Window"
+              },
+              "allocation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bridge"
+                ],
+                "properties": {
+                  "bridge": {
+                    "$ref": "#/$defs/Name"
+                  }
+                }
+              },
+              "home_dataset": {
+                "$ref": "#/$defs/Name",
+                "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+              }
+            },
+            "required": [
+              "components"
+            ]
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "element": {
+              "const": "metric"
+            },
+            "additivity": {
+              "enum": [
+                "additive",
+                "semi_additive",
+                "non_additive",
+                "recomputable",
+                "ordered"
+              ]
+            },
+            "non_additive_axes": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/Axis"
+              }
+            },
+            "period_end": {
+              "$ref": "#/$defs/PeriodEnd"
+            },
+            "components": {
+              "$ref": "#/$defs/Components"
+            },
+            "aggregate_class": {
+              "enum": [
+                "distributive",
+                "algebraic",
+                "holistic",
+                "sketch"
+              ],
+              "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+            },
+            "approximate": {
+              "$ref": "#/$defs/Approximate"
+            },
+            "reaggregable_state": {
+              "enum": [
+                "exact_bitmap",
+                "exact_sorted_set"
+              ],
+              "description": "S11/S13: an exact state that re-aggregates across groups."
+            },
+            "zero_denominator": {
+              "enum": [
+                "null",
+                "reject"
+              ]
+            },
+            "rounding": {
+              "$ref": "#/$defs/Rounding"
+            },
+            "unit": {
+              "$ref": "#/$defs/Unit"
+            },
+            "currency": {
+              "$ref": "#/$defs/Currency"
+            },
+            "format": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "owner": {
+              "$ref": "#/$defs/Owner"
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "certified",
+                "deprecated"
+              ]
+            },
+            "deprecation": {
+              "$ref": "#/$defs/Deprecation"
+            },
+            "over_metrics": {
+              "$ref": "#/$defs/OverMetrics"
+            },
+            "context": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/ContextStep"
+              }
+            },
+            "level_of_detail": {
+              "$ref": "#/$defs/LevelOfDetail"
+            },
+            "window": {
+              "$ref": "#/$defs/Window"
+            },
+            "allocation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "bridge"
+              ],
+              "properties": {
+                "bridge": {
+                  "$ref": "#/$defs/Name"
+                }
+              }
+            },
+            "home_dataset": {
+              "$ref": "#/$defs/Name",
+              "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+            }
+          },
+          "if": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "metric"
+              },
+              "additivity": {
+                "enum": [
+                  "additive",
+                  "semi_additive",
+                  "non_additive",
+                  "recomputable",
+                  "ordered"
+                ]
+              },
+              "non_additive_axes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/Axis"
+                }
+              },
+              "period_end": {
+                "$ref": "#/$defs/PeriodEnd"
+              },
+              "components": {
+                "$ref": "#/$defs/Components"
+              },
+              "aggregate_class": {
+                "enum": [
+                  "distributive",
+                  "algebraic",
+                  "holistic",
+                  "sketch"
+                ],
+                "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+              },
+              "approximate": {
+                "$ref": "#/$defs/Approximate"
+              },
+              "reaggregable_state": {
+                "enum": [
+                  "exact_bitmap",
+                  "exact_sorted_set"
+                ],
+                "description": "S11/S13: an exact state that re-aggregates across groups."
+              },
+              "zero_denominator": {
+                "enum": [
+                  "null",
+                  "reject"
+                ]
+              },
+              "rounding": {
+                "$ref": "#/$defs/Rounding"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "owner": {
+                "$ref": "#/$defs/Owner"
+              },
+              "status": {
+                "const": "deprecated"
+              },
+              "deprecation": {
+                "$ref": "#/$defs/Deprecation"
+              },
+              "over_metrics": {
+                "$ref": "#/$defs/OverMetrics"
+              },
+              "context": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/ContextStep"
+                }
+              },
+              "level_of_detail": {
+                "$ref": "#/$defs/LevelOfDetail"
+              },
+              "window": {
+                "$ref": "#/$defs/Window"
+              },
+              "allocation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bridge"
+                ],
+                "properties": {
+                  "bridge": {
+                    "$ref": "#/$defs/Name"
+                  }
+                }
+              },
+              "home_dataset": {
+                "$ref": "#/$defs/Name",
+                "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "metric"
+              },
+              "additivity": {
+                "enum": [
+                  "additive",
+                  "semi_additive",
+                  "non_additive",
+                  "recomputable",
+                  "ordered"
+                ]
+              },
+              "non_additive_axes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/Axis"
+                }
+              },
+              "period_end": {
+                "$ref": "#/$defs/PeriodEnd"
+              },
+              "components": {
+                "$ref": "#/$defs/Components"
+              },
+              "aggregate_class": {
+                "enum": [
+                  "distributive",
+                  "algebraic",
+                  "holistic",
+                  "sketch"
+                ],
+                "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+              },
+              "approximate": {
+                "$ref": "#/$defs/Approximate"
+              },
+              "reaggregable_state": {
+                "enum": [
+                  "exact_bitmap",
+                  "exact_sorted_set"
+                ],
+                "description": "S11/S13: an exact state that re-aggregates across groups."
+              },
+              "zero_denominator": {
+                "enum": [
+                  "null",
+                  "reject"
+                ]
+              },
+              "rounding": {
+                "$ref": "#/$defs/Rounding"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "owner": {
+                "$ref": "#/$defs/Owner"
+              },
+              "status": {
+                "enum": [
+                  "draft",
+                  "certified",
+                  "deprecated"
+                ]
+              },
+              "deprecation": {
+                "$ref": "#/$defs/Deprecation"
+              },
+              "over_metrics": {
+                "$ref": "#/$defs/OverMetrics"
+              },
+              "context": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/ContextStep"
+                }
+              },
+              "level_of_detail": {
+                "$ref": "#/$defs/LevelOfDetail"
+              },
+              "window": {
+                "$ref": "#/$defs/Window"
+              },
+              "allocation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bridge"
+                ],
+                "properties": {
+                  "bridge": {
+                    "$ref": "#/$defs/Name"
+                  }
+                }
+              },
+              "home_dataset": {
+                "$ref": "#/$defs/Name",
+                "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+              }
+            },
+            "required": [
+              "deprecation"
+            ]
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "element": {
+              "const": "metric"
+            },
+            "additivity": {
+              "enum": [
+                "additive",
+                "semi_additive",
+                "non_additive",
+                "recomputable",
+                "ordered"
+              ]
+            },
+            "non_additive_axes": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/Axis"
+              }
+            },
+            "period_end": {
+              "$ref": "#/$defs/PeriodEnd"
+            },
+            "components": {
+              "$ref": "#/$defs/Components"
+            },
+            "aggregate_class": {
+              "enum": [
+                "distributive",
+                "algebraic",
+                "holistic",
+                "sketch"
+              ],
+              "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+            },
+            "approximate": {
+              "$ref": "#/$defs/Approximate"
+            },
+            "reaggregable_state": {
+              "enum": [
+                "exact_bitmap",
+                "exact_sorted_set"
+              ],
+              "description": "S11/S13: an exact state that re-aggregates across groups."
+            },
+            "zero_denominator": {
+              "enum": [
+                "null",
+                "reject"
+              ]
+            },
+            "rounding": {
+              "$ref": "#/$defs/Rounding"
+            },
+            "unit": {
+              "$ref": "#/$defs/Unit"
+            },
+            "currency": {
+              "$ref": "#/$defs/Currency"
+            },
+            "format": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "owner": {
+              "$ref": "#/$defs/Owner"
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "certified",
+                "deprecated"
+              ]
+            },
+            "deprecation": {
+              "$ref": "#/$defs/Deprecation"
+            },
+            "over_metrics": {
+              "$ref": "#/$defs/OverMetrics"
+            },
+            "context": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/ContextStep"
+              }
+            },
+            "level_of_detail": {
+              "$ref": "#/$defs/LevelOfDetail"
+            },
+            "window": {
+              "$ref": "#/$defs/Window"
+            },
+            "allocation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "bridge"
+              ],
+              "properties": {
+                "bridge": {
+                  "$ref": "#/$defs/Name"
+                }
+              }
+            },
+            "home_dataset": {
+              "$ref": "#/$defs/Name",
+              "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+            }
+          },
+          "if": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "metric"
+              },
+              "additivity": {
+                "enum": [
+                  "additive",
+                  "semi_additive",
+                  "non_additive",
+                  "recomputable",
+                  "ordered"
+                ]
+              },
+              "non_additive_axes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/Axis"
+                }
+              },
+              "period_end": {
+                "$ref": "#/$defs/PeriodEnd"
+              },
+              "components": {
+                "$ref": "#/$defs/Components"
+              },
+              "aggregate_class": {
+                "enum": [
+                  "distributive",
+                  "algebraic",
+                  "holistic",
+                  "sketch"
+                ],
+                "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+              },
+              "approximate": {
+                "$ref": "#/$defs/Approximate"
+              },
+              "reaggregable_state": {
+                "enum": [
+                  "exact_bitmap",
+                  "exact_sorted_set"
+                ],
+                "description": "S11/S13: an exact state that re-aggregates across groups."
+              },
+              "zero_denominator": {
+                "enum": [
+                  "null",
+                  "reject"
+                ]
+              },
+              "rounding": {
+                "$ref": "#/$defs/Rounding"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "owner": {
+                "$ref": "#/$defs/Owner"
+              },
+              "status": {
+                "enum": [
+                  "draft",
+                  "certified"
+                ]
+              },
+              "deprecation": {
+                "$ref": "#/$defs/Deprecation"
+              },
+              "over_metrics": {
+                "$ref": "#/$defs/OverMetrics"
+              },
+              "context": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/ContextStep"
+                }
+              },
+              "level_of_detail": {
+                "$ref": "#/$defs/LevelOfDetail"
+              },
+              "window": {
+                "$ref": "#/$defs/Window"
+              },
+              "allocation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bridge"
+                ],
+                "properties": {
+                  "bridge": {
+                    "$ref": "#/$defs/Name"
+                  }
+                }
+              },
+              "home_dataset": {
+                "$ref": "#/$defs/Name",
+                "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "metric"
+              },
+              "additivity": {
+                "enum": [
+                  "additive",
+                  "semi_additive",
+                  "non_additive",
+                  "recomputable",
+                  "ordered"
+                ]
+              },
+              "non_additive_axes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/Axis"
+                }
+              },
+              "period_end": {
+                "$ref": "#/$defs/PeriodEnd"
+              },
+              "components": {
+                "$ref": "#/$defs/Components"
+              },
+              "aggregate_class": {
+                "enum": [
+                  "distributive",
+                  "algebraic",
+                  "holistic",
+                  "sketch"
+                ],
+                "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+              },
+              "approximate": {
+                "$ref": "#/$defs/Approximate"
+              },
+              "reaggregable_state": {
+                "enum": [
+                  "exact_bitmap",
+                  "exact_sorted_set"
+                ],
+                "description": "S11/S13: an exact state that re-aggregates across groups."
+              },
+              "zero_denominator": {
+                "enum": [
+                  "null",
+                  "reject"
+                ]
+              },
+              "rounding": {
+                "$ref": "#/$defs/Rounding"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "owner": {
+                "$ref": "#/$defs/Owner"
+              },
+              "status": {
+                "enum": [
+                  "draft",
+                  "certified",
+                  "deprecated"
+                ]
+              },
+              "deprecation": false,
+              "over_metrics": {
+                "$ref": "#/$defs/OverMetrics"
+              },
+              "context": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/ContextStep"
+                }
+              },
+              "level_of_detail": {
+                "$ref": "#/$defs/LevelOfDetail"
+              },
+              "window": {
+                "$ref": "#/$defs/Window"
+              },
+              "allocation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bridge"
+                ],
+                "properties": {
+                  "bridge": {
+                    "$ref": "#/$defs/Name"
+                  }
+                }
+              },
+              "home_dataset": {
+                "$ref": "#/$defs/Name",
+                "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "element": {
+              "const": "metric"
+            },
+            "additivity": {
+              "enum": [
+                "additive",
+                "semi_additive",
+                "non_additive",
+                "recomputable",
+                "ordered"
+              ]
+            },
+            "non_additive_axes": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/Axis"
+              }
+            },
+            "period_end": {
+              "$ref": "#/$defs/PeriodEnd"
+            },
+            "components": {
+              "$ref": "#/$defs/Components"
+            },
+            "aggregate_class": {
+              "enum": [
+                "distributive",
+                "algebraic",
+                "holistic",
+                "sketch"
+              ],
+              "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+            },
+            "approximate": {
+              "$ref": "#/$defs/Approximate"
+            },
+            "reaggregable_state": {
+              "enum": [
+                "exact_bitmap",
+                "exact_sorted_set"
+              ],
+              "description": "S11/S13: an exact state that re-aggregates across groups."
+            },
+            "zero_denominator": {
+              "enum": [
+                "null",
+                "reject"
+              ]
+            },
+            "rounding": {
+              "$ref": "#/$defs/Rounding"
+            },
+            "unit": {
+              "$ref": "#/$defs/Unit"
+            },
+            "currency": {
+              "$ref": "#/$defs/Currency"
+            },
+            "format": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "owner": {
+              "$ref": "#/$defs/Owner"
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "certified",
+                "deprecated"
+              ]
+            },
+            "deprecation": {
+              "$ref": "#/$defs/Deprecation"
+            },
+            "over_metrics": {
+              "$ref": "#/$defs/OverMetrics"
+            },
+            "context": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/ContextStep"
+              }
+            },
+            "level_of_detail": {
+              "$ref": "#/$defs/LevelOfDetail"
+            },
+            "window": {
+              "$ref": "#/$defs/Window"
+            },
+            "allocation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "bridge"
+              ],
+              "properties": {
+                "bridge": {
+                  "$ref": "#/$defs/Name"
+                }
+              }
+            },
+            "home_dataset": {
+              "$ref": "#/$defs/Name",
+              "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+            }
+          },
+          "if": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "metric"
+              },
+              "additivity": {
+                "enum": [
+                  "additive",
+                  "semi_additive",
+                  "non_additive",
+                  "recomputable",
+                  "ordered"
+                ]
+              },
+              "non_additive_axes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/Axis"
+                }
+              },
+              "period_end": {
+                "$ref": "#/$defs/PeriodEnd"
+              },
+              "components": {
+                "$ref": "#/$defs/Components"
+              },
+              "aggregate_class": {
+                "enum": [
+                  "distributive",
+                  "algebraic",
+                  "holistic"
+                ]
+              },
+              "approximate": {
+                "$ref": "#/$defs/Approximate"
+              },
+              "reaggregable_state": {
+                "enum": [
+                  "exact_bitmap",
+                  "exact_sorted_set"
+                ],
+                "description": "S11/S13: an exact state that re-aggregates across groups."
+              },
+              "zero_denominator": {
+                "enum": [
+                  "null",
+                  "reject"
+                ]
+              },
+              "rounding": {
+                "$ref": "#/$defs/Rounding"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "owner": {
+                "$ref": "#/$defs/Owner"
+              },
+              "status": {
+                "enum": [
+                  "draft",
+                  "certified",
+                  "deprecated"
+                ]
+              },
+              "deprecation": {
+                "$ref": "#/$defs/Deprecation"
+              },
+              "over_metrics": {
+                "$ref": "#/$defs/OverMetrics"
+              },
+              "context": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/ContextStep"
+                }
+              },
+              "level_of_detail": {
+                "$ref": "#/$defs/LevelOfDetail"
+              },
+              "window": {
+                "$ref": "#/$defs/Window"
+              },
+              "allocation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bridge"
+                ],
+                "properties": {
+                  "bridge": {
+                    "$ref": "#/$defs/Name"
+                  }
+                }
+              },
+              "home_dataset": {
+                "$ref": "#/$defs/Name",
+                "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+              }
+            },
+            "required": [
+              "aggregate_class"
+            ]
+          },
+          "then": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "metric"
+              },
+              "additivity": {
+                "enum": [
+                  "additive",
+                  "semi_additive",
+                  "non_additive",
+                  "recomputable",
+                  "ordered"
+                ]
+              },
+              "non_additive_axes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/Axis"
+                }
+              },
+              "period_end": {
+                "$ref": "#/$defs/PeriodEnd"
+              },
+              "components": {
+                "$ref": "#/$defs/Components"
+              },
+              "aggregate_class": {
+                "enum": [
+                  "distributive",
+                  "algebraic",
+                  "holistic",
+                  "sketch"
+                ],
+                "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+              },
+              "approximate": false,
+              "reaggregable_state": {
+                "enum": [
+                  "exact_bitmap",
+                  "exact_sorted_set"
+                ],
+                "description": "S11/S13: an exact state that re-aggregates across groups."
+              },
+              "zero_denominator": {
+                "enum": [
+                  "null",
+                  "reject"
+                ]
+              },
+              "rounding": {
+                "$ref": "#/$defs/Rounding"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "owner": {
+                "$ref": "#/$defs/Owner"
+              },
+              "status": {
+                "enum": [
+                  "draft",
+                  "certified",
+                  "deprecated"
+                ]
+              },
+              "deprecation": {
+                "$ref": "#/$defs/Deprecation"
+              },
+              "over_metrics": {
+                "$ref": "#/$defs/OverMetrics"
+              },
+              "context": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/ContextStep"
+                }
+              },
+              "level_of_detail": {
+                "$ref": "#/$defs/LevelOfDetail"
+              },
+              "window": {
+                "$ref": "#/$defs/Window"
+              },
+              "allocation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bridge"
+                ],
+                "properties": {
+                  "bridge": {
+                    "$ref": "#/$defs/Name"
+                  }
+                }
+              },
+              "home_dataset": {
+                "$ref": "#/$defs/Name",
+                "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "const": 1
+            },
+            "element": {
+              "const": "metric"
+            },
+            "additivity": {
+              "enum": [
+                "additive",
+                "semi_additive",
+                "non_additive",
+                "recomputable",
+                "ordered"
+              ]
+            },
+            "non_additive_axes": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/Axis"
+              }
+            },
+            "period_end": {
+              "$ref": "#/$defs/PeriodEnd"
+            },
+            "components": {
+              "$ref": "#/$defs/Components"
+            },
+            "aggregate_class": {
+              "enum": [
+                "distributive",
+                "algebraic",
+                "holistic",
+                "sketch"
+              ],
+              "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+            },
+            "approximate": {
+              "$ref": "#/$defs/Approximate"
+            },
+            "reaggregable_state": {
+              "enum": [
+                "exact_bitmap",
+                "exact_sorted_set"
+              ],
+              "description": "S11/S13: an exact state that re-aggregates across groups."
+            },
+            "zero_denominator": {
+              "enum": [
+                "null",
+                "reject"
+              ]
+            },
+            "rounding": {
+              "$ref": "#/$defs/Rounding"
+            },
+            "unit": {
+              "$ref": "#/$defs/Unit"
+            },
+            "currency": {
+              "$ref": "#/$defs/Currency"
+            },
+            "format": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "owner": {
+              "$ref": "#/$defs/Owner"
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "certified",
+                "deprecated"
+              ]
+            },
+            "deprecation": {
+              "$ref": "#/$defs/Deprecation"
+            },
+            "over_metrics": {
+              "$ref": "#/$defs/OverMetrics"
+            },
+            "context": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/ContextStep"
+              }
+            },
+            "level_of_detail": {
+              "$ref": "#/$defs/LevelOfDetail"
+            },
+            "window": {
+              "$ref": "#/$defs/Window"
+            },
+            "allocation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "bridge"
+              ],
+              "properties": {
+                "bridge": {
+                  "$ref": "#/$defs/Name"
+                }
+              }
+            },
+            "home_dataset": {
+              "$ref": "#/$defs/Name",
+              "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+            }
+          },
+          "not": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "version": {
+                "const": 1
+              },
+              "element": {
+                "const": "metric"
+              },
+              "additivity": {
+                "enum": [
+                  "additive",
+                  "semi_additive",
+                  "non_additive",
+                  "recomputable",
+                  "ordered"
+                ]
+              },
+              "non_additive_axes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/Axis"
+                }
+              },
+              "period_end": {
+                "$ref": "#/$defs/PeriodEnd"
+              },
+              "components": {
+                "$ref": "#/$defs/Components"
+              },
+              "aggregate_class": {
+                "enum": [
+                  "distributive",
+                  "algebraic",
+                  "holistic",
+                  "sketch"
+                ],
+                "description": "Checked against the aggregates of the Ossie expression (expression_language.md L281-L290)."
+              },
+              "approximate": {
+                "$ref": "#/$defs/Approximate"
+              },
+              "reaggregable_state": {
+                "enum": [
+                  "exact_bitmap",
+                  "exact_sorted_set"
+                ],
+                "description": "S11/S13: an exact state that re-aggregates across groups."
+              },
+              "zero_denominator": {
+                "enum": [
+                  "null",
+                  "reject"
+                ]
+              },
+              "rounding": {
+                "$ref": "#/$defs/Rounding"
+              },
+              "unit": {
+                "$ref": "#/$defs/Unit"
+              },
+              "currency": {
+                "$ref": "#/$defs/Currency"
+              },
+              "format": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "owner": {
+                "$ref": "#/$defs/Owner"
+              },
+              "status": {
+                "enum": [
+                  "draft",
+                  "certified",
+                  "deprecated"
+                ]
+              },
+              "deprecation": {
+                "$ref": "#/$defs/Deprecation"
+              },
+              "over_metrics": {
+                "$ref": "#/$defs/OverMetrics"
+              },
+              "context": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/ContextStep"
+                }
+              },
+              "level_of_detail": {
+                "$ref": "#/$defs/LevelOfDetail"
+              },
+              "window": {
+                "$ref": "#/$defs/Window"
+              },
+              "allocation": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bridge"
+                ],
+                "properties": {
+                  "bridge": {
+                    "$ref": "#/$defs/Name"
+                  }
+                }
+              },
+              "home_dataset": {
+                "$ref": "#/$defs/Name",
+                "description": "The dataset a model metric that names no field (`COUNT(*)`) counts."
+              }
+            },
+            "required": [
+              "over_metrics",
+              "window"
+            ]
+          }
+        }
+      ],
+      "dependentRequired": {
+        "deprecation": [
+          "status"
+        ],
+        "approximate": [
+          "aggregate_class"
+        ],
+        "non_additive_axes": [
+          "additivity"
+        ],
+        "components": [
+          "additivity"
+        ],
+        "period_end": [
+          "non_additive_axes"
+        ]
+      }
+    },
+    "MetricRef": {
+      "description": "A metric: `metric` for a model metric, `dataset.metric` for a dataset metric.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 257,
+      "pattern": "^[^\\s.]+(\\.[^\\s.]+)?$"
+    },
+    "ModelPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "element"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "element": {
+          "const": "model"
+        },
+        "default_time_zone": {
+          "$ref": "#/$defs/TimeZone"
+        },
+        "calendars": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/Calendar"
+          }
+        },
+        "drill_paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/DrillPath"
+          }
+        },
+        "parent_child": {
+          "$ref": "#/$defs/ParentChild"
+        },
+        "calculation_groups": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/CalculationGroup"
+          }
+        },
+        "parameters": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/Parameter"
+          }
+        },
+        "segments": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/Segment"
+          }
+        },
+        "cohorts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/Cohort"
+          }
+        },
+        "funnels": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/Funnel"
+          }
+        },
+        "preaggregations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/Preaggregation"
+          }
+        }
+      }
+    },
+    "Name": {
+      "description": "An Ossie identifier (expression_language.md L86): at most 128 characters; compared case-insensitively unless quoted.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^\\s.]+$"
+    },
+    "Names": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/Name"
+      },
+      "uniqueItems": true
+    },
+    "NormalizationScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entities"
+      ],
+      "properties": {
+        "entities": {
+          "$ref": "#/$defs/Names"
+        }
+      }
+    },
+    "Numeric": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "precision": {
+          "description": "Total digits, 1-38, as text.",
+          "type": "string",
+          "pattern": "^([1-9]|[12][0-9]|3[0-8])$"
+        },
+        "scale": {
+          "description": "Digits after the point, 0-38 and at most the precision, as text.",
+          "type": "string",
+          "pattern": "^([0-9]|[12][0-9]|3[0-8])$"
+        },
+        "width": {
+          "enum": [
+            "8",
+            "16",
+            "32",
+            "64",
+            "128"
+          ],
+          "description": "Bits of an integer field."
+        },
+        "signed": {
+          "type": "boolean"
+        }
+      },
+      "description": "The exact numeric shape Ossie's Decimal and Integer leave unspecified (spec L74). Decimal fields give precision and scale; integer fields give width and signed."
+    },
+    "OverMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expression",
+        "align"
+      ],
+      "properties": {
+        "expression": {
+          "$ref": "#/$defs/Expression"
+        },
+        "align": {
+          "$ref": "#/$defs/Align"
+        },
+        "ignore_filters": {
+          "$ref": "#/$defs/Names"
+        }
+      }
+    },
+    "Owner": {
+      "description": "Who answers for a member: a person or team handle.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "Parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type",
+        "default"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "type": {
+          "enum": [
+            "number",
+            "date",
+            "member",
+            "metric"
+          ]
+        },
+        "default": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "allowed": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "uniqueItems": true
+        }
+      },
+      "description": "S10: a typed parameter; values are text, typed by `type`."
+    },
+    "ParentChild": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset",
+        "ancestor",
+        "descendant"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/Name"
+        },
+        "ancestor": {
+          "$ref": "#/$defs/Name"
+        },
+        "descendant": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "PeriodEnd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "order_by"
+      ],
+      "properties": {
+        "order_by": {
+          "$ref": "#/$defs/FieldRefs"
+        },
+        "per_entities": {
+          "$ref": "#/$defs/Names"
+        },
+        "tie_breaker": {
+          "$ref": "#/$defs/Name"
+        }
+      },
+      "description": "S3: the value at a period's end: the last row by `order_by` per entity; `tie_breaker` names the unique key that breaks ties."
+    },
+    "Preaggregation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "base_dataset",
+        "grain",
+        "metrics",
+        "refresh"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "base_dataset": {
+          "$ref": "#/$defs/Name"
+        },
+        "grain": {
+          "$ref": "#/$defs/Names"
+        },
+        "metrics": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/MetricRef"
+          },
+          "uniqueItems": true
+        },
+        "refresh": {
+          "enum": [
+            "full",
+            "incremental"
+          ]
+        }
+      }
+    },
+    "RelationshipPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "element"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "element": {
+          "const": "relationship"
+        },
+        "cardinality": {
+          "enum": [
+            "many_to_one",
+            "one_to_one"
+          ],
+          "description": "`from` is the many side (spec); a many-to-many is two relationships through a bridge dataset."
+        },
+        "optionality": {
+          "enum": [
+            "required",
+            "optional"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "cardinality",
+              "referential_integrity"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "temporal": {
+          "$ref": "#/$defs/Temporal"
+        }
+      }
+    },
+    "Rounding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scale",
+        "mode"
+      ],
+      "properties": {
+        "scale": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 38
+        },
+        "mode": {
+          "enum": [
+            "half_even",
+            "half_away_from_zero",
+            "down",
+            "up"
+          ]
+        }
+      }
+    },
+    "Segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "dimension",
+        "metric",
+        "condition",
+        "mode"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "dimension": {
+          "$ref": "#/$defs/FieldRef"
+        },
+        "metric": {
+          "$ref": "#/$defs/MetricRef"
+        },
+        "condition": {
+          "$ref": "#/$defs/Expression"
+        },
+        "grain": {
+          "$ref": "#/$defs/Names"
+        },
+        "mode": {
+          "enum": [
+            "static",
+            "dynamic"
+          ]
+        }
+      }
+    },
+    "Temporal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_time",
+        "valid_from",
+        "valid_to",
+        "match"
+      ],
+      "properties": {
+        "event_time": {
+          "$ref": "#/$defs/FieldRef"
+        },
+        "valid_from": {
+          "$ref": "#/$defs/FieldRef"
+        },
+        "valid_to": {
+          "$ref": "#/$defs/FieldRef"
+        },
+        "boundary": {
+          "enum": [
+            "closed_open"
+          ]
+        },
+        "match": {
+          "enum": [
+            "exactly_one"
+          ]
+        }
+      }
+    },
+    "TimeRoles": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/Name"
+        },
+        "validity": {
+          "$ref": "#/$defs/Validity"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/Name"
+        }
+      },
+      "description": "Each named field's effective Ossie `is_time` must be true (P2-03)."
+    },
+    "TimeZone": {
+      "description": "An IANA time zone name, checked against the pinned database by the compiler (P2-04).",
+      "type": "string",
+      "pattern": "^(UTC|[A-Z][A-Za-z_]+(/[A-Za-z0-9_+-]+){1,2})$"
+    },
+    "TimeZoneDecl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/TimeZone"
+        },
+        "database_version": {
+          "$ref": "#/$defs/TzdbVersion"
+        }
+      },
+      "description": "On a DateTime field, the civil zone its values were written in; on a DateTimeTz field, the named zone Ossie does not keep (spec L80)."
+    },
+    "TzdbVersion": {
+      "description": "An IANA time zone database version, e.g. `2025b`.",
+      "type": "string",
+      "pattern": "^[0-9]{4}[a-z]$"
+    },
+    "Unit": {
+      "description": "A unit of measure in UCUM case-sensitive syntax (P2-04 checks it against the pinned registry).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\s]+$"
+    },
+    "Validity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/Name"
+        },
+        "to": {
+          "$ref": "#/$defs/Name"
+        }
+      },
+      "description": "A closed-open validity interval."
+    },
+    "Window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "function",
+        "of",
+        "partition_by",
+        "order_by",
+        "densify"
+      ],
+      "properties": {
+        "function": {
+          "enum": [
+            "running_total",
+            "moving_average",
+            "rank",
+            "dense_rank",
+            "percent_of_total",
+            "difference",
+            "percent_difference",
+            "lag",
+            "lead"
+          ]
+        },
+        "of": {
+          "$ref": "#/$defs/MetricRef"
+        },
+        "partition_by": {
+          "type": "array",
+          "minItems": 0,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/Name"
+          }
+        },
+        "order_by": {
+          "$ref": "#/$defs/Names"
+        },
+        "densify": {
+          "enum": [
+            "calendar",
+            "none"
+          ]
+        },
+        "frame": {
+          "$ref": "#/$defs/Frame"
+        },
+        "null_fill": {
+          "enum": [
+            "null",
+            "zero"
+          ]
+        }
+      },
+      "description": "S9: a window over a metric. `partition_by`, `order_by` and `densify` are always explicit: nothing is inferred."
+    }
+  }
+}

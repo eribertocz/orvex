@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "element": "metric",
+  "window": {
+    "function": "running_total",
+    "of": "revenue",
+    "partition_by": [
+      "region"
+    ],
+    "order_by": [
+      "month"
+    ],
+    "densify": "calendar",
+    "frame": {
+      "kind": "rows",
+      "preceding": "unbounded",
+      "following": "0"
+    },
+    "null_fill": "null"
+  }
+}

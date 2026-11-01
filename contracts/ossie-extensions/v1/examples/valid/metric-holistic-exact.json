@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "element": "metric",
+  "aggregate_class": "holistic",
+  "reaggregable_state": "exact_bitmap",
+  "allocation": {
+    "bridge": "order_campaign"
+  }
+}

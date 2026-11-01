@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "element": "metric",
+  "over_metrics": {
+    "expression": "gross_revenue - refunds",
+    "align": {
+      "grain": [
+        "month",
+        "region"
+      ],
+      "time": "month"
+    },
+    "ignore_filters": [
+      "channel"
+    ]
+  },
+  "context": [
+    {
+      "operation": "remove",
+      "targets": [
+        "channel"
+      ]
+    }
+  ],
+  "level_of_detail": {
+    "mode": "fixed",
+    "dimensions": [
+      "region"
+    ]
+  }
+}

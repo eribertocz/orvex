@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "element": "model",
+  "default_time_zone": "America/La_Paz",
+  "calendars": [
+    {
+      "name": "fiscal",
+      "kind": "fiscal",
+      "year_start_month": 7
+    },
+    {
+      "name": "working_days",
+      "kind": "business",
+      "dataset": "calendar_days",
+      "date": "day",
+      "business_day": "is_business_day"
+    },
+    {
+      "name": "civil",
+      "kind": "gregorian"
+    }
+  ],
+  "drill_paths": [
+    {
+      "name": "geography",
+      "levels": [
+        "regions.region",
+        "branches.branch"
+      ]
+    }
+  ],
+  "parent_child": {
+    "dataset": "employees",
+    "ancestor": "manager_id",
+    "descendant": "employee_id"
+  },
+  "calculation_groups": [
+    {
+      "name": "time_comparison",
+      "precedence": 10,
+      "items": [
+        {
+          "name": "previous_year",
+          "expression": "revenue"
+        }
+      ]
+    }
+  ],
+  "parameters": [
+    {
+      "name": "top_n",
+      "type": "number",
+      "default": "10",
+      "allowed": [
+        "5",
+        "10",
+        "20"
+      ]
+    }
+  ],
+  "segments": [
+    {
+      "name": "large_customers",
+      "dimension": "customers.customer_id",
+      "metric": "revenue",
+      "condition": "revenue > 10000",
+      "grain": [
+        "month"
+      ],
+      "mode": "dynamic"
+    }
+  ],
+  "cohorts": [
+    {
+      "name": "first_purchase",
+      "entity": "customer",
+      "event": "sales.sale_date",
+      "period": "month"
+    }
+  ],
+  "funnels": [
+    {
+      "name": "checkout",
+      "entity": "session",
+      "steps": [
+        "events.kind = 'cart'",
+        "events.kind = 'paid'"
+      ],
+      "window": "P7D",
+      "order": "strict"
+    }
+  ],
+  "preaggregations": [
+    {
+      "name": "sales_by_month",
+      "base_dataset": "sales",
+      "grain": [
+        "month",
+        "region"
+      ],
+      "metrics": [
+        "revenue",
+        "sales.units"
+      ],
+      "refresh": "incremental"
+    }
+  ]
+}

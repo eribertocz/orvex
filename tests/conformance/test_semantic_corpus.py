@@ -12,6 +12,7 @@ import sys
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -267,3 +268,98 @@ def test_command_exits_one_with_code_and_case(
     )
     assert result.returncode == 1
     assert line in result.stdout
+
+
+# --- Translation into ossie-extensions v1 (P2-01, #276) -----------------------------------------
+
+MODELS = sorted((ROOT / CORPUS / "models").glob("CASE-0??.yaml"))
+VENDOR = "TESTVENDOR"  # the product's own name is read from identity.toml at run time
+
+
+def extension_payloads(node: object, vendor: str) -> list[dict[str, object]]:
+    found: list[dict[str, object]] = []
+    if isinstance(node, dict):
+        for entry in node.get("custom_extensions") or []:
+            if isinstance(entry, dict) and entry.get("vendor_name") == vendor:
+                found.append(json.loads(entry["data"]))
+        for value in node.values():
+            found.extend(extension_payloads(value, vendor))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(extension_payloads(item, vendor))
+    return found
+
+
+def load_model(path: Path) -> dict[str, Any]:
+    model = adapter.load_yaml(path)
+    assert isinstance(model, dict)
+    return dict(model)
+
+
+def test_the_corpus_has_21_models() -> None:
+    assert len(MODELS) == 21
+
+
+@pytest.mark.parametrize("path", MODELS, ids=lambda path: path.stem)
+def test_every_corpus_payload_translates_into_a_valid_v1_payload(path: Path) -> None:
+    from jsonschema import Draft202012Validator
+
+    schema = json.loads(
+        (ROOT / "contracts" / "ossie-extensions" / "v1" / "schema.json").read_text(encoding="utf-8")
+    )
+    model = adapter.load_yaml(path)
+    assert isinstance(model, dict)
+    translated, _ = adapter.translate(dict(model), VENDOR)
+    payloads = extension_payloads(translated, VENDOR)
+    assert payloads
+    for payload in payloads:
+        assert list(Draft202012Validator(schema).iter_errors(payload)) == [], payload
+    assert extension_payloads(translated, adapter.VENDOR_NAME) == []
+
+
+def test_row_policies_are_set_aside_for_p2_08() -> None:
+    with_policies = [path for path in MODELS if adapter.translate(load_model(path), VENDOR)[1]]
+    assert len(with_policies) == 1
+
+
+@pytest.mark.parametrize(
+    ("where", "payload"),
+    [
+        ("dataset", {"version": 1, "entity": "x", "colour": "red"}),
+        ("field", {"version": 1, "time_role": "lunar"}),
+        ("field", {"version": 1, "unit": {"meters": "m"}}),
+        ("metric", {"version": 1, "aggregation": {"class": "mostly_additive"}}),
+        ("dataset", {"version": 2, "entity": "x"}),
+    ],
+)
+def test_an_untranslatable_key_or_value_fails(where: str, payload: dict[str, object]) -> None:
+    entry = {"vendor_name": adapter.VENDOR_NAME, "data": json.dumps(payload)}
+    field: dict[str, Any] = {"name": "f", "expression": {"sql": "f"}}
+    dataset: dict[str, Any] = {"name": "d", "source": "d", "fields": [field]}
+    model: dict[str, Any] = {"version": "0.2.0.dev0", "name": "m", "datasets": [dataset]}
+    if where == "dataset":
+        dataset["custom_extensions"] = [entry]
+    elif where == "field":
+        field["custom_extensions"] = [entry]
+    else:
+        model["metrics"] = [
+            {"name": "x", "expression": {"sql": "SUM(d.f)"}, "custom_extensions": [entry]}
+        ]
+    with pytest.raises(adapter.UntranslatableKey):
+        adapter.translate(model, VENDOR)
+
+
+def test_a_bridge_moves_onto_its_bridge_dataset() -> None:
+    translated, _ = adapter.translate(
+        load_model(ROOT / CORPUS / "models" / "CASE-011.yaml"), VENDOR
+    )
+    bridge_dataset = next(d for d in translated["datasets"] if d["name"] == "order_campaign")
+    (payload,) = extension_payloads(bridge_dataset, VENDOR)
+    assert payload["bridge"] == {
+        "left": "order",
+        "right": "campaign",
+        "weight": "allocation_weight",
+        "total": "1.00",
+        "tolerance": "0.00",
+        "normalization_scope": {"entities": ["order"]},
+    }

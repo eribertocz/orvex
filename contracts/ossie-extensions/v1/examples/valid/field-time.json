@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "element": "field",
+  "time_zone": {
+    "name": "America/La_Paz",
+    "database_version": "2025b"
+  },
+  "calendar": "fiscal",
+  "nullability": "nullable"
+}

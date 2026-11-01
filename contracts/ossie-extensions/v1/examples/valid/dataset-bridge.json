@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "element": "dataset",
+  "entity": "order_campaign",
+  "bridge": {
+    "left": "order",
+    "right": "campaign",
+    "weight": "allocation_weight",
+    "total": "1.00",
+    "tolerance": "0.00",
+    "normalization_scope": {
+      "entities": [
+        "order"
+      ]
+    }
+  }
+}

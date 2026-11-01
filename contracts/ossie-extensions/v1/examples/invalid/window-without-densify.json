@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "element": "metric",
+  "window": {
+    "function": "rank",
+    "of": "revenue",
+    "partition_by": [],
+    "order_by": [
+      "month"
+    ]
+  }
+}
