@@ -29,8 +29,6 @@ SERVER = "https://extensions.duckdb.org/"
 MAX_BYTES = 256 * 1024 * 1024  # the largest official file today is about 60 MB unpacked
 STORE = Path("packages/store/src")
 USER_AGENT = "duckdb-extension-installer (development tool)"
-# DuckDB's own names for the aliases the store uses (`duckdb_extensions().aliases`).
-FILE_NAMES = {"sqlite": "sqlite_scanner", "postgres": "postgres_scanner"}
 
 type Fetch = Callable[[str, Path], None]
 
@@ -63,12 +61,12 @@ def store_extensions(root: Path = REPOSITORY_ROOT) -> list[str]:
                     ):
                         from_list.add(id(inner))
         for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Assign)
-                and any(isinstance(t, ast.Name) and t.id == "EXTENSIONS" for t in node.targets)
-                and isinstance(node.value, ast.Tuple)
-            ):
-                for element in node.value.elts:
+            value = _extensions_value(node)
+            if value is not None:
+                if not isinstance(value, (ast.Tuple, ast.List)):
+                    line = getattr(node, "lineno", 0)
+                    raise ExtensionError(f"EXTENSION_NAME_NOT_LITERAL: {path}:{line}")
+                for element in value.elts:
                     names.add(_literal(element, path))
             elif (
                 isinstance(node, ast.Call)
@@ -81,6 +79,22 @@ def store_extensions(root: Path = REPOSITORY_ROOT) -> list[str]:
                     raise ExtensionError(f"EXTENSION_NAME_NOT_LITERAL: {path}:{node.lineno}")
                 names.add(_literal(node.args[0], path))
     return sorted(names)
+
+
+def _extensions_value(node: ast.AST) -> ast.expr | None:
+    """The value bound to `EXTENSIONS` by this node, in any assignment form."""
+    if isinstance(node, ast.Assign) and any(
+        isinstance(t, ast.Name) and t.id == "EXTENSIONS" for t in node.targets
+    ):
+        return node.value
+    if (
+        isinstance(node, (ast.AnnAssign, ast.AugAssign))
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "EXTENSIONS"
+    ):
+        # An annotation without a value binds nothing; anything else must be literal.
+        return node.value if node.value is not None else ast.Tuple(elts=[])
+    return None
 
 
 def _literal(node: ast.expr, path: Path) -> str:
@@ -110,7 +124,14 @@ def check_version(root: Path = REPOSITORY_ROOT) -> str:
 
 
 def file_name(name: str) -> str:
-    return FILE_NAMES.get(name, name)
+    """The extension's file name, resolved through DuckDB's own aliases (`sqlite` is the
+    alias of `sqlite_scanner`)."""
+    with duckdb.connect() as connection:
+        rows = connection.execute(
+            "SELECT extension_name FROM duckdb_extensions() WHERE list_contains(aliases, ?)",
+            [name],
+        ).fetchall()
+    return str(rows[0][0]) if rows else name
 
 
 def copy_bounded(chunks: Iterable[bytes], destination: Path, limit: int = MAX_BYTES) -> None:

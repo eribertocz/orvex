@@ -9,6 +9,9 @@
 #   "check": gates every pull request; "scoped": gates only pull requests that change the
 #   workflow's `paths`, and the local verification does not run it (its `reason` says why);
 #   "automation": acts on the repository and checks nothing.
+#   A check job also records `digest`, a digest of the whole job in its workflow: when the job
+#   changes in any way, the drift test fails until its entries here are compared with it again
+#   and the digest updated (`python -m tools.ci.checks` prints the new one).
 # [[job.check]]: name, run (the step's first line), directory (the step's working directory,
 #   when not the repository root), and `local`: true when the local full verification runs
 #   it; false with the `reason` it can run only in CI.
@@ -17,6 +20,7 @@
 workflow = "checks.yml"
 job = "product-name"
 kind = "check"
+digest = "83c5deeca3cbebec"
 setup = []
 [[job.check]]
 name = "product-name"
@@ -27,6 +31,7 @@ local = true
 workflow = "checks.yml"
 job = "boundaries"
 kind = "check"
+digest = "1f51fdbcd7302f8e"
 setup = []
 [[job.check]]
 name = "boundaries"
@@ -37,6 +42,7 @@ local = true
 workflow = "contracts.yml"
 job = "contracts"
 kind = "check"
+digest = "d290acd3722cec10"
 setup = ["python -m pip install --quiet pip==26.2.2"]
 [[job.check]]
 name = "contracts-validate"
@@ -45,12 +51,14 @@ local = true
 [[job.check]]
 name = "contracts-generated"
 run = "python -m tools.contracts.generate --check"
-local = true
+local = false
+reason = "the generator runs the web tools (npm ci --prefix web), which need Node 24; the sandbox has Node 22"
 
 [[job]]
 workflow = "governance-scripts.yml"
 job = "governance-scripts"
 kind = "check"
+digest = "c00b552535c8f864"
 setup = []
 [[job.check]]
 name = "governance-scripts"
@@ -62,6 +70,7 @@ local = true
 workflow = "python.yml"
 job = "python-lint"
 kind = "check"
+digest = "d738506075b8608f"
 setup = ["python -m pip install --quiet pip==26.2.2"]
 [[job.check]]
 name = "ruff-format"
@@ -76,6 +85,7 @@ local = true
 workflow = "python.yml"
 job = "python-types"
 kind = "check"
+digest = "75687ff402893421"
 setup = ["python -m pip install --quiet pip==26.2.2"]
 [[job.check]]
 name = "mypy-modules"
@@ -90,6 +100,7 @@ local = true
 workflow = "python.yml"
 job = "python-tests-part"
 kind = "check"
+digest = "d628012ea6e16adc"
 pythons = ["3.15", "3.14"]
 setup = [
   "python -m pip install --quiet pip==26.2.2",
@@ -108,6 +119,7 @@ local = true
 workflow = "python.yml"
 job = "python-tests"
 kind = "check"
+digest = "6d1a12821c8f372d"
 pythons = ["3.15", "3.14"]
 setup = ['test "$RESULT" = success']
 # Reports the parts of python-tests-part as the required checks; nothing to run locally.
@@ -116,6 +128,7 @@ setup = ['test "$RESULT" = success']
 workflow = "python.yml"
 job = "python-lock"
 kind = "check"
+digest = "73afff09045a5b65"
 setup = []
 [[job.check]]
 name = "python-lock"
@@ -126,6 +139,7 @@ local = true
 workflow = "web.yml"
 job = "licenses"
 kind = "check"
+digest = "356a33b2e6ef5a12"
 setup = ["python -m pip install --quiet pip==26.2.2"]
 [[job.check]]
 name = "licenses"
@@ -136,6 +150,7 @@ local = true
 workflow = "web.yml"
 job = "web-check"
 kind = "check"
+digest = "8085c8955d9c821a"
 setup = ["npm ci"]
 [[job.check]]
 name = "web-check"
@@ -148,6 +163,7 @@ reason = "the web tools need Node 24 (web/package.json engines); the sandbox has
 workflow = "web.yml"
 job = "web-lint"
 kind = "check"
+digest = "9516527ee746ff18"
 setup = ["npm ci"]
 [[job.check]]
 name = "web-lint"
@@ -160,6 +176,7 @@ reason = "the web tools need Node 24 (web/package.json engines); the sandbox has
 workflow = "web.yml"
 job = "web-test"
 kind = "check"
+digest = "361646c4e511b8ca"
 setup = ["npm ci"]
 [[job.check]]
 name = "web-test"
@@ -172,6 +189,7 @@ reason = "the web tools need Node 24 (web/package.json engines); the sandbox has
 workflow = "web.yml"
 job = "web-build"
 kind = "check"
+digest = "37ae5839fe610415"
 setup = ["npm ci"]
 [[job.check]]
 name = "web-build"
@@ -203,6 +221,7 @@ setup = []
 workflow = "governance.yml"
 job = "governance"
 kind = "check"
+digest = "4e8985542b8d0b99"
 setup = []
 [[job.check]]
 name = "governance"

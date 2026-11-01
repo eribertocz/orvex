@@ -6,6 +6,9 @@ difference, so the list cannot fall behind what pull requests run.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +22,15 @@ LIST = Path("tools/ci/checks.toml")
 WORKFLOWS = Path(".github/workflows")
 KINDS = ("check", "scoped", "automation")
 PULL_REQUEST_EVENTS = ("pull_request", "pull_request_target")
+# Actions a check job may use: they prepare the runner and check nothing themselves. Any
+# other action in a check job is drift, so a gate cannot be added as a `uses:` step unseen.
+PREPARING_ACTIONS = (
+    "actions/checkout",
+    "actions/setup-python",
+    "actions/setup-node",
+    "actions/upload-artifact",
+    "actions/download-artifact",
+)
 
 
 @dataclass(frozen=True)
@@ -72,6 +84,13 @@ def _first_line(step: dict[str, Any]) -> str:
     return str(step["run"]).splitlines()[0]
 
 
+def digest(body: dict[str, Any]) -> str:
+    """A digest of the whole job as the workflow defines it: every step's full text, its
+    environment, conditions, services and matrix. Any change to the job changes it."""
+    canonical = json.dumps(body, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
 def drift(root: Path = REPOSITORY_ROOT) -> list[str]:
     """One line per difference between the list and the pull-request workflows."""
     found: list[str] = []
@@ -112,6 +131,15 @@ def _job_drift(label: str, job: dict[str, Any], body: dict[str, Any], *, scoped:
         found.append(f"job {label} is scoped and needs a reason")
     if kind != "check":
         return found
+    if job.get("digest") != (current := digest(body)):
+        found.append(
+            f"job {label} changed since this list was checked against it: compare every step "
+            f'with its entries here, then set digest = "{current}"'
+        )
+    for step in body.get("steps", []):
+        action = str(step.get("uses", "")).split("@")[0]
+        if action and action not in PREPARING_ACTIONS:
+            found.append(f"job {label}: action {action} is not a preparing action; list it")
     matrix = body.get("strategy", {}).get("matrix", {}).get("python")
     if tuple(matrix or ()) != tuple(job.get("pythons", ())):
         found.append(f"job {label}: pythons {job.get('pythons', [])} differ from matrix {matrix}")
@@ -160,3 +188,13 @@ def not_run_jobs(root: Path = REPOSITORY_ROOT) -> list[tuple[str, str]]:
         for job in _jobs(root)
         if job.get("kind") == "scoped"
     ]
+
+
+def main() -> int:
+    found = drift()
+    print("\n".join(found) if found else f"{LIST}: matches the workflows")
+    return 1 if found else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -58,6 +58,33 @@ def test_a_name_that_is_not_a_literal_fails_closed(tmp_path: Path) -> None:
         tool.store_extensions(write(tmp_path, {STORE: source}))
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "EXTENSIONS = tuple(names())\n",
+        "EXTENSIONS: tuple[str, ...] = tuple(names())\n",
+        'EXTENSIONS = ("icu", name)\n',
+        "EXTENSIONS += more\n",
+    ],
+)
+def test_any_binding_of_the_list_that_is_not_literal_fails_closed(
+    tmp_path: Path, source: str
+) -> None:
+    with pytest.raises(tool.ExtensionError, match="EXTENSION_NAME_NOT_LITERAL"):
+        tool.store_extensions(write(tmp_path, {STORE: source}))
+
+
+def test_annotated_and_list_forms_are_read(tmp_path: Path) -> None:
+    source = 'EXTENSIONS: tuple[str, ...] = ("icu",)\nOTHER = 1\nEXTENSIONS += ["azure"]\n'
+    assert tool.store_extensions(write(tmp_path, {STORE: source})) == ["azure", "icu"]
+
+
+def test_file_names_come_from_duckdb_aliases() -> None:
+    assert tool.file_name("sqlite") == "sqlite_scanner"
+    assert tool.file_name("postgres") == "postgres_scanner"
+    assert tool.file_name("ducklake") == "ducklake"
+
+
 def test_the_pinned_version_is_read_from_the_lock_of_this_python() -> None:
     assert tool.locked_version(REPOSITORY_ROOT, (3, 14)) == duckdb.__version__
     assert tool.locked_version(REPOSITORY_ROOT, (3, 15)) == duckdb.__version__
@@ -138,8 +165,10 @@ def test_nothing_is_downloaded_when_every_extension_loads(tmp_path: Path) -> Non
     def fetch(url: str, destination: Path) -> None:
         calls.append(url)
 
-    names = [n for n in tool.store_extensions(REPOSITORY_ROOT) if n != "azure"]
+    names = tool.store_extensions(REPOSITORY_ROOT)
     present = [n for n in names if list(directory.rglob(f"{tool.file_name(n)}.duckdb_extension"))]
+    if not present:
+        pytest.skip("none of the store's extensions is installed on this machine")
     assert tool.ensure(present, directory, fetch) == []
     assert calls == []
 

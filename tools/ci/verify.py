@@ -33,6 +33,7 @@ from tools.ci import checks
 from tools.repository import REPOSITORY_ROOT
 
 TESTS = "python-tests"
+PIP = "pip==26.2.2"  # the version CI installs first (python.yml)
 CACHE = Path.home() / ".cache" / "verify-environments"
 # The checks `fast` runs: quick ones, each well under a minute.
 FAST = (
@@ -77,7 +78,7 @@ def plan(root: Path, pythons: Sequence[str], junit_dir: Path) -> tuple[list[Step
         elif check.name == TESTS:
             for python in check.pythons:
                 junit = str(junit_dir / f"junit-{python}.xml")
-                command = check.run.replace("--junitxml=junit.xml", f"--junitxml={junit}")
+                command = _with_report(checks.script(root, check), junit)
                 steps.append(
                     Step(f"{TESTS}-{python}", python, None, ("bash", "-c", command), junit)
                 )
@@ -93,6 +94,13 @@ def plan(root: Path, pythons: Sequence[str], junit_dir: Path) -> tuple[list[Step
     for job, reason in checks.not_run_jobs(root):
         skipped.append(Result(job, "not run", reason))
     return steps, skipped
+
+
+def _with_report(script: str, junit: str) -> str:
+    """The test step's own script, writing its report where this run reads it."""
+    if script.count("--junitxml=junit.xml") != 1:
+        raise RuntimeError("the test step no longer writes --junitxml=junit.xml once")
+    return script.replace("--junitxml=junit.xml", f"--junitxml={junit}")
 
 
 def changed_tests(root: Path, files: Iterable[str]) -> list[str]:
@@ -186,60 +194,37 @@ def _interpreter(python: str) -> str:
 
 
 def environment(root: Path, python: str, checkout: Path) -> Path:
-    """A virtual environment for `python` with its lock file installed (kept between runs
-    while the lock file is unchanged) and the checkout's packages installed editable."""
+    """A virtual environment for `python` built as CI builds it: pip, then the lock file
+    (kept between runs while the lock file is unchanged and its install completed), then the
+    checkout's packages installed editable."""
     lock = root / ("pylock.py314.toml" if python == "3.14" else "pylock.toml")
     digest = hashlib.sha256(lock.read_bytes()).hexdigest()[:16]
     venv = CACHE / f"{python}-{digest}"
-    uv = shutil.which("uv")
-    if not (venv / "bin" / "python").is_file():
+    interpreter = venv / "bin" / "python"
+    complete = venv / ".lock-installed"
+    if not complete.is_file():
         shutil.rmtree(venv, ignore_errors=True)
         venv.parent.mkdir(parents=True, exist_ok=True)
-        if uv:
+        subprocess.run([_interpreter(python), "-m", "venv", venv], check=True)
+        subprocess.run([interpreter, "-m", "pip", "install", "-q", PIP], check=True)
+        subprocess.run([interpreter, "-m", "pip", "install", "-q", "-r", lock], check=True)
+        complete.write_text(lock.name)
+    for package in sorted((checkout / "packages").iterdir()):
+        if (package / "pyproject.toml").is_file():
             subprocess.run(
-                [uv, "venv", "--quiet", "--python", _interpreter(python), venv], check=True
-            )
-            subprocess.run(
-                [uv, "pip", "install", "--quiet", "--python", venv / "bin" / "python", "-r", lock],
+                [
+                    interpreter,
+                    "-m",
+                    "pip",
+                    "install",
+                    "-q",
+                    "--no-deps",
+                    "--no-build-isolation",
+                    "-e",
+                    package,
+                ],
                 check=True,
             )
-        else:
-            subprocess.run([_interpreter(python), "-m", "venv", venv], check=True)
-            subprocess.run(
-                [venv / "bin" / "python", "-m", "pip", "install", "-q", "-r", lock], check=True
-            )
-    packages = sorted(
-        str(p) for p in (checkout / "packages").iterdir() if (p / "pyproject.toml").is_file()
-    )
-    editable = [arg for package in packages for arg in ("-e", package)]
-    if uv:
-        subprocess.run(
-            [
-                uv,
-                "pip",
-                "install",
-                "--quiet",
-                "--no-deps",
-                "--python",
-                venv / "bin" / "python",
-                *editable,
-            ],
-            check=True,
-        )
-    else:
-        subprocess.run(
-            [
-                venv / "bin" / "python",
-                "-m",
-                "pip",
-                "install",
-                "-q",
-                "--no-deps",
-                "--no-build-isolation",
-                *editable,
-            ],
-            check=True,
-        )
     return venv
 
 
@@ -318,14 +303,17 @@ def fast(
     steps = [
         Step(c.name, "", c.directory, ("bash", "-eo", "pipefail", "-c", checks.script(root, c)))
         for c in checks.load(root)
-        if c.name in FAST
+        if c.name in FAST and c.local
     ]
-    if tests := changed_tests(root, changed):
-        steps.append(Step(TESTS, "", None, (sys.executable, "-m", "pytest", "-q", *tests)))
     variables = dict(os.environ)
     variables["PATH"] = f"{Path(sys.executable).parent}{os.pathsep}{variables.get('PATH', '')}"
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        results = list(pool.map(lambda s: run(s, root, variables), steps))
+    with tempfile.TemporaryDirectory(prefix="verify-") as scratch:
+        if tests := changed_tests(root, changed):
+            junit = str(Path(scratch) / "junit.xml")
+            command = (sys.executable, "-m", "pytest", "-q", f"--junitxml={junit}", *tests)
+            steps.append(Step(TESTS, "", None, command, junit))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(lambda s: run(s, root, variables), steps))
     text, status = summary(results)
     print(text)
     return status

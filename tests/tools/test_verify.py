@@ -123,3 +123,20 @@ def test_full_refuses_uncommitted_changes(
     (tmp_path / "new.txt").write_text("x")
     assert verify.full(tmp_path, 1) == 2
     assert "new.txt" in capsys.readouterr().out
+
+
+def test_the_test_step_must_still_write_its_report_where_verify_reads_it() -> None:
+    assert verify._with_report("pytest --junitxml=junit.xml\nmore", "/r.xml").startswith(
+        "pytest --junitxml=/r.xml"
+    )
+    with pytest.raises(RuntimeError, match="junitxml"):
+        verify._with_report("pytest --junitxml=other.xml", "/r.xml")
+
+
+def test_the_planned_test_command_is_the_whole_workflow_step(tmp_path: Path) -> None:
+    steps, _ = verify.plan(REPOSITORY_ROOT, ("3.15", "3.14"), tmp_path)
+    check = next(c for c in checks.load(REPOSITORY_ROOT) if c.name == verify.TESTS)
+    step = next(s for s in steps if s.junit)
+    assert step.command[-1] == verify._with_report(
+        checks.script(REPOSITORY_ROOT, check), step.junit or ""
+    )

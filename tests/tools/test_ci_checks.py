@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tools.ci import checks
 from tools.repository import REPOSITORY_ROOT
@@ -36,10 +37,11 @@ jobs:
       - run: pip install x
       - run: ruff check .
 """
-LISTED = """[[job]]
+LISTED = f"""[[job]]
 workflow = "ci.yml"
 job = "lint"
 kind = "check"
+digest = "{checks.digest(yaml.safe_load(WORKFLOW)["jobs"]["lint"])}"
 setup = ["pip install x"]
 [[job.check]]
 name = "ruff"
