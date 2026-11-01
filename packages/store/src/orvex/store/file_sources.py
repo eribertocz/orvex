@@ -33,6 +33,7 @@ from orvex.store.sql_text import identifier, literal
 
 # The types a CSV text column may take, in order: the first that gives back every value wins.
 _CSV_ORDER = ("BOOLEAN", "BIGINT", "DATE", "TIMESTAMP", "TIMESTAMPTZ")
+_CSV_SAMPLE = 20480  # rows on which each type is tried before one is checked on every row
 # A timestamp DuckDB reads to the microsecond with an explicit offset: its instant is exact.
 _OFFSET_TIMESTAMP = (
     r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-](0\d|1[0-4])(:?[0-5]\d)?)"
@@ -78,7 +79,7 @@ def _parquet_view(
     widest, kinds, duplicated, int96 = _parquet_schema(connection, listed)
     in_files = {key: name for key, (name, _) in kinds.items()}
     messages, forced, shared, folder_guard = _folders(
-        connection, source, reader_of, files, in_files
+        connection, source, reader_of, files, in_files, parquet=listed
     )
     reader = reader_of(forced)
     united = _columns(connection, reader)
@@ -211,16 +212,29 @@ def _csv_view(
     ]
     proven: dict[str, str] = {}
     if candidates:
-        # A column with no value at all keeps its text: no value proves a type.
-        checks = ", ".join(
+        # Each type is first tried on the first rows (cheap), and only the one that fits there
+        # is checked over every row of every file (one condition per column, one scan). A
+        # column with no value at all keeps its text: no value proves a type.
+        tries = ", ".join(
             f"count({identifier(name)}) > 0 AND coalesce(bool_and({_keeps(name, target)}), false)"
             for name, target in candidates
         )
-        row = _row(connection, f"SELECT [{checks}] FROM {reader}")
-        kept = row[0] if row and isinstance(row[0], list) else [False] * len(candidates)
-        for (name, target), ok in zip(candidates, kept, strict=True):
-            if ok is True and name not in proven:
-                proven[name] = target
+        sample = _row(connection, f"SELECT [{tries}] FROM (FROM {reader} LIMIT {_CSV_SAMPLE})")
+        fits = sample[0] if sample and isinstance(sample[0], list) else []
+        proposed: dict[str, str] = {}
+        for (name, target), ok in zip(candidates, fits, strict=False):
+            if ok is True and name not in proposed:
+                proposed[name] = target
+        if proposed:
+            checks = ", ".join(
+                f"coalesce(bool_and({_keeps(name, target)}), false)"
+                for name, target in proposed.items()
+            )
+            row = _row(connection, f"SELECT [{checks}] FROM {reader}")
+            kept = row[0] if row and isinstance(row[0], list) else []
+            for (name, target), ok in zip(proposed.items(), kept, strict=False):
+                if ok is True:
+                    proven[name] = target
     parts = []
     for name, _ in columns:
         column = identifier(name)
@@ -276,6 +290,7 @@ def _folders(
     reader_of: Callable[[str], str],
     files: list[str],
     in_files: dict[str, str],
+    parquet: str = "",
 ) -> tuple[dict[str, str], str, set[str], str]:
     """The columns DuckDB makes from `name=value` folders (Hive partitioning), checked against
     the values DuckDB itself serves: it decodes `%XX` in a value and may type it (`2026` as
@@ -288,6 +303,12 @@ def _folders(
     ` AND …`, the condition that checks those agreeing columns again on every read, so a file
     rewritten afterwards fails instead of being served its folder's value. Every comparison
     treats NULL as a value (`IS NOT DISTINCT FROM`), never as a pass.
+
+    For Parquet (`parquet` lists its files) a shared column is compared through each file's
+    footer statistics, never its rows: every row group's minimum and maximum are the folder's
+    text and it holds no NULL. The same metadata check runs on every read; a file without such
+    statistics fails it, so its column is refused (fail closed). CSV files have no statistics:
+    their rows are compared, on every read too.
     """
     keys = {fold(key) for file in files for key in _folder_names(file)}
     served = [name for name, _ in _columns(connection, reader_of(""))]
@@ -319,33 +340,11 @@ def _folders(
         for index in range(len(folder))
     )
     shared = [(index, name) for index, name in enumerate(folder) if fold(name) in in_files]
-    agree = ", ".join(
-        f"coalesce(bool_and(t.t{index} IS NOT DISTINCT FROM t.l{index} AND "
-        f"CAST(f.{identifier(in_files[fold(name)])} AS VARCHAR) IS NOT DISTINCT FROM "
-        f"t.t{index}), true)"
-        for index, name in shared
-    )
     row = _row(
         connection,
         f"SELECT [{keeps}] FROM {text_rows} AS t JOIN {typed_rows} AS d USING ({by_file})",
     )
     kept = row[0] if row and isinstance(row[0], list) else []
-    agreed: list[object] = []
-    if shared:  # every row of every file, against its folder's value
-        files_rows = reader_of(", hive_partitioning = false" + tag)
-        found = _row(
-            connection,
-            f"SELECT [{agree}] FROM {files_rows} AS f JOIN {text_rows} AS t USING ({by_file})",
-        )
-        agreed = found[0] if found and isinstance(found[0], list) else []
-    messages = {}
-    for position, (_, name) in enumerate(shared):
-        if not (position < len(agreed) and agreed[position] is True):
-            messages[fold(name)] = (
-                f"UNSUPPORTED_SOURCE_TYPE: column {in_files[fold(name)]} of source {source} is "
-                f"also the folder name {name}=…, and some file holds other values than its "
-                "folder's: DuckDB would serve the folder's."
-            )
     texts_only = [
         name for index, name in enumerate(folder) if not (index < len(kept) and kept[index] is True)
     ]
@@ -353,36 +352,83 @@ def _folders(
     if texts_only:
         listed = ", ".join(f"{literal(name)}: 'VARCHAR'" for name in texts_only)
         forced = f", hive_types = {{{listed}}}"
-    agreeing = [(index, name) for index, name in shared if fold(name) not in messages]
-    guard = ""
-    if agreeing:
-        columns = ", ".join(f"t{index}" for index, _ in agreeing)
-        values = _row(
-            connection,
-            f"SELECT list({{'file': {by_file}, 'texts': [{columns}]}}) FROM {text_rows}",
-        )
-        per_file = values[0] if values and isinstance(values[0], list) else []
-        conditions = []
-        for position, (_, name) in enumerate(agreeing):
-            column = f"CAST({identifier(in_files[fold(name)])} AS VARCHAR)"
+    if not shared:
+        return {}, forced, set(), ""
+    # One value per file, or the folder is not that file's value: no text then (never equal).
+    columns = ", ".join(
+        f"CASE WHEN t{index} IS NOT DISTINCT FROM l{index} THEN t{index} END" for index, _ in shared
+    )
+    single = ", ".join(f"t{index} IS NOT DISTINCT FROM l{index}" for index, _ in shared)
+    values = _row(
+        connection,
+        f"SELECT list({{'file': {by_file}, 'texts': [{columns}], 'single': [{single}]}}) "
+        f"FROM {text_rows}",
+    )
+    per_file = values[0] if values and isinstance(values[0], list) else []
+    checks = []
+    for position, (_, name) in enumerate(shared):
+        column = in_files[fold(name)]
+        folder_text = {
+            str(entry["file"]): entry["texts"][position] if entry["single"][position] else None
+            for entry in per_file
+        }
+        if parquet:
             cases = " ".join(
-                f"WHEN {literal(str(entry['file']))} THEN {column} IS NOT DISTINCT FROM "
+                f"WHEN {literal(file)} THEN "
                 + (
-                    "NULL"
-                    if entry["texts"][position] is None
-                    else literal(str(entry["texts"][position]))
+                    "false"
+                    if text is None
+                    else f"stats_min_value IS NOT DISTINCT FROM {literal(str(text))} "
+                    f"AND stats_max_value IS NOT DISTINCT FROM {literal(str(text))} "
+                    "AND stats_null_count = 0"
                 )
-                for entry in per_file
+                for file, text in folder_text.items()
             )
-            conditions.append(f"CASE {by_file} {cases} ELSE false END")
+            # `lower` may match more column chunks than DuckDB's ASCII-only rule, never fewer: an
+            # extra one is checked too (fail closed).
+            checks.append(
+                f"(SELECT count(*) > 0 AND coalesce(bool_and(CASE file_name {cases} ELSE false "
+                f"END), false) FROM parquet_metadata([{parquet}]) "
+                f"WHERE lower(path_in_schema) = lower({literal(column)}))"
+            )
+        else:
+            value = f"CAST({identifier(column)} AS VARCHAR)"
+            cases = " ".join(
+                f"WHEN {literal(file)} THEN {value} IS NOT DISTINCT FROM "
+                + ("NULL" if text is None else literal(str(text)))
+                for file, text in folder_text.items()
+            )
+            files_rows = reader_of(", hive_partitioning = false" + tag)
+            checks.append(
+                f"(SELECT coalesce(bool_and(CASE {by_file} {cases} ELSE false END), true) "
+                f"FROM {files_rows})"
+            )
+    # The check that decides now is the one every read runs.
+    found = _row(connection, f"SELECT [{', '.join(checks)}]")
+    agreed = found[0] if found and isinstance(found[0], list) else []
+    messages = {}
+    kept_checks = []
+    for position, (_, name) in enumerate(shared):
+        if position < len(agreed) and agreed[position] is True:
+            kept_checks.append(checks[position])
+            continue
+        messages[fold(name)] = (
+            f"UNSUPPORTED_SOURCE_TYPE: column {in_files[fold(name)]} of source {source} is "
+            f"also the folder name {name}=…, and some file holds other values than its folder's "
+            "(or, for Parquet, no statistics that prove it): DuckDB would serve the folder's."
+        )
+    guard = ""
+    if kept_checks:
         message = (
             f"UNSUPPORTED_SOURCE_TYPE: a file of source {source} now holds, in a column shared "
             "with its folder name, another value than its folder's; attach the source again."
         )
-        files_rows = reader_of(", hive_partitioning = false" + tag)
-        check = f"(SELECT coalesce(bool_and({' AND '.join(conditions)}), true) FROM {files_rows})"
-        guard = f" AND CASE WHEN {check} THEN true ELSE error({literal(message)}) END"
-    return messages, forced, {fold(name) for _, name in agreeing}, guard
+        guard = (
+            f" AND CASE WHEN {' AND '.join(kept_checks)} THEN true "
+            f"ELSE error({literal(message)}) END"
+        )
+    agreeing = {fold(name) for _, name in shared} - set(messages)
+    return messages, forced, agreeing, guard
 
 
 def _folder_names(file: str) -> list[str]:
