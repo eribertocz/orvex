@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -479,3 +480,32 @@ def test_synthetic_dataset_through_a_postgres_source(
         "payments": 236_400,
         "credit_notes": 100,
     }
+
+
+def test_the_sqlite_copy_reads_only_schema_names_in_python(
+    sqlite_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The reason of the one non-DuckDB reader allowed in store (data-reader-allowlist.toml):
+    # the backup API copies the file, and Python reads only schema names; DuckDB reads the rows.
+    from orvex.store import lake as lake_module
+
+    traced: list[str] = []
+    connect = sqlite3.connect
+
+    def tracing(database: str | Path, uri: bool = False) -> sqlite3.Connection:
+        connection: sqlite3.Connection = connect(database, uri=uri)
+        connection.set_trace_callback(traced.append)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", tracing)
+    columns = lake_module._sqlite_snapshot(sqlite_source(sqlite_file), tmp_path / "copy.sqlite")
+    assert ("consumers", "id", "INTEGER") in columns
+    assert traced, "the copy ran no statement"
+    schema_only = (
+        r"SELECT count\(\*\) FROM sqlite_master WHERE type = 'view'",
+        r"SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        r"SELECT name, type FROM pragma_table_info\('[a-z_]+'\)",
+        r"-- PRAGMA table_info='[a-z_]+'",  # SQLite's own trace of that table function
+    )
+    for statement in traced:
+        assert any(re.fullmatch(p, statement) for p in schema_only), statement

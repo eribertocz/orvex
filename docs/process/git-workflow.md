@@ -84,6 +84,41 @@ Before merging, the Agent verifies its own pull request according to the risk ti
 | **B — standard** | Every other change: `web`, `dashboards`, `mcp`, server tests, tooling, documentation outside the tier A paths | All required checks green; the Agent checks every criterion and posts the case matrix with results |
 | **C — routine** | Dependabot patch and minor updates of Python and npm packages; typo fixes outside governed paths | Auto-merge when all required checks are green: `.github/workflows/dependabot-auto-merge.yml` enables it for these pull requests only, and every required check and rule still applies. A pip update merges once the Agent has pushed the regenerated lock files, since Dependabot cannot regenerate them. GitHub Actions updates touch `.github/workflows/` and are therefore `owner-merge` |
 
+The `governance` check reads the two lists below.
+
+### Critical paths (tier A)
+
+```
+packages/store/        persistence and sources
+packages/transform/    data transformation
+packages/semantic/     the semantic engine
+packages/access/       security
+packages/server/src/   the server that composes the modules
+contracts/             public contracts
+conformance/           conformance suites
+docs/adr/              architecture decisions
+docs/product/laws.md   laws
+.github/workflows/     CI gates
+```
+
+### Not counted in a pull request's size
+
+```
+pylock.toml                       lock files
+pylock.py314.toml
+web/package-lock.json
+packages/contracts/src/orvex/contracts/   generated contract types
+!packages/contracts/src/orvex/contracts/__init__.py     hand-written: counted
+!packages/contracts/src/orvex/contracts/contracts.toml  hand-written: counted
+!packages/contracts/src/orvex/contracts/py.typed        hand-written: counted
+tests/contracts/generated/        generated contract fixtures
+!tests/contracts/generated/__init__.py                  hand-written: counted
+web/src/lib/contracts/            generated TypeScript types
+!web/src/lib/contracts/contracts.test.ts                hand-written: counted
+```
+
+A test (`tests/tools/test_checks.py`, `TestUncountedFiles`) fails when a tracked file this list leaves uncounted is neither a lock file nor a file `tools/contracts/generate.py` generates.
+
 A `[Reviewer]` verdict of **changes requested** blocks the merge until the same reviewers confirm their findings are fixed (`review.md`). Only a finding that makes things worse blocks; everything else becomes a separate issue.
 
 ### 3.6 Merging

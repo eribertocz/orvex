@@ -122,6 +122,8 @@ class TestMaterialization:
             "to_pylist",
             "to_pydict",
             "as_py",
+            "iterrows",
+            "itertuples",
         ],
     )
     def test_every_materializing_call_is_reported(self, call: str) -> None:
@@ -129,8 +131,9 @@ class TestMaterialization:
         assert len(materialization_findings(parse(f"x.{call}()\n"), "a.py", set())) == 1
 
     def test_the_list_is_exactly_the_issues(self) -> None:
-        # #46: one name per way of turning rows into Python objects, no more and no fewer.
-        assert len(MATERIALIZING_NAMES) == 18
+        # #46: one name per way of turning rows into Python objects, no more and no fewer;
+        # #261 adds the row-by-row walks of a DataFrame.
+        assert len(MATERIALIZING_NAMES) == 20
 
     def test_a_reference_without_a_call_is_reported(self) -> None:
         tree = parse("rows = table.to_pylist\nfirst = map(column.as_py, values)\n")
@@ -212,3 +215,199 @@ class TestMaterialization:
 
     def test_repository_has_no_findings(self) -> None:
         assert scan_boundaries(REPOSITORY_ROOT, load_allow_list()) == []
+
+
+def readers(source: str, relative: str = "packages/store/src/orvex/store/x.py") -> list[str]:
+    from tools.checks.boundaries import reader_findings
+
+    return [f.detail for f in reader_findings(ast.parse(source), relative, set())]
+
+
+TEST_FILE = "packages/store/tests/test_x.py"
+
+
+def allow_list(tmp_path: Path, body: str) -> Path:
+    (tmp_path / "packages" / "store" / "tests").mkdir(parents=True, exist_ok=True)
+    (tmp_path / TEST_FILE).write_text("def test_copy() -> None:\n    assert True\n")
+    path = tmp_path / "allow.toml"
+    path.write_text(body)
+    return path
+
+
+ENTRY = (
+    '[[allow]]\nfile = "packages/store/src/orvex/store/x.py"\nreader = "sqlite3"\n'
+    'function = "_copy"\nreason = "copies the file; reads schema names only"\n'
+)
+
+
+class TestDataReaders:
+    """Only DuckDB reads source rows in `store` and `transform` (engineering.md §2, #261)."""
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "import pyarrow.parquet as pq\n",
+            "from pyarrow import parquet\n",
+            "from pyarrow.csv import read_csv\n",
+            "import pyarrow.dataset\n",
+            "import pyarrow.json\n",
+            "import pyarrow.orc\n",
+            "from pyarrow import feather\n",
+            "import pyarrow as pa\nt = pa.parquet.read_table('f')\n",
+            "import pyarrow as pa\nt = pa.csv.read_csv('f')\n",
+            "import pyarrow as pa\nd = pa.dataset.dataset('f')\n",
+            "import pyarrow as pa\nt = pa.ipc.open_file('f').read_all()\n",
+            "from pyarrow import ipc\nt = ipc.open_stream('f')\n",
+            "import pyarrow as pa\nr = pa.ipc.RecordBatchFileReader(pa.memory_map('f'))\n",
+            "import pyarrow as pa\nf = pa.OSFile('f')\n",
+            "import pyarrow as pa\nf = pa.input_stream('f')\n",
+            "import pyarrow.fs\n",
+            "import csv\n",
+            "import sqlite3\n",
+            "import pandas\n",
+            "import polars as pl\n",
+            "import fastparquet\n",
+            "text = open('source.csv').read()\n",
+            "import os\nd = os.open('source.csv', 0)\n",
+            "import os\nh = os.fdopen(3)\n",
+            "import io\nh = io.open('source.csv')\n",
+            "from pathlib import Path\nt = Path('source.csv').read_text()\n",
+            "def f(p):\n    return p.read_bytes()\n",
+        ],
+    )
+    def test_a_reader_other_than_duckdb_is_reported(self, source: str) -> None:
+        assert readers(source)
+
+    @pytest.mark.parametrize(
+        "relative",
+        ["packages/store/src/orvex/store/x.py", "packages/transform/src/orvex/transform/x.py"],
+    )
+    def test_store_and_transform_are_checked(self, relative: str) -> None:
+        assert readers("import sqlite3\n", relative)
+
+    @pytest.mark.parametrize(
+        "relative",
+        [
+            "packages/server/src/orvex/server/x.py",
+            "packages/store/tests/test_x.py",
+            "packages/transform/tests/test_x.py",
+        ],
+    )
+    def test_other_modules_and_tests_are_not_checked(self, relative: str) -> None:
+        assert not readers("import pyarrow.parquet as pq\n", relative)
+
+    def test_arrow_as_a_transport_is_accepted(self) -> None:
+        source = (
+            "import pyarrow as pa\n"
+            "def stream(result) -> pa.RecordBatchReader:\n"
+            "    return result.to_arrow_reader(10_000)\n"
+            "def schema(fields) -> pa.Schema:\n"
+            "    return pa.schema(fields)\n"
+            "def batches(schema, items) -> pa.RecordBatchReader:\n"
+            "    return pa.RecordBatchReader.from_batches(schema, items)\n"
+            "def write(sink, schema):\n"
+            "    return pa.ipc.new_stream(sink, schema)\n"
+        )
+        assert readers(source) == []
+
+    def test_an_exception_is_limited_to_its_function(self) -> None:
+        from tools.checks.boundaries import reader_findings
+
+        source = (
+            "import sqlite3\n"
+            "def _copy(path):\n    return sqlite3.connect(path)\n"
+            "def other(path):\n    return sqlite3.connect(path)\n"
+        )
+        allowed = {("packages/store/src/orvex/store/x.py", "sqlite3", "_copy")}
+        found = reader_findings(ast.parse(source), "packages/store/src/orvex/store/x.py", allowed)
+        assert [f.line for f in found] == [5]
+
+    def test_an_exception_needs_a_reason_a_function_and_a_test_in_a_test_folder(
+        self, tmp_path: Path
+    ) -> None:
+        from tools.checks.boundaries import AllowListError, load_reader_allow_list
+
+        good = allow_list(tmp_path, ENTRY + f'test = "{TEST_FILE}::test_copy"\n')
+        assert load_reader_allow_list(good, root=tmp_path) == {
+            ("packages/store/src/orvex/store/x.py", "sqlite3", "_copy")
+        }
+        bad = [
+            ENTRY.replace('reason = "copies the file; reads schema names only"\n', "")
+            + f'test = "{TEST_FILE}::test_copy"\n',  # no reason
+            ENTRY.replace('function = "_copy"\n', "") + f'test = "{TEST_FILE}::test_copy"\n',
+            ENTRY,  # no test
+            ENTRY + f'test = "{TEST_FILE}::test_gone"\n',  # a test that does not exist
+            ENTRY + 'test = "packages/store/src/orvex/store/x.py::_copy"\n',  # not a test
+            ENTRY + f'test = "{(tmp_path / TEST_FILE).as_posix()}::test_copy"\n',  # absolute
+            ENTRY + 'test = "../outside/test_x.py::test_copy"\n',  # outside the repository
+        ]
+        for body in bad:
+            with pytest.raises(AllowListError):
+                load_reader_allow_list(allow_list(tmp_path, body), root=tmp_path)
+
+    def test_an_exception_matching_no_use_is_stale(self, tmp_path: Path) -> None:
+        from tools.checks.boundaries import stale_reader_entries
+
+        repository = make_repository(
+            tmp_path, {"packages/store/src/orvex/store/x.py": "import duckdb\n"}
+        )
+        allowed = {("packages/store/src/orvex/store/x.py", "sqlite3", "_copy")}
+        assert stale_reader_entries(repository, allowed) == sorted(allowed)
+
+    def test_the_check_fails_on_a_reader_and_passes_without_one(self, tmp_path: Path) -> None:
+        from tools.checks.boundaries import run
+
+        files = {"packages/store/src/orvex/store/x.py": "import pyarrow.parquet\n"}
+        empty = tmp_path / "empty.toml"
+        empty.write_text("")
+        (tmp_path / "bad").mkdir()
+        (tmp_path / "good").mkdir()
+        assert run(make_repository(tmp_path / "bad", files), empty, empty) == 1
+        clean = {"packages/store/src/orvex/store/x.py": "import duckdb\n"}
+        assert run(make_repository(tmp_path / "good", clean), empty, empty) == 0
+
+    def test_a_stale_exception_fails_the_check(self, tmp_path: Path) -> None:
+        from tools.checks.boundaries import run
+
+        repository = make_repository(
+            tmp_path, {"packages/store/src/orvex/store/x.py": "import duckdb\n"}
+        )
+        allowed = allow_list(repository, ENTRY + f'test = "{TEST_FILE}::test_copy"\n')
+        empty = tmp_path / "empty.toml"
+        empty.write_text("")
+        assert run(repository, empty, allowed) == 1
+
+    def test_the_repository_has_no_reader_findings_and_no_stale_entries(self) -> None:
+        from tools.checks.boundaries import (
+            load_reader_allow_list,
+            reader_scan,
+            stale_reader_entries,
+        )
+
+        allowed = load_reader_allow_list()
+        assert reader_scan(REPOSITORY_ROOT, allowed) == []
+        assert stale_reader_entries(REPOSITORY_ROOT, allowed) == []
+
+
+class TestUncountedFiles:
+    """The size gate's uncounted list matches lock and generated files exactly (#261)."""
+
+    def test_every_uncounted_tracked_file_is_a_lock_or_a_generated_file(self) -> None:
+        import subprocess
+        import sys
+
+        sys.path.insert(0, str(REPOSITORY_ROOT / ".github" / "workflows" / "scripts"))
+        from governance import UNCOUNTED_HEADING, parse_path_block
+
+        from tools.contracts.generate import generated_files_on_disk
+
+        rules = (REPOSITORY_ROOT / "docs" / "process" / "git-workflow.md").read_text()
+        uncounted = parse_path_block(rules, UNCOUNTED_HEADING)
+        tracked = subprocess.run(
+            ["git", "ls-files"], cwd=REPOSITORY_ROOT, capture_output=True, text=True, check=True
+        ).stdout.splitlines()
+        generated = {p.relative_to(REPOSITORY_ROOT).as_posix() for p in generated_files_on_disk()}
+        locks = {"pylock.toml", "pylock.py314.toml", "web/package-lock.json"}
+        wrongly = [p for p in tracked if uncounted.is_governed(p) and p not in generated | locks]
+        assert wrongly == []
+        assert all(uncounted.is_governed(p) for p in generated | locks)
