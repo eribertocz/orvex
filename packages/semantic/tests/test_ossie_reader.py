@@ -123,6 +123,10 @@ def both(*changes: Callable[[Model], None]) -> Callable[[Model], None]:
     return change
 
 
+def advisories(model: OssieModel) -> list[tuple[str, str]]:
+    return [(advisory.pointer, advisory.kind) for advisory in model.advisories]
+
+
 def pointer_path(pointer: str) -> tuple[str | int, ...]:
     parts = pointer.split("/")[1:]
     return tuple(int(part) if part.isdigit() else part for part in parts)
@@ -195,13 +199,6 @@ ROWS: list[tuple[str, Change, str, str, str]] = [
     (
         "column-arity",
         lambda m: rel(m).update(from_columns=["customer_id", "sale_id"]),
-        "OSSIE_INVALID",
-        "reference",
-        "/relationships/0/to_columns",
-    ),
-    (
-        "to-columns-cover-no-key",
-        lambda m: rel(m).update(from_columns=["customer_id"], to_columns=["region"]),
         "OSSIE_INVALID",
         "reference",
         "/relationships/0/to_columns",
@@ -334,20 +331,6 @@ ROWS: list[tuple[str, Change, str, str, str]] = [
         "OSSIE_INVALID",
         "reference",
         "/metrics/0/custom_extensions/0/data",
-    ),
-    (
-        "two-duckdb-dialects",
-        lambda m: fld(m, "note").update(
-            expression={
-                "dialects": [
-                    {"dialect": "DUCKDB", "expression": "note"},
-                    {"dialect": "DUCKDB", "expression": "note"},
-                ]
-            }
-        ),
-        "OSSIE_INVALID",
-        "schema",
-        "/datasets/0/fields/4/expression/dialects/1/dialect",
     ),
 ]
 
@@ -492,11 +475,25 @@ def test_dialect_selection() -> None:
         "dialects": [{"dialect": "NOT_A_DIALECT", "expression": "x"}]
     }
     for engines in ({}, {"sales": "DUCKDB"}):
-        error = failure(as_yaml(model), "yaml", engines=engines)
-        assert (error.code, dict(error.details)) == (
-            "UNSUPPORTED_OPERATION",
-            {"operation": "expression_dialect"},
-        )
+        loaded = load(as_yaml(model), "yaml", engines=engines)
+        assert "/datasets/0/fields/4" not in {e.element for e in loaded.expressions}
+        assert advisories(loaded) == [("/datasets/0/fields/4", "no_executable_expression")]
+
+
+@pytest.mark.parametrize("form", ["yaml", "json"])
+def test_two_entries_for_one_dialect_load_and_neither_is_chosen(form: str) -> None:
+    model = base()
+    fld(model, "note")["expression"] = {
+        "dialects": [
+            {"dialect": "DUCKDB", "expression": "note"},
+            {"dialect": "DUCKDB", "expression": "upper(note)"},
+        ]
+    }
+    loaded = load(as_yaml(model) if form == "yaml" else as_json(model), form, {"sales": "DUCKDB"})
+    assert advisories(loaded) == [
+        ("/datasets/0/fields/4/expression/dialects/1/dialect", "duplicate_dialect"),
+        ("/datasets/0/fields/4", "no_executable_expression"),
+    ]
 
 
 def derived(model: Model, declare: bool) -> Model:
@@ -518,11 +515,10 @@ def test_the_product_dialect_needs_an_explicit_derived_declaration() -> None:
     for form in ("yaml", "json"):
         model = derived(base(), declare=False)
         content = as_yaml(model) if form == "yaml" else as_json(model)
-        (problem,) = problems(failure(content, form))
-        assert (problem["rule"], problem["pointer"]) == (
-            "extension",
-            "/metrics/1/expression/dialects/0/dialect",
-        )
+        assert advisories(load(content, form)) == [
+            ("/metrics/1/expression/dialects/0/dialect", "undeclared_product_dialect"),
+            ("/metrics/1", "no_executable_expression"),
+        ]
         model = derived(base(), declare=True)
         content = as_yaml(model) if form == "yaml" else as_json(model)
         (selected,) = [e for e in load(content, form).expressions if e.element == "/metrics/1"]
@@ -560,11 +556,10 @@ def test_derived_declarations_and_the_product_dialect(form: str) -> None:
     # On a field, the product's token is never explicit.
     model = base()
     fld(model, "note")["expression"] = {"dialects": [{"dialect": CURRENT, "expression": "note"}]}
-    (problem,) = problems(failure(render(model), form))
-    assert (problem["rule"], problem["pointer"]) == (
-        "extension",
-        "/datasets/0/fields/4/expression/dialects/0/dialect",
-    )
+    assert advisories(load(render(model), form)) == [
+        ("/datasets/0/fields/4/expression/dialects/0/dialect", "undeclared_product_dialect"),
+        ("/datasets/0/fields/4", "no_executable_expression"),
+    ]
     # The payload and the dialect entry must state the same expression.
     model = derived(base(), declare=True)
     model["metrics"][1]["expression"]["dialects"][0]["expression"] = "revenue * 3"
@@ -609,24 +604,27 @@ def temporal(**more: str) -> Model:
 
 
 @pytest.mark.parametrize("form", ["yaml", "json"])
-def test_a_declared_as_of_match_excuses_key_coverage(form: str) -> None:
-    model = temporal_model()
-    put(rel(model), temporal())
-    put(rel(model), {"temporal": "anything"}, "bi-platform")
-    loaded = load(as_yaml(model) if form == "yaml" else as_json(model), form)
-    assert len(loaded.foreign_extensions) == 1
+def test_key_coverage_is_an_advisory_and_an_as_of_declaration_is_recorded(form: str) -> None:
+    """Ossie only warns when `to_columns` cover no key of `to`: the document loads with an
+    advisory, whatever entries it carries (Owner decision of 2026-11-01). A product as-of
+    declaration is recorded for P2-20; a foreign one is never read as a guarantee."""
+    extras: list[Change] = [
+        lambda m: None,
+        lambda m: put(rel(m), temporal(), "OTHER"),
+        lambda m: put(rel(m), {"version": 1, "element": "relationship"}),
+        lambda m: put(rel(m), temporal()),
+    ]
+    for extra in extras:
+        model = temporal_model()
+        extra(model)
+        loaded = load(as_yaml(model) if form == "yaml" else as_json(model), form)
+        assert advisories(loaded) == [("/relationships/0/to_columns", "to_columns_cover_no_key")]
+    assert [e.element for e in loaded.product_extensions] == ["relationship"]
 
 
 @pytest.mark.parametrize(
     ("change", "rule", "pointer"),
     [
-        (lambda m: None, "reference", "/relationships/0/to_columns"),
-        (lambda m: put(rel(m), temporal(), "OTHER"), "reference", "/relationships/0/to_columns"),
-        (
-            lambda m: put(rel(m), {"version": 1, "element": "relationship"}),
-            "reference",
-            "/relationships/0/to_columns",
-        ),
         (
             both(
                 lambda m: ds(m, "customers").update(primary_key=["customer_id", "valid_to"]),
@@ -666,18 +664,13 @@ def test_a_declared_as_of_match_excuses_key_coverage(form: str) -> None:
         ),
     ],
     ids=[
-        "no-entry",
-        "foreign-entry-only",
-        "product-entry-without-temporal",
         "valid-from-outside-every-key",
         "validity-field-in-to-columns",
         "event-time-not-of-from",
         "dataset-validity-disagrees",
     ],
 )
-def test_a_temporal_exception_needs_a_coherent_product_declaration(
-    change: Change, rule: str, pointer: str
-) -> None:
+def test_an_as_of_declaration_must_be_coherent(change: Change, rule: str, pointer: str) -> None:
     model = temporal_model()
     change(model)
     for form, content in (("yaml", as_yaml(model)), ("json", as_json(model))):
@@ -778,13 +771,6 @@ CANARY_STEPS: list[tuple[str, Change, str]] = [
         "payload-reference",
         lambda m: put(m["metrics"][0], {"version": 1, "element": "metric", "home_dataset": CANARY}),
         "reference",
-    ),
-    (
-        "dialect",
-        lambda m: fld(m, "note").update(
-            expression={"dialects": [{"dialect": CANARY, "expression": CANARY}]}
-        ),
-        "",
     ),
     ("ai-context", lambda m: m.update(ai_context={CANARY: [CANARY]}, version="0.3.0"), ""),
 ]

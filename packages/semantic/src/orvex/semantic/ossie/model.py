@@ -54,6 +54,25 @@ class SelectedExpression:
     text: str
 
 
+AdvisoryKind = Literal[
+    "to_columns_cover_no_key",
+    "duplicate_dialect",
+    "undeclared_product_dialect",
+    "no_executable_expression",
+]
+
+
+@dataclass(frozen=True)
+class Advisory:
+    """A finding on a document that conforms to Ossie but that the product cannot yet compile or
+    execute safely as written (Owner decision of 2026-11-01: conformance and executability are
+    separate). The document loads; an operation that needs the element is refused with a typed
+    error by the stage that runs it (P2-04 compilation, P2-15 and P2-20 relationships)."""
+
+    pointer: str
+    kind: AdvisoryKind
+
+
 @dataclass(frozen=True)
 class OssieModel:
     path: str = field(compare=False)
@@ -68,6 +87,7 @@ class OssieModel:
     product_extensions: tuple[ProductExtension, ...]
     foreign_extensions: tuple[ForeignExtension, ...]
     expressions: tuple[SelectedExpression, ...]
+    advisories: tuple[Advisory, ...]
 
     @property
     def preservation_only(self) -> bool:

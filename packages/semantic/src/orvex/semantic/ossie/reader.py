@@ -13,7 +13,13 @@ ordered by line, then pointer, at most 50 (`semantic-error/v1`):
 6. the product's extensions (`extension`, `extension_duplicate`, `reference`,
    `extension_conflict`); other vendors' entries are listed and never interpreted;
 7. dialects: two entries for one dialect (`schema`), then the deterministic selection of each
-   field's and metric's expression (`UNSUPPORTED_OPERATION` when none can be selected).
+   field's and metric's expression.
+
+What Ossie accepts loads (Owner decision of 2026-11-01). Where the product needs more than Ossie
+requires to compile or execute safely, the read records an `Advisory` instead of an error: a
+relationship whose `to_columns` cover no key of `to` (the official validator's warning), two
+entries for one dialect, a product-dialect entry without a derived declaration, a member with no
+expression the product can select. The stage that would use the element refuses it then.
 
 No error carries text from the document: a pointer holds only keys the Ossie schema declares
 and indexes, and a line number.
@@ -34,6 +40,7 @@ from orvex.semantic.ossie import expressions, extensions
 from orvex.semantic.ossie.documents import MAX_BYTES, Format, ParseProblem, Path, parse
 from orvex.semantic.ossie.expressions import ExpressionUnreadable, normalize
 from orvex.semantic.ossie.model import (
+    Advisory,
     ElementKind,
     ForeignExtension,
     OssieModel,
@@ -45,7 +52,6 @@ from orvex.semantic.ossie.registry import Entry, Registry, default_registry
 
 MAX_PROBLEMS = 50
 PORTABLE = "OSSIE_SQL_2026"
-NO_DIALECT = "expression_dialect"  # UNSUPPORTED_OPERATION's operation when none is selectable
 _VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,63}")  # semantic-error/v1 `Version`
 _SUFFIXES: dict[str, Format] = {".ossie.yaml": "yaml", ".ossie.json": "json"}
 
@@ -328,29 +334,8 @@ def _names(document: Json, problems: _Problems) -> None:
     problems.raise_if_any()
 
 
-def _temporal(relationship: Json, vendor_names: Sequence[str]) -> Json | None:
-    """The `temporal` member of a relationship's single valid product entry, if any. Another
-    vendor's entry is never read as a temporal guarantee."""
-    ours = [
-        entry["data"]
-        for entry in _list(relationship, "custom_extensions")
-        if entry["vendor_name"] in vendor_names
-    ]
-    if len(ours) != 1:
-        return None
-    try:
-        payload = parse(ours[0], "json").data
-    except ParseProblem:
-        return None
-    if not isinstance(payload, dict) or not extensions.validator().is_valid(payload):
-        return None
-    temporal = payload.get("temporal")
-    return temporal if payload["element"] == "relationship" and temporal else None
-
-
-def _references(
-    document: Json, index: _Index, problems: _Problems, vendor_names: Sequence[str]
-) -> None:
+def _references(document: Json, index: _Index, problems: _Problems) -> list[Advisory]:
+    advisories: list[Advisory] = []
     for at, dataset in enumerate(_list(document, "datasets")):
         own = index.dataset(dataset["name"])
         assert own is not None
@@ -380,14 +365,10 @@ def _references(
             problems.add((*path, "to_columns"), "reference")
         target = sides["to"]
         covered = frozenset(normalize(name) for name in to_columns)
-        # `from` is the many side only if `to` is unique: an error, not a warning. A declared
-        # as-of match is the one exception; step 6 checks that declaration (#278, CASE-013).
-        if (
-            target is not None
-            and not any(key <= covered for key in target.keys)
-            and _temporal(relationship, vendor_names) is None
-        ):
-            problems.add((*path, "to_columns"), "reference")
+        # `from` is the many side only if `to` is unique. Ossie only warns, so the document
+        # loads; joining through the relationship needs a key or a declared as-of match.
+        if target is not None and not any(key <= covered for key in target.keys):
+            advisories.append(Advisory(_pointer((*path, "to_columns")), "to_columns_cover_no_key"))
     metrics: list[tuple[Path, Json, _Dataset | None]] = [
         (("metrics", at), metric, None) for at, metric in enumerate(_list(document, "metrics"))
     ]
@@ -407,6 +388,7 @@ def _references(
             if not all(_resolves(reference.parts, own, index) for reference in reading.references):
                 problems.add(text_at, "reference")
     problems.raise_if_any()
+    return advisories
 
 
 def _resolves(parts: tuple[str, ...], own: _Dataset | None, index: _Index) -> bool:
@@ -633,11 +615,13 @@ def _dialects(
     engines: Mapping[str, str],
     vendor_names: Sequence[str],
     derived: Mapping[str, Mapping[str, object]],
-) -> list[SelectedExpression]:
-    """Two entries for one dialect are `schema`. An entry under the product's own token is a
-    product construct, so it is explicit only on a metric whose product entry declares a derived
-    form (`over_metrics` or `window`, ossie-extensions v1); anywhere else it is `extension`, never
-    read silently (Owner policy of 2026-11-01). Then one expression is selected per member."""
+) -> tuple[list[SelectedExpression], list[Advisory]]:
+    """One expression is selected per field and metric. An entry under the product's own token
+    is a product construct, explicit only on a metric whose product entry declares a derived form
+    (`over_metrics` or `window`, ossie-extensions v1); there it must state the payload's
+    expression (`extension_conflict`). Anywhere else it is never selected (Owner policy of
+    2026-11-01). Ossie allows any dialect entry, so what cannot be selected is an advisory."""
+    advisories: list[Advisory] = []
     members: list[tuple[Path, Json, str | None]] = []
     shared = {engines.get(normalize(d["name"])) for d in _list(document, "datasets")}
     for at, dataset in enumerate(_list(document, "datasets")):
@@ -658,12 +642,12 @@ def _dialects(
         for at, entry in enumerate(_list(member["expression"], "dialects")):
             at_dialect: Path = (*path, "expression", "dialects", at, "dialect")
             if entry["dialect"] in seen:
-                problems.add(at_dialect, "schema")
+                advisories.append(Advisory(_pointer(at_dialect), "duplicate_dialect"))
             seen.add(entry["dialect"])
             if entry["dialect"] in vendor_names:
                 payload = derived.get(_pointer(path))
                 if payload is None:
-                    problems.add(at_dialect, "extension")
+                    advisories.append(Advisory(_pointer(at_dialect), "undeclared_product_dialect"))
                 else:
                     over = cast(Mapping[str, object], payload.get("over_metrics") or {})
                     if over.get("expression", entry["expression"]) != entry["expression"]:
@@ -676,9 +660,10 @@ def _dialects(
         product = vendor_names if _pointer(path) in derived else ()
         choice = _select(member["expression"], path, (PORTABLE, *product, engine))
         if choice is None:
-            raise SemanticError("UNSUPPORTED_OPERATION", {"operation": NO_DIALECT})
-        selected.append(choice)
-    return selected
+            advisories.append(Advisory(_pointer(path), "no_executable_expression"))
+        else:
+            selected.append(choice)
+    return selected, advisories
 
 
 def _pointer(path: Path) -> str:
@@ -694,10 +679,13 @@ def _select(expression: Json, path: Path, order: Sequence[str | None]) -> Select
         return SelectedExpression(element, f"{element}/expression/sql", PORTABLE, expression["sql"])
     entries = _list(expression, "dialects")
     for token in order:
-        for at, entry in enumerate(entries):
-            if token is not None and entry["dialect"] == token:
-                pointer = f"{element}/expression/dialects/{at}/expression"
-                return SelectedExpression(element, pointer, token, entry["expression"])
+        matching = [at for at, entry in enumerate(entries) if entry["dialect"] == token]
+        if len(matching) > 1:
+            return None  # two entries for one dialect: neither is chosen
+        if token is not None and matching:
+            (at,) = matching
+            pointer = f"{element}/expression/dialects/{at}/expression"
+            return SelectedExpression(element, pointer, token, entries[at]["expression"])
     return None
 
 
@@ -731,14 +719,16 @@ def read(
     _schema(document, problems, entry, registry)
     _names(document, problems)
     index = _Index.of(document)
-    _references(document, index, problems, vendor_names)
+    advisories = _references(document, index, problems)
     found = _extensions(document, index, problems, vendor_names)
     derived = {
         extension.pointer.rsplit("/custom_extensions/", 1)[0]: extension.payload
         for extension in found.product
         if "over_metrics" in extension.payload or "window" in extension.payload
     }
-    selected = _dialects(document, index, problems, engines_by_name, vendor_names, derived)
+    selected, unselected = _dialects(
+        document, index, problems, engines_by_name, vendor_names, derived
+    )
     return OssieModel(
         path=path,
         format=written,
@@ -752,4 +742,5 @@ def read(
         product_extensions=tuple(found.product),
         foreign_extensions=tuple(found.foreign),
         expressions=tuple(selected),
+        advisories=tuple(advisories + unselected),
     )

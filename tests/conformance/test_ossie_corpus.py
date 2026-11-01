@@ -1,13 +1,14 @@
 """P2-03 (#278): the 21 corpus models through the Ossie adapter, in YAML and in JSON.
 
-Every model is read exactly as imported; nothing is rewritten to make it pass. The corpus splits
-three ways against the pinned revision (`c721ffc`, Owner policy of 2026-11-01):
+Every model is read exactly as imported; nothing is rewritten to make it pass. Against the pinned
+revision (`c721ffc`, Owner policy of 2026-11-01):
 
-- **Conformant** (16): valid Ossie documents; they load, and their bi-platform entries are
+- **Conformant** (17): accepted by P2-03's checks; they load, and their bi-platform entries are
   preserved, listed and never interpreted.
-- **Future** (4): a metric expression names another metric, which this revision does not support
-  ("a metric expression that refers to another metric", spec L692-L699; L424). They are refused
-  with `reference` at that expression, unchanged, until a revision specifies derived metrics.
+- **Not conformant** (4): a metric expression names another metric, which this revision does
+  not support ("a metric expression that refers to another metric", spec L692-L699; L424).
+  They are refused with `reference` at that expression, unchanged, until a revision
+  specifies derived metrics.
   The product's explicit construct for them is a derived metric (ossie-extensions v1:
   `over_metrics` or `window`, with the expression under the product's dialect token):
   - CASE-010: `over_metrics`, aligned on the grain bi-platform declares. The conformance
@@ -19,11 +20,10 @@ three ways against the pinned revision (`c721ffc`, Owner policy of 2026-11-01):
     is kept, never substituted. As a product construct it needs a declared alignment too.
   - CASE-021: `window` (`running_total` of `daily_revenue` by `date`), not declared in the
     corpus.
-- **CASE-013**: a valid Ossie document (the official validator only warns when `to_columns`
-  cover no key of `to`) that the product refuses, because `from` is the many side only if `to` is
-  unique. It loads only with the product's own as-of declaration, a product capability that is
-  not part of Ossie (Owner decision of 2026-11-01). The test adds that entry beside the preserved
-  bi-platform entry.
+- **CASE-013** is one of the conformant models: the official validator only warns when
+  `to_columns` cover no key of `to`. It loads with an advisory; joining through that relationship
+  needs the product's own as-of declaration, checked when it is used (P2-20). The test also adds
+  that declaration, beside the preserved bi-platform entry, and the model still loads.
 """
 
 from __future__ import annotations
@@ -54,8 +54,7 @@ FUTURE = {
     "CASE-010": "/metrics/2/expression/dialects/0/expression",
     "CASE-021": "/metrics/1/expression/dialects/0/expression",
 }
-PRODUCT_DECLARATION = {"CASE-013"}
-CONFORMANT = [p for p in MODELS if p.stem not in FUTURE and p.stem not in PRODUCT_DECLARATION]
+CONFORMANT = [p for p in MODELS if p.stem not in FUTURE]
 
 
 def raw(path: Path) -> dict[str, Any]:
@@ -85,9 +84,9 @@ def bi_platform_entries(model: object, at: str = "") -> list[str]:
     return found
 
 
-def test_the_corpus_splits_16_conformant_4_future_and_case_013() -> None:
+def test_the_corpus_splits_17_conformant_and_4_not_conformant() -> None:
     assert len(MODELS) == 21
-    assert len(CONFORMANT) == 16
+    assert len(CONFORMANT) == 17
 
 
 @pytest.mark.parametrize("path", CONFORMANT, ids=lambda path: path.stem)
@@ -127,18 +126,22 @@ def with_product_temporal(path: Path) -> dict[str, Any]:
     return model
 
 
-def test_case_013_is_refused_as_written_and_loads_with_the_product_declaration() -> None:
+def test_case_013_loads_as_written_with_its_advisory() -> None:
+    """Valid Ossie: the official validator only warns that `to_columns` cover no key of `to`.
+    It loads; joining through that relationship needs the product's as-of declaration (P2-20)."""
     path = ROOT / CORPUS / "models" / "CASE-013.yaml"
     for form, content in both_formats(path):
-        with pytest.raises(SemanticError) as caught:
-            read(content, f"semantic/CASE-013.ossie.{form}", VENDORS)
-        (problem,) = cast(list[dict[str, str]], caught.value.details["problems"])
-        assert (problem["rule"], problem["pointer"]) == ("reference", "/relationships/0/to_columns")
+        result = read(content, f"semantic/CASE-013.ossie.{form}", VENDORS)
+        assert [(a.pointer, a.kind) for a in result.advisories] == [
+            ("/relationships/0/to_columns", "to_columns_cover_no_key")
+        ]
+        assert result.product_extensions == ()
     model = with_product_temporal(path)
-    expected = sorted(bi_platform_entries(model))
     for form, content in both_formats(path, model):
         result = read(content, f"semantic/CASE-013.ossie.{form}", VENDORS)
-        assert sorted(e.pointer for e in result.foreign_extensions) == expected
+        assert sorted(e.pointer for e in result.foreign_extensions) == sorted(
+            bi_platform_entries(model)
+        )
         assert [e.element for e in result.product_extensions] == ["relationship"]
 
 
