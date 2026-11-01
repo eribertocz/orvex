@@ -20,3 +20,6 @@ WORKDIR /home/app
 # default command reports the installed versions.
 ENTRYPOINT ["python", "-m", "orvex.server"]
 CMD ["--version"]
+
+# E2 evidence for #267 (never merged): break the build on purpose.
+RUN exit 1

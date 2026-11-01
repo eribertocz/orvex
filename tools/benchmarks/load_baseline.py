@@ -472,3 +472,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+raise SystemExit("E2 evidence for #267 (never merged): fail on purpose")

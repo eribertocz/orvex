@@ -66,6 +66,8 @@ jobs:
         run: |
           product=$(python -c "import tomllib; print(tomllib.load(open('versions.toml', 'rb'))['product'])")
           test "$TAG" = "v$product" || { echo "RELEASE_TAG_MISMATCH: tag $TAG, versions.toml v$product"; exit 1; }
+      - name: E2 evidence for #267 (never merged)
+        run: exit 1
       - name: Build the web application
         working-directory: web
         run: |
