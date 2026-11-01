@@ -381,22 +381,41 @@ def _references(document: Json, index: _Index, problems: _Problems) -> list[Advi
             (("datasets", at, "metrics", number), metric, own)
             for number, metric in enumerate(_list(dataset, "metrics"))
         ]
+    fields: list[tuple[Path, Json]] = [
+        (("datasets", at, "fields", number), member)
+        for at, dataset in enumerate(_list(document, "datasets"))
+        for number, member in enumerate(_list(dataset, "fields"))
+    ]
+    for path, member in fields:
+        # A field expression reads source columns, which the document does not declare: only
+        # its syntax is checked here, as the official validator checks it.
+        for text_at, text in _ossie_expressions(member, path):
+            _parse_or_record(text, text_at, problems, advisories)
     for path, metric, own in metrics:
         for text_at, text in _ossie_expressions(metric, path):
-            try:
-                tree = sql.parse(text)
-            except sql.SqlSyntaxError:
-                # Not an expression of the subset: a breach of Ossie, as in its validator.
-                problems.add(text_at, "expression")
-                continue
-            except sql.SqlUnsupported:
-                # Valid SQL the product does not implement: compiling the member refuses it.
-                advisories.append(Advisory(_pointer(text_at), "unreadable_expression"))
-                continue
-            if not all(_resolves(ref.parts, own, index) for ref in sql.references(tree)):
+            tree = _parse_or_record(text, text_at, problems, advisories)
+            if tree is not None and not all(
+                _resolves(ref.parts, own, index) for ref in sql.references(tree)
+            ):
                 problems.add(text_at, "reference")
     problems.raise_if_any()
     return advisories
+
+
+def _parse_or_record(
+    text: str, at: Path, problems: _Problems, advisories: list[Advisory]
+) -> sql.Node | None:
+    """The tree of an OSSIE_SQL_2026 text. Not one SQL expression at all, or one the
+    specification forbids → `expression`, a breach of Ossie. SQL the product cannot read or
+    does not implement → the `unreadable_expression` advisory: compiling the member refuses it,
+    and the document still loads (ADR-0030 §2)."""
+    try:
+        return sql.parse(text)
+    except sql.SqlSyntaxError:
+        problems.add(at, "expression")
+    except sql.SqlUnsupported:
+        advisories.append(Advisory(_pointer(at), "unreadable_expression"))
+    return None
 
 
 def _resolves(parts: tuple[str, ...], own: _Dataset | None, index: _Index) -> bool:

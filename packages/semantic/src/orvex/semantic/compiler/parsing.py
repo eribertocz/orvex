@@ -279,9 +279,10 @@ def _ossie_member(member_id: MemberId, pointer: str, text: str, names: _Names) -
     try:
         tree = sql.parse(text)
     except sql.SqlUnsupported as unsupported:
-        # P2-03's unreadable_expression: valid SQL the product does not implement.
+        # P2-03's unreadable_expression: SQL the product cannot read or does not implement.
         return _Draft(member_id, pointer, "ossie", None, set(), (), unsupported.operation)
-    # A syntax error was refused by P2-03 (`OSSIE_INVALID` `expression`); none reaches here.
+    # A syntax error in a field or metric text was refused by P2-03 (`OSSIE_INVALID`
+    # `expression`), so every text that reaches here has a tree or is unsupported.
     operation = sql.unsupported(tree)
     draft = _Draft(member_id, pointer, "ossie", tree, set(), (), operation)
     if member_id.kind == "metric":

@@ -110,7 +110,27 @@ def test_recognizable_sql_outside_the_subset_is_unsupported(text: str, operation
         "   -- only a comment",
         "SUM(",
         "SUM(a))",
+        ")",
+        "'unclosed",
+        '"unclosed',
+        "a; b",
+        '"' + "x" * 129 + '"',
+        "(" * 100 + "1" + ")" * 100,
+    ],
+)
+def test_what_is_not_one_sql_expression_is_a_syntax_error(text: str) -> None:
+    """Not one SQL expression in any dialect (empty, unbalanced, more than one statement), or
+    what the specification forbids (an identifier over 128 characters)."""
+    with pytest.raises(sql.SqlSyntaxError):
+        sql.parse(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # outside this grammar, though some dialect may read them (ADR-0030 §2)
         "a +",
+        "+",
         "a AND",
         "CASE END",
         "CASE WHEN a THEN 1",
@@ -119,19 +139,32 @@ def test_recognizable_sql_outside_the_subset_is_unsupported(text: str, operation
         "a IS",
         "a NOT 1",
         "a BETWEEN 1",
-        "EXTRACT(CENTURY FROM d)",
-        "a.b.c",
         "a, b",
+        "SUM()",
+        "COUNT(a);",
+        "a.b.c",
+        "EXTRACT(EPOCH FROM ts)",
         "SUM(a) FILTER (a > 1)",
         "LOWER(a) FILTER (WHERE a > 1)",
         "SUM(a) WITHIN GROUP (ORDER BY a)",
         "PERCENTILE_CONT(0.5)",
         "RANK()",
-        "'unclosed",
-        '"' + "x" * 129 + '"',
-        "(" * 100 + "1" + ")" * 100,
+        "LAG(x)",
+        "STRING_AGG(DISTINCT a, ',')",
+        "LISTAGG(a, ',') WITHIN GROUP (ORDER BY a)",
+        "MODE() WITHIN GROUP (ORDER BY x)",
+        "SUM(a) IGNORE NULLS",
+        "x IS TRUE",
+        "ts AT TIME ZONE 'UTC'",
+        "a == b",
+        'name COLLATE "C"',
+        "x SIMILAR TO 'a%'",
+        "f(a => 1)",
+        "TRIM(BOTH 'x' FROM y)",
+        "SUBSTRING(s FROM 1 FOR 2)",
     ],
 )
-def test_text_outside_the_grammar_is_a_syntax_error(text: str) -> None:
-    with pytest.raises(sql.SqlSyntaxError):
+def test_text_outside_the_grammar_is_unsupported_never_invalid(text: str) -> None:
+    with pytest.raises(sql.SqlUnsupported) as caught:
         sql.parse(text)
+    assert caught.value.operation in ("outside_subset", "operator")

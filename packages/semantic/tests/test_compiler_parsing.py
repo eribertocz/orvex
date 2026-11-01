@@ -257,6 +257,8 @@ def test_to_columns_cover_no_key_is_carried() -> None:
         ("MIN(TO_CHAR(sales.date, 'YYYY'))", "experimental_function"),
         ("FOO(sales.amount)", "unknown_function"),
         ("SUM(sales.amount) ^ 2", "operator"),
+        ("STRING_AGG(DISTINCT sales.amount, ',')", "outside_subset"),
+        ("SUM(sales.amount) IGNORE NULLS", "outside_subset"),
     ],
 )
 def test_valid_sql_the_product_does_not_implement_is_unsupported(text: str, operation: str) -> None:
@@ -271,7 +273,7 @@ def test_valid_sql_the_product_does_not_implement_is_unsupported(text: str, oper
         )
 
 
-@pytest.mark.parametrize("text", ["SUM(", "SUM(sales.amount) AND", "SUM(sales.amount))"])
+@pytest.mark.parametrize("text", ["SUM(", "SUM(sales.amount))", "SUM(sales.amount); 1"])
 def test_text_outside_the_grammar_is_an_expression_error(text: str) -> None:
     model = base()
     model["metrics"][0]["expression"]["sql"] = text
@@ -301,6 +303,19 @@ def test_a_cycle_through_a_calculated_field_is_refused() -> None:
             "METRIC_CYCLE",
             {"cycle": ["sales.loop", "sales.loop"]},
         )
+
+
+def test_a_field_text_follows_the_same_split_as_a_metric_text() -> None:
+    """The official validator checks field SQL too: not one SQL expression → `expression`;
+    SQL outside the subset → the advisory, the field excluded, and so is what reads it."""
+    model = base()
+    model["datasets"][0]["fields"][1]["expression"]["sql"] = "(amount"
+    for error in failure_both(model):
+        assert problems(error) == [("expression", "/datasets/0/fields/1/expression/sql")]
+    model["datasets"][0]["fields"][1]["expression"]["sql"] = "amount +"
+    for parsed in compile_both(model):
+        assert [a.kind for a in parsed.advisories] == ["unreadable_expression"]
+        assert parsed.excluded == {f("amount"): "outside_subset", REVENUE: "outside_subset"}
 
 
 # --- product and opaque expressions -----------------------------------------------------------
@@ -408,11 +423,19 @@ def test_any_text_gives_a_tree_or_a_typed_refusal(text: str) -> None:
     sql.aggregate_class(tree)
 
 
-@settings(max_examples=60, deadline=None)
-@given(st.lists(_SQL_ALPHABET, max_size=30).map("".join))
-def test_any_expression_gives_a_model_or_a_semantic_error(text: str) -> None:
+@settings(max_examples=80, deadline=None)
+@given(
+    st.lists(_SQL_ALPHABET, max_size=30).map("".join),
+    st.sampled_from(["metric", "dataset_metric", "field"]),
+)
+def test_any_expression_gives_a_model_or_a_semantic_error(text: str, where: str) -> None:
     model = base()
-    model["metrics"][0]["expression"]["sql"] = text or "x"
+    if where == "metric":
+        model["metrics"][0]["expression"]["sql"] = text or "x"
+    elif where == "dataset_metric":
+        model["datasets"][0]["metrics"][0]["expression"]["sql"] = text or "x"
+    else:
+        model["datasets"][0]["fields"][1]["expression"]["sql"] = text or "x"
     content = json.dumps(model).encode()
     with contextlib.suppress(SemanticError):
         parse_model(read(content, "semantic/shop.ossie.json", VENDORS), VENDORS)

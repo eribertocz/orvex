@@ -3,13 +3,14 @@
 Conformance and product capability are kept apart (ADR-0030 §2):
 - `parse` turns one expression of the subset's grammar into an immutable tree, window functions
   and EXPERIMENTAL functions included, so references are checked on every valid expression. A
-  text outside the grammar raises `SqlSyntaxError`: a breach of the specification, as in the
-  official validator (`OSSIE_INVALID`, rule `expression`).
-- Recognizable SQL outside the subset (a subquery, `::`, `INTERVAL`, a typed literal, an
-  operator or sigil of some dialect such as `^`, `[`, `#`, `$`) raises `SqlUnsupported`, as no
-  tree can be built for it. When in doubt, a text is unsupported rather than invalid: only a
-  text no SQL dialect could read as one expression of the subset (empty, unbalanced, a
-  structural keyword where an operand belongs, text after the expression) is a syntax error.
+  text that is not one SQL expression in any dialect, or that the specification forbids, raises
+  `SqlSyntaxError`: a breach of the specification (`OSSIE_INVALID`, rule `expression`).
+- Any other text this grammar cannot read raises `SqlUnsupported`: a subquery, `::`,
+  `INTERVAL`, a typed literal, a dialect operator (`^`, `[`, `#`, `$`), a function form or
+  modifier of some dialect (`STRING_AGG(DISTINCT …)`, `IGNORE NULLS`, `AT TIME ZONE`), or simply
+  a construct outside the subset. It may be valid in some dialect, so it is never declared a
+  breach of Ossie (ADR-0030 §2). Only what is not one SQL expression in any dialect, or what the
+  specification forbids, is a syntax error (see `parse`).
 - `unsupported(tree)` names the first construct of a valid tree that the product does not
   implement (a window `OVER`, an EXPERIMENTAL or unknown function): `UNSUPPORTED_OPERATION`,
   with a fixed `operation` name, never text from the document.
@@ -37,10 +38,10 @@ _TOKEN = re.compile(
     (?P<space>\s+)
   | (?P<comment>--[^\n]*|/\*.*?\*/)
   | (?P<string>'(?:[^']|'')*')
-  | (?P<quoted>"(?:[^"]|"")+")
+  | (?P<quoted>"(?:[^"]|"")*")
   | (?P<number>(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)
   | (?P<word>[^\W\d][\w$]*)
-  | (?P<symbol><>|<=|>=|!=|\|\||::|[-+*/%(),.<>=])
+  | (?P<symbol><>|<=|>=|!=|\|\||::|[-+*/%(),.<>=;])
   | (?P<foreign>[\^\[\]{}#$?&~!@])
     """,
     re.VERBOSE | re.DOTALL,
@@ -114,6 +115,11 @@ _PART_FIRST = frozenset({"DATEADD", "DATEDIFF", "DATE_TRUNC", "DATE_PART"})
 
 class SqlSyntaxError(ValueError):
     """Not an expression of the subset's grammar."""
+
+
+class _OutsideSubset(Exception):
+    """Internal: the text is not an expression of the subset's grammar. `parse` turns it into
+    `SqlUnsupported`, since some SQL dialect may read it (ADR-0030 §2)."""
 
 
 class SqlUnsupported(ValueError):
@@ -303,7 +309,9 @@ def _tokens(text: str) -> list[_Token]:
     while at < len(text):
         match = _TOKEN.match(text, at)
         if match is None:
-            raise SqlSyntaxError("an unexpected character")
+            if text[at] in "'\"":
+                raise SqlSyntaxError("a string or a quoted identifier is not closed")
+            raise SqlUnsupported("operator")
         at = match.end()
         kind = match.lastgroup
         assert kind is not None
@@ -342,18 +350,18 @@ class _Parser:
     def take(self) -> _Token:
         token = self.peek()
         if token is None:
-            raise SqlSyntaxError("the expression ends too early")
+            raise _OutsideSubset("the expression ends too early")
         self.at += 1
         return token
 
     def expect_symbol(self, symbol: str) -> None:
         if not self.symbol(symbol):
-            raise SqlSyntaxError(f"'{symbol}' expected")
+            raise _OutsideSubset(f"'{symbol}' expected")
         self.at += 1
 
     def expect_word(self, word: str) -> None:
         if not self.word(word):
-            raise SqlSyntaxError(f"{word} expected")
+            raise _OutsideSubset(f"{word} expected")
         self.at += 1
 
     def nested(self) -> None:
@@ -428,7 +436,7 @@ class _Parser:
                 escape = self.additive()
             return Like(node, pattern, escape, insensitive, negated)
         if negated:
-            raise SqlSyntaxError("NOT expects BETWEEN, IN, LIKE or ILIKE")
+            raise _OutsideSubset("NOT expects BETWEEN, IN, LIKE or ILIKE")
         if self.word("IS"):
             self.at += 1
             is_not = False
@@ -442,7 +450,7 @@ class _Parser:
                 self.at += 1
                 self.expect_word("FROM")
                 return IsDistinct(node, self.additive(), is_not)
-            raise SqlSyntaxError("IS expects NULL or DISTINCT FROM")
+            raise _OutsideSubset("IS expects NULL or DISTINCT FROM")
         return node
 
     def additive(self) -> Node:
@@ -485,7 +493,7 @@ class _Parser:
                 node = self.expression()
                 self.expect_symbol(")")
                 return node
-            raise SqlSyntaxError("an operand expected")
+            raise _OutsideSubset("an operand expected")
         if token.kind == "quoted":
             return self.reference(token)
         word = token.upper
@@ -521,7 +529,7 @@ class _Parser:
         if self.symbol("("):
             return self.call(word)
         if word in RESERVED and word not in SOFT_RESERVED:
-            raise SqlSyntaxError("a reserved word used as an identifier")
+            raise _OutsideSubset("a reserved word used as an identifier")
         return self.reference(token)
 
     def reference(self, first: _Token) -> Ref:
@@ -530,11 +538,13 @@ class _Parser:
             self.at += 1
             part = self.take()
             if part.kind not in ("word", "quoted"):
-                raise SqlSyntaxError("a name expected after '.'")
+                raise _OutsideSubset("a name expected after '.'")
             parts.append(part)
         if len(parts) > 2:
-            raise SqlSyntaxError("a reference has one or two parts")
+            raise _OutsideSubset("a reference has one or two parts")
         names = tuple(normalize(part.text) for part in parts)
+        if not all(names):
+            raise _OutsideSubset("an empty quoted identifier")
         if any(len(name) > MAX_IDENTIFIER for name in names):
             raise SqlSyntaxError("an identifier longer than 128 characters")
         return Ref(names)
@@ -548,7 +558,7 @@ class _Parser:
             self.expect_word("THEN")
             whens.append((condition, self.expression()))
         if not whens:
-            raise SqlSyntaxError("CASE needs WHEN")
+            raise _OutsideSubset("CASE needs WHEN")
         otherwise = None
         if self.word("ELSE"):
             self.at += 1
@@ -562,7 +572,7 @@ class _Parser:
         self.expect_word("AS")
         token = self.take()
         if token.kind != "word":
-            raise SqlSyntaxError("a type name expected")
+            raise _OutsideSubset("a type name expected")
         name = token.upper
         arguments: list[int] = []
         if self.symbol("("):
@@ -570,7 +580,7 @@ class _Parser:
             while True:
                 number = self.take()
                 if number.kind != "number" or not number.text.isdigit():
-                    raise SqlSyntaxError("a type argument is an integer")
+                    raise _OutsideSubset("a type argument is an integer")
                 arguments.append(int(number.text))
                 if self.symbol(")"):
                     self.at += 1
@@ -585,7 +595,7 @@ class _Parser:
         self.expect_symbol("(")
         token = self.take()
         if token.upper not in DATE_PARTS:
-            raise SqlSyntaxError("EXTRACT expects a date part")
+            raise _OutsideSubset("EXTRACT expects a date part")
         self.expect_word("FROM")
         operand = self.expression()
         self.expect_symbol(")")
@@ -640,16 +650,18 @@ class _Parser:
             self.expect_word("WHERE")
             filtered = self.expression()
             self.expect_symbol(")")
+        if name in AGGREGATES and not arguments:
+            raise _OutsideSubset("an aggregate reads an argument")
         if (distinct or order is not None or filtered is not None) and name not in AGGREGATES:
-            raise SqlSyntaxError("DISTINCT, WITHIN GROUP and FILTER apply to aggregates only")
+            raise _OutsideSubset("DISTINCT, WITHIN GROUP and FILTER apply to aggregates only")
         if (order is not None) != (name in ("PERCENTILE_CONT", "PERCENTILE_DISC")):
-            raise SqlSyntaxError("WITHIN GROUP belongs to PERCENTILE_CONT and PERCENTILE_DISC")
+            raise _OutsideSubset("WITHIN GROUP belongs to PERCENTILE_CONT and PERCENTILE_DISC")
         call = Call(name, tuple(arguments), distinct, filtered, order, descending)
         if self.word("OVER"):
             self.at += 1
             return self.window(call)
         if name in WINDOW_ONLY:
-            raise SqlSyntaxError("a window function needs OVER")
+            raise _OutsideSubset("a window function needs OVER")
         return call
 
     def window(self, call: Call) -> Window:
@@ -675,7 +687,7 @@ class _Parser:
                 if self.word("NULLS"):
                     self.at += 1
                     if not self.word("FIRST", "LAST"):
-                        raise SqlSyntaxError("NULLS expects FIRST or LAST")
+                        raise _OutsideSubset("NULLS expects FIRST or LAST")
                     self.at += 1
                 order.append((key, descending))
                 if not self.symbol(","):
@@ -685,20 +697,47 @@ class _Parser:
             while not self.symbol(")"):
                 token = self.take()
                 if token.kind not in ("word", "number"):
-                    raise SqlSyntaxError("a window frame holds words and numbers")
+                    raise _OutsideSubset("a window frame holds words and numbers")
                 frame.append(token.upper or token.text)
         self.expect_symbol(")")
         return Window(call, tuple(partition), tuple(order), tuple(frame))
 
 
 def parse(text: str) -> Node:
-    """One OSSIE_SQL_2026 expression as a tree."""
+    """One OSSIE_SQL_2026 expression as a tree.
+
+    `SqlSyntaxError` only for what is not one SQL expression in any dialect, and what the
+    specification itself forbids: an empty text, a string or quoted identifier left open,
+    unbalanced parentheses, more than one statement, an identifier over 128 characters (L86),
+    nesting beyond `MAX_DEPTH`. Any other text this grammar cannot read is `SqlUnsupported`
+    (`outside_subset`): it may be valid in some dialect, so it is never declared a breach of
+    Ossie; compiling refuses it."""
     parser = _Parser(text)
-    if not parser.tokens:
+    tokens = parser.tokens
+    if not tokens:
         raise SqlSyntaxError("the expression is empty")
-    node = parser.expression()
-    if parser.peek() is not None:
-        raise SqlSyntaxError("text follows the expression")
+    depth = 0
+    for token in tokens:
+        if token.kind == "symbol" and token.text in "()":
+            depth += 1 if token.text == "(" else -1
+            if depth < 0:
+                raise SqlSyntaxError("a ')' closes nothing")
+    if depth:
+        raise SqlSyntaxError("a '(' is not closed")
+    statements: list[list[_Token]] = [[]]
+    for token in tokens:
+        if token.kind == "symbol" and token.text == ";":
+            statements.append([])
+        else:
+            statements[-1].append(token)
+    if sum(1 for statement in statements if statement) > 1:
+        raise SqlSyntaxError("more than one statement")
+    try:
+        node = parser.expression()
+        if parser.peek() is not None:
+            raise _OutsideSubset("text follows the expression")
+    except _OutsideSubset:
+        raise SqlUnsupported("outside_subset") from None
     return node
 
 

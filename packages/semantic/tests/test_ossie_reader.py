@@ -598,7 +598,7 @@ def test_unsupported_sql_is_an_advisory_and_invalid_sql_an_error(form: str) -> N
     assert advisories(load(render(model), form)) == [
         ("/datasets/0/metrics/0/expression/sql", "unreadable_expression")
     ]
-    for text in ("COUNT(sale_id", "COUNT(sale_id))", "COUNT(sale_id) AND"):
+    for text in ("COUNT(sale_id", "COUNT(sale_id))", "COUNT(sale_id); COUNT(sale_id)"):
         model = base()
         ds(model)["metrics"][0]["expression"]["sql"] = text
         (problem,) = problems(failure(render(model), form))
