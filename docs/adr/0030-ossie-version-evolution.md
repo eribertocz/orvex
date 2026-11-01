@@ -58,9 +58,7 @@ A document can pass stage 1 and fail stage 2 or stage 5. It can still be opened,
   - **First execution.** The refusal ships with the first issue that executes queries (P2-12 in the roadmap). No execution path exists without it. That issue adds the declaration as an optional `ORVEX` member, a compatible change to `ossie-extensions/v1`.
 
 ### 4. Standard fields and `ORVEX` extensions
-When a registry entry's reader understands a standard concept that an `ORVEX` member also declares, precedence goes by **semantic relation, not representation**. The reader maps the standard field onto the engine's semantic aspects (for additivity: the aggregation class, the non-additive axes and their behavior, the period-end rule, null treatment). It then compares, aspect by aspect:
-
-Each aspect falls into exactly one case; a standard default counts as defined:
+When a registry entry's reader understands a standard concept that an `ORVEX` member also declares, precedence goes by **semantic relation, not representation**. The reader maps the standard field onto the engine's semantic aspects (for additivity: the aggregation class, the non-additive axes and their behavior, the period-end rule, null treatment). It then compares them aspect by aspect. Each aspect falls into exactly one case, and a standard default counts as defined:
 
 | Aspect | Result for that aspect |
 |---|---|
@@ -73,7 +71,7 @@ Each aspect falls into exactly one case; a standard default counts as defined:
 - **Declaration level.** A declaration is accepted only if no aspect is a conflict or undecidable; anything else is rejected (`OSSIE_INVALID`, rule `extension_conflict`). A pair that is not covered is never assumed equal.
 - **Redundant members.** When every aspect is defined by both and agrees, the `ORVEX` member is reported as redundant, and export may drop it.
 
-- Equal compiled trees are not enough: two different spellings of the same meaning must be `equal`, and two equal-looking declarations that differ in null handling, zone or frame must not be.
+- Equal compiled trees are not enough: two different spellings of the same meaning must agree on every aspect, and two equal-looking declarations that differ in null handling, zone or frame must not be.
 - Each mapping has positive and negative tests.
 - **When the standard field is absent**, the `ORVEX` member is the only source, as today. A standard field that is present but that the reader does not understand is an unknown capability (§3) and is rejected; it is never skipped in favour of the extension.
 - `ossie-extensions/v1` stays stable.
@@ -112,7 +110,7 @@ Each aspect falls into exactly one case; a standard default counts as defined:
 
 ## Consequences
 - P2-03 (#278) resolves versions through the registry, keeps a reference to the preserved document and to the registry entry used, takes dialect tokens from the registry, and records foreign extensions. Its scope does not grow beyond that. Executing and refusing execution belong to later issues.
-- P2-04 (#280) adds the reader's capabilities version to the compiled identity. Per the Owner's decision, it also rejects at compile time a metric whose aggregation is ambiguous without its declarations.
+- P2-04 (#280) adds the reader's id and capabilities version to the compiled identity. Per the Owner's decision, it also rejects at compile time a metric whose aggregation is ambiguous without its declarations.
 - `semantic-error/v1` gains the rules `unsupported_capability` and `extension_conflict`. These are compatible additions to a detail's enumeration, and its README's compatibility list says so explicitly when P2-03 adds them. The refusal of queries that reach unreviewed foreign extensions gets its code in P2-12.
 - `UNSUPPORTED_OSSIE_VERSION.supported` names the newest `stable` version. A list of every supported version, when there is more than one, is an optional detail (compatible).
 - A second registry entry, the full migrator and an extended compatibility matrix are built when a second revision is needed. The registry, the stages and the identities exist from P2-03, so that work adds entries, not a redesign.
