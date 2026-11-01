@@ -48,9 +48,9 @@ This record amends **ADR-0009** and **ADR-0012**.
 A document can pass stage 1 and fail stage 2 or stage 5. It can still be opened, preserved and exported, never executed.
 
 **Conformance and executability are separate.**
-- Stages 2 and 3 decide only conformance with Ossie. A document Ossie accepts is never refused there for a rule stricter than Ossie's. An official validator warning, such as `to_columns` covering no key of `to`, stays a warning.
+- Stages 2 and 3 decide only conformance with Ossie. A document Ossie accepts is never refused there for a rule stricter than Ossie's. The one deliberate exception is stage 1's safety limits (one document, size and nesting limits, no anchors, aliases, merge keys or tags outside the core schema), which protect the reader. An official validator warning, such as `to_columns` covering no key of `to`, stays a warning.
 - Where the product needs more to compile or execute safely, stage 3 records an advisory on the element. Examples: a key or an as-of declaration for that relationship, or a selectable expression for a field.
-- Stage 4 or 5 refuses, with a typed error, the operation that needs the element. It never returns a result that could be wrong.
+- Stage 4 or 5 refuses, with a typed error, the operation that needs the element. It never returns a result that could be wrong. A text the product's expression reader cannot read is such a limitation of the product, not a breach of Ossie.
 
 ### 3. Unknown capabilities fail closed
 - **Inside `ORVEX` entries**, an unknown member is an error. The contract is closed (`ossie-extensions/v1`).
