@@ -36,7 +36,9 @@ from typing import Any, cast
 import pytest
 import yaml
 from orvex.semantic import SemanticError
+from orvex.semantic.compiler.catalog import LogicalType, SourceColumn
 from orvex.semantic.compiler.parsing import MemberId, parse_model
+from orvex.semantic.compiler.typecheck import type_model
 from orvex.semantic.ossie.reader import read
 
 from conformance.runners import bi_platform_adapter as adapter
@@ -182,3 +184,52 @@ def test_every_accepted_corpus_model_parses_with_nothing_excluded(path: Path) ->
             attainment = parsed.members[MemberId("metric", None, "ATTAINMENT")]
             assert attainment.language == "product"
             assert [m.name for m in attainment.depends_on] == ["ACTUAL_REVENUE", "TARGET_REVENUE"]
+
+
+def catalog(path: Path) -> dict[str, dict[str, SourceColumn]]:
+    """The case's `.catalog.yaml`, through the adapter, as the store would report it."""
+    written = yaml.safe_load(path.with_name(f"{path.stem}.catalog.yaml").read_text("utf-8"))
+    return {
+        source: {column: SourceColumn(*shape) for column, shape in columns.items()}
+        for source, columns in adapter.translate_catalog(written).items()
+    }
+
+
+@pytest.mark.parametrize("path", MODELS, ids=lambda path: path.stem)
+def test_every_accepted_corpus_model_types(path: Path) -> None:
+    """P2-04c (#289): every corpus model P2-03 accepts, as imported or as translated, types
+    against its catalog; nothing becomes a float. CASE-002 is Decimal(38,2) exact, and CASE-019
+    buckets its instants in America/La_Paz."""
+    candidates = [("yaml", path.read_bytes())]
+    translated, _ = adapter.translate(raw(path), VENDORS[0])
+    candidates.append(("json", json.dumps(translated).encode()))
+    for form, content in candidates:
+        if path.stem in FUTURE and (form == "yaml" or path.stem not in EXPLICIT_EXTENSION):
+            continue
+        loaded = read(content, f"semantic/{path.stem}.ossie.{form}", VENDORS)
+        parsed = parse_model(loaded, VENDORS)
+        typed = type_model(loaded, parsed, catalog(path))
+        assert set(typed.members) == set(parsed.members)
+        assert all(t.type.exactness == "exact" for t in typed.members.values())
+        if path.stem == "CASE-002":
+            revenue = typed.members[MemberId("metric", None, "REVENUE")]
+            assert revenue.type.logical == LogicalType("Decimal", 38, 2)
+        if path.stem == "CASE-019" and form == "json":
+            day = typed.members[MemberId("field", "EVENTS", "BUSINESS_DAY")]
+            assert day.type.logical == LogicalType("DateTimeTz", zone="America/La_Paz")
+            assert day.tree is not None
+            assert day.tree.type.bucket_zone == "America/La_Paz"
+
+
+def test_the_catalog_adapter_maps_every_corpus_type_and_refuses_an_unknown_one() -> None:
+    written = {"t": {"a": "int64", "b": "decimal(18,2) null", "c": "timestamptz", "d": "utf8"}}
+    assert adapter.translate_catalog(written) == {
+        "t": {
+            "a": ("BIGINT", False),
+            "b": ("DECIMAL(18,2)", True),
+            "c": ("TIMESTAMP WITH TIME ZONE", False),
+            "d": ("VARCHAR", False),
+        }
+    }
+    with pytest.raises(ValueError, match="float32"):
+        adapter.translate_catalog({"t": {"a": "float32"}})

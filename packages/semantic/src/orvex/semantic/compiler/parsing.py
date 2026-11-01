@@ -165,7 +165,7 @@ def _product_target(ref: sql.Ref, own_row: str | None, names: _Names) -> MemberI
     )
 
 
-class _Problems:
+class Problems:
     def __init__(self, model: OssieModel) -> None:
         self.model = model
         self.found: set[tuple[int, str, str]] = set()
@@ -225,7 +225,7 @@ def _payloads(model: OssieModel) -> dict[str, tuple[str, Json]]:
     return found
 
 
-def _parse_product(text: object, at: str, problems: _Problems) -> sql.Node | None:
+def _parse_product(text: object, at: str, problems: Problems) -> sql.Node | None:
     try:
         return sql.parse(str(text))
     except sql.SqlSyntaxError, sql.SqlUnsupported:
@@ -236,7 +236,7 @@ def _parse_product(text: object, at: str, problems: _Problems) -> sql.Node | Non
 def parse_model(model: OssieModel, vendor_names: Sequence[str]) -> ParsedModel:
     document = model.document
     names = _Names.of(document)
-    problems = _Problems(model)
+    problems = Problems(model)
     payloads = _payloads(model)
     selected = {expression.element: expression for expression in model.expressions}
     drafts: dict[MemberId, _Draft] = {}
@@ -299,7 +299,7 @@ def _opaque_member(
     pointer: str,
     text: str,
     names: _Names,
-    problems: _Problems,
+    problems: Problems,
     text_at: str,
 ) -> _Draft:
     """An engine-dialect expression is never interpreted; P2-03's rule that a metric never
@@ -328,7 +328,7 @@ def _names_a_metric(ref: sql.Ref, owner: MemberId, names: _Names) -> bool:
 
 
 def _resolve_product(
-    tree: sql.Node, own_row: str | None, names: _Names, at: str, problems: _Problems
+    tree: sql.Node, own_row: str | None, names: _Names, at: str, problems: Problems
 ) -> set[MemberId]:
     reads: set[MemberId] = set()
     for ref in sql.references(tree):
@@ -348,7 +348,7 @@ def _metric_ref(ref: object, names: _Names) -> MemberId | None:
 
 
 def _payload_reads(
-    payload: Json, member_id: MemberId, names: _Names, at: str, problems: _Problems
+    payload: Json, member_id: MemberId, names: _Names, at: str, problems: Problems
 ) -> set[MemberId]:
     """The members a field's or metric's payload expressions read."""
     reads: set[MemberId] = set()
@@ -378,7 +378,7 @@ def _payload_reads(
     return reads
 
 
-def _model_payload_reads(payload: Json, names: _Names, at: str, problems: _Problems) -> None:
+def _model_payload_reads(payload: Json, names: _Names, at: str, problems: Problems) -> None:
     """Calculation items, segment conditions and funnel steps: parsed and resolved here; their
     semantics are their capabilities' issues (S1, S10, S11)."""
     texts: list[object] = []

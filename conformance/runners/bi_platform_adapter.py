@@ -524,3 +524,35 @@ def _ossie_expression(element: dict[str, Any]) -> str:
             if isinstance(dialect, dict) and dialect.get("dialect") == "OSSIE_SQL_2026":
                 return str(dialect["expression"])
     raise UntranslatableKey(f"no OSSIE_SQL_2026 expression on {element.get('name')!r}")
+
+
+# bi-platform's catalog type -> the DuckDB type the store reports (contracts/store/v1).
+_CATALOG_TYPES = {
+    "int64": "BIGINT",
+    "utf8": "VARCHAR",
+    "date": "DATE",
+    "timestamptz": "TIMESTAMP WITH TIME ZONE",
+}
+
+
+def translate_catalog(catalog: dict[str, Any]) -> dict[str, dict[str, tuple[str, bool]]]:
+    """A case's `.catalog.yaml` as source -> column -> (DuckDB type, nullable). bi-platform
+    marks a nullable column with a trailing `null`; every other column holds no NULL. An
+    unknown type fails the load."""
+    translated: dict[str, dict[str, tuple[str, bool]]] = {}
+    for source, columns in catalog.items():
+        translated[str(source)] = {}
+        if not isinstance(columns, dict):
+            raise ValueError(f"the catalog of {source} is not a mapping")
+        for column, written in columns.items():
+            text = str(written).strip()
+            nullable = text.endswith(" null")
+            name = text.removesuffix(" null").strip()
+            if name.startswith("decimal(") and name.endswith(")"):
+                duckdb = "DECIMAL" + name.removeprefix("decimal").replace(" ", "")
+            elif name in _CATALOG_TYPES:
+                duckdb = _CATALOG_TYPES[name]
+            else:
+                raise ValueError(f"unknown bi-platform catalog type {name!r} for {source}.{column}")
+            translated[str(source)][str(column)] = (duckdb.upper(), nullable)
+    return translated
