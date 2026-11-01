@@ -378,8 +378,8 @@ class Calendar(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    name: Name | None = None
-    kind: Literal["gregorian", "fiscal", "business"] | None = None
+    name: Name
+    kind: Literal["gregorian", "fiscal", "business"]
     year_start_month: Annotated[int | None, Field(ge=1, le=12)] = None
     dataset: Name | None = None
     date: Name | None = None
@@ -483,7 +483,7 @@ class History(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    mode: Literal["snapshots", "versioned"] | None = None
+    mode: Literal["snapshots", "versioned"]
     entity_key: Names | None = None
     version: Name | None = None
     recorded_at: Name | None = None
@@ -591,8 +591,8 @@ class FieldPayload(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    version: Literal[1] | None = None
-    element: Literal["field"] | None = None
+    version: Literal[1]
+    element: Literal["field"]
     semantic_type: (
         Literal[
             "identifier",
@@ -626,8 +626,8 @@ class MetricPayload(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    version: Literal[1] | None = None
-    element: Literal["metric"] | None = None
+    version: Literal[1]
+    element: Literal["metric"]
     additivity: (
         Literal["additive", "semi_additive", "non_additive", "recomputable", "ordered"] | None
     ) = None

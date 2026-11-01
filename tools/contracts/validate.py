@@ -64,6 +64,8 @@ _OBJECT_KEYWORDS = (
     "maxProperties",
     "dependentRequired",
 )
+# Applicators that apply to the same instance as the schema that holds them.
+_IN_PLACE_KEYWORDS = ("allOf", "anyOf", "oneOf", "not", "if", "then", "else")
 # A schema with one of these is constrained even without `type`.
 # `not` alone does not constrain: `{"not": {"type": "string"}}` still accepts any object.
 _CONSTRAINING_KEYWORDS = ("type", "$ref", "const", "enum", *_SCHEMA_LIST_KEYWORDS)
@@ -128,12 +130,19 @@ def open_objects(
     pointer: str = "#",
     document: object = None,
     visited: set[str] | None = None,
+    applied: bool = False,
 ) -> Iterator[str]:
     """JSON pointers of schemas that accept objects with undeclared properties.
 
     The walk follows keyword positions (never key names), so a property called `default` or
     `enum` is checked like any other, and it follows every local `$ref` to its target, wherever
     the target lives in the document (each target is walked once).
+
+    `applied`: the schema is an in-place applicator (`allOf`, `anyOf`, `oneOf`, `not`, `if`,
+    `then`, `else`) of a closed object. The parent's `additionalProperties: false` already rejects
+    every undeclared property, whatever the applicator says, so the applicator itself need not be
+    closed (a conditional such as `if: {properties: {kind: {const: x}}}, then: {required: [y]}`).
+    The objects nested inside it (property values, items) are still checked.
     """
     document = schema if document is None else document
     visited = set() if visited is None else visited
@@ -153,8 +162,11 @@ def open_objects(
         or any(keyword in schema for keyword in _OBJECT_KEYWORDS)
         or not any(keyword in schema for keyword in _CONSTRAINING_KEYWORDS)
     )
-    if is_object and schema.get("additionalProperties") is not False:
+    closed = schema.get("additionalProperties") is False
+    if is_object and not closed and not applied:
         yield pointer
+    # Applicators of a closed object, or of an applicator of one, apply to that closed instance.
+    in_place = (is_object and closed) or applied
     is_array = "array" in type_list or "prefixItems" in schema or "contains" in schema
     if is_array and "items" not in schema:
         # A missing `items` means any element, objects included.
@@ -162,10 +174,14 @@ def open_objects(
     for keyword in _SCHEMA_KEYWORDS:
         child = schema.get(keyword)
         if child is not None:
-            yield from open_objects(child, f"{pointer}/{keyword}", document, visited)
+            on_instance = in_place and keyword in _IN_PLACE_KEYWORDS
+            yield from open_objects(child, f"{pointer}/{keyword}", document, visited, on_instance)
     for keyword in _SCHEMA_LIST_KEYWORDS:
         for index, child in enumerate(schema.get(keyword) or []):
-            yield from open_objects(child, f"{pointer}/{keyword}/{index}", document, visited)
+            on_instance = in_place and keyword in _IN_PLACE_KEYWORDS
+            yield from open_objects(
+                child, f"{pointer}/{keyword}/{index}", document, visited, on_instance
+            )
     for keyword in _SCHEMA_MAP_KEYWORDS:
         for name, child in (schema.get(keyword) or {}).items():
             yield from open_objects(child, f"{pointer}/{keyword}/{name}", document, visited)
