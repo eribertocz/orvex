@@ -7,7 +7,9 @@ difference, so the list cannot fall behind what pull requests run.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
+import re
 import sys
 import tomllib
 from dataclasses import dataclass
@@ -22,6 +24,22 @@ LIST = Path("tools/ci/checks.toml")
 WORKFLOWS = Path(".github/workflows")
 KINDS = ("check", "scoped", "automation")
 PULL_REQUEST_EVENTS = ("pull_request", "pull_request_target")
+# A required check must run on every update of a pull request.
+PULL_REQUEST_TYPES = frozenset({"opened", "synchronize", "reopened"})
+TRIGGER_FILTERS = ("paths", "paths-ignore", "branches", "branches-ignore")
+# `always()` only adds runs. `failure()` skips a step on a passing run, so it is allowed only on
+# the trailing steps of a job, after every other step (reporting a failure).
+ALWAYS = "always()"
+ON_FAILURE = "failure()"
+# Shells GitHub runs failing on the first error (bash with -eo pipefail); a custom template
+# such as `bash {0}` or `true {0}` can neuter a check, so it is refused in a protected job.
+SAFE_SHELLS = frozenset({"bash", "sh", "python"})
+SCOPED_CONDITION = "needs.changes.outputs.relevant == 'true'"
+AGGREGATE = "python3 .github/workflows/scripts/aggregate.py"
+CHANGES = "changes"
+_NEEDS_RESULT = re.compile(r"^\$\{\{ needs\.([A-Za-z0-9_-]+)\.result \}\}$")
+_TEST_SUCCESS = re.compile(r'^test "\$([A-Za-z_][A-Za-z0-9_]*)" = success$')
+_MATRIX_NAME = re.compile(r"\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}")
 # Actions a check job may use: they prepare the runner and check nothing themselves. Any
 # other action in a check job is drift, so a gate cannot be added as a `uses:` step unseen.
 PREPARING_ACTIONS = (
@@ -96,6 +114,7 @@ def drift(root: Path = REPOSITORY_ROOT) -> list[str]:
     found: list[str] = []
     listed = {(job["workflow"], job["job"]): job for job in _jobs(root)}
     seen: set[tuple[str, str]] = set()
+    producers: dict[str, list[str]] = {}
     for path in sorted((root / WORKFLOWS).glob("*.yml")):
         workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
         events = _events(workflow)
@@ -113,8 +132,244 @@ def drift(root: Path = REPOSITORY_ROOT) -> list[str]:
                 continue
             seen.add(key)
             found.extend(_job_drift(label, listed[key], body, scoped=scoped))
+        found.extend(_skips(path.name, workflow, events, listed))
+        for name, body in workflow.get("jobs", {}).items():
+            names = _contexts(body, name)
+            if names is None:
+                # A name with any other expression could equal a required check's name.
+                found.append(
+                    f"job {path.name}:{name}: its check names cannot be computed; use a literal "
+                    "name or one built from matrix values only"
+                )
+            for context in names or []:
+                producers.setdefault(context, []).append(f"{path.name}:{name}")
     for workflow_name, job_name in sorted(set(listed) - seen):
         found.append(f"job {workflow_name}:{job_name} is listed but not in the workflows")
+    for (workflow_name, job_name), job in sorted(listed.items()):
+        for context in job.get("contexts", []):
+            jobs = producers.get(context, [])
+            if jobs != [f"{workflow_name}:{job_name}"]:
+                found.append(
+                    f"check name {context} must come from {workflow_name}:{job_name} alone; "
+                    f"pull-request jobs producing it: {', '.join(jobs) or 'none'}"
+                )
+    return found
+
+
+def _needs(body: dict[str, Any]) -> list[str]:
+    needs = body.get("needs", [])
+    return [needs] if isinstance(needs, str) else list(needs)
+
+
+def _contexts(body: dict[str, Any], name: str) -> list[str] | None:
+    """The status-check names a job produces, or None when they cannot be computed."""
+    template = str(body.get("name", name))
+    keys = _MATRIX_NAME.findall(template)
+    if "${{" in _MATRIX_NAME.sub("", template):
+        return None
+    if not keys:
+        return [template]
+    matrix = body.get("strategy", {}).get("matrix", {})
+    if not all(isinstance(matrix.get(key), list) for key in keys):
+        return None
+    names = []
+    for values in itertools.product(*(matrix[key] for key in keys)):
+        name_of = template
+        for key, value in zip(keys, values, strict=True):
+            name_of = re.sub(
+                r"\$\{\{\s*matrix\." + re.escape(key) + r"\s*\}\}", str(value), name_of
+            )
+        names.append(name_of)
+    return names
+
+
+def _aggregator(body: dict[str, Any], jobs: dict[str, Any], listed: dict[str, Any]) -> str | None:
+    """Why a job with `if: always()` and `needs` is not a safe aggregator, or None if it is.
+
+    Safe forms: every step tests `test "$X" = success` for a variable bound to each needed
+    job's result; or the scoped-check aggregator script with the `changes` job's result and
+    output and its one scoped job's result.
+    """
+    needs = set(_needs(body))
+    if body.get("if") != "always()" or not needs:
+        return "an aggregator must have `if: always()` and `needs`"
+    runs = [step for step in body.get("steps", []) if "run" in step]
+    if not runs or any(
+        "if" in step or "continue-on-error" in step for step in body.get("steps", [])
+    ):
+        return "an aggregator's steps must run unconditionally"
+    if "defaults" in body or any("shell" in step for step in runs):
+        return "an aggregator's steps must run in the default shell"
+    if len(runs) == 1 and str(runs[0]["run"]).strip() == AGGREGATE:
+        env = runs[0].get("env", {})
+        scoped = needs - {CHANGES}
+        if CHANGES not in needs or len(scoped) != 1:
+            return f"the aggregator script needs `{CHANGES}` and one scoped job"
+        (real,) = scoped
+        if listed.get(real, {}).get("kind") != "scoped":
+            return f"{real} is not listed as scoped"
+        expected = {
+            "CHANGES": f"${{{{ needs.{CHANGES}.result }}}}",
+            "RELEVANT": f"${{{{ needs.{CHANGES}.outputs.relevant }}}}",
+            "RESULT": f"${{{{ needs.{real}.result }}}}",
+        }
+        wrong = [key for key, value in expected.items() if env.get(key) != value]
+        return (
+            f"the aggregator script's {', '.join(wrong)} are not bound to its needs"
+            if wrong
+            else None
+        )
+    tested: set[str] = set()
+    for step in runs:
+        variables = {
+            key: match.group(1)
+            for key, value in step.get("env", {}).items()
+            if (match := _NEEDS_RESULT.match(str(value)))
+        }
+        for line in str(step["run"]).strip().splitlines():
+            match = _TEST_SUCCESS.match(line.strip())
+            if match is None or match.group(1) not in variables:
+                return f"line `{line.strip()}` is not a test that a needed job succeeded"
+            tested.add(variables[match.group(1)])
+    if missing := sorted(needs - tested):
+        return f"needs {', '.join(missing)} are not tested for success"
+    return None
+
+
+def _protected(required: set[str], jobs: dict[str, Any]) -> set[str]:
+    """The required jobs and every job they need, directly or not."""
+    protected: set[str] = set()
+    pending = list(required)
+    while pending:
+        name = pending.pop()
+        if name in protected or name not in jobs:
+            continue
+        protected.add(name)
+        pending.extend(_needs(jobs[name]))
+    return protected
+
+
+def _skips(
+    workflow_name: str,
+    workflow: dict[str, Any],
+    events: dict[str, Any],
+    listed: dict[tuple[str, str], dict[str, Any]],
+) -> list[str]:
+    """Every way the workflow could skip a required check, or widen a job's permissions."""
+    found: list[str] = []
+    jobs: dict[str, Any] = workflow.get("jobs", {})
+    here = {job: entry for (wf, job), entry in listed.items() if wf == workflow_name}
+    required = {job for job, entry in here.items() if entry.get("required")}
+    top = workflow.get("permissions")
+    for name, body in jobs.items():
+        entry = here.get(name)
+        if entry is None:
+            continue
+        label = f"{workflow_name}:{name}"
+        permissions = body.get("permissions", top)
+        allowed = entry.get("permissions")
+        if allowed is not None and permissions != allowed:
+            found.append(f"job {label}: permissions {permissions} differ from the listed {allowed}")
+        if allowed is None and any(v not in ("read", "none") for v in (permissions or {}).values()):
+            found.append(f"job {label}: permissions {permissions} are not read-only; list them")
+        aggregates = body.get("if") == "always()" and _needs(body) and entry.get("kind") == "check"
+        if aggregates and (why := _aggregator(body, jobs, here)) is not None:
+            found.append(f"job {label}: not a safe aggregator: {why}")
+        if (contexts := entry.get("contexts")) is not None and _contexts(body, name) != contexts:
+            found.append(
+                f"job {label}: produces check names {_contexts(body, name)}, listed {contexts}"
+            )
+        if entry.get("required") and not entry.get("contexts"):
+            found.append(f"job {label} is required and lists no check names")
+    if any(here[job].get("kind") == "scoped" for job in here):
+        if top != {"contents": "read"}:
+            found.append(
+                f"workflow {workflow_name}: a scoped check's workflow has permissions {top}"
+            )
+        paths = [
+            line.strip()
+            for line in str(workflow.get("env", {}).get("RELEVANT_PATHS", "")).splitlines()
+            if line.strip()
+        ]
+        for job, entry in here.items():
+            if entry.get("kind") == "scoped" and entry.get("paths") != paths:
+                found.append(
+                    f"job {workflow_name}:{job}: paths {entry.get('paths')} "
+                    f"differ from RELEVANT_PATHS {paths}"
+                )
+            if entry.get("kind") == "scoped" and not any(
+                str(step.get("run", "")).strip() == AGGREGATE
+                and step.get("env", {}).get("RESULT") == f"${{{{ needs.{job}.result }}}}"
+                for body in jobs.values()
+                for step in body.get("steps", [])
+            ):
+                found.append(f"job {workflow_name}:{job} is scoped and no aggregator reports it")
+    shell = workflow.get("defaults", {}).get("run", {}).get("shell")
+    if shell is not None and shell not in SAFE_SHELLS and here:
+        found.append(
+            f"workflow {workflow_name}: `defaults.run.shell: {shell}` can neuter its checks"
+        )
+    if not required:
+        return found
+    for event in PULL_REQUEST_EVENTS:
+        if event not in events:
+            continue
+        trigger = events[event] or {}
+        for key in TRIGGER_FILTERS:
+            if key in trigger:
+                found.append(
+                    f"workflow {workflow_name}: `{event}.{key}` can leave out its required checks"
+                )
+        if "types" in trigger and not set(trigger["types"]) >= PULL_REQUEST_TYPES:
+            found.append(
+                f"workflow {workflow_name}: `{event}.types` must include "
+                f"{', '.join(sorted(PULL_REQUEST_TYPES))}"
+            )
+    for name in sorted(required):
+        body = jobs.get(name)
+        if body is None:
+            continue
+        label = f"{workflow_name}:{name}"
+        if ("if" in body or _needs(body)) and _aggregator(body, jobs, here) is not None:
+            found.append(
+                f"job {label} is required and can be skipped: "
+                "`if` or `needs` outside a safe aggregator"
+            )
+    for name in sorted(_protected(required, jobs)):
+        body = jobs[name]
+        label = f"{workflow_name}:{name}"
+        conditions = set(here.get(name, {}).get("conditions", []))
+        if "continue-on-error" in body:
+            found.append(f"job {label}: `continue-on-error` hides a failure of a required check")
+        shell = body.get("defaults", {}).get("run", {}).get("shell")
+        if shell is not None and shell not in SAFE_SHELLS:
+            found.append(f"job {label}: `defaults.run.shell: {shell}` can neuter its checks")
+        steps = body.get("steps", [])
+        # The trailing steps that run only on a failure; every step before them must run.
+        trailing = len(steps)
+        while trailing > 0 and steps[trailing - 1].get("if") == ON_FAILURE:
+            trailing -= 1
+        for position, step in enumerate(steps):
+            title = step.get("name") or step.get("run", step.get("uses", "?"))
+            title = str(title).splitlines()[0]
+            if "continue-on-error" in step:
+                found.append(f"job {label}: step `{title}` has `continue-on-error`")
+            if "shell" in step and step["shell"] not in SAFE_SHELLS:
+                found.append(f"job {label}: step `{title}` has `shell: {step['shell']}`")
+            condition = step.get("if")
+            if condition is None or condition == ALWAYS or condition in conditions:
+                continue
+            # Only a trailing step listed as a report (it checks nothing) may run on failure only.
+            reports = here.get(name, {}).get("reports", [])
+            trailing_report = (
+                position >= trailing and "run" in step and _first_line(step) in reports
+            )
+            if condition == ON_FAILURE and trailing_report:
+                continue
+            found.append(f"job {label}: step `{title}` can be skipped by `if: {condition}`")
+        matrix = body.get("strategy", {}).get("matrix", {})
+        if "exclude" in matrix:
+            found.append(f"job {label}: `strategy.matrix.exclude` can remove a required run")
     return found
 
 
@@ -123,19 +378,27 @@ def _job_drift(label: str, job: dict[str, Any], body: dict[str, Any], *, scoped:
     kind = job.get("kind")
     if kind not in KINDS:
         return [f"job {label}: kind must be one of {', '.join(KINDS)}"]
-    if kind == "scoped" and not scoped:
-        found.append(f"job {label} is scoped but its workflow runs on every pull request")
-    if kind == "check" and scoped:
-        found.append(f"job {label} runs only on some paths; list it as scoped")
+    if scoped and kind != "automation":
+        found.append(
+            f"job {label} runs only on some paths: make it scoped, gated by a changes job "
+            "and reported by an aggregator"
+        )
     if kind == "scoped" and not job.get("reason"):
         found.append(f"job {label} is scoped and needs a reason")
-    if kind != "check":
+    if kind == "scoped" and (body.get("if") != SCOPED_CONDITION or CHANGES not in _needs(body)):
+        found.append(
+            f"job {label} is scoped but is not gated by its workflow's changes job "
+            f"(`needs: {CHANGES}` and `if: {SCOPED_CONDITION}`), so it runs on every pull request"
+        )
+    if kind == "automation":
         return found
     if job.get("digest") != (current := digest(body)):
         found.append(
             f"job {label} changed since this list was checked against it: compare every step "
             f'with its entries here, then set digest = "{current}"'
         )
+    if kind == "scoped":
+        return found
     for step in body.get("steps", []):
         action = str(step.get("uses", "")).split("@")[0]
         if action and action not in PREPARING_ACTIONS:
@@ -145,7 +408,7 @@ def _job_drift(label: str, job: dict[str, Any], body: dict[str, Any], *, scoped:
         found.append(f"job {label}: pythons {job.get('pythons', [])} differ from matrix {matrix}")
     default = body.get("defaults", {}).get("run", {}).get("working-directory")
     steps = [s for s in body.get("steps", []) if "run" in s]
-    setup = list(job.get("setup", []))
+    setup = list(job.get("setup", [])) + list(job.get("reports", []))
     checks = list(job.get("check", []))
     for step in steps:
         line = _first_line(step)

@@ -17,17 +17,41 @@ on:
         description: Rounds (each a full first load, an incremental cycle and maintenance)
         type: number
         default: 3
-  # A change to this workflow or its script is tried on the `small` dataset, once.
+  # A change to this workflow or its script is tried on the `small` dataset, once; every pull
+  # request gets the `load-baseline` result (#267).
   pull_request:
-    paths:
-      - .github/workflows/load-baseline.yml
-      - tools/benchmarks/**
 
 permissions:
   contents: read
 
+env:
+  # The paths that make this check apply (#267), read by changes.py and aggregate.py.
+  RELEVANT_PATHS: |
+    .github/workflows/load-baseline.yml
+    tools/benchmarks/**
+
 jobs:
+  # Whether this run changes a relevant path (#267): `changes.py` fails closed.
+  changes:
+    name: load-baseline-changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.changes.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/workflows/scripts/changes.py
+
   baseline:
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     # Three full loads of the large dataset; a hung step must fail the job.
     timeout-minutes: 360
@@ -76,3 +100,20 @@ jobs:
           name: load-baseline-${{ env.SIZE }}
           path: baseline/
           if-no-files-found: warn
+
+  # The required result (#267): passes when baseline ran and passed, reports "Not applicable"
+  # only when `changes` proved nothing relevant changed, and fails otherwise.
+  load-baseline:
+    needs: [changes, baseline]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 .github/workflows/scripts/aggregate.py
+        env:
+          CHECK: load-baseline
+          CHANGES: ${{ needs.changes.result }}
+          RELEVANT: ${{ needs.changes.outputs.relevant }}
+          RESULT: ${{ needs.baseline.result }}

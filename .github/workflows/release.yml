@@ -8,9 +8,9 @@ name: release
 on:
   push:
     tags: ["v*"]
-  # A change to this workflow is built (never published) on its pull request.
+  # A change to this workflow is built (never published) on its pull request; every pull
+  # request gets the `release-build` result (#267).
   pull_request:
-    paths: [.github/workflows/release.yml]
   workflow_dispatch:
     inputs:
       dry-run:
@@ -21,8 +21,33 @@ on:
 permissions:
   contents: read
 
+env:
+  # The paths that make this check apply (#267), read by changes.py and aggregate.py.
+  RELEVANT_PATHS: |
+    .github/workflows/release.yml
+
 jobs:
+  # Whether this run changes a relevant path (#267): `changes.py` fails closed.
+  changes:
+    name: release-changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.changes.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/workflows/scripts/changes.py
+
   build:
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -104,3 +129,20 @@ jobs:
             gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --title "$TAG" \
               --generate-notes --prerelease="$prerelease"
           fi
+
+  # The required result (#267): passes when build ran and passed, reports "Not applicable"
+  # only when `changes` proved nothing relevant changed, and fails otherwise.
+  release-build:
+    needs: [changes, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 .github/workflows/scripts/aggregate.py
+        env:
+          CHECK: release-build
+          CHANGES: ${{ needs.changes.result }}
+          RELEVANT: ${{ needs.changes.outputs.relevant }}
+          RESULT: ${{ needs.build.result }}

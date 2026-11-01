@@ -6,9 +6,16 @@
 #
 # [[job]]: workflow, job, kind, setup (first lines of the steps that prepare the job), and
 #   `pythons` when the job runs on a matrix of Python versions. Kinds:
-#   "check": gates every pull request; "scoped": gates only pull requests that change the
-#   workflow's `paths`, and the local verification does not run it (its `reason` says why);
-#   "automation": acts on the repository and checks nothing.
+#   "check": runs on every pull request; "scoped": runs only when its `paths` change, gated by
+#   its workflow's `changes` job and reported by an aggregator (#267), and the local
+#   verification does not run it (its `reason` says why); "automation": acts on the
+#   repository and checks nothing.
+#   `required` marks a job whose status-check names (`contexts`) main's protection requires;
+#   the drift test refuses every way such a job could be skipped, and tools/ci/protection.py
+#   compares the required names with main's rulesets and branch protection. `conditions` lists
+#   step conditions allowed in a required job or a job it needs, each with its reason;
+#   `permissions` lists a job's permissions when they are not read-only; `reports` lists the
+#   trailing steps that run only on a failure (`if: failure()`) and check nothing.
 #   A check job also records `digest`, a digest of the whole job in its workflow: when the job
 #   changes in any way, the drift test fails until its entries here are compared with it again
 #   and the digest updated (`python -m tools.ci.checks` prints the new one).
@@ -20,6 +27,8 @@
 workflow = "checks.yml"
 job = "product-name"
 kind = "check"
+required = true
+contexts = ["product-name"]
 digest = "83c5deeca3cbebec"
 setup = []
 [[job.check]]
@@ -31,6 +40,8 @@ local = true
 workflow = "checks.yml"
 job = "boundaries"
 kind = "check"
+required = true
+contexts = ["boundaries"]
 digest = "1f51fdbcd7302f8e"
 setup = []
 [[job.check]]
@@ -42,6 +53,8 @@ local = true
 workflow = "contracts.yml"
 job = "contracts"
 kind = "check"
+required = true
+contexts = ["contracts"]
 digest = "d290acd3722cec10"
 setup = ["python -m pip install --quiet pip==26.2.2"]
 [[job.check]]
@@ -58,18 +71,27 @@ reason = "the generator runs the web tools (npm ci --prefix web), which need Nod
 workflow = "governance-scripts.yml"
 job = "governance-scripts"
 kind = "check"
-digest = "c00b552535c8f864"
+digest = "e039aad20b0f7fd1"
+required = true
+contexts = ["governance-scripts"]
 setup = []
 [[job.check]]
 name = "governance-scripts"
 run = "python3 -m unittest discover -p 'test_*.py' -v"
 directory = ".github/workflows/scripts"
 local = true
+[[job.check]]
+name = "protection"
+run = "python3 -m tools.ci.protection"
+local = false
+reason = "reads main's rulesets and branch protection from GitHub"
 
 [[job]]
 workflow = "python.yml"
 job = "python-lint"
 kind = "check"
+required = true
+contexts = ["python-lint"]
 digest = "d738506075b8608f"
 setup = ["python -m pip install --quiet pip==26.2.2"]
 [[job.check]]
@@ -85,6 +107,8 @@ local = true
 workflow = "python.yml"
 job = "python-types"
 kind = "check"
+required = true
+contexts = ["python-types"]
 digest = "75687ff402893421"
 setup = ["python -m pip install --quiet pip==26.2.2"]
 [[job.check]]
@@ -100,14 +124,38 @@ local = true
 workflow = "python.yml"
 job = "python-tests-part"
 kind = "check"
+required = false
+contexts = [
+  "python-tests-3.15-part-0",
+  "python-tests-3.15-part-1",
+  "python-tests-3.15-part-2",
+  "python-tests-3.15-part-3",
+  "python-tests-3.15-part-4",
+  "python-tests-3.15-part-5",
+  "python-tests-3.15-part-6",
+  "python-tests-3.15-part-7",
+  "python-tests-3.15-part-8",
+  "python-tests-3.15-part-9",
+  "python-tests-3.14-part-0",
+  "python-tests-3.14-part-1",
+  "python-tests-3.14-part-2",
+  "python-tests-3.14-part-3",
+  "python-tests-3.14-part-4",
+  "python-tests-3.14-part-5",
+  "python-tests-3.14-part-6",
+  "python-tests-3.14-part-7",
+  "python-tests-3.14-part-8",
+  "python-tests-3.14-part-9",
+]
 digest = "d628012ea6e16adc"
 pythons = ["3.15", "3.14"]
 setup = [
   "python -m pip install --quiet pip==26.2.2",
   'dir="$RUNNER_TEMP/postgres-tls"',
   "docker run --detach --name azurite --publish 10000:10000 \\",
-  "python -m tools.ci.junit_annotations junit.xml",
 ]
+# Trailing steps that run only on a failure and check nothing (#267).
+reports = ["python -m tools.ci.junit_annotations junit.xml"]
 [[job.check]]
 # Locally: the whole suite on each Python of the matrix, in one part. Tests that need the
 # PostgreSQL, ClickHouse or Azurite services CI starts are reported as not run, by reason.
@@ -119,6 +167,8 @@ local = true
 workflow = "python.yml"
 job = "python-tests"
 kind = "check"
+required = true
+contexts = ["python-tests-3.15", "python-tests-3.14"]
 digest = "6d1a12821c8f372d"
 pythons = ["3.15", "3.14"]
 setup = ['test "$RESULT" = success']
@@ -128,6 +178,8 @@ setup = ['test "$RESULT" = success']
 workflow = "python.yml"
 job = "python-lock"
 kind = "check"
+required = true
+contexts = ["python-lock"]
 digest = "73afff09045a5b65"
 setup = []
 [[job.check]]
@@ -139,6 +191,8 @@ local = true
 workflow = "web.yml"
 job = "licenses"
 kind = "check"
+required = true
+contexts = ["licenses"]
 digest = "356a33b2e6ef5a12"
 setup = ["python -m pip install --quiet pip==26.2.2"]
 [[job.check]]
@@ -150,6 +204,8 @@ local = true
 workflow = "web.yml"
 job = "web-check"
 kind = "check"
+required = true
+contexts = ["web-check"]
 digest = "8085c8955d9c821a"
 setup = ["npm ci"]
 [[job.check]]
@@ -163,6 +219,8 @@ reason = "the web tools need Node 24 (web/package.json engines); the sandbox has
 workflow = "web.yml"
 job = "web-lint"
 kind = "check"
+required = true
+contexts = ["web-lint"]
 digest = "9516527ee746ff18"
 setup = ["npm ci"]
 [[job.check]]
@@ -176,6 +234,8 @@ reason = "the web tools need Node 24 (web/package.json engines); the sandbox has
 workflow = "web.yml"
 job = "web-test"
 kind = "check"
+required = true
+contexts = ["web-test"]
 digest = "361646c4e511b8ca"
 setup = ["npm ci"]
 [[job.check]]
@@ -189,6 +249,8 @@ reason = "the web tools need Node 24 (web/package.json engines); the sandbox has
 workflow = "web.yml"
 job = "web-build"
 kind = "check"
+required = true
+contexts = ["web-build"]
 digest = "37ae5839fe610415"
 setup = ["npm ci"]
 [[job.check]]
@@ -212,15 +274,48 @@ reason = "reads the web build, which needs Node 24"
 
 [[job]]
 workflow = "docker.yml"
+job = "changes"
+kind = "check"
+digest = "e85a382e71cf7923"
+required = false
+contexts = ["docker-changes"]
+setup = []
+[[job.check]]
+name = "changes-docker"
+run = "python3 .github/workflows/scripts/changes.py"
+local = false
+reason = "reads the pull request's base and head commits in CI; its rules are tested by governance-scripts"
+
+[[job]]
+workflow = "docker.yml"
 job = "docker-build"
 kind = "scoped"
+digest = "38387e5cf066edae"
 reason = "runs only when the Dockerfile changes; its base image comes from Docker Hub, which the sandbox cannot reach"
+paths = ["Dockerfile", ".dockerignore", ".github/workflows/docker.yml"]
 setup = []
+
+[[job]]
+workflow = "docker.yml"
+job = "docker"
+kind = "check"
+digest = "77ffaa51a11c0bfb"
+# Joins main's protection only after its three states are shown in CI (#267).
+required = false
+contexts = ["docker"]
+setup = []
+[[job.check]]
+name = "docker"
+run = "python3 .github/workflows/scripts/aggregate.py"
+local = false
+reason = "reports the result of this run's CI jobs; its rules are tested by governance-scripts"
 
 [[job]]
 workflow = "governance.yml"
 job = "governance"
 kind = "check"
+required = true
+contexts = ["governance"]
 digest = "4e8985542b8d0b99"
 setup = []
 [[job.check]]
@@ -231,32 +326,100 @@ reason = "reads the pull request's body and files from GitHub; governance-script
 
 [[job]]
 workflow = "load-baseline.yml"
+job = "changes"
+kind = "check"
+digest = "f27e6078ba124186"
+required = false
+contexts = ["load-baseline-changes"]
+setup = []
+[[job.check]]
+name = "changes-load-baseline"
+run = "python3 .github/workflows/scripts/changes.py"
+local = false
+reason = "reads the pull request's base and head commits in CI; its rules are tested by governance-scripts"
+
+[[job]]
+workflow = "load-baseline.yml"
 job = "baseline"
 kind = "scoped"
+digest = "b749dcc6fa2bfbbe"
 reason = "runs only when its workflow or tools/benchmarks change, on the synthetic small dataset"
+paths = [".github/workflows/load-baseline.yml", "tools/benchmarks/**"]
 setup = []
+
+[[job]]
+workflow = "load-baseline.yml"
+job = "load-baseline"
+kind = "check"
+digest = "789292ec3af26c8d"
+# Joins main's protection only after its three states are shown in CI (#267).
+required = false
+contexts = ["load-baseline"]
+setup = []
+[[job.check]]
+name = "load-baseline"
+run = "python3 .github/workflows/scripts/aggregate.py"
+local = false
+reason = "reports the result of this run's CI jobs; its rules are tested by governance-scripts"
+
+[[job]]
+workflow = "release.yml"
+job = "changes"
+kind = "check"
+digest = "c173cb6e52464406"
+required = false
+contexts = ["release-changes"]
+setup = []
+[[job.check]]
+name = "changes-release"
+run = "python3 .github/workflows/scripts/changes.py"
+local = false
+reason = "reads the pull request's base and head commits in CI; its rules are tested by governance-scripts"
 
 [[job]]
 workflow = "release.yml"
 job = "build"
 kind = "scoped"
+digest = "042ed9e228ff1be1"
 reason = "runs only when the release workflow changes; it builds the web application with Node 24"
+paths = [".github/workflows/release.yml"]
+# The tag check applies to tag pushes only; on a pull request there is no tag to check.
+conditions = ["startsWith(github.ref, 'refs/tags/v')"]
 setup = []
+
+[[job]]
+workflow = "release.yml"
+job = "release-build"
+kind = "check"
+digest = "4407e3ac7b773998"
+# Joins main's protection only after its three states are shown in CI (#267).
+required = false
+contexts = ["release-build"]
+setup = []
+[[job.check]]
+name = "release-build"
+run = "python3 .github/workflows/scripts/aggregate.py"
+local = false
+reason = "reports the result of this run's CI jobs; its rules are tested by governance-scripts"
 
 [[job]]
 workflow = "dependabot-auto-merge.yml"
 job = "auto-merge"
 kind = "automation"
+permissions = { contents = "write", pull-requests = "write" }
 setup = []
 
 [[job]]
 workflow = "issue-status.yml"
 job = "status"
 kind = "automation"
+permissions = { contents = "read", issues = "write" }
 setup = []
 
 [[job]]
 workflow = "release.yml"
 job = "publish"
 kind = "automation"
+# Publishes a release for a product tag only (its `if` is unchanged by #267).
+permissions = { contents = "write" }
 setup = []

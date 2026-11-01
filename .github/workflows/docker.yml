@@ -1,19 +1,42 @@
 # Docker skeleton (P0-08): build the image (never pushed) on pull requests that change it, and
-# check that it runs as a non-root user.
+# check that it runs as a non-root user. Every pull request gets the `docker` result (#267).
 name: docker
 
 on:
   pull_request:
-    paths:
-      - Dockerfile
-      - .dockerignore
-      - .github/workflows/docker.yml
 
 permissions:
   contents: read
 
+env:
+  # The paths that make this check apply (#267), read by changes.py and aggregate.py.
+  RELEVANT_PATHS: |
+    Dockerfile
+    .dockerignore
+    .github/workflows/docker.yml
+
 jobs:
+  # Whether this run changes a relevant path (#267): `changes.py` fails closed.
+  changes:
+    name: docker-changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.changes.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/workflows/scripts/changes.py
+
   docker-build:
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,3 +54,20 @@ jobs:
           test "$uid" != "0"
       - name: Starts and reports its versions
         run: docker run --rm local/product:ci | tee versions.txt && grep -q "contract http-api v1" versions.txt
+
+  # The required result (#267): passes when docker-build ran and passed, reports "Not applicable"
+  # only when `changes` proved nothing relevant changed, and fails otherwise.
+  docker:
+    needs: [changes, docker-build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 .github/workflows/scripts/aggregate.py
+        env:
+          CHECK: docker
+          CHANGES: ${{ needs.changes.result }}
+          RELEVANT: ${{ needs.changes.outputs.relevant }}
+          RESULT: ${{ needs.docker-build.result }}
