@@ -106,10 +106,20 @@ class UntranslatableKey(ValueError):
     """A bi-platform payload key, or value, with no mapping to `ossie-extensions` v1."""
 
 
+def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """A JSON object whose keys are unique: `json.loads` alone keeps the last of two."""
+    keys = [key for key, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise UntranslatableKey(
+            f"a payload repeats a key: {sorted(k for k in set(keys) if keys.count(k) > 1)}"
+        )
+    return dict(pairs)
+
+
 def _payload(entry: object) -> dict[str, Any]:
     if not isinstance(entry, dict) or not isinstance(entry.get("data"), str):
         raise UntranslatableKey(f"not a payload entry: {entry!r}")
-    data = json.loads(str(entry["data"]))
+    data = json.loads(str(entry["data"]), object_pairs_hook=_unique_keys)
     if not isinstance(data, dict) or data.get("version") != 1:
         raise UntranslatableKey(f"unknown payload version: {data!r}")
     return data
@@ -271,7 +281,10 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
         )
         scope = _shape(allocation["normalization_scope"], {"entities"}, where="normalization_scope")
         bridge_datasets[str(bridge["name"])] = str(bridge["bridge"])
-        payloads.setdefault(id(target), {"version": 1, "element": "dataset"})["bridge"] = {
+        target_payload = payloads.setdefault(id(target), {"version": 1, "element": "dataset"})
+        if "bridge" in target_payload:
+            raise UntranslatableKey(f"two bridges on the bridge dataset {bridge['bridge']!r}")
+        target_payload["bridge"] = {
             "left": bridge["left_relationship"],
             "right": bridge["right_relationship"],
             "weight": allocation["weight"],

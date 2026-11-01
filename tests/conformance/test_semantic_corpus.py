@@ -580,3 +580,23 @@ def test_another_corpus_semantic_version_fails() -> None:
 
     with pytest.raises(adapter.UntranslatableKey, match=re.escape("semantic_version '9.9.9'")):
         translated_or_error(edit)
+
+
+def test_two_bridges_on_one_bridge_dataset_fail() -> None:
+    def edit(model: dict[str, Any]) -> None:
+        data = bridges(model)
+        data["bridges"].append({**data["bridges"][0], "name": "second"})
+        set_payload(model, data)
+
+    with pytest.raises(adapter.UntranslatableKey, match="two bridges on the bridge dataset"):
+        translated_or_error(edit)
+
+
+def test_a_payload_that_repeats_a_key_fails() -> None:
+    def edit(model: dict[str, Any]) -> None:
+        field = model["datasets"][0]["fields"][0]
+        text = '{"version": 1, "dimension": "a", "dimension": "b"}'
+        field["custom_extensions"] = [{"vendor_name": adapter.VENDOR_NAME, "data": text}]
+
+    with pytest.raises(adapter.UntranslatableKey, match=re.escape("repeats a key: ['dimension']")):
+        translated_or_error(edit)
