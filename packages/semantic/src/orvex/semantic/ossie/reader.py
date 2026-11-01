@@ -9,7 +9,7 @@ ordered by line, then pointer, at most 50 (`semantic-error/v1`):
    or not a version);
 3. the Ossie JSON Schema of the matched registry entry (`schema`);
 4. names: lengths (`schema`) and uniqueness (`duplicate_name`);
-5. references (`reference`) and Ossie expressions that cannot be read (`expression`);
+5. references (`reference`);
 6. the product's extensions (`extension`, `extension_duplicate`, `reference`,
    `extension_conflict`); other vendors' entries are listed and never interpreted;
 7. dialects: two entries for one dialect (`schema`), then the deterministic selection of each
@@ -19,7 +19,8 @@ What Ossie accepts loads (Owner decision of 2026-11-01). Where the product needs
 requires to compile or execute safely, the read records an `Advisory` instead of an error: a
 relationship whose `to_columns` cover no key of `to` (the official validator's warning), two
 entries for one dialect, a product-dialect entry without a derived declaration, a member with no
-expression the product can select. The stage that would use the element refuses it then.
+expression the product can select, an OSSIE_SQL_2026 text the product's lexer cannot read. The
+stage that would use the element refuses it then.
 
 No error carries text from the document: a pointer holds only keys the Ossie schema declares
 and indexes, and a line number.
@@ -383,7 +384,8 @@ def _references(document: Json, index: _Index, problems: _Problems) -> list[Advi
             try:
                 reading = expressions.read(text)
             except ExpressionUnreadable:
-                problems.add(text_at, "expression")
+                # A limit of the product's lexer, not a breach of Ossie: P2-04 refuses it.
+                advisories.append(Advisory(_pointer(text_at), "unreadable_expression"))
                 continue
             if not all(_resolves(reference.parts, own, index) for reference in reading.references):
                 problems.add(text_at, "reference")
@@ -474,10 +476,12 @@ def _payload_rule(
     if element.kind == "metric" and "aggregate_class" in payload:
         texts = _ossie_expressions(element.node, element.path)
         # Only an OSSIE_SQL_2026 text is read here; P2-04 checks other forms on its parser.
-        if texts:
+        try:
             classes = {expressions.read(text).aggregate_class for _, text in texts}
-            if classes != {payload["aggregate_class"]}:
-                return "extension"
+        except ExpressionUnreadable:
+            classes = set()  # an unreadable text is an advisory; P2-04 checks it
+        if classes and classes != {payload["aggregate_class"]}:
+            return "extension"
     if not all(_payload_references(element, payload, index)):
         return "reference"
     if element.kind == "dataset" and element.dataset is not None:

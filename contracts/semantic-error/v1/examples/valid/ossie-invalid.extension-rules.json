@@ -4,16 +4,11 @@
   "severity": "error",
   "category": "model",
   "audience": "builder",
-  "message": "The model semantic/sales.ossie.yaml is not valid: 3 problems, 0 more not shown.",
+  "message": "The model semantic/sales.ossie.yaml is not valid: 2 problems, 0 more not shown.",
   "locale": "en",
   "details": {
     "file": "semantic/sales.ossie.yaml",
     "problems": [
-      {
-        "pointer": "/datasets/0/metrics/0/expression/sql",
-        "line": "14",
-        "rule": "expression"
-      },
       {
         "pointer": "/datasets/0/custom_extensions/0/data",
         "line": "21",

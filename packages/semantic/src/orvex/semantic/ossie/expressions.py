@@ -58,14 +58,14 @@ KEYWORDS = frozenset(
 _TOKEN = re.compile(
     r"""
     (?P<space>\s+)
-  | (?P<comment>--[^\n]*)
+  | (?P<comment>--[^\n]*|/\*.*?\*/)
   | (?P<string>'(?:[^']|'')*')
   | (?P<quoted>"(?:[^"]|"")+")
   | (?P<number>(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)
-  | (?P<word>[A-Za-z_][A-Za-z0-9_$]*)
+  | (?P<word>[^\W\d][\w$]*)
   | (?P<symbol><>|<=|>=|!=|\|\||::|[-+*/%(),.<>=\[\]])
     """,
-    re.VERBOSE,
+    re.VERBOSE | re.DOTALL,
 )
 
 

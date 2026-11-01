@@ -59,6 +59,7 @@ AdvisoryKind = Literal[
     "duplicate_dialect",
     "undeclared_product_dialect",
     "no_executable_expression",
+    "unreadable_expression",
 ]
 
 

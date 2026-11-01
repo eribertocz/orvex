@@ -7,7 +7,7 @@
 3. **The standard wins once it exists.** When Ossie specifies an equivalent capability, new models use the standard representation, after semantic equivalence is verified (ADR-0030 §4).
 4. **Old extensions stay readable.** They are not removed automatically: they stay compatible through a controlled transition, with explicit migration, a difference report, and refusal when a meaning could change (ADR-0030 §5).
 5. **No silent reinterpretation.** An invalid standard expression is never read as an extension. An extension is used only where it is declared.
-6. **Conformance and executability are separate.** A document Ossie accepts loads; it is never refused for a rule stricter than Ossie's. Where the product needs more to compile or execute safely, the read records an advisory. The operation that needs the element is refused with a typed error, never answered with a possibly wrong result.
+6. **Conformance and executability are separate.** A document Ossie accepts loads; it is never refused for a rule stricter than Ossie's, except for the reader's safety limits (one document, size and nesting limits, no anchors, aliases, merge keys or non-core tags). Where the product needs more to compile or execute safely, the read records an advisory. The operation that needs the element is refused with a typed error, never answered with a possibly wrong result.
 7. **Adoption is never automatic.** Upstream changes reach this matrix only through the watch (#285), an issue, a registry entry and tests.
 
 ## Matrix

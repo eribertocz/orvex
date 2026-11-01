@@ -243,8 +243,7 @@
             "extension",
             "extension_duplicate",
             "extension_conflict",
-            "unsupported_capability",
-            "expression"
+            "unsupported_capability"
           ]
         }
       }
