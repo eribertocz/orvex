@@ -9,7 +9,8 @@ ordered by line, then pointer, at most 50 (`semantic-error/v1`):
    or not a version);
 3. the Ossie JSON Schema of the matched registry entry (`schema`);
 4. names: lengths (`schema`) and uniqueness (`duplicate_name`);
-5. references (`reference`);
+5. references (`reference`), and OSSIE_SQL_2026 texts outside the subset's grammar
+   (`expression`), as the official validator rejects them;
 6. the product's extensions (`extension`, `extension_duplicate`, `reference`,
    `extension_conflict`); other vendors' entries are listed and never interpreted;
 7. dialects: two entries for one dialect (`schema`), then the deterministic selection of each
@@ -19,7 +20,7 @@ What Ossie accepts loads (Owner decision of 2026-11-01). Where the product needs
 requires to compile or execute safely, the read records an `Advisory` instead of an error: a
 relationship whose `to_columns` cover no key of `to` (the official validator's warning), two
 entries for one dialect, a product-dialect entry without a derived declaration, a member with no
-expression the product can select, an OSSIE_SQL_2026 text the product's lexer cannot read. The
+expression the product can select, valid OSSIE_SQL_2026 that the product does not implement. The
 stage that would use the element refuses it then.
 
 No error carries text from the document: a pointer holds only keys the Ossie schema declares
@@ -33,13 +34,14 @@ import re
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cache
+from types import MappingProxyType
 from typing import Any, cast
 
 from jsonschema import Draft202012Validator
 from orvex.semantic.errors import SemanticError
-from orvex.semantic.ossie import expressions, extensions
+from orvex.semantic.ossie import extensions, identifiers, sql
 from orvex.semantic.ossie.documents import MAX_BYTES, Format, ParseProblem, Path, parse
-from orvex.semantic.ossie.expressions import ExpressionUnreadable, normalize
+from orvex.semantic.ossie.identifiers import normalize
 from orvex.semantic.ossie.model import (
     Advisory,
     ElementKind,
@@ -310,9 +312,9 @@ def _names(document: Json, problems: _Problems) -> None:
     def unique(members: Iterator[tuple[Path, str]], sql_names: bool = True) -> None:
         seen: set[str] = set()
         for at, name in members:
-            too_long = expressions.identifier_length(name) > expressions.MAX_IDENTIFIER
+            too_long = identifiers.identifier_length(name) > identifiers.MAX_IDENTIFIER
             # Datasets, fields and metrics are named in expressions: ANSI SQL names (L86).
-            if too_long or (sql_names and not expressions.is_valid_identifier(name)):
+            if too_long or (sql_names and not identifiers.is_valid_identifier(name)):
                 problems.add(at, "schema")
             key = normalize(name)
             if key in seen:
@@ -379,18 +381,41 @@ def _references(document: Json, index: _Index, problems: _Problems) -> list[Advi
             (("datasets", at, "metrics", number), metric, own)
             for number, metric in enumerate(_list(dataset, "metrics"))
         ]
+    fields: list[tuple[Path, Json]] = [
+        (("datasets", at, "fields", number), member)
+        for at, dataset in enumerate(_list(document, "datasets"))
+        for number, member in enumerate(_list(dataset, "fields"))
+    ]
+    for path, member in fields:
+        # A field expression reads source columns, which the document does not declare: only
+        # its syntax is checked here, as the official validator checks it.
+        for text_at, text in _ossie_expressions(member, path):
+            _parse_or_record(text, text_at, problems, advisories)
     for path, metric, own in metrics:
         for text_at, text in _ossie_expressions(metric, path):
-            try:
-                reading = expressions.read(text)
-            except ExpressionUnreadable:
-                # A limit of the product's lexer, not a breach of Ossie: P2-04 refuses it.
-                advisories.append(Advisory(_pointer(text_at), "unreadable_expression"))
-                continue
-            if not all(_resolves(reference.parts, own, index) for reference in reading.references):
+            tree = _parse_or_record(text, text_at, problems, advisories)
+            if tree is not None and not all(
+                _resolves(ref.parts, own, index) for ref in sql.references(tree)
+            ):
                 problems.add(text_at, "reference")
     problems.raise_if_any()
     return advisories
+
+
+def _parse_or_record(
+    text: str, at: Path, problems: _Problems, advisories: list[Advisory]
+) -> sql.Node | None:
+    """The tree of an OSSIE_SQL_2026 text. Not one SQL expression at all, or one the
+    specification forbids → `expression`, a breach of Ossie. SQL the product cannot read or
+    does not implement → the `unreadable_expression` advisory: compiling the member refuses it,
+    and the document still loads (ADR-0030 §2)."""
+    try:
+        return sql.parse(text)
+    except sql.SqlSyntaxError:
+        problems.add(at, "expression")
+    except sql.SqlUnsupported:
+        advisories.append(Advisory(_pointer(at), "unreadable_expression"))
+    return None
 
 
 def _resolves(parts: tuple[str, ...], own: _Dataset | None, index: _Index) -> bool:
@@ -474,14 +499,15 @@ def _payload_rule(
     ):
         return "extension"
     if element.kind == "metric" and "aggregate_class" in payload:
-        texts = _ossie_expressions(element.node, element.path)
-        # Only an OSSIE_SQL_2026 text is read here; P2-04 checks other forms on its parser.
-        try:
-            classes = {expressions.read(text).aggregate_class for _, text in texts}
-        except ExpressionUnreadable:
-            classes = set()  # an unreadable text is an advisory; P2-04 checks it
-        if classes and classes != {payload["aggregate_class"]}:
-            return "extension"
+        # Each readable OSSIE_SQL_2026 text is checked on its own; an unsupported one is an
+        # advisory, and the product's compiler checks other forms on its typed tree.
+        for _, text in _ossie_expressions(element.node, element.path):
+            try:
+                tree = sql.parse(text)
+            except sql.SqlSyntaxError, sql.SqlUnsupported:
+                continue
+            if sql.aggregate_class(tree) != payload["aggregate_class"]:
+                return "extension"
     if not all(_payload_references(element, payload, index)):
         return "reference"
     if element.kind == "dataset" and element.dataset is not None:
@@ -747,4 +773,5 @@ def read(
         foreign_extensions=tuple(found.foreign),
         expressions=tuple(selected),
         advisories=tuple(advisories + unselected),
+        lines=MappingProxyType({_pointer(path): line for path, line in lines.items()}),
     )

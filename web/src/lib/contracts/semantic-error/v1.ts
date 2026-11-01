@@ -900,7 +900,9 @@ export interface Problem {
 		| 'extension'
 		| 'extension_duplicate'
 		| 'extension_conflict'
-		| 'unsupported_capability';
+		| 'unsupported_capability'
+		| 'expression'
+		| 'type';
 }
 /**
  * OSSIE_INVALID as any other audience sees it: the generic message and public details only.
