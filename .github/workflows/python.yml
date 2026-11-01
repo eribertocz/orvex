@@ -47,15 +47,18 @@ jobs:
       - name: Strict types (tests and scripts)
         run: mypy packages/*/tests tests tools conformance .github/workflows/scripts
 
-  python-tests:
-    name: python-tests-${{ matrix.python }}
+  python-tests-part:
+    name: python-tests-${{ matrix.python }}-part-${{ matrix.part }}
     runs-on: ubuntu-latest
-    # A hung test must fail the job, not hold it for the default six hours. The suite takes
-    # about 16 minutes; #120 runs the shared lake tests on a third catalog (SQLite).
-    timeout-minutes: 30
+    # The suite (about 24 minutes in one job) is split into 10 parts per Python version that run
+    # at the same time (tools/ci/shard.py); `python-tests` below reports them as one check. A
+    # hung test must fail the job, not hold it for the default six hours.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
+        python: ["3.15", "3.14"]
+        part: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
         include:
           - python: "3.15"
             lock: pylock.toml
@@ -101,6 +104,10 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
+          # The downloaded wheels are kept between runs: 20 parts would otherwise download
+          # the same lock file 20 times.
+          cache: pip
+          cache-dependency-path: ${{ matrix.lock }}
       - name: Install from the lock file and the workspace packages
         run: |
           python -m pip install --quiet pip==26.2.2
@@ -158,10 +165,28 @@ jobs:
           done
           key="Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
           echo "STORE_TEST_AZURE_CONNECTION_STRING=DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=$key;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;" >> "$GITHUB_ENV"
-      - run: pytest --junitxml=junit.xml
+      - run: python -m pytest -p tools.ci.shard --junitxml=junit.xml
+        env:
+          PYTEST_SHARD: ${{ matrix.part }}/10
       - name: Report failures as annotations
         if: failure()
         run: python -m tools.ci.junit_annotations junit.xml
+
+  python-tests:
+    # The required checks keep their names: one per Python version, green only when all of its
+    # parts passed.
+    name: python-tests-${{ matrix.python }}
+    needs: python-tests-part
+    if: always()
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.15", "3.14"]
+    steps:
+      - name: Every part passed
+        env:
+          RESULT: ${{ needs.python-tests-part.result }}
+        run: test "$RESULT" = success
 
   python-lock:
     runs-on: ubuntu-latest
