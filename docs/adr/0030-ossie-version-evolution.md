@@ -2,7 +2,11 @@
 
 **Status:** Proposed (2026-11-01). Owner direction recorded in the conversation of 2026-11-01: plan A1–A4 and B1 approved.
 
-This record amends **ADR-0009**. "The supported Ossie specification is pinned to an exact commit" becomes "the supported revisions are listed in a version registry, each identified by its commit and hashes". The rest of ADR-0009 stands: the model is a native Ossie document, `ORVEX` extensions carry what Ossie lacks, all Ossie knowledge lives in the Ossie adapter, and export reports every loss. Adding or changing a registry entry still needs an issue, and an ADR when the semantics change.
+This record amends **ADR-0009** and **ADR-0012**.
+
+**ADR-0009.** "The supported Ossie specification is pinned to an exact commit" becomes "the supported revisions are listed in a version registry, each identified by its commit and hashes". The rest of ADR-0009 stands: the model is a native Ossie document, `ORVEX` extensions carry what Ossie lacks, all Ossie knowledge lives in the Ossie adapter, and export reports every loss. Adding or changing a registry entry still needs an issue, and an ADR when the semantics change.
+
+**ADR-0012.** The result-cache key keeps its four parts (query fingerprint, model fingerprint, data snapshot, permission fingerprint). It gains the engine's version and the dialect adapter's version (§6), because the engines disagree on exact arithmetic (#280) and an adapter change can change a number.
 
 ## Context
 - **Ossie evolves quickly and has no release yet.**
@@ -23,13 +27,16 @@ This record amends **ADR-0009**. "The supported Ossie specification is pinned to
     - `experimental`: compiled and executed only in a project that opts in;
     - `read_only`: preserved and validated, never compiled;
     - `rejected`;
-  - the `reader` that interprets it;
+  - the `reader` that interprets it (a stable reader id);
   - the reader's `capabilities` version.
+- **Active entries.** The active entry for a `specification_version` is the one that reads documents declaring it. Only a `stable`, `experimental` or `read_only` entry can be active; a `rejected` one never is.
 - **A development number is not an identity.** Two revisions with the same `specification_version` are different entries.
   - At most one entry per number is active at a time; the registry check refuses two.
   - The others stay in the registry, so an old compiled model or receipt can still name the entry that read it.
-- **Readers are reused across compatible revisions.** A new reader is written only when a revision changes the meaning of something the engine reads. A revision that changes only text, examples or validator wording reuses the reader and its capabilities version.
-- **The first registry has one entry:** the current pin (`c721ffc`), `stable`. Orvex's own dialect tokens (`DUCKDB`, and the product's token from `identity.toml`) are listed beside the upstream catalogs. Recognizing a token never depends on an upstream registration.
+- **Readers are reused across compatible revisions.** A new reader is written only when a revision changes the meaning of something the engine reads.
+  - A revision whose changes are **editorial only** reuses the reader and its capabilities version: typos, examples, formatting, links, or validator messages with the same verdicts.
+  - The text of `spec.md`, `expression_language.md` and `relational_semantics.md` is normative. The adoption issue classifies every normative diff, with evidence. When in doubt, the capabilities version is raised.
+- **The first registry has one entry:** the current pin (`c721ffc`), `stable`. Orvex's own dialect tokens are listed beside the upstream catalogs: `DUCKDB`, `CLICKHOUSE` (registered upstream only after the pin, in `2fd19c7`) and the product's token from `identity.toml`. An upstream validator warning about a dialect it does not know is not promoted to an error for these tokens. Recognizing a token never depends on an upstream registration.
 
 ### 2. Five stages, kept apart
 1. **Preservation.** The document's bytes are kept as written. Nothing in Orvex rewrites what it does not own (ADR-0024). Unknown and foreign content survives every edit.
@@ -43,24 +50,33 @@ A document can pass stage 1 and fail stage 2 or stage 5. It can still be opened,
 ### 3. Unknown capabilities fail closed
 - **Inside `ORVEX` entries**, an unknown member is an error. The contract is closed (`ossie-extensions/v1`).
 - **A standard capability the reader does not implement**, such as a newer construct in a `read_only` or `experimental` revision, or an expression form the reader cannot type, is rejected with a typed error. It is never skipped (`OSSIE_INVALID`, rule `unsupported_capability`).
-- **Foreign extensions** (other vendors' `custom_extensions`) are preserved and never interpreted. Because they may change a metric, a filter, a relationship, a permission or a result in the tool that wrote them, they are not silently ignored either:
-  - the compiled model lists every foreign extension and the element it sits on;
-  - a query whose lineage reaches such an element is rejected until the Builder declares that vendor's extensions non-semantic for that project, through a reviewed, versioned declaration in the model;
-  - the receipt lists the declaration that was relied on.
+- **Foreign extensions** (other vendors' `custom_extensions`) are preserved and never interpreted. Ossie says only that it carries them without interpreting them; it does not say they are inert. Because they may change a metric, a filter, a relationship, a permission or a result in the tool that wrote them, they are not silently ignored either:
+  - **Listing.** The compiled model lists every foreign entry with its element and the SHA-256 of its `data`.
+  - **Reach.** A query is refused when any element it uses carries an unreviewed entry. The elements it uses are: the model root (so an entry on the model blocks every query); every dataset it reads, including datasets reached through relationships, bridges and policies; every relationship it traverses; and every field and metric it references, directly or through a dependency.
+  - **Review.** The Builder reviews one entry at a time. The declaration names the element, the vendor and the `data` hash, and sits in the model itself, so it is versioned and reviewed in Git. A new or changed entry has no declaration, so it is refused until reviewed; a declaration never covers a whole vendor.
+  - **Receipt.** It lists the declarations relied on.
+  - **First execution.** The refusal ships with the first issue that executes queries (P2-12 in the roadmap). No execution path exists without it. That issue adds the declaration as an optional `ORVEX` member, a compatible change to `ossie-extensions/v1`.
 
 ### 4. Standard fields and `ORVEX` extensions
 When a registry entry's reader understands a standard concept that an `ORVEX` member also declares, precedence goes by **semantic relation, not representation**. The reader maps the standard field onto the engine's semantic aspects (for additivity: the aggregation class, the non-additive axes and their behavior, the period-end rule, null treatment). It then compares, aspect by aspect:
 
-| Relation | Meaning | Result |
-|---|---|---|
-| equal | every aspect that either side defines agrees | accepted; the `ORVEX` member is reported as redundant (export may drop it) |
-| refines | the extension defines aspects the standard leaves open, and agrees on every shared aspect | accepted; the extension stays authoritative for those aspects |
-| conflicts | some shared aspect differs | rejected (`OSSIE_INVALID`, rule `extension_conflict`) |
-| incomparable | the reader cannot decide an aspect | rejected; never assumed equal |
+Each aspect falls into exactly one case; a standard default counts as defined:
+
+| Aspect | Result for that aspect |
+|---|---|
+| defined by both, and they agree | accepted |
+| defined by both, and they differ | **conflict** |
+| defined only by the standard | accepted; the standard decides it |
+| defined only by the extension | accepted; the extension decides it (a refinement) |
+| the reader cannot decide whether they agree | **undecidable** |
+
+- **Declaration level.** A declaration is accepted only if no aspect is a conflict or undecidable; anything else is rejected (`OSSIE_INVALID`, rule `extension_conflict`). A pair that is not covered is never assumed equal.
+- **Redundant members.** When every aspect is defined by both and agrees, the `ORVEX` member is reported as redundant, and export may drop it.
 
 - Equal compiled trees are not enough: two different spellings of the same meaning must be `equal`, and two equal-looking declarations that differ in null handling, zone or frame must not be.
 - Each mapping has positive and negative tests.
-- Until a reader understands the standard concept, the `ORVEX` member is the only source, as today. `ossie-extensions/v1` stays stable.
+- **When the standard field is absent**, the `ORVEX` member is the only source, as today. A standard field that is present but that the reader does not understand is an unknown capability (§3) and is rejected; it is never skipped in favour of the extension.
+- `ossie-extensions/v1` stays stable.
 
 ### 5. Migration and export
 - **Moving a document to another revision is always explicit.** It runs through the project writer, shows a diff and is confirmed by the Builder. It is never automatic on load or save.
@@ -71,15 +87,18 @@ When a registry entry's reader understands a standard concept that an `ORVEX` me
 | Identity | Covers | Changes when | Used for |
 |---|---|---|---|
 | **Document** | SHA-256 of the file's bytes | any edit, comments and formatting included | the writer's conflict checks, audit, preservation tests |
-| **Compiled model** | P2-04 `semantic_fingerprint`, plus the reader's capabilities version and the compiler rules version | a change in meaning: a definition, a reader whose capabilities changed, a compiler rule | model caches, catalog, impact analysis |
-| **Execution** | compiled model + query + security context + data version + dialect adapter version | anything that can change a number | result cache key (ADR-0012), receipts (P2-07) |
+| **Compiled model** | P2-04 `semantic_fingerprint`, plus the reader's id and capabilities version and the compiler rules version | a change in meaning: a definition, another reader or a reader whose capabilities changed, a compiler rule | model caches, catalog, impact analysis |
+| **Execution** | compiled model + query fingerprint + permission fingerprint + data snapshot or version + engine version + dialect adapter version | anything that can change a number | result cache key (ADR-0012 as amended above), receipts (P2-07) |
 
-- **Edits that cannot change meaning do not invalidate results.** A comment, a reordering or a new revision whose reader and capabilities version stay the same leaves the compiled identity unchanged.
+- **Edits that cannot change meaning do not invalidate results.** These leave the compiled identity unchanged:
+  - a comment;
+  - a reordering of an unordered collection (an ordered list, such as `group_by` or a drill path, is meaning);
+  - a new editorial revision read by the same reader at the same capabilities version.
 - **Anything that can change meaning does invalidate.** Correctness wins.
-- The registry entry's `id` is recorded in the compiled model and the receipt, for traceability, even when it does not change the identity.
+- The registry entry's `id` is recorded in the compiled model and the receipt, for traceability, even when it does not change the identity. A receipt flags a result read through an `experimental` entry.
 
 ### 7. Watching upstream
-- A weekly, read-only workflow compares the vendored files and a list of watched upstream proposals with `apache/ossie`. It classifies each change as informational, compatible, potentially incompatible or semantically critical.
+- A weekly, read-only workflow (#285) compares the vendored files and a list of watched upstream proposals with `apache/ossie`. It classifies each change as informational, compatible, potentially incompatible or semantically critical.
 - It never fails a pull request, never changes a version or a contract, and never opens an issue.
 - A change touching expressions, nulls, aggregates, relational semantics or the schema is flagged for a critical review; the classification is a warning, not a verdict.
 - Adopting a revision is a normal issue (and an ADR when semantics change), tested on the corpus, the security suite, round-trip preservation and, when available, the upstream compliance suite.
@@ -94,6 +113,7 @@ When a registry entry's reader understands a standard concept that an `ORVEX` me
 ## Consequences
 - P2-03 (#278) resolves versions through the registry, keeps a reference to the preserved document and to the registry entry used, takes dialect tokens from the registry, and records foreign extensions. Its scope does not grow beyond that. Executing and refusing execution belong to later issues.
 - P2-04 (#280) adds the reader's capabilities version to the compiled identity. Per the Owner's decision, it also rejects at compile time a metric whose aggregation is ambiguous without its declarations.
-- `semantic-error/v1` gains the rules `unsupported_capability` and `extension_conflict` (compatible additions). The rejection of queries that reach unreviewed foreign extensions is added with its code when its issue is specified.
+- `semantic-error/v1` gains the rules `unsupported_capability` and `extension_conflict`. These are compatible additions to a detail's enumeration, and its README's compatibility list says so explicitly when P2-03 adds them. The refusal of queries that reach unreviewed foreign extensions gets its code in P2-12.
+- `UNSUPPORTED_OSSIE_VERSION.supported` names the newest `stable` version. A list of every supported version, when there is more than one, is an optional detail (compatible).
 - A second registry entry, the full migrator and an extended compatibility matrix are built when a second revision is needed. The registry, the stages and the identities exist from P2-03, so that work adds entries, not a redesign.
 - Contributing `ORVEX` and `DUCKDB` to the upstream catalogs is prepared separately and published only with the Owner's approval. Nothing here depends on it.
