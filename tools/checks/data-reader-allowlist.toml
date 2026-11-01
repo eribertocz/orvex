@@ -1,0 +1,14 @@
+# Readers other than DuckDB allowed in `store` and `transform` (engineering.md §2, #261).
+# Each entry: the file, the reader module, why no source row is read or materialized in Python,
+# and the test that proves it stays within that reason.
+# [[allow]]
+# file = "packages/<module>/src/<namespace>/<module>/<file>.py"
+# reader = "sqlite3"
+# reason = "what it reads, and why no source row goes through Python"
+# test = "packages/<module>/tests/test_<x>.py::test_<name>"
+
+[[allow]]
+file = "packages/store/src/orvex/store/lake.py"
+reader = "sqlite3"
+reason = "The SQLite snapshot copy (#83): the backup API copies the file byte for byte, and only schema names (tables, views, column types) are read; DuckDB reads every row from the copy. Reviewed under #259"
+test = "packages/store/tests/test_database_sources.py::test_sqlite_table_is_copied_unchanged"

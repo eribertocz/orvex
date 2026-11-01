@@ -122,6 +122,8 @@ class TestMaterialization:
             "to_pylist",
             "to_pydict",
             "as_py",
+            "iterrows",
+            "itertuples",
         ],
     )
     def test_every_materializing_call_is_reported(self, call: str) -> None:
@@ -129,8 +131,9 @@ class TestMaterialization:
         assert len(materialization_findings(parse(f"x.{call}()\n"), "a.py", set())) == 1
 
     def test_the_list_is_exactly_the_issues(self) -> None:
-        # #46: one name per way of turning rows into Python objects, no more and no fewer.
-        assert len(MATERIALIZING_NAMES) == 18
+        # #46: one name per way of turning rows into Python objects, no more and no fewer;
+        # #261 adds the row-by-row walks of a DataFrame.
+        assert len(MATERIALIZING_NAMES) == 20
 
     def test_a_reference_without_a_call_is_reported(self) -> None:
         tree = parse("rows = table.to_pylist\nfirst = map(column.as_py, values)\n")
@@ -212,3 +215,104 @@ class TestMaterialization:
 
     def test_repository_has_no_findings(self) -> None:
         assert scan_boundaries(REPOSITORY_ROOT, load_allow_list()) == []
+
+
+def readers(source: str, relative: str = "packages/store/src/orvex/store/x.py") -> list[str]:
+    from tools.checks.boundaries import reader_findings
+
+    return [f.detail for f in reader_findings(ast.parse(source), relative, set())]
+
+
+class TestDataReaders:
+    """Only DuckDB reads source rows in `store` and `transform` (engineering.md §2, #261)."""
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "import pyarrow.parquet as pq\n",
+            "from pyarrow import parquet\n",
+            "from pyarrow.csv import read_csv\n",
+            "import pyarrow.dataset\n",
+            "import pyarrow as pa\nt = pa.parquet.read_table('f')\n",
+            "import pyarrow as pa\nt = pa.csv.read_csv('f')\n",
+            "import pyarrow as pa\nd = pa.dataset.dataset('f')\n",
+            "import csv\n",
+            "import sqlite3\n",
+            "import pandas\n",
+            "import polars as pl\n",
+            "import fastparquet\n",
+        ],
+    )
+    def test_a_reader_other_than_duckdb_is_reported(self, source: str) -> None:
+        assert readers(source)
+
+    @pytest.mark.parametrize(
+        "relative",
+        ["packages/store/src/orvex/store/x.py", "packages/transform/src/orvex/transform/x.py"],
+    )
+    def test_store_and_transform_are_checked(self, relative: str) -> None:
+        assert readers("import sqlite3\n", relative)
+
+    @pytest.mark.parametrize(
+        "relative",
+        [
+            "packages/server/src/orvex/server/x.py",
+            "packages/store/tests/test_x.py",
+            "packages/transform/tests/test_x.py",
+        ],
+    )
+    def test_other_modules_and_tests_are_not_checked(self, relative: str) -> None:
+        assert not readers("import pyarrow.parquet as pq\n", relative)
+
+    def test_arrow_as_a_transport_is_accepted(self) -> None:
+        source = (
+            "import pyarrow as pa\n"
+            "def stream(result) -> pa.RecordBatchReader:\n"
+            "    return result.to_arrow_reader(10_000)\n"
+            "def schema(fields) -> pa.Schema:\n"
+            "    return pa.schema(fields)\n"
+            "import pyarrow.ipc\n"
+        )
+        assert readers(source) == []
+
+    def test_an_allow_listed_reader_passes_and_needs_a_test(self, tmp_path: Path) -> None:
+        from tools.checks.boundaries import AllowListError, load_reader_allow_list
+
+        (tmp_path / "test_x.py").write_text("def test_copy() -> None:\n    pass\n")
+        good = tmp_path / "ok.toml"
+        good.write_text(
+            '[[allow]]\nfile = "packages/store/src/orvex/store/x.py"\nreader = "sqlite3"\n'
+            'reason = "copies the file; reads schema names only"\n'
+            f'test = "{(tmp_path / "test_x.py").as_posix()}::test_copy"\n'
+        )
+        allowed = load_reader_allow_list(good, root=Path("/"))
+        assert ("packages/store/src/orvex/store/x.py", "sqlite3") in allowed
+        missing = tmp_path / "missing.toml"
+        missing.write_text(
+            '[[allow]]\nfile = "packages/store/src/orvex/store/x.py"\nreader = "sqlite3"\n'
+            'reason = "r"\n'
+        )
+        with pytest.raises(AllowListError):
+            load_reader_allow_list(missing, root=Path("/"))
+        absent = tmp_path / "absent.toml"
+        absent.write_text(
+            '[[allow]]\nfile = "packages/store/src/orvex/store/x.py"\nreader = "sqlite3"\n'
+            f'reason = "r"\ntest = "{(tmp_path / "test_x.py").as_posix()}::test_gone"\n'
+        )
+        with pytest.raises(AllowListError):
+            load_reader_allow_list(absent, root=Path("/"))
+
+    def test_row_by_row_walks_of_dataframes_are_reported(self) -> None:
+        for call in ("iterrows", "itertuples"):
+            assert call in MATERIALIZING_NAMES
+
+    def test_the_repository_has_no_reader_findings_and_no_stale_entries(self) -> None:
+        from tools.checks.boundaries import (
+            load_reader_allow_list,
+            reader_scan,
+            stale_reader_entries,
+        )
+
+        allowed = load_reader_allow_list()
+        assert reader_scan(REPOSITORY_ROOT, allowed) == []
+        assert stale_reader_entries(REPOSITORY_ROOT, allowed) == []

@@ -84,6 +84,34 @@ Before merging, the Agent verifies its own pull request according to the risk ti
 | **B — standard** | Every other change: `web`, `dashboards`, `mcp`, server tests, tooling, documentation outside the tier A paths | All required checks green; the Agent checks every criterion and posts the case matrix with results |
 | **C — routine** | Dependabot patch and minor updates of Python and npm packages; typo fixes outside governed paths | Auto-merge when all required checks are green: `.github/workflows/dependabot-auto-merge.yml` enables it for these pull requests only, and every required check and rule still applies. A pip update merges once the Agent has pushed the regenerated lock files, since Dependabot cannot regenerate them. GitHub Actions updates touch `.github/workflows/` and are therefore `owner-merge` |
 
+The `governance` check reads the two lists below.
+
+### Critical paths (tier A)
+
+```
+packages/store/        persistence and sources
+packages/transform/    data transformation
+packages/semantic/     the semantic engine
+packages/access/       security
+packages/server/src/   the server that composes the modules
+contracts/             public contracts
+conformance/           conformance suites
+docs/adr/              architecture decisions
+docs/product/laws.md   laws
+.github/workflows/     CI gates
+```
+
+### Not counted in a pull request's size
+
+```
+pylock.toml                       lock files
+pylock.py314.toml
+web/package-lock.json
+packages/contracts/src/orvex/contracts/   generated contract types (the hand-written __init__.py is tiny)
+tests/contracts/generated/        generated contract fixtures
+web/src/lib/contracts/            generated TypeScript types
+```
+
 A `[Reviewer]` verdict of **changes requested** blocks the merge until the same reviewers confirm their findings are fixed (`review.md`). Only a finding that makes things worse blocks; everything else becomes a separate issue.
 
 ### 3.6 Merging
