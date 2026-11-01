@@ -276,6 +276,71 @@ def test_duckdb_source_with_macros_or_views_is_refused(
     assert raised.value.code == "STORE_SOURCE_INVALID"
 
 
+# A generated column's expression runs where the column is read (#268). The canary is the
+# lake session's own spill folder: a source file cannot know it, so reading it proves the
+# source's SQL ran in the lake session.
+LEAKING_COLUMN = (
+    "CREATE TABLE ventas(id INTEGER, info VARCHAR GENERATED ALWAYS AS "
+    "(current_setting('temp_directory')) VIRTUAL)"
+)
+
+
+def test_duckdb_runs_a_generated_column_in_the_reading_session(tmp_path: Path) -> None:
+    """Why #268 refuses them: DuckDB's own behaviour, outside Orvex. If DuckDB stops doing this,
+    the refusal stays (no source SQL on read) and this test documents the change."""
+    path = tmp_path / "leaking.duckdb"
+    with duckdb.connect(str(path)) as writer:
+        writer.sql(LEAKING_COLUMN)
+        writer.sql("INSERT INTO ventas (id) VALUES (1)")
+    with duckdb.connect() as reader:
+        reader.sql("SET temp_directory = '/canary/reading-session'")
+        reader.sql(f"ATTACH '{path}' AS legacy (READ_ONLY)")
+        assert reader.sql("SELECT info FROM legacy.ventas").fetchall() == [
+            ("/canary/reading-session",)
+        ]
+
+
+def test_duckdb_source_with_a_generated_column_is_refused_before_any_read(
+    location: Location, files: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with_column = files / "generated.duckdb"
+    with duckdb.connect(str(with_column)) as writer:
+        writer.sql(LEAKING_COLUMN)
+        writer.sql("INSERT INTO ventas (id) VALUES (1)")
+    # On main this source attached, and `SELECT info FROM legacy.ventas` returned the lake's
+    # spill folder (the first test shows the mechanism).
+    with pytest.raises(StoreError) as raised:
+        open_lake(location, LIMITS, [source("legacy", "duckdb", with_column)])
+    assert raised.value.code == "STORE_SOURCE_INVALID"
+    assert "generated columns" in str(raised.value)
+    # The refusal comes from the catalog alone: nothing of the source ran, so the lake session's
+    # spill folder (tempfile prefix "lake-spill-") appears in no error and no log.
+    for text in (str(raised.value), str(raised.value.details), caplog.text):
+        assert "lake-spill-" not in text
+
+
+def test_column_defaults_and_checks_of_a_duckdb_source_never_run_on_read(tmp_path: Path) -> None:
+    """The other catalog objects of a read-only DuckDB file (#268 review): a default or a CHECK
+    expression runs only on a write, and an attached source refuses writes."""
+    path = tmp_path / "objects.duckdb"
+    with duckdb.connect(str(path)) as writer:
+        writer.sql(
+            "CREATE TABLE t(a INTEGER DEFAULT length(current_setting('temp_directory')), "
+            "b VARCHAR CHECK (length(b) < length(current_setting('temp_directory')) + 100))"
+        )
+        writer.sql("INSERT INTO t VALUES (1, 'x')")
+        writer.sql("CREATE INDEX ix ON t ((b || 'k'))")
+        writer.sql("CREATE SEQUENCE s")
+        writer.sql("CREATE TYPE mood AS ENUM ('ok')")
+        writer.sql("COMMENT ON TABLE t IS 'kept as text'")
+    with duckdb.connect() as reader:
+        reader.sql("SET temp_directory = '/canary/reading-session'")
+        reader.sql(f"ATTACH '{path}' AS legacy (READ_ONLY)")
+        assert reader.sql("SELECT * FROM legacy.t").fetchall() == [(1, "x")]
+        with pytest.raises(duckdb.Error):
+            reader.sql("INSERT INTO legacy.t (b) VALUES ('y')")
+
+
 def test_synthetic_dataset_loads_through_declared_sources(
     location: Location, tmp_path: Path
 ) -> None:
