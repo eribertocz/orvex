@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "element": "field",
+  "semantic_type": "category",
+  "calculated": {
+    "expression": "CASE WHEN days_overdue <= 30 THEN '0-30' ELSE '>30' END",
+    "max_cardinality": "4"
+  },
+  "pii": "personal"
+}

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "element": "metric",
+  "additivity": "semi_additive",
+  "non_additive_axes": [
+    {
+      "dimension": "snapshot_date",
+      "behavior": "period_end"
+    },
+    {
+      "entity": "account",
+      "behavior": "recompute"
+    }
+  ],
+  "period_end": {
+    "order_by": [
+      "balances.snapshot_date"
+    ],
+    "per_entities": [
+      "account"
+    ],
+    "tie_breaker": "account_snapshot"
+  },
+  "aggregate_class": "distributive",
+  "currency": "USD",
+  "rounding": {
+    "scale": 2,
+    "mode": "half_even"
+  },
+  "status": "certified",
+  "owner": "treasury"
+}

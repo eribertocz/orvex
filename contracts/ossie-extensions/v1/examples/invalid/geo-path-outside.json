@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "element": "field",
+  "semantic_type": "geo_region",
+  "geo_source": {
+    "file": "../secret.geojson",
+    "key_property": "code"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "element": "field",
+  "semantic_type": "identifier",
+  "numeric": {
+    "width": "64",
+    "signed": true
+  }
+}

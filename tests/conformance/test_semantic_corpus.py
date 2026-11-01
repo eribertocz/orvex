@@ -5,13 +5,16 @@ Rejection cases run on copies in a temporary folder; the imported files are neve
 
 from __future__ import annotations
 
+import copy
 import json
+import re
 import shutil
 import subprocess
 import sys
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -267,3 +270,350 @@ def test_command_exits_one_with_code_and_case(
     )
     assert result.returncode == 1
     assert line in result.stdout
+
+
+# --- Translation into ossie-extensions v1 (P2-01, #276) -----------------------------------------
+
+MODELS = sorted((ROOT / CORPUS / "models").glob("CASE-0??.yaml"))
+VENDOR = "TESTVENDOR"  # the product's own name is read from identity.toml at run time
+
+
+def extension_payloads(node: object, vendor: str) -> list[dict[str, object]]:
+    found: list[dict[str, object]] = []
+    if isinstance(node, dict):
+        for entry in node.get("custom_extensions") or []:
+            if isinstance(entry, dict) and entry.get("vendor_name") == vendor:
+                found.append(json.loads(entry["data"]))
+        for value in node.values():
+            found.extend(extension_payloads(value, vendor))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(extension_payloads(item, vendor))
+    return found
+
+
+def load_model(path: Path) -> dict[str, Any]:
+    model = adapter.load_yaml(path)
+    assert isinstance(model, dict)
+    return dict(model)
+
+
+def test_the_corpus_has_21_models() -> None:
+    assert len(MODELS) == 21
+
+
+@pytest.mark.parametrize("path", MODELS, ids=lambda path: path.stem)
+def test_every_corpus_payload_translates_into_a_valid_v1_payload(path: Path) -> None:
+    from jsonschema import Draft202012Validator
+
+    schema = json.loads(
+        (ROOT / "contracts" / "ossie-extensions" / "v1" / "schema.json").read_text(encoding="utf-8")
+    )
+    model = adapter.load_yaml(path)
+    assert isinstance(model, dict)
+    translated, _ = adapter.translate(dict(model), VENDOR)
+    payloads = extension_payloads(translated, VENDOR)
+    assert payloads
+    for payload in payloads:
+        assert list(Draft202012Validator(schema).iter_errors(payload)) == [], payload
+    assert extension_payloads(translated, adapter.VENDOR_NAME) == []
+
+
+def test_row_policies_are_set_aside_for_p2_08() -> None:
+    with_policies = [path for path in MODELS if adapter.translate(load_model(path), VENDOR)[1]]
+    assert len(with_policies) == 1
+
+
+@pytest.mark.parametrize(
+    ("where", "payload"),
+    [
+        ("dataset", {"version": 1, "entity": "x", "colour": "red"}),
+        ("field", {"version": 1, "time_role": "lunar"}),
+        ("field", {"version": 1, "unit": {"meters": "m"}}),
+        ("metric", {"version": 1, "aggregation": {"class": "mostly_additive"}}),
+        ("dataset", {"version": 2, "entity": "x"}),
+    ],
+)
+def test_an_untranslatable_key_or_value_fails(where: str, payload: dict[str, object]) -> None:
+    entry = {"vendor_name": adapter.VENDOR_NAME, "data": json.dumps(payload)}
+    field: dict[str, Any] = {"name": "f", "expression": {"sql": "f"}}
+    dataset: dict[str, Any] = {"name": "d", "source": "d", "fields": [field]}
+    model: dict[str, Any] = {"version": "0.2.0.dev0", "name": "m", "datasets": [dataset]}
+    if where == "dataset":
+        dataset["custom_extensions"] = [entry]
+    elif where == "field":
+        field["custom_extensions"] = [entry]
+    else:
+        model["metrics"] = [
+            {"name": "x", "expression": {"sql": "SUM(d.f)"}, "custom_extensions": [entry]}
+        ]
+    with pytest.raises(adapter.UntranslatableKey):
+        adapter.translate(model, VENDOR)
+
+
+def test_a_bridge_moves_onto_its_bridge_dataset() -> None:
+    translated, _ = adapter.translate(
+        load_model(ROOT / CORPUS / "models" / "CASE-011.yaml"), VENDOR
+    )
+    bridge_dataset = next(d for d in translated["datasets"] if d["name"] == "order_campaign")
+    (payload,) = extension_payloads(bridge_dataset, VENDOR)
+    assert payload["bridge"] == {
+        "left": "order",
+        "right": "campaign",
+        "weight": "allocation_weight",
+        "total": "1.00",
+        "tolerance": "0.00",
+        "normalization_scope": {"entities": ["order"]},
+    }
+
+
+def translated_or_error(change: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+    model = load_model(ROOT / CORPUS / "models" / "CASE-011.yaml")
+    change(model)
+    return adapter.translate(model, VENDOR)[0]
+
+
+def set_payload(node: dict[str, Any], payload: dict[str, Any]) -> None:
+    node["custom_extensions"] = [{"vendor_name": adapter.VENDOR_NAME, "data": json.dumps(payload)}]
+
+
+def bridges(model: dict[str, Any]) -> dict[str, Any]:
+    data: dict[str, Any] = json.loads(model["custom_extensions"][0]["data"])
+    return data
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ("bridge extra key", r"bridge: .*\['note'\]"),
+        ("bridge left is not the relationship end", "is not where left_relationship ends"),
+        ("allocation extra key", r"bridge allocation: .*\['rounding'\]"),
+        ("keys extra key", r"dataset keys: .*\['x'\]"),
+    ],
+)
+def test_nested_keys_and_repeated_values_are_checked(change: str, reason: str) -> None:
+    def edit(model: dict[str, Any]) -> None:
+        data = bridges(model)
+        if change == "bridge extra key":
+            data["bridges"][0]["note"] = "x"
+        elif change == "bridge left is not the relationship end":
+            data["bridges"][0]["left"] = "campaign"
+        elif change == "allocation extra key":
+            data["bridges"][0]["allocation"]["rounding"] = "half_up"
+        else:
+            orders = model["datasets"][0]
+            set_payload(
+                orders, {"version": 1, "keys": [{"entity": "o", "fields": ["order_id"], "x": 1}]}
+            )
+            return
+        set_payload(model, data)
+
+    with pytest.raises(adapter.UntranslatableKey, match=reason):
+        translated_or_error(edit)
+
+
+@pytest.mark.parametrize(
+    ("behavior", "reason"),
+    [
+        (
+            {"rule": "period_end", "order_by": [{"field": "b.d", "direction": "desc"}]},
+            r"order_by: .*\['direction'\]",
+        ),
+        (
+            {"rule": "period_end", "order_by": [{"field": "b.d"}], "ties": {"policy": "first"}},
+            r"ties: .*\['policy'\]",
+        ),
+        (
+            {"rule": "period_end", "order_by": [{"field": "b.d"}], "axis": {"dimension": "other"}},
+            "is no period_end axis",
+        ),
+    ],
+    ids=["order direction", "ties policy", "axis is no period_end axis"],
+)
+def test_a_period_end_detail_that_cannot_be_kept_fails(
+    behavior: dict[str, Any], reason: str
+) -> None:
+    def edit(model: dict[str, Any]) -> None:
+        model["metrics"] = [
+            {
+                "name": "balance",
+                "expression": {"sql": "SUM(orders.order_total)"},
+                "custom_extensions": [
+                    {
+                        "vendor_name": adapter.VENDOR_NAME,
+                        "data": json.dumps(
+                            {
+                                "version": 1,
+                                "aggregation": {
+                                    "class": "semi_additive",
+                                    "axes": [{"dimension": "snapshot", "behavior": "period_end"}],
+                                },
+                                "time_behavior": behavior,
+                            }
+                        ),
+                    }
+                ],
+            }
+        ]
+
+    with pytest.raises(adapter.UntranslatableKey, match=reason):
+        translated_or_error(edit)
+
+
+def test_an_axis_with_both_a_dimension_and_an_entity_fails() -> None:
+    def edit(model: dict[str, Any]) -> None:
+        axis = {"dimension": "d", "entity": "e", "behavior": "forbidden"}
+        model["metrics"] = [
+            {
+                "name": "m",
+                "expression": {"sql": "SUM(orders.order_total)"},
+                "custom_extensions": [
+                    {
+                        "vendor_name": adapter.VENDOR_NAME,
+                        "data": json.dumps(
+                            {
+                                "version": 1,
+                                "aggregation": {"class": "semi_additive", "axes": [axis]},
+                            }
+                        ),
+                    }
+                ],
+            }
+        ]
+
+    with pytest.raises(adapter.UntranslatableKey, match=r"aggregation axis: .*\[.entity.\]"):
+        translated_or_error(edit)
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        (
+            {
+                "version": 1,
+                "aggregation": {
+                    "class": "non_additive",
+                    "axes": [{"dimension": "region", "behavior": "forbidden"}],
+                },
+            },
+            "must be recompute",
+        ),
+        ({"version": 1, "allocation_bridge": "unknown"}, "names no bridge"),
+    ],
+    ids=["non-additive axis that does not recompute", "unknown allocation bridge"],
+)
+def test_a_metric_declaration_that_has_no_faithful_translation_fails(
+    payload: dict[str, Any], reason: str
+) -> None:
+    def edit(model: dict[str, Any]) -> None:
+        metric = {"name": "m", "expression": {"sql": "SUM(orders.order_total)"}}
+        set_payload(metric, payload)
+        model["metrics"] = [metric]
+
+    with pytest.raises(adapter.UntranslatableKey, match=reason):
+        translated_or_error(edit)
+
+
+def axis_metric(additivity_class: str, behavior: str) -> dict[str, Any]:
+    metric = {"name": "m", "expression": {"sql": "SUM(orders.order_total)"}}
+    axes = [{"dimension": "region", "behavior": behavior}]
+    set_payload(metric, {"version": 1, "aggregation": {"class": additivity_class, "axes": axes}})
+    return metric
+
+
+@pytest.mark.parametrize(
+    ("additivity_class", "behavior"),
+    [
+        ("fully_additive", "distinct_recompute"),
+        ("fully_additive", "forbidden"),
+        ("non_additive", "additive"),
+    ],
+)
+def test_an_axis_a_metric_class_contradicts_fails(additivity_class: str, behavior: str) -> None:
+    def edit(model: dict[str, Any]) -> None:
+        model["metrics"] = [axis_metric(additivity_class, behavior)]
+
+    with pytest.raises(adapter.UntranslatableKey, match=r"an axis of a \w+ metric must be"):
+        translated_or_error(edit)
+
+
+@pytest.mark.parametrize(
+    ("additivity_class", "behavior", "additivity"),
+    [
+        ("fully_additive", "additive", "additive"),
+        ("non_additive", "distinct_recompute", "non_additive"),
+    ],
+)
+def test_an_axis_its_metric_class_implies_is_dropped(
+    additivity_class: str, behavior: str, additivity: str
+) -> None:
+    def edit(model: dict[str, Any]) -> None:
+        model["metrics"] = [axis_metric(additivity_class, behavior)]
+
+    translated = translated_or_error(edit)
+    assert extension_payloads(translated["metrics"][0], VENDOR) == [
+        {"version": 1, "element": "metric", "additivity": additivity}
+    ]
+
+
+def test_an_entry_on_an_element_the_adapter_never_reads_fails() -> None:
+    def edit(model: dict[str, Any]) -> None:
+        set_payload(model["datasets"][0]["fields"][0].setdefault("dimension", {}), {"version": 1})
+
+    with pytest.raises(adapter.UntranslatableKey, match="never reads"):
+        translated_or_error(edit)
+
+
+def test_two_fields_with_one_time_role_fail() -> None:
+    def edit(model: dict[str, Any]) -> None:
+        for field in model["datasets"][0]["fields"][:2]:
+            set_payload(field, {"version": 1, "time_role": "event"})
+
+    with pytest.raises(adapter.UntranslatableKey, match="two fields with time_role 'event'"):
+        translated_or_error(edit)
+
+
+def test_another_corpus_semantic_version_fails() -> None:
+    def edit(model: dict[str, Any]) -> None:
+        data = bridges(model)
+        data["semantic_version"] = "9.9.9"
+        set_payload(model, data)
+
+    with pytest.raises(adapter.UntranslatableKey, match=re.escape("semantic_version '9.9.9'")):
+        translated_or_error(edit)
+
+
+def test_two_bridges_on_one_bridge_dataset_fail() -> None:
+    def edit(model: dict[str, Any]) -> None:
+        data = bridges(model)
+        data["bridges"].append({**data["bridges"][0], "name": "second"})
+        set_payload(model, data)
+
+    with pytest.raises(adapter.UntranslatableKey, match="two bridges on the bridge dataset"):
+        translated_or_error(edit)
+
+
+def test_a_payload_that_repeats_a_key_fails() -> None:
+    def edit(model: dict[str, Any]) -> None:
+        field = model["datasets"][0]["fields"][0]
+        text = '{"version": 1, "dimension": "a", "dimension": "b"}'
+        field["custom_extensions"] = [{"vendor_name": adapter.VENDOR_NAME, "data": text}]
+
+    with pytest.raises(adapter.UntranslatableKey, match=re.escape("repeats a key: ['dimension']")):
+        translated_or_error(edit)
+
+
+@pytest.mark.parametrize("kind", ["bridge", "dataset", "relationship"])
+def test_a_repeated_name_fails_instead_of_replacing_an_element(kind: str) -> None:
+    def edit(model: dict[str, Any]) -> None:
+        if kind == "bridge":
+            data = bridges(model)
+            data["bridges"].append({**data["bridges"][0], "bridge": "orders"})
+            set_payload(model, data)
+        elif kind == "dataset":
+            model["datasets"].append(copy.deepcopy(model["datasets"][0]))
+        else:
+            model["relationships"].append(copy.deepcopy(model["relationships"][0]))
+
+    with pytest.raises(adapter.UntranslatableKey, match=f"two {kind}s? named"):
+        translated_or_error(edit)

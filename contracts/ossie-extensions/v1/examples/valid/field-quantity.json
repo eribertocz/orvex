@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "element": "field",
+  "semantic_type": "quantity",
+  "unit": "kW.h",
+  "numeric": {
+    "precision": "20",
+    "scale": "3"
+  }
+}

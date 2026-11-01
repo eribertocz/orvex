@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "element": "field",
+  "semantic_type": "amount",
+  "currency": "usd"
+}

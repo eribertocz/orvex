@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "element": "relationship",
+  "cardinality": "many_to_one",
+  "optionality": "required",
+  "evidence": [
+    "cardinality",
+    "referential_integrity"
+  ],
+  "temporal": {
+    "event_time": "sales.sale_date",
+    "valid_from": "customer_history.valid_from",
+    "valid_to": "customer_history.valid_to",
+    "boundary": "closed_open",
+    "match": "exactly_one"
+  }
+}

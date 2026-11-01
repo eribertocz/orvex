@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "element": "metric",
+  "aggregate_class": "holistic",
+  "approximate": {
+    "error_bound": "0.01"
+  }
+}

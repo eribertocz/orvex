@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "element": "dataset",
+  "bridge": {
+    "left": "a",
+    "right": "b",
+    "weight": "w",
+    "total": "1",
+    "tolerance": "-0.01",
+    "normalization_scope": {
+      "entities": [
+        "a"
+      ]
+    }
+  }
+}

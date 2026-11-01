@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "element": "metric",
+  "over_metrics": {
+    "expression": "a - b",
+    "align": {
+      "grain": [
+        "month"
+      ],
+      "time": "month"
+    }
+  },
+  "window": {
+    "function": "rank",
+    "of": "a",
+    "partition_by": [],
+    "order_by": [
+      "month"
+    ],
+    "densify": "none"
+  }
+}

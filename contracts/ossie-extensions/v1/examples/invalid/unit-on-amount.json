@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "element": "field",
+  "semantic_type": "amount",
+  "currency": "USD",
+  "unit": "kW.h"
+}

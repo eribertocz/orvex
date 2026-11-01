@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "element": "metric",
+  "aggregate_class": "sketch",
+  "approximate": {
+    "error_bound": "0.02"
+  },
+  "status": "deprecated",
+  "deprecation": {
+    "date": "2026-12-31",
+    "replacement": "exact_customers"
+  }
+}

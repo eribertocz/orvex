@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "element": "field",
+  "semantic_type": "amount",
+  "currency": "BOB",
+  "numeric": {
+    "precision": "18",
+    "scale": "2"
+  },
+  "nullability": "not_null",
+  "pii": "none"
+}

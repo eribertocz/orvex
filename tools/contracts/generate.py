@@ -152,10 +152,29 @@ def json_schema_bundle(contract: ContractVersion) -> dict[str, Any]:
     return {"title": title, "$defs": json.loads(text)}
 
 
+# Conditional applicators: they constrain values, not shapes, so a type cannot express them, and
+# json2ts would turn each into a duplicated intersection. The schema keeps them (#276).
+_CONDITIONALS = ("if", "then", "else", "not", "dependentRequired")
+
+
+def structure_only(schema: Any) -> Any:  # noqa: ANN401 - any JSON value
+    """The schema without its conditional applicators, for type generation only."""
+    if isinstance(schema, list):
+        return [structure_only(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    kept = {key: structure_only(value) for key, value in schema.items() if key not in _CONDITIONALS}
+    if "allOf" in kept:
+        kept["allOf"] = [item for item in kept["allOf"] if item != {}]
+        if not kept["allOf"]:
+            del kept["allOf"]
+    return kept
+
+
 def typescript_types(contract: ContractVersion, scratch: Path) -> str:
     bundle = scratch / "schema.json"
     output = scratch / "types.ts"
-    bundle.write_text(json.dumps(json_schema_bundle(contract)), encoding="utf-8")
+    bundle.write_text(json.dumps(structure_only(json_schema_bundle(contract))), encoding="utf-8")
     run(
         [
             web_tool("json2ts"),

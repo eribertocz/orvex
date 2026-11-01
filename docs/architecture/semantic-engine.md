@@ -22,15 +22,17 @@ The engine is the single enforcement point for data access (law 3) and the singl
 
 ## 3. Input: Apache Ossie plus `ORVEX` extensions
 
-The semantic model is a valid Apache Ossie document (pinned specification commit; see ADR-0009). Ossie defines datasets, fields, dimensions, metrics, relationships and `ai_context`. What Ossie does not define is carried in `custom_extensions` entries with `vendor_name: ORVEX`, whose `data` payload is validated by `contracts/ossie-extensions/v1` (JSON Schema).
+The semantic model is a valid Apache Ossie document (pinned specification commit; see ADR-0009). Ossie defines datasets, fields, dimensions, metrics, relationships and `ai_context`. What Ossie does not define is carried in `custom_extensions` entries with `vendor_name: ORVEX`, whose `data` is JSON text of one payload object, validated by `contracts/ossie-extensions/v1` (JSON Schema). That contract's README is the authority on every member. In summary:
 
-| Element | `ORVEX` extension fields |
+| Element | `ORVEX` extension members |
 |---|---|
-| Dataset | `grain` (key columns that identify one row), `unique_keys`, `time_roles` (event time, validity interval, snapshot time), `evidence` (see §6), `cache` (`enabled`, `ttl`), `certification` |
-| Field | `semantic_type` (identifier, category, quantity, amount, ratio, instant, date…, and geographic: `geo_region` with a `geo_source` naming a project GeoJSON file under `assets/geo/` and its key property, `latitude`, `longitude`), `unit`, `currency`, `nullability` contract, `calendar` for date fields, `pii` classification |
-| Metric | `additivity` (`additive`, `semi_additive`, `non_additive`, `recomputable`, `ordered`), `non_additive_axes`, `period_end` rule for semi-additive metrics, `components` for recomputable ratios, `zero_denominator` policy, `rounding` policy, `format`, `owner`, `status` (`draft`, `certified`, `deprecated`), `deprecation` (date, replacement) |
-| Relationship | `cardinality` (`many_to_one`, `one_to_one`, `one_to_many`, `many_to_many`), `role` name, `evidence`, `bridge` (weights, weight total, tolerance, normalization scope) for many-to-many allocation, `temporal` (as-of matching with closed–open intervals) |
-| Model | `calendars` (Gregorian, fiscal, business calendar tables), `default_time_zone`, `drill_paths`, `calculation_groups`, `preaggregations` (name, base dataset, grain, metrics, refresh strategy; S5) |
+| Dataset | `entity`, `entity_keys` (matching Ossie's `primary_key` or `unique_keys` unless declared coarser), `grain` (conformed dimensions), `time_roles` (event time, validity interval, snapshot time), `history` (S12), `evidence` (see §6), `cache` (`enabled`, `ttl`), `certification`, `bridge` on a bridge dataset (weights, weight total, tolerance, normalization scope; a many-to-many is two Ossie many-to-one relationships through it), `aggregate_table` (S5) |
+| Field | `semantic_type` (identifier, category, quantity, amount, ratio, and geographic: `geo_region` with a `geo_source` naming a project GeoJSON file under `assets/geo/` and its key property, `latitude`, `longitude`), `unit`, `currency`, `numeric` (precision, scale, width), `time_zone`, `nullability`, `calendar`, `pii`, `conformed_dimension`, `calculated` (S10), `business_time` |
+| Metric | `additivity` (`additive`, `semi_additive`, `non_additive`, `recomputable`, `ordered`), `non_additive_axes`, `period_end`, `components`, `aggregate_class`, `zero_denominator`, `rounding`, `unit`, `currency`, `format`, `owner`, `status`, `deprecation`, `over_metrics` (S7), `context` and `level_of_detail` (S1, S8), `window` (S9), `allocation` |
+| Relationship | `cardinality` (`many_to_one`, `one_to_one`; `from` is the many side), `optionality`, `evidence`, `temporal` (as-of matching with closed–open intervals); a role is a separate Ossie relationship |
+| Model | `calendars` (Gregorian, fiscal, business calendar tables), `default_time_zone`, `drill_paths`, `parent_child`, `calculation_groups`, `parameters`, `segments` (S10), `cohorts`, `funnels` (S11), `preaggregations` (S5) |
+
+Keys, logical types, time roles of dimensions and intrinsic metric filters are Ossie's own (`primary_key`, `unique_keys`, `datatype`, `is_time`, `FILTER (WHERE …)`) and are never repeated in a payload.
 
 Rules:
 

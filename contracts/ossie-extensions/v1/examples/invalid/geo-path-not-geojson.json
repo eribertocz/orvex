@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "element": "field",
+  "semantic_type": "geo_region",
+  "geo_source": {
+    "file": "assets/geo/x.json",
+    "key_property": "code"
+  }
+}

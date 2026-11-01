@@ -362,3 +362,87 @@ def test_dangling_or_anchor_reference_is_rejected(tmp_path: Path, reference: str
     schema["properties"]["meter"] = {"$ref": reference}
     path.write_text(json.dumps(schema))
     assert codes(root) == ["CONTRACT_SCHEMA_INVALID"]
+
+
+def add_definition(root: Path, name: str, definition: dict[str, object]) -> None:
+    schema = json.loads(schema_of(root).read_text())
+    edit_schema(root, {"$defs": {**schema["$defs"], name: definition}})
+
+
+def closed_with(applicator: dict[str, object]) -> dict[str, object]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"kind": {"enum": ["a", "b"]}, "extra": {"type": "string"}},
+        **applicator,
+    }
+
+
+@pytest.mark.parametrize(
+    "applicator",
+    [
+        {"if": {"properties": {"kind": {"const": "a"}}}, "then": {"required": ["extra"]}},
+        {
+            "allOf": [
+                {
+                    "if": {"properties": {"kind": {"const": "b"}}},
+                    "then": {"properties": {"extra": False}},
+                }
+            ]
+        },
+        {"not": {"required": ["kind", "extra"]}},
+    ],
+)
+def test_conditionals_of_a_closed_object_are_not_open(
+    tmp_path: Path, applicator: dict[str, object]
+) -> None:
+    # #276: the closed parent already rejects undeclared properties, whatever its applicators say.
+    root = repository_with_example(tmp_path)
+    add_definition(root, "Conditional", closed_with(applicator))
+    assert codes(root) == []
+
+
+def test_an_open_object_nested_in_a_conditional_is_still_reported(tmp_path: Path) -> None:
+    root = repository_with_example(tmp_path)
+    nested: dict[str, object] = {
+        "then": {"properties": {"extra": {"type": "object", "properties": {"x": {}}}}}
+    }
+    add_definition(root, "Conditional", closed_with(nested))
+    findings = validate_all(root)
+    assert any(
+        f.code == "CONTRACT_OPEN_OBJECT" and "then/properties/extra" in f.detail for f in findings
+    )
+
+
+def test_an_applicator_of_an_open_object_is_still_reported(tmp_path: Path) -> None:
+    root = repository_with_example(tmp_path)
+    open_parent: dict[str, object] = {
+        "type": "object",
+        "if": {"properties": {"k": {"const": 1}}},
+        "then": {"required": ["k"]},
+    }
+    add_definition(root, "Conditional", open_parent)
+    findings = [f.detail for f in validate_all(root) if f.code == "CONTRACT_OPEN_OBJECT"]
+    assert any(detail.endswith("#/$defs/Conditional") for detail in findings)
+    assert any("Conditional/if" in detail for detail in findings)
+
+
+def test_types_are_generated_from_the_structure_without_conditionals() -> None:
+    # #276: json2ts turns each conditional into a duplicated intersection; types carry shape only.
+    schema: dict[str, object] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"kind": {"enum": ["a", "b"]}, "x": {"type": "string"}},
+        "dependentRequired": {"x": ["kind"]},
+        "allOf": [
+            {"if": {"properties": {"kind": {"const": "a"}}}, "then": {"required": ["x"]}},
+            {"not": {"required": ["kind", "x"]}},
+            {"$ref": "#/$defs/Other"},
+        ],
+    }
+    assert generate.structure_only(schema) == {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"kind": {"enum": ["a", "b"]}, "x": {"type": "string"}},
+        "allOf": [{"$ref": "#/$defs/Other"}],
+    }
