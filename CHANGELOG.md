@@ -4,6 +4,11 @@ Product releases of Orvex. Module versions are listed in `versions.toml`; the fo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
 [Semantic Versioning](https://semver.org/) (`docs/process/versioning.md`).
 
+## Unreleased
+
+### Security
+- A DuckDB-file source with generated columns is now refused (`STORE_SOURCE_INVALID`), before anything is read (#268). A `VIRTUAL` generated column's expression ran in the lake's session when the column was read, and could return the lake session's settings. `STORED` generated columns are refused too, as a precaution: no leak through them was shown, and DuckDB 2.0.0 cannot create them.
+
 ## v0.2.0-alpha.1 — 2026-10-31
 
 Phase P1 (Storage and transformation). Alpha: formats and contracts may still change between phases.

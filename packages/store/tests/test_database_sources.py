@@ -509,3 +509,25 @@ def test_the_sqlite_copy_reads_only_schema_names_in_python(
     )
     for statement in traced:
         assert any(re.fullmatch(p, statement) for p in schema_only), statement
+
+
+def test_a_sqlite_generated_column_never_reaches_the_lake_session(
+    location: Location, tmp_path: Path
+) -> None:
+    """#268: DuckDB's SQLite reader does not expose a SQLite generated column at all (measured
+    on DuckDB 2.0.0), so its expression can never run in the lake session; the other columns
+    are read as usual."""
+    path = tmp_path / "generated.sqlite"
+    connection = sqlite3.connect(path)
+    connection.execute(
+        "CREATE TABLE t (a INTEGER, b TEXT GENERATED ALWAYS AS (char(65 + a)) VIRTUAL)"
+    )
+    connection.execute("INSERT INTO t (a) VALUES (7)")
+    connection.commit()
+    connection.close()
+    lake = open_lake(location, LIMITS, [sqlite_source(path)])
+    try:
+        write(lake, "CREATE TABLE copied AS SELECT * FROM field.t")
+        assert read(lake, "SELECT * FROM copied") == [{"a": 7}]
+    finally:
+        lake.close()

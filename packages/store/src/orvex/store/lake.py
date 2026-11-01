@@ -1656,19 +1656,33 @@ class Lake:
             self._source_sql(
                 source, f"ATTACH {_quote(path)} AS {_identifier(source.name)} (READ_ONLY)"
             )
-            macros = self._one(
+            # Only catalog metadata is read here: no source table, no source expression. Every
+            # object whose SQL runs when the source is read is refused before anything is read.
+            found = self._one(
                 "SELECT (SELECT count(*) FROM duckdb_functions() WHERE database_name = $name "
                 "AND NOT internal AND function_type IN ('macro', 'table_macro')) "
                 "+ (SELECT count(*) FROM duckdb_views() WHERE database_name = $name "
-                "AND NOT internal)",
+                "AND NOT internal), "
+                "(SELECT count(*) FROM duckdb_columns() WHERE database_name = $name "
+                "AND is_generated)",
                 {"name": source.name},
             )
-            if macros and int(str(macros[0])):
+            if found and int(str(found[0])):
                 # A view or macro runs with the lake's connection: it could read lake tables or
                 # the lake's catalog database, which a source must never reach.
                 raise StoreError(
                     "STORE_SOURCE_INVALID",
                     f"Source {source.name} defines views or macros, which a lake cannot attach.",
+                    {"source": source.name},
+                )
+            if found and int(str(found[1])):
+                # #268: a VIRTUAL generated column's expression runs in the reading session, the
+                # lake's (a reproduced leak of the lake's settings). STORED ones are refused as a
+                # precaution only (DuckDB 2.0.0 cannot create them): no SQL of a source on read.
+                raise StoreError(
+                    "STORE_SOURCE_INVALID",
+                    f"Source {source.name} has generated columns, whose expressions would run in "
+                    "the lake's session; a lake cannot attach it.",
                     {"source": source.name},
                 )
             return [Path(path).as_posix()]
