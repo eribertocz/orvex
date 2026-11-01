@@ -219,6 +219,10 @@ def test_odd_values_get_their_json_form_or_are_refused() -> None:
         canonicalize(deep)
     with pytest.raises(NotCanonical):
         canonicalize_text("[" * 100_000 + "]" * 100_000)
+    cyclic: list[object] = []
+    cyclic.append(cyclic)
+    with pytest.raises(NotCanonical):
+        fingerprint("model", 1, cyclic)
 
 
 def test_plain_values() -> None:

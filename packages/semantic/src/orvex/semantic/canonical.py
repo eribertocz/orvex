@@ -187,6 +187,8 @@ def fingerprint(kind: str, format: int, document: object) -> str:
         raise NotCanonical("a fingerprint's kind is a non-empty string")
     if isinstance(format, bool) or not isinstance(format, int) or format < 0:
         raise NotCanonical("a fingerprint's format is a non-negative integer")
-    _integers_only(document)
     tagged = {"format": format, "kind": kind, "value": document}
-    return "sha256:" + hashlib.sha256(canonicalize(tagged)).hexdigest()
+    # Canonicalizing first refuses a cycle (`NotCanonical`), so the walk below always ends.
+    canonical = canonicalize(tagged)
+    _integers_only(document)
+    return "sha256:" + hashlib.sha256(canonical).hexdigest()
