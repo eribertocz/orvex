@@ -61,7 +61,14 @@ conformance/security/scenarios/
 - One pull request per issue, with `Closes #<n>`.
 - The description follows the template (case matrix, verification commands and output, laws, contracts, dependencies, risks). Sections that do not apply say "none".
 - The pull request stays within the issue's medium size; if the work grows beyond it, the Agent stops and splits the issue before continuing (`issues.md` §2).
-- Drafts allowed while working; **Ready for review** only when local checks pass.
+- **Reviewable size.** About 400 changed lines (without generated and lock files) is a guide, not a hard limit. A larger pull request is allowed for tests, fixtures, a mechanical refactor, or when splitting it would break technical coherence; its description then has a `## Size` section that says why, and it stays reviewable.
+- **Tests before code.** The case matrix and its tests are written before the implementation and fail without it (`engineering.md` §4).
+- **Only the issue.** An improvement the issue does not need is not mixed in: the Agent identifies it in the pull request and it is handled apart, after the Owner's approval (rule below).
+- Drafts allowed while working; **Ready for review** only when the full local verification passes on a clean checkout of the commit (`engineering.md` §4).
+
+### 3.3.1 Nothing new on GitHub without approval
+
+The Agent creates no issue, comment, ADR, document or pull request on GitHub without the Owner's explicit approval. While a draft is being discussed, it stays in the conversation.
 
 ### 3.4 Specification before code
 
@@ -73,11 +80,11 @@ Before merging, the Agent verifies its own pull request according to the risk ti
 
 | Tier | Applies to | Verification |
 |---|---|---|
-| **A — critical** | `semantic`, `access`, security, contracts, numeric exactness, concurrency, `conformance/` | All required checks green **and** an independent **Reviewer pass**: a separate subagent session with clean context and reviewer instructions (`docs/process/review.md`) that did not take part in writing the code. It checks every acceptance criterion and reads the full diff. Its verdict is posted on the pull request as a comment starting with `[Reviewer]` |
-| **B — standard** | `web`, `dashboards`, `transform`, `store`, `server`, `mcp`, tooling (unless they touch tier A topics) | All required checks green; the Agent checks every criterion and posts the case matrix with results |
+| **A — critical** | Every pull request that changes a file under: `packages/store/`, `packages/transform/`, `packages/semantic/`, `packages/access/`, `packages/server/src/` (persistence, data transformation, the semantic engine, security and the server that composes them); `contracts/` (public contracts); `conformance/`; `docs/adr/` and `docs/product/laws.md` (architecture and laws); `.github/workflows/` (CI gates). The rule is by path, so it is decided without interpretation | All required checks green, a `## Case matrix` in the description, **and** an independent **Reviewer pass** (`docs/process/review.md`): focused reviewers with clean context, launched together in one pass, that did not take part in writing the code. They check every acceptance criterion and read the full diff. The verdict is posted on the pull request as a comment starting with `[Reviewer]` |
+| **B — standard** | Every other change: `web`, `dashboards`, `mcp`, server tests, tooling, documentation outside the tier A paths | All required checks green; the Agent checks every criterion and posts the case matrix with results |
 | **C — routine** | Dependabot patch and minor updates of Python and npm packages; typo fixes outside governed paths | Auto-merge when all required checks are green: `.github/workflows/dependabot-auto-merge.yml` enables it for these pull requests only, and every required check and rule still applies. A pip update merges once the Agent has pushed the regenerated lock files, since Dependabot cannot regenerate them. GitHub Actions updates touch `.github/workflows/` and are therefore `owner-merge` |
 
-A `[Reviewer]` verdict of **changes requested** blocks the merge until a new Reviewer pass approves.
+A `[Reviewer]` verdict of **changes requested** blocks the merge until the same reviewers confirm their findings are fixed (`review.md`). Only a finding that makes things worse blocks; everything else becomes a separate issue.
 
 ### 3.6 Merging
 

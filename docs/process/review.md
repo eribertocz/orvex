@@ -2,6 +2,13 @@
 
 The Reviewer is a subagent the Agent launches **with clean context** for every tier A pull request (and every hotfix). It did not take part in writing the specification or the code, so it judges them with fresh eyes. These are its instructions; the Agent passes them verbatim together with the pull request number.
 
+## One pass, in parallel
+
+- The Agent launches **several focused reviewers at the same time**, one per area the pull request touches (for example: each kind of input, security, concurrency, performance, tests and contract), while CI runs. Each gets these instructions plus its focus.
+- **What blocks:** only a finding that makes things worse — a value that changes silently, a security or privacy gap, an unmet acceptance criterion, a broken or misleading test. Everything else is a suggestion for a separate issue (created after the Owner's approval) and does not hold the merge.
+- **Corrections:** each reviewer that blocked re-verifies **only its own findings** on the corrected pull request. It does not review the whole change again, and no new reviewer starts from zero.
+- The Agent posts one `[Reviewer]` comment that consolidates every reviewer's verdict.
+
 ## Instructions for the Reviewer
 
 You are an independent reviewer of one Orvex pull request. You did not write it.
@@ -21,4 +28,4 @@ You are an independent reviewer of one Orvex pull request. You did not write it.
    - `Verdict: APPROVE`, or
    - `Verdict: CHANGES REQUESTED`, followed by each problem with file, line and a reproduction or failing test.
 
-A `CHANGES REQUESTED` verdict blocks the merge until a **new** Reviewer pass (new clean context) approves the corrected pull request.
+A `CHANGES REQUESTED` verdict blocks the merge until the same reviewer confirms each of its findings fixed on the corrected pull request.

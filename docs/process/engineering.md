@@ -30,6 +30,7 @@ Rules:
 - Domain types are immutable (`dataclass(frozen=True, slots=True)` or equivalent).
 - No module imports another module's internals. Cross-module communication uses contract types only. CI enforces this with an import-boundary check written with the standard library (`ast`).
 - Errors are explicit, typed per module, and carry a stable `code` (for example `AMBIGUOUS_RELATIONSHIP_PATH`), a human message and structured details. No bare `except`, no swallowed exceptions.
+- **Only DuckDB reads source rows.** In `store` and `transform`, the rows of a source are never read or materialized by another reader (a Parquet, CSV or SQLite reader of another library, a file opened in Python). Arrow and PyArrow may carry rows as a transport or stream between DuckDB and another component, when DuckDB produces or consumes them and Python neither materializes them nor walks them row by row. Exceptions are explicit, minimal, justified and tested.
 - **Data stays in DuckDB (ADR-0025).** Rows never pass through Python between steps: compose SQL or lazy DuckDB relations, write with `INSERT … SELECT`, `MERGE`, `CREATE TABLE … AS` or `COPY`, and read each final result **exactly once** into Arrow. A lazy relation reruns its query on every read, so a second read, `str(rel)` or `fetchall` on it is a defect. Every DuckLake read pins its snapshot. `DuckDBPyRelation` never crosses a module boundary; contracts exchange Arrow.
 - SQL sent to DuckDB is generated from a plan or written as plain SQL with bound parameters. **Never** concatenate user input into SQL. Session variables (`SET VARIABLE`) are never used on shared connections; values are passed as explicit prepared-statement parameters.
 
@@ -54,6 +55,11 @@ Rules:
 
 Rules:
 
+- **Tests before code.** The case matrix covers the input space of the change, generated where it is large (every type, every pair of types), and its tests are written first and fail without the fix.
+- **A test proves observable behavior,** not line coverage: it asserts what a user or caller sees (values, types, error codes), and it would fail if the behavior broke.
+- **Existing tests and criteria are never lowered** (removed, skipped, loosened) to make CI pass.
+- **Local verification** (`tools/ci/verify`, added by #261): while working, the fast checks and the tests of the changed part; before pushing, the full verification once, on a clean checkout of the commit, equivalent to the mandatory CI checks. CI only confirms: it never discovers an error that the local verification could have found.
+- **CI performance** targets 3–4 minutes for the full suite; it is a goal only, and never a reason to remove, skip or weaken a test.
 - Tests are deterministic and reproducible: the same commands locally and in CI.
 - Every rejection the specification defines is tested and asserts the exact error code.
 - No mocks of DuckDB in integration tests; use real in-process DuckDB.
@@ -76,6 +82,7 @@ Every new dependency requires one line in the pull request: problem, package, ve
 
 ## 6. Security
 
+- **Fail closed.** Every security decision that cannot be proven safe refuses.
 - Authorization is decided on the server; the client is never trusted.
 - Secrets come from environment variables or a secret store; never from files in Git, logs, issues or comments.
 - Pull requests touching security include a short threat model: what is protected, from whom, how it is tested.

@@ -27,17 +27,18 @@ The Agent works through the Owner's GitHub account; its commits carry the author
 
 1. **Phase start.** Check that every dependency is at its latest stable release (ADR-0022). Create the milestone and all issues of the phase in outline. Open one `type:decision` issue with the phase's new product behaviors (with a Spanish summary) and wait for the Owner's batch approval before specifying those behaviors.
 2. **Specify ahead.** Keep the **next three** issues in roadmap order fully specified (`status:spec-ready`, Definition of Ready in [`docs/process/issues.md`](docs/process/issues.md) §4). Specification and implementation never happen in the same step; a spec-ready issue's acceptance criteria are not changed to fit the code.
-3. **Implement.** One issue at a time, every issue medium-sized. **Before starting**, tell the Owner in plain, non-technical Spanish what the issue consists of: what it will produce and why it matters, in a few lines. Before coding, turn criteria and rejection cases into a case matrix in the pull request. Touch only what the issue covers. After **three** failed attempts on the same problem, stop, document the problem in the issue, and ask the Owner if a product decision is involved.
-4. **Verify by risk tier** ([`git-workflow.md`](docs/process/git-workflow.md) §3.5). Tier A (semantic engine, security, contracts, exactness, concurrency, conformance) requires an independent **Reviewer pass**; tier B requires all criteria checked with evidence; tier C (Dependabot patch/minor for Python and npm, typo fixes) auto-merges on green checks.
+3. **Implement.** One issue at a time, every issue medium-sized. **Before starting**, tell the Owner in plain, non-technical Spanish what the issue consists of: what it will produce and why it matters, in a few lines. Before coding, turn criteria and rejection cases into a case matrix in the pull request, and write its tests first: they fail without the fix (`engineering.md` §4). Touch only what the issue covers: an improvement it does not need is identified and handled apart. If an architectural problem changes the scope, or a product decision is needed, stop and ask the Owner before taking it in. After **three** failed attempts on the same problem, stop, document the problem in the issue, and ask the Owner if a product decision is involved.
+4. **Verify by risk tier** ([`git-workflow.md`](docs/process/git-workflow.md) §3.5). Run the full local verification on a clean checkout before pushing; CI only confirms. Tier A is decided by path (store, transform, semantic, access, server sources, contracts, conformance, ADRs and laws, CI workflows) and requires a case matrix and one parallel Reviewer pass (`review.md`); only findings that make things worse block, and the same reviewers re-verify their fixes. Tier B requires all criteria checked with evidence; tier C (Dependabot patch/minor for Python and npm, typo fixes) auto-merges on green checks.
 5. **Merge.** Squash, with required checks green and the tier's verification done. Pull requests touching **governed paths** are labeled `owner-merge` and merged only by the Owner.
 6. **Refill the window.** After each merge, specify the next issue so three remain ready.
-7. **Explain.** When each pull request is ready, give the Owner a short summary in plain Spanish that covers everything: what was implemented, problems found, what had to change or be corrected (including specification corrections), the tests run and their results (and any not run), the risks that remain, and what remains or needs the Owner. Brief, never long. When something usable is merged, also say what the Owner can now do, how to try it and what they should see.
+7. **Explain.** When each pull request is ready, give the Owner a short summary in plain Spanish that covers everything: what was implemented, problems found, what had to change or be corrected (including specification corrections), the tests run and their results (and any not run), the risks that remain, what remains or needs the Owner, **how long the issue took and how many errors CI found first** (target: zero). Brief, never long. When something usable is merged, also say what the Owner can now do, how to try it and what they should see.
 8. **Phase end.** Release according to [`git-workflow.md`](docs/process/git-workflow.md) §6.
 
 **Done** means the acceptance criteria are met and tests protect them.
 
 ## 4. Questions to the Owner
 
+- **Nothing new on GitHub without the Owner's explicit approval:** no issue, comment, ADR, document or pull request. A draft under discussion stays in the conversation.
 - Only **product** questions go to the Owner; technical questions are decided by the Agent and recorded in the issue or pull request (ADR only when laws, scope, public contracts or architecture change).
 - A product question is a `type:decision` issue with: the question, options with consequences, the recommendation, and a plain-language summary in Spanish. The blocked issue gets `status:needs-owner-decision`; the Agent continues with other ready work.
 - The Agent never guesses product behavior.
@@ -55,7 +56,9 @@ Full rules: [`docs/process/engineering.md`](docs/process/engineering.md).
 - **Product name:** never hard-code the display name or slug in code or UI strings; read them from `identity.toml` (exemptions in `engineering.md` §1).
 - **No secrets** in Git, logs, issues or comments. **No real company data** in the repository; use the synthetic data generator.
 - Required CI checks for the current phase pass locally before a pull request is marked ready.
-- No `TODO`, dead code or commented-out code at merge time. Fix root causes, not symptoms.
+- No `TODO`, dead code or commented-out code at merge time. Fix root causes, not symptoms: a finding is fixed for its whole class, not for the one case found.
+- **Fail closed** in every security decision. **Never lower** existing tests or criteria to make CI pass.
+- **Only DuckDB reads source rows** in `store` and `transform`; Arrow may carry them as a transport (`engineering.md` §2).
 
 ## 6. Git rules (summary)
 
