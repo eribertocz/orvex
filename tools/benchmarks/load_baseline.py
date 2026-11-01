@@ -1,3 +1,4 @@
+raise SystemExit("E2 evidence for #267 (never merged): fail on purpose")
 """P1 load-performance baseline (#69): load a synthetic dataset into a lake and measure it.
 
 Builds a project of models over a dataset written by `tools.synthetic.generate`, then, for each
@@ -473,5 +474,3 @@ def main() -> int:
 if __name__ == "__main__":
     sys.exit(main())
 
-
-raise SystemExit("E2 evidence for #267 (never merged): fail on purpose")
