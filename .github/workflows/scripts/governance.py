@@ -132,7 +132,7 @@ def has_filled_row(text: str) -> bool:
     fenced = False
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("```"):
+        if stripped.startswith(("```", "~~~")):  # a code block opens or closes
             fenced = not fenced
             continue
         if not fenced and stripped.startswith("|"):

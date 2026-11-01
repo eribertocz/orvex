@@ -1,3 +1,5 @@
+import contextlib
+import io
 import tempfile
 import unittest
 from collections.abc import Iterator
@@ -206,7 +208,10 @@ class FilledRowTests(unittest.TestCase):
         self.assertFalse(has_filled_row("| a |\n|---|\n| \\| |\n"))
 
     def test_a_table_inside_a_code_block_does_not_count(self) -> None:
-        self.assertFalse(has_filled_row("```\n| a |\n|---|\n| x |\n```\n"))
+        for fence in ("```", "~~~", "````"):
+            with self.subTest(fence=fence):
+                text = f"{fence}\n| a |\n|---|\n| x |\n{fence}\n"
+                self.assertFalse(has_filled_row(text))
 
     def test_a_second_table_does_not_fill_an_empty_first_one(self) -> None:
         text = "| a |\n|---|\n| |\n\n| b |\n|---|\n"
@@ -253,9 +258,13 @@ class PullClient:
         self.body = body
         self.files = files
         self.labels = labels
+        self.requests = 0
 
     def request(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
-        if self.body is GitHubApiError:
+        # The first request lists the files; with `GitHubApiError` as the body, the next one,
+        # which reads the description, fails.
+        self.requests += 1
+        if self.body is GitHubApiError and self.requests > 1:
             raise GitHubApiError("GET failed with HTTP 502")
         return {"changed_files": len(self.files), "body": self.body, "user": {"login": "a"}}
 
@@ -281,7 +290,14 @@ class RunTests(unittest.TestCase):
         self.assertEqual(self.run_with(PullClient(MATRIX, self.store, [])), 0)
 
     def test_an_unreadable_description_fails_closed(self) -> None:
-        self.assertEqual(self.run_with(PullClient(GitHubApiError, self.store, [])), 1)
+        # A small tier B change, which an empty description would let through: only the
+        # failure to read it can block it.
+        small = [{"filename": "tools/x.py", "additions": 5, "deletions": 0}]
+        self.assertEqual(self.run_with(PullClient("", small, [])), 0)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(self.run_with(PullClient(GitHubApiError, small, [])), 1)
+        self.assertIn("DESCRIPTION_UNAVAILABLE", output.getvalue())
 
     def test_a_null_description_is_an_empty_one(self) -> None:
         self.assertEqual(self.run_with(PullClient(None, self.store, [])), 1)
