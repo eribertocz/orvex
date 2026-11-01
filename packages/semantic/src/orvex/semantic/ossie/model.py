@@ -89,6 +89,18 @@ class OssieModel:
     foreign_extensions: tuple[ForeignExtension, ...]
     expressions: tuple[SelectedExpression, ...]
     advisories: tuple[Advisory, ...]
+    # The line of each value by its JSON Pointer, so later stages report problems as P2-03 does.
+    lines: Mapping[str, int] = field(
+        compare=False, repr=False, default_factory=lambda: MappingProxyType({})
+    )
+
+    def line(self, pointer: str) -> int:
+        """The line of `pointer`, or of its nearest ancestor that has one."""
+        while pointer:
+            if pointer in self.lines:
+                return self.lines[pointer]
+            pointer = pointer.rsplit("/", 1)[0]
+        return self.lines.get("", 1)
 
     @property
     def preservation_only(self) -> bool:

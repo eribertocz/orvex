@@ -578,10 +578,12 @@ def test_a_declared_derived_metric_still_cannot_name_metrics_in_ossie_sql() -> N
 
 
 @pytest.mark.parametrize("form", ["yaml", "json"])
-def test_what_the_lexer_cannot_read_is_an_advisory_not_an_error(form: str) -> None:
-    """ANSI names may be non-ASCII and SQL has bracketed comments; both read. A text the
-    product's lexer still cannot read is a product limit, never a breach of Ossie (ADR-0030 §2):
-    it loads with an advisory, and P2-04 refuses it."""
+def test_unsupported_sql_is_an_advisory_and_invalid_sql_an_error(form: str) -> None:
+    """ANSI names may be non-ASCII and SQL has bracketed comments; both read. Valid SQL the
+    product does not implement is a product limit, never a breach of Ossie (ADR-0030 §2): it
+    loads with an advisory, and compiling refuses it. A text outside the grammar is a breach of
+    the specification, as the official validator reports it (P2-04b): `OSSIE_INVALID`
+    `expression`."""
 
     def render(model: Model) -> bytes:
         return as_yaml(model) if form == "yaml" else as_json(model)
@@ -591,11 +593,19 @@ def test_what_the_lexer_cannot_read_is_an_advisory_not_an_error(form: str) -> No
     ds(model)["metrics"][0]["expression"]["sql"] = "SUM(año) /* gross, not sale_id */"
     assert advisories(load(render(model), form)) == []
     model = base()
-    ds(model)["metrics"][0]["expression"]["sql"] = "COUNT(sale_id) # not a token"
+    ds(model)["metrics"][0]["expression"]["sql"] = "COUNT(sale_id) + INTERVAL '1' DAY"
     put(ds(model)["metrics"][0], {"version": 1, "element": "metric", "aggregate_class": "holistic"})
     assert advisories(load(render(model), form)) == [
         ("/datasets/0/metrics/0/expression/sql", "unreadable_expression")
     ]
+    for text in ("COUNT(sale_id", "COUNT(sale_id))", "COUNT(sale_id) AND"):
+        model = base()
+        ds(model)["metrics"][0]["expression"]["sql"] = text
+        (problem,) = problems(failure(render(model), form))
+        assert (problem["rule"], problem["pointer"]) == (
+            "expression",
+            "/datasets/0/metrics/0/expression/sql",
+        )
 
 
 # --- temporal relationships (Owner decision of 2026-11-01, CASE-013) ---------------------------

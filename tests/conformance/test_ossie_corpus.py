@@ -36,6 +36,7 @@ from typing import Any, cast
 import pytest
 import yaml
 from orvex.semantic import SemanticError
+from orvex.semantic.compiler.parsing import MemberId, parse_model
 from orvex.semantic.ossie.reader import read
 
 from conformance.runners import bi_platform_adapter as adapter
@@ -163,3 +164,21 @@ def test_translated_models_follow_the_split_except_explicit_extensions(path: Pat
             e for e in result.expressions if e.element == FUTURE[path.stem].split("/expression")[0]
         ]
         assert derived.dialect == VENDORS[0]
+
+
+@pytest.mark.parametrize("path", MODELS, ids=lambda path: path.stem)
+def test_every_accepted_corpus_model_parses_with_nothing_excluded(path: Path) -> None:
+    """P2-04b (#288): every corpus model P2-03 accepts, as imported or as translated, parses;
+    every reference resolves, and no member is left out."""
+    candidates = [("yaml", path.read_bytes())]
+    translated, _ = adapter.translate(raw(path), VENDORS[0])
+    candidates.append(("json", json.dumps(translated).encode()))
+    for form, content in candidates:
+        if path.stem in FUTURE and (form == "yaml" or path.stem not in EXPLICIT_EXTENSION):
+            continue
+        parsed = parse_model(read(content, f"semantic/{path.stem}.ossie.{form}", VENDORS), VENDORS)
+        assert parsed.excluded == {}
+        if path.stem == "CASE-010" and form == "json":
+            attainment = parsed.members[MemberId("metric", None, "ATTAINMENT")]
+            assert attainment.language == "product"
+            assert [m.name for m in attainment.depends_on] == ["ACTUAL_REVENUE", "TARGET_REVENUE"]
