@@ -4,11 +4,11 @@
   "severity": "error",
   "category": "model",
   "audience": "builder",
-  "message": "The declaration sales.amount is missing on sales.amount (model).",
+  "message": "The declaration additivity is missing on sales.amount (model).",
   "locale": "en",
   "details": {
     "element": "model",
     "name": "sales.amount",
-    "declaration": "sales.amount"
+    "declaration": "additivity"
   }
 }

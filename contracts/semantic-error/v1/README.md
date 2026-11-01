@@ -31,6 +31,7 @@ Each detail field is `public` or `builder` (`codes.json`).
 - `audience: builder` gets the `builder` template and every field.
 - The schema enforces the pairing: a code with builder fields has two variants, one with `audience: builder` and every field, one with `audience: other` and only the public fields. So an `other` message that carries a builder field, or a builder message that lacks one, is invalid.
 - The audience decides only how much of the **error's explanation** is shown. It is never a data permission: a builder sees no data value, member or row that its own data policies hide. No administrative role is a builder audience by itself; administrative and data permissions are independent (Owner, 2026-11-01). Roles arrive with `security-context` (P2-09, P3); until then the audience is a parameter.
+- **A public field names only what the caller may see.** A public name (a member, dataset, dimension or element) is always one the caller referenced or one visible to the caller. When the member at fault is not visible to the caller (a hidden base metric under a visible derived one, say), the raise site names the visible member the caller referenced, never the hidden one: a hidden member is never confirmed to exist (security.md §3.3). Every raise site (P2-03 onward) tests this.
 - `MEMBER_NOT_FOUND` names only what the caller wrote, so a hidden member and a missing one give the same message. `MEMBER_MASKED` and `POLICY_ATTRIBUTE_MISSING` carry no builder field: their builder message reveals nothing a policy hides.
 
 ## Messages
@@ -87,8 +88,8 @@ Each detail field is `public` or `builder` (`codes.json`).
 ## Compatibility
 
 - Every v1 code is stable (ADR-0004 rule 6).
-- **Compatible:** a new code (a new enum value and its variants, entries in `codes.json` and both catalogs), a new optional detail field, a reworded template.
-- **Incompatible:** removing or renaming a code, changing its meaning, severity, category or a field's disclosure from `builder` to `public`, removing a field or making a new one required. These need `v2`, an ADR and a transition period.
+- **Compatible:** a new code (a new enum value and its variants, entries in `codes.json` and both catalogs), a reworded template, and a new optional detail field, which is compatible for readers of messages (a producer of v1 messages never sends it).
+- **Incompatible:** removing or renaming a code; changing its meaning, severity or category; changing a field's disclosure in either direction (the `other` variants are closed and require every public field, so moving a field to `builder` breaks old messages and moving one to `public` discloses more); removing a field or making a new one required. These need `v2`, an ADR and a transition period.
 
 ## Reserved: `repairs` (S14)
 

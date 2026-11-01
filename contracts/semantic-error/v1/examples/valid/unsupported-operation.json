@@ -4,9 +4,9 @@
   "severity": "error",
   "category": "engine",
   "audience": "builder",
-  "message": "The operation sales.amount is not supported.",
+  "message": "The operation group_by is not supported.",
   "locale": "en",
   "details": {
-    "operation": "sales.amount"
+    "operation": "group_by"
   }
 }

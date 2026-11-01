@@ -165,3 +165,21 @@ def test_problems_are_rendered_as_their_count() -> None:
 def test_any_requested_locale_renders_a_known_language(locale: str) -> None:
     message = SemanticError("MEMBER_NOT_FOUND", {"member": "a"}).to_message(locale)
     assert message.root.locale.root in {"es", "en"}
+
+
+def test_a_look_alike_of_the_builder_audience_gets_the_other_view() -> None:
+    class LooksLikeBuilder(str):
+        def __eq__(self, other: object) -> bool:
+            return True
+
+        __hash__ = str.__hash__
+
+    error = SemanticError(
+        "QUERY_BUDGET_EXCEEDED", {"budget": "rows_scanned", "limit": "10", "estimate": "424242"}
+    )
+    assert "424242" not in error.to_json("en", LooksLikeBuilder("other"))
+
+
+def test_an_invalid_detail_is_named_in_a_short_message() -> None:
+    with pytest.raises(ValueError, match=r"^MEMBER_MASKED: invalid details \['operation'\]$"):
+        SemanticError("MEMBER_MASKED", {"member": "m", "operation": "peek"})

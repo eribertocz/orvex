@@ -17,6 +17,7 @@ from types import MappingProxyType
 from typing import Any, Literal
 
 from orvex.contracts.semantic_error.v1 import SemanticError as SemanticErrorMessage
+from pydantic import ValidationError
 
 Audience = Literal["other", "builder"]
 LOCALES = ("es", "en")
@@ -80,7 +81,21 @@ class SemanticError(Exception):
         self.category: str = entry["category"]
         self.details: Mapping[str, object] = MappingProxyType(dict(details))
         # The builder view holds every detail: validating it checks each value's type.
-        self.to_message(DEFAULT_LOCALE, "builder")
+        try:
+            self.to_message(DEFAULT_LOCALE, "builder")
+        except ValidationError as error:
+            # Only this code's builder variant explains the failure; the union lists them all.
+            variant = "".join(part.capitalize() for part in code.split("_")) + "Error"
+            fields = sorted(
+                {
+                    str(problem["loc"][problem["loc"].index("details") + 1])
+                    for problem in error.errors()
+                    if problem["loc"][:1] == (variant,)
+                    and "details" in problem["loc"]
+                    and len(problem["loc"]) > problem["loc"].index("details") + 1
+                }
+            )
+            raise ValueError(f"{code}: invalid details {fields}") from None
 
     def __str__(self) -> str:
         return self.code
@@ -92,7 +107,8 @@ class SemanticError(Exception):
         the generic template and the public details only."""
         codes, messages = _catalog()
         language = resolve_locale(locale)
-        view: Audience = "builder" if audience == "builder" else "other"
+        # Exactly the text "builder"; anything else, a look-alike included, is the other view.
+        view: Audience = "builder" if type(audience) is str and audience == "builder" else "other"
         disclosure: dict[str, str] = codes[self.code]["details"]
         shown = {
             name: value
