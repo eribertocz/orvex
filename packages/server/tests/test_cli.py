@@ -1,9 +1,11 @@
+import contextlib
 import json
 import os
 import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -91,27 +93,133 @@ def test_version_lists_modules_and_contracts(capsys: pytest.CaptureFixture[str])
     assert "contract http-api v1" in output
 
 
+# How long a started server may take to announce its address on a loaded machine (#272).
+START_DEADLINE_SECONDS = 60
+
+
+def announced_url(
+    process: subprocess.Popen[str], errors: Path, deadline: float = START_DEADLINE_SECONDS
+) -> str:
+    """The address the server printed once it is ready, waiting at most START_DEADLINE_SECONDS.
+
+    Waits at most `deadline` seconds. The server binds the first free port from the one asked
+    (`free_port`), so a test must use
+    the address it announces: another process may take the asked port first (#272).
+    """
+    assert process.stdout is not None
+    lines: list[str] = []
+    stdout = process.stdout
+    reader = threading.Thread(target=lambda: lines.append(stdout.readline()), daemon=True)
+    started_at = time.monotonic()
+    reader.start()
+    reader.join(deadline)
+    elapsed = time.monotonic() - started_at
+    if not lines or "-> http://" not in lines[0]:
+        if lines and not lines[0]:
+            # End of output: the process is ending; give it a moment to report its code.
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=5)
+        code = process.poll()
+        state = f"exited with code {code}" if code is not None else "still running"
+        tail = errors.read_text(encoding="utf-8")[-2000:] if errors.exists() else ""
+        pytest.fail(
+            f"the server announced no address after {elapsed:.1f}s ({state}); "
+            f"stdout: {lines[0] if lines else ''!r}; last stderr: {tail}"
+        )
+    return lines[0].split("-> ", 1)[1].strip().rstrip("/")
+
+
+def health_when_ready(
+    process: subprocess.Popen[str], url: str, errors: Path, deadline: float = START_DEADLINE_SECONDS
+) -> tuple[dict[str, object], str]:
+    """The health answer and its request id, polling until the server listens: it announces its
+    address just before it binds. Fails at once if the server exits, or at the deadline."""
+    started_at = time.monotonic()
+    last_error: OSError | None = None
+    while time.monotonic() - started_at < deadline:
+        if (code := process.poll()) is not None:
+            tail = errors.read_text(encoding="utf-8")[-2000:]
+            pytest.fail(f"the server exited with code {code} before answering; last stderr: {tail}")
+        try:
+            with urllib.request.urlopen(f"{url}/api/v1/health", timeout=5) as reply:
+                return json.loads(reply.read()), reply.headers["X-Request-Id"]
+        except OSError as error:
+            last_error = error
+            time.sleep(0.1)
+    pytest.fail(f"{url} did not answer within {deadline}s; last error: {last_error}")
+
+
+def spawned(code: str, errors: Path) -> subprocess.Popen[str]:
+    with errors.open("w", encoding="utf-8") as stderr_file:
+        return subprocess.Popen(
+            [sys.executable, "-c", code], stdout=subprocess.PIPE, stderr=stderr_file, text=True
+        )
+
+
+def test_a_server_that_exits_before_announcing_fails_with_its_code_and_output(
+    tmp_path: Path,
+) -> None:
+    errors = tmp_path / "stderr.txt"
+    process = spawned("import sys; print('boom', file=sys.stderr); sys.exit(3)", errors)
+    try:
+        with pytest.raises(pytest.fail.Exception, match=r"exited with code 3.*boom"):
+            announced_url(process, errors)
+    finally:
+        process.communicate()
+
+
+def test_a_server_that_never_announces_fails_at_the_deadline(tmp_path: Path) -> None:
+    errors = tmp_path / "stderr.txt"
+    process = spawned("import time; time.sleep(30)", errors)
+    try:
+        with pytest.raises(pytest.fail.Exception, match=r"after [0-9.]+s \(still running\)"):
+            announced_url(process, errors, deadline=0.5)
+    finally:
+        process.kill()
+        process.communicate()
+
+
 def test_server_starts_and_answers(tmp_path: Path) -> None:
-    port = free_port(20000)
+    serve_and_check(tmp_path, asked_port=20000)
+
+
+def test_a_taken_port_moves_the_server_and_the_test_follows_it(tmp_path: Path) -> None:
+    # #272: another process (here a bare listener; in a local verification, the other Python's
+    # suite) holds the asked port, so the server binds the next one and says so.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as holder:
+        holder.bind((LOCAL_HOST, 0))
+        holder.listen()
+        taken = holder.getsockname()[1]
+        if taken >= 65000:
+            pytest.skip("the free port chosen is too close to the end of the range")
+        url = serve_and_check(tmp_path, asked_port=taken)
+    assert not url.endswith(f":{taken}")
+
+
+def serve_and_check(tmp_path: Path, asked_port: int) -> str:
     environment = os.environ | {home_variable(IDENTITY): str(tmp_path / "instance")}
     project = tmp_path / "billing"
-    process = subprocess.Popen(
-        [sys.executable, "-m", "orvex.server", str(project), "--no-browser", "--port", str(port)],
-        env=environment,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    errors = tmp_path / "stderr.txt"
+    with errors.open("w", encoding="utf-8") as stderr_file:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "orvex.server",
+                str(project),
+                "--no-browser",
+                "--port",
+                str(asked_port),
+            ],
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=stderr_file,
+            text=True,
+        )
     try:
-        body = None
-        for _ in range(100):
-            try:
-                with urllib.request.urlopen(f"http://{LOCAL_HOST}:{port}/api/v1/health") as reply:
-                    body = json.loads(reply.read())
-                    request_id = reply.headers["X-Request-Id"]
-                break
-            except OSError:
-                time.sleep(0.1)
+        url = announced_url(process, errors)
+        port = int(url.rsplit(":", 1)[1])
+        body, request_id = health_when_ready(process, url, errors)
         assert body == {"status": "ok"}
         # A page whose name was made to resolve to 127.0.0.1 (DNS rebinding) is refused (#45).
         rebound = urllib.request.Request(
@@ -126,9 +234,11 @@ def test_server_starts_and_answers(tmp_path: Path) -> None:
         assert (tmp_path / "instance" / "server.sqlite").is_file()
     finally:
         process.terminate()
-        _, stderr = process.communicate(timeout=10)
+        process.communicate(timeout=10)
+    stderr = errors.read_text(encoding="utf-8")
     log_lines = [json.loads(line) for line in stderr.splitlines() if line.startswith("{")]
     assert any(line.get("request_id") == request_id for line in log_lines)
+    return url
 
 
 def started(arguments: list[str], tmp_path: Path) -> subprocess.Popen[str]:
