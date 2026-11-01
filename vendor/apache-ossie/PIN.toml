@@ -1,4 +1,6 @@
-# Apache Ossie specification supported by this product (ADR-0009). Upgrading needs an issue and an ADR.
+# Apache Ossie revision supported by this product: the one entry of the version registry
+# (ADR-0009, ADR-0030). Adding or changing an entry needs an issue, and an ADR when the semantics
+# change. The semantic package ships a byte-identical copy under `ossie/revisions/<id>/`.
 
 repository = "https://github.com/apache/ossie"
 commit = "c721ffce76869cf941a1d9d8b9d01b607a87e838"
@@ -6,8 +8,37 @@ date = "2026-10-26"
 specification_version = "0.2.0.dev0"
 license = "Apache-2.0"
 
+# Registry entry (ADR-0030 §1).
+id = "c721ffc"
+state = "stable"
+reader = "ossie-0.2"
+capabilities = 1
+
+# Dialect tokens: the upstream catalog at this commit (`dialects.md`), and this product's own
+# tokens, which never depend on an upstream registration. The product's dialect token is its
+# Ossie vendor name, read from identity.toml at run time.
+upstream_dialects = [
+  "OSSIE_SQL_2026",
+  "ANSI_SQL",
+  "SNOWFLAKE",
+  "MDX",
+  "TABLEAU",
+  "DATABRICKS",
+  "MAQL",
+  "BIGQUERY",
+  "SIGMA",
+  "THOUGHTSPOT",
+  "DAX",
+  "HOLISTICS_AQL",
+]
+product_dialects = ["DUCKDB", "CLICKHOUSE"]
+
 [files]
 "ossie-schema.json" = "core-spec/ossie-schema.json"
+"spec.md" = "core-spec/spec.md"
+"expression_language.md" = "core-spec/expression_language.md"
+"dialects.md" = "extensions/dialects.md"
+"vendors.md" = "extensions/vendors.md"
 LICENSE = "LICENSE"
 NOTICE = "NOTICE"
 
@@ -15,3 +46,7 @@ NOTICE = "NOTICE"
 "LICENSE" = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
 "NOTICE" = "cdd61e3d225833b912985567730c9043394ae21e3ecfe619ed63cff5f170c59a"
 "ossie-schema.json" = "2cf11e3c555b767b2612a4e479545e55485d81af62c3bf465a03f33a861aae4c"
+"spec.md" = "e926e87c2591a45364b1ac0194a6dc41a58c31e121a2bd7a72db3e3761fb1792"
+"expression_language.md" = "86b0a4be32d75402c9cf15228c97395dd5bd45d39dc116e26a225deb4999bc98"
+"dialects.md" = "03fe7cc3e56a1ba76520b24d8a85b07cf9e5ee6d0e17f891bf1bb488e82d83f3"
+"vendors.md" = "02f91208836d2b5362445aa497942bf65e73443d86d60ed676409aa3d208fe74"

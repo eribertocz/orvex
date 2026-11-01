@@ -85,12 +85,12 @@ Each detail field is `public` or `builder` (`codes.json`).
 
 35 codes: the 27 of §12 (with `MISSING_EXTENSION_DECLARATION`, formerly a name containing the product name), S7 `METRIC_ALIGNMENT_AMBIGUOUS` and `METRIC_CYCLE`, S8 `CONTEXT_CONFLICT`, #238 rule 3 `FILTER_CYCLE`, S9 `WINDOW_UNDEFINED_AT_TOTAL` (also a cell state, carried by P2-06), S12 `AS_KNOWN_AT_UNSUPPORTED`, S10 `PARAMETER_INVALID` and S11 `REAGGREGATION_NOT_ALLOWED`. S13 adds none (the optimizer never rejects; it keeps the base plan), and S14 adds none (repairs ride on other codes).
 
-`OSSIE_INVALID.problems` holds 1–50 problems (`pointer`, a JSON Pointer; `line`; `rule`: `syntax`, `schema`, `duplicate_name`, `reference`, `extension`, `extension_duplicate`), and `problems_omitted` how many more were found. `MEMBER_MASKED.operation` is `group_by`, `filter`, `sort`, `distinct_count` or `possible_values`.
+`OSSIE_INVALID.problems` holds 1–50 problems (`pointer`, a JSON Pointer; `line`; `rule`: `syntax`, `schema`, `duplicate_name`, `reference`, `extension`, `extension_duplicate`, `extension_conflict` (a standard field and an `ORVEX` declaration disagree, ADR-0030 §4), `unsupported_capability` (a capability the reader does not implement, or a revision that may not run, ADR-0030 §3), `expression` (an Ossie expression that cannot be read)), and `problems_omitted` how many more were found. `MEMBER_MASKED.operation` is `group_by`, `filter`, `sort`, `distinct_count` or `possible_values`.
 
 ## Compatibility
 
 - Every v1 code is stable (ADR-0004 rule 6).
-- **Compatible:** a new code (a new enum value and its variants, entries in `codes.json` and both catalogs), a reworded template, and a new optional detail field, which is compatible for readers of messages (a producer of v1 messages never sends it).
+- **Compatible:** a new code (a new enum value and its variants, entries in `codes.json` and both catalogs), a new value of a detail's enumeration (such as `OSSIE_INVALID` `rule`), a reworded template, and a new optional detail field, which is compatible for readers of messages (a producer of v1 messages never sends it).
 - **Incompatible:** removing or renaming a code; changing its meaning, severity or category; changing a field's disclosure in either direction (the `other` variants are closed and require every public field, so moving a field to `builder` breaks old messages and moving one to `public` discloses more); removing a field or making a new one required. These need `v2`, an ADR and a transition period.
 
 ## Reserved: `repairs` (S14)
