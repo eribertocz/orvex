@@ -517,13 +517,15 @@ def _payload_rule(
 def _coherent_temporal(
     element: _Element, temporal: Json, index: _Index, validities: Mapping[int, Json]
 ) -> bool:
-    """When `to_columns` cover no key of `to`, a declared as-of match must make a coherent
-    declaration (#278, Owner decision of 2026-11-01). It never proves that exactly one version
-    is valid for each row; overlaps, gaps and multiple matches are P2-20's, at execution."""
+    """A declared as-of match must be coherent (#278, Owner decision of 2026-11-01):
+    `event_time` a field of `from`; `valid_from` and `valid_to` two fields of `to`, outside
+    `to_columns`; any `time_roles.validity` of `to` naming the same fields. When `to_columns`
+    cover no key of `to`, a key must contain `valid_from` and be covered by `to_columns` plus
+    `valid_from`. It never proves that exactly one version is valid for each row: overlaps,
+    gaps and multiple matches are P2-20's, at execution."""
     source, target = element.sides
-    columns = frozenset(normalize(name) for name in element.node["to_columns"])
-    if source is None or target is None or any(key <= columns for key in target.keys):
-        return True  # nothing to excuse: references and keys are checked elsewhere
+    if source is None or target is None:
+        return True  # an unknown dataset is a `reference` problem of step 5
 
     def field_of(ref: object, dataset: _Dataset) -> str | None:
         if not isinstance(ref, str):
@@ -533,6 +535,7 @@ def _coherent_temporal(
             return None
         return parts[-1] if parts[-1] in dataset.fields else None
 
+    columns = frozenset(normalize(name) for name in element.node["to_columns"])
     event = field_of(temporal["event_time"], source)
     start = field_of(temporal["valid_from"], target)
     end = field_of(temporal["valid_to"], target)
@@ -540,12 +543,14 @@ def _coherent_temporal(
         return False
     if start in columns or end in columns:
         return False
-    if not any(start in key and key <= columns | {start} for key in target.keys):
-        return False
     declared = validities.get(id(target))
-    if declared is None:
+    if declared is not None and (
+        normalize(declared["from"]) != start or normalize(declared["to"]) != end
+    ):
+        return False
+    if any(key <= columns for key in target.keys):
         return True
-    return normalize(declared["from"]) == start and normalize(declared["to"]) == end
+    return any(start in key and key <= columns | {start} for key in target.keys)
 
 
 def _payload_references(element: _Element, payload: Json, index: _Index) -> Iterator[bool]:

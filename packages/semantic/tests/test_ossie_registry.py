@@ -72,13 +72,6 @@ def test_the_packaged_extension_schema_is_the_contract() -> None:
     )
 
 
-def test_one_changed_byte_in_the_extension_schema_fails_the_hash() -> None:
-    contract = (ROOT / "contracts" / "ossie-extensions" / "v1" / "schema.json").read_bytes()
-    changed = bytearray(extensions.schema_bytes())
-    changed[-2] ^= 0x01
-    assert hashlib.sha256(bytes(changed)).digest() != hashlib.sha256(contract).digest()
-
-
 @pytest.mark.parametrize(
     ("pattern", "text", "matches"),
     [

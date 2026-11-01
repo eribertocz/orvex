@@ -270,6 +270,8 @@ def _yaml_value(
                 raise ParseProblem("merge keys (<<) are not supported", path, key_line)
             if not isinstance(key, yaml.ScalarNode) or key.tag != "tag:yaml.org,2002:str":
                 raise ParseProblem("a key is text", path, key_line)
+            if _has_surrogate(key.value):
+                raise ParseProblem("a lone surrogate in a key", path, key_line)
             if key.value in members:
                 raise ParseProblem("duplicate key", path, key_line)
             child = (*path, key.value)
@@ -286,10 +288,17 @@ def _yaml_value(
         return _yaml_decimal(node.value, path, line)
     if node.tag == "tag:yaml.org,2002:int":
         return _yaml_integer(node, path, line, loader)
+    if node.tag == "tag:yaml.org,2002:str" and _has_surrogate(node.value):
+        # A "\uD800" escape: JSON refuses it, and it cannot be encoded as UTF-8.
+        raise ParseProblem("a lone surrogate in a string", path, line)
     try:
         return loader.construct_object(node)
     except ValueError, OverflowError:
         raise ParseProblem("a value that cannot be read", path, line) from None
+
+
+def _has_surrogate(text: str) -> bool:
+    return any("\ud800" <= char <= "\udfff" for char in text)
 
 
 def _yaml_decimal(written: str, path: Path, line: int) -> Decimal:

@@ -393,7 +393,11 @@ def test_the_base_model_and_every_product_element_load(form: str) -> None:
             {"version": 1, "element": "metric", "aggregate_class": "distributive"},
             vendor,
         )
-        put(rel(model), {"version": 1, "element": "relationship", "cardinality": "many_to_one"})
+        put(
+            rel(model),
+            {"version": 1, "element": "relationship", "cardinality": "many_to_one"},
+            vendor,
+        )
         content = as_yaml(model) if form == "yaml" else as_json(model)
         loaded = load(content, form)
         assert {e.element for e in loaded.product_extensions} == {
@@ -603,6 +607,21 @@ def test_a_temporal_exception_needs_a_coherent_product_declaration(
         assert (problem["rule"], problem["pointer"]) == (rule, pointer)
 
 
+@pytest.mark.parametrize("form", ["yaml", "json"])
+def test_an_incoherent_temporal_declaration_is_refused_even_when_keys_are_covered(
+    form: str,
+) -> None:
+    model = base()
+    region = "customers.region"
+    put(rel(model), temporal(event_time=region, valid_from=region, valid_to=region))
+    content = as_yaml(model) if form == "yaml" else as_json(model)
+    (problem,) = problems(failure(content, form))
+    assert (problem["rule"], problem["pointer"]) == (
+        "extension_conflict",
+        "/relationships/0/custom_extensions/0/data",
+    )
+
+
 # --- representation, preservation and safety ----------------------------------------------
 
 
@@ -652,20 +671,83 @@ def test_the_model_is_immutable_and_reading_is_deterministic() -> None:
     assert errors[0] == errors[1]
 
 
-def test_a_canary_never_reaches_a_message() -> None:
+CANARY_STEPS: list[tuple[str, Change, str]] = [
+    ("syntax", lambda m: m.update({CANARY: [CANARY, CANARY]}), "syntax"),
+    ("version", lambda m: m.update(version=CANARY + " !"), "schema"),
+    ("schema", lambda m: m.update({CANARY: CANARY}), "schema"),
+    (
+        "names",
+        lambda m: m["datasets"].extend(
+            [{"name": CANARY, "source": CANARY}, {"name": CANARY, "source": CANARY}]
+        ),
+        "duplicate_name",
+    ),
+    ("long-name", lambda m: fld(m, "note").update(name=CANARY * 20), "schema"),
+    ("reference", lambda m: rel(m).update(to=CANARY), "reference"),
+    (
+        "expression-reference",
+        lambda m: m["metrics"][0]["expression"].update(sql=f"SUM({CANARY}.{CANARY})"),
+        "reference",
+    ),
+    ("expression", lambda m: m["metrics"][0]["expression"].update(sql=CANARY + " #"), "expression"),
+    ("payload-text", lambda m: put(ds(m), CANARY), "extension"),
+    (
+        "payload-schema",
+        lambda m: put(ds(m), {"version": 1, "element": "dataset", CANARY: CANARY}),
+        "extension",
+    ),
+    (
+        "payload-reference",
+        lambda m: put(m["metrics"][0], {"version": 1, "element": "metric", "home_dataset": CANARY}),
+        "reference",
+    ),
+    (
+        "dialect",
+        lambda m: fld(m, "note").update(
+            expression={"dialects": [{"dialect": CANARY, "expression": CANARY}]}
+        ),
+        "",
+    ),
+    ("ai-context", lambda m: m.update(ai_context={CANARY: [CANARY]}, version="0.3.0"), ""),
+]
+
+
+@pytest.mark.parametrize("form", ["yaml", "json"])
+@pytest.mark.parametrize(
+    ("change", "rule"), [row[1:] for row in CANARY_STEPS], ids=[row[0] for row in CANARY_STEPS]
+)
+def test_a_canary_never_reaches_a_message(change: Change, rule: str, form: str) -> None:
+    """One failure per step, each carrying the canary where that step reads it. The one
+    deliberate exception is `UNSUPPORTED_OSSIE_VERSION.found`, which the contract defines as the
+    document's version when it is version-shaped; a version that is not is `schema`."""
     model = base()
-    model[CANARY] = CANARY
-    ds(model)[CANARY] = CANARY
-    model["datasets"].append({"name": CANARY, "source": CANARY})
-    rel(model)["to"] = CANARY + "x"
-    put(fld(model, "note"), CANARY)
-    for edit in (model, {**base(), "version": CANARY + " !"}):
-        for form, content in (("yaml", as_yaml(edit)), ("json", as_json(edit))):
-            error = failure(content, form)
-            for audience in ("builder", "other"):
-                for locale in ("es", "en"):
-                    assert CANARY not in error.to_json(locale, audience)
-            assert CANARY not in json.dumps(dict(error.details))
+    change(model)
+    content = as_yaml(model) if form == "yaml" else as_json(model)
+    if rule == "syntax":
+        text = content.decode()
+        content = (text + text[-40:] if form == "json" else text + f"{CANARY}: 1\n").encode()
+    error = failure(content, form)
+    if rule:
+        assert {p["rule"] for p in problems(error)} == {rule}
+    assert CANARY in content.decode()
+    for audience in ("builder", "other"):
+        for locale in ("es", "en"):
+            assert CANARY not in error.to_json(locale, audience)
+
+
+@pytest.mark.parametrize("form", ["yaml", "json"])
+@pytest.mark.parametrize("where", ["name", "key", "foreign-data"])
+def test_a_lone_surrogate_is_syntax_in_both_formats(where: str, form: str) -> None:
+    model = base()
+    if where == "name":
+        model["name"] = "LONE"
+    elif where == "key":
+        model["ai_context"] = {"LONE": 1}
+    else:
+        put(ds(model), "LONE", "OTHER")
+    content = (as_yaml(model) if form == "yaml" else as_json(model)).decode()
+    escaped = content.replace("LONE", '"sh\\uD800op"' if form == "yaml" else "sh\\uD800op")
+    assert [p["rule"] for p in problems(failure(escaped.encode(), form))] == ["syntax"]
 
 
 _MUTATIONS = st.lists(
