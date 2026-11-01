@@ -53,7 +53,7 @@ Work in progress: at most **one issue being implemented** at a time; review pass
 5. **Acceptance criteria** — measurable, as a checklist, **including the cases that must be rejected** with their exact error codes.
 6. **Test data** — fixtures, corpus cases or concrete values.
 7. **Laws touched** — and how compliance is verified, or "none (purely technical)".
-8. **References studied** — 2–4 tools (adopted / rejected / improved) when the issue introduces a new capability; otherwise "not applicable".
+8. **References studied** — proportional to the change's complexity, novelty and risk. Architecture, the semantic engine, security and major contracts get a rigorous review of the relevant specifications and established tools: what works well is adopted, what fails is improved. Trivial fixes, maintenance and routine changes apply the knowledge and practice already established. No report, document or approval is required to show the review; the issue records only the conclusions that add value, as requirements in neutral terms, never naming or judging another product.
 9. **Required reading** — the module pack and the exact sections; never "all docs".
 10. **Risk tier** — A, B or C (`git-workflow.md` §3.5).
 11. Labels, milestone and roadmap ID; link to the Owner's batch approval when the issue introduces new product behavior.
@@ -70,6 +70,7 @@ Work in progress: at most **one issue being implemented** at a time; review pass
 8. User-facing text is internationalized (Spanish and English).
 9. UI changes pass automated accessibility checks and include a keyboard walkthrough.
 10. Performance-sensitive paths include before/after measurements.
+11. For architecture, the semantic engine, security and major contracts, the implementation follows established practice for the same problem (mature libraries, proven patterns, known pitfalls); the pull request mentions a conclusion only when it adds value.
 
 ## 6. Issue types
 
