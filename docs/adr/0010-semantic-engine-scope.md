@@ -1,6 +1,6 @@
 # 0010 — Semantic engine scope: SEF parity plus S1–S6; normative corpus
 
-**Status:** Accepted (2026-10-26)
+**Status:** Accepted (2026-10-26); scope amended by [0029](0029-semantic-engine-scope-s1-s14.md) (S1–S14 for v1.0.0, once accepted)
 
 ## Context
 The semantic engine is Orvex's core. SEF (bi-platform) already implements a staged, correctness-first design and executes 17 of the 18 valid corpus cases; its own roadmap lists missing capabilities S1–S6. The Owner decided not to simplify the engine and to surpass SEF.
