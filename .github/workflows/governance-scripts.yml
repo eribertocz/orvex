@@ -17,3 +17,8 @@ jobs:
       - name: Test the repository automation scripts
         working-directory: .github/workflows/scripts
         run: python3 -m unittest discover -p 'test_*.py' -v
+      # The required checks in tools/ci/checks.toml equal main's effective protection (#267).
+      - name: The listed required checks equal main's protection
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -m tools.ci.protection
