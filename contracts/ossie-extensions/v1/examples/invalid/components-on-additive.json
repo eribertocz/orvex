@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "element": "metric",
+  "additivity": "additive",
+  "components": {
+    "numerator": "a",
+    "denominator": "b"
+  }
+}

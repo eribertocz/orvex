@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "element": "metric",
+  "additivity": "additive",
+  "non_additive_axes": [
+    {
+      "dimension": "date",
+      "behavior": "forbidden"
+    }
+  ]
+}

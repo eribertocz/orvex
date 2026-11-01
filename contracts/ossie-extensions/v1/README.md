@@ -52,13 +52,14 @@ Every member is optional unless marked required; ⇒ marks a condition the schem
 
 **Field (`element: field`).**
 - `semantic_type`, with these conditions:
-  - `amount` ⇒ `currency` (ISO 4217); `currency` appears only on an `amount`;
+  - `amount` ⇒ `currency` (ISO 4217); `currency` appears only on an `amount`, and ⇒ `semantic_type`;
   - `quantity` ⇒ `unit` (UCUM syntax);
   - `geo_region` ⇔ `geo_source` (a `.geojson` under `assets/geo/`).
 - `numeric`:
   - for `Decimal`, `precision` and `scale`;
   - for `Integer`, `width` and `signed`;
-  - all as text, because Ossie leaves them unspecified (spec L74).
+  - `precision`, `scale` and `width` as text and `signed` as a boolean, because Ossie leaves them unspecified (spec L74).
+  - Which members a field's Ossie `datatype` requires or forbids (`numeric` on `Decimal` and `Integer`, `time_zone` and `calendar` on temporal types) depends on the Ossie document, so P2-03 checks it, not this schema.
 - `time_zone`: on `DateTime`, the civil zone of origin; on `DateTimeTz`, the named zone Ossie does not keep (spec L80).
 - `conformed_dimension`, `nullability`, `calendar`, `pii`.
 - `calculated` (S10): an expression over fields of the same row, with a bounded cardinality.
@@ -67,15 +68,16 @@ Every member is optional unless marked required; ⇒ marks a condition the schem
 **Metric (`element: metric`).**
 - `additivity`, with its conditions:
   - `semi_additive` ⇒ `non_additive_axes`, each axis a dimension or an entity, with `behavior` (`additive`, `forbidden`, `period_end`, `recompute`);
-  - optionally `period_end`;
-  - `recomputable` ⇒ `components`.
+  - an axis whose behavior is `period_end` ⇒ `period_end` (its `order_by` and tie rule);
+  - `recomputable` ⇒ `components`;
+  - `non_additive_axes` and `period_end` appear only on `semi_additive`, `components` only on `recomputable`.
 - `aggregate_class`: `distributive`, `algebraic`, `holistic` or `sketch`. P2-03 checks it against the aggregates of the Ossie expression (`expression_language.md` L281–L290).
   - `approximate` is allowed only on `sketch`.
-  - `reaggregable_state` names an exact state that re-aggregates.
+  - `reaggregable_state` (`exact_bitmap`, `exact_sorted_set`) names an exact state that re-aggregates.
 - `zero_denominator`, `rounding`, `unit`, `currency`, `format`, `owner`.
 - `status`: `deprecated` ⇔ `deprecation`.
 - `over_metrics` (S7): an expression over metrics with a required `align` on grain and time.
-- `context` (S1, S8), `level_of_detail`.
+- `context` (S1, S8), `level_of_detail`: a `keep` or `remove` step ⇒ `targets`; `over_metrics.ignore_filters` names filters a derived metric does not inherit.
 - `window` (S9): `partition_by`, `order_by` and `densify` are always explicit.
 - `allocation`.
 - `home_dataset`: the dataset a model metric that names no field (`COUNT(*)`) counts.
@@ -85,7 +87,7 @@ Every member is optional unless marked required; ⇒ marks a condition the schem
 - `cardinality`: `many_to_one` or `one_to_one`.
 - `optionality`.
 - `evidence`: `cardinality`, `referential_integrity`.
-- `temporal`: an as-of match of an event time against a closed–open validity, `exactly_one`.
+- `temporal`: an as-of match of an event time against a validity, with `boundary: closed_open` and `match: exactly_one`.
 - A role is a separate Ossie relationship, named by its `name`.
 
 ## The product's expression language
@@ -99,13 +101,13 @@ They use the OSSIE_SQL_2026 subset plus references:
 - `metric` for model metrics;
 - `dataset.metric` for dataset metrics.
 
-Identifiers follow Ossie's rule: at most 128 characters, compared case-insensitively unless quoted (`expression_language.md` L86). P2-04 parses and types them, and rejects any cycle.
+Identifiers follow Ossie's rule: at most 128 characters, compared case-insensitively unless quoted (`expression_language.md` L86–L88). P2-04 parses and types them, and rejects any cycle.
 
 A derived metric still carries Ossie's required `expression`: its portable expansion when one exists, such as `SUM(a)/SUM(b)`; otherwise an entry in `expression.dialects` under the product's dialect token, read from `identity.toml`.
 
 ## Rules
 
-- **Exact values.** Decimals, counts and anything that may exceed 2^53 are text with a decimal pattern; the only JSON numbers are `version` and small bounded integers (`year_start_month`, `rounding.scale`, `precedence`). Dates are ISO 8601, durations ISO 8601, zones IANA, currencies ISO 4217.
+- **Exact values.** Tolerances and error bounds are non-negative. Decimals, counts and anything that may exceed 2^53 are text with a decimal pattern; the only JSON numbers are `version` and small bounded integers (`year_start_month`, `rounding.scale`, `precedence`). Dates are ISO 8601, durations ISO 8601, zones IANA, currencies ISO 4217.
 - **Declarations never replace verification.** Evidence status (`declared`, `verified`, `violated`) is engine state, never written here. A declared cardinality that the data violates yields `EVIDENCE_VIOLATED`; the engine never picks a "first matching row".
 - **Fail closed.** An unknown member, a wrong type or an unmet condition is rejected, never ignored.
 - **Units are declared and checked, never converted.** The transformation layer converts values; the engine rejects mixed units (`INCOMPATIBLE_UNITS`, P2-04).
@@ -115,7 +117,7 @@ A derived metric still carries Ossie's required `expression`: its portable expan
 - Every v1 member is stable.
 - **Compatible changes:** a new optional member, or a new documented enum value.
 - **Incompatible changes:** removing, renaming or retyping a member, making one required, or removing an enum value. Any of these needs `v2`, an ADR and a transition period.
-- `tests/contracts/test_ossie_extensions.py` records the v1 surface and fails on any incompatible change.
+- `tests/contracts/ossie_extensions_v1_frozen.json` is the schema as released; `tests/contracts/test_ossie_extensions.py` compares every node of it with the current schema and fails on any incompatible change.
 
 Names follow the upstream proposal for units and formats (Ossie PR #287), so a merged proposal maps without a rename:
 

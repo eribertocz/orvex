@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "element": "metric",
+  "context": [
+    {
+      "operation": "keep"
+    }
+  ]
+}

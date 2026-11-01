@@ -363,3 +363,150 @@ def test_a_bridge_moves_onto_its_bridge_dataset() -> None:
         "tolerance": "0.00",
         "normalization_scope": {"entities": ["order"]},
     }
+
+
+def translated_or_error(change: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+    model = load_model(ROOT / CORPUS / "models" / "CASE-011.yaml")
+    change(model)
+    return adapter.translate(model, VENDOR)[0]
+
+
+def set_payload(node: dict[str, Any], payload: dict[str, Any]) -> None:
+    node["custom_extensions"] = [{"vendor_name": adapter.VENDOR_NAME, "data": json.dumps(payload)}]
+
+
+def bridges(model: dict[str, Any]) -> dict[str, Any]:
+    data: dict[str, Any] = json.loads(model["custom_extensions"][0]["data"])
+    return data
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ("bridge extra key", r"bridge: .*\['note'\]"),
+        ("bridge left is not the relationship end", "is not where left_relationship ends"),
+        ("allocation extra key", r"bridge allocation: .*\['rounding'\]"),
+        ("keys extra key", r"dataset keys: .*\['x'\]"),
+    ],
+)
+def test_nested_keys_and_repeated_values_are_checked(change: str, reason: str) -> None:
+    def edit(model: dict[str, Any]) -> None:
+        data = bridges(model)
+        if change == "bridge extra key":
+            data["bridges"][0]["note"] = "x"
+        elif change == "bridge left is not the relationship end":
+            data["bridges"][0]["left"] = "campaign"
+        elif change == "allocation extra key":
+            data["bridges"][0]["allocation"]["rounding"] = "half_up"
+        else:
+            orders = model["datasets"][0]
+            set_payload(
+                orders, {"version": 1, "keys": [{"entity": "o", "fields": ["order_id"], "x": 1}]}
+            )
+            return
+        set_payload(model, data)
+
+    with pytest.raises(adapter.UntranslatableKey, match=reason):
+        translated_or_error(edit)
+
+
+@pytest.mark.parametrize(
+    ("behavior", "reason"),
+    [
+        (
+            {"rule": "period_end", "order_by": [{"field": "b.d", "direction": "desc"}]},
+            r"order_by: .*\['direction'\]",
+        ),
+        (
+            {"rule": "period_end", "order_by": [{"field": "b.d"}], "ties": {"policy": "first"}},
+            r"ties: .*\['policy'\]",
+        ),
+        (
+            {"rule": "period_end", "order_by": [{"field": "b.d"}], "axis": {"dimension": "other"}},
+            "is no period_end axis",
+        ),
+    ],
+    ids=["order direction", "ties policy", "axis is no period_end axis"],
+)
+def test_a_period_end_detail_that_cannot_be_kept_fails(
+    behavior: dict[str, Any], reason: str
+) -> None:
+    def edit(model: dict[str, Any]) -> None:
+        model["metrics"] = [
+            {
+                "name": "balance",
+                "expression": {"sql": "SUM(orders.order_total)"},
+                "custom_extensions": [
+                    {
+                        "vendor_name": adapter.VENDOR_NAME,
+                        "data": json.dumps(
+                            {
+                                "version": 1,
+                                "aggregation": {
+                                    "class": "semi_additive",
+                                    "axes": [{"dimension": "snapshot", "behavior": "period_end"}],
+                                },
+                                "time_behavior": behavior,
+                            }
+                        ),
+                    }
+                ],
+            }
+        ]
+
+    with pytest.raises(adapter.UntranslatableKey, match=reason):
+        translated_or_error(edit)
+
+
+def test_an_axis_with_both_a_dimension_and_an_entity_fails() -> None:
+    def edit(model: dict[str, Any]) -> None:
+        axis = {"dimension": "d", "entity": "e", "behavior": "forbidden"}
+        model["metrics"] = [
+            {
+                "name": "m",
+                "expression": {"sql": "SUM(orders.order_total)"},
+                "custom_extensions": [
+                    {
+                        "vendor_name": adapter.VENDOR_NAME,
+                        "data": json.dumps(
+                            {
+                                "version": 1,
+                                "aggregation": {"class": "semi_additive", "axes": [axis]},
+                            }
+                        ),
+                    }
+                ],
+            }
+        ]
+
+    with pytest.raises(adapter.UntranslatableKey, match=r"aggregation axis: .*\[.entity.\]"):
+        translated_or_error(edit)
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        (
+            {
+                "version": 1,
+                "aggregation": {
+                    "class": "non_additive",
+                    "axes": [{"dimension": "region", "behavior": "forbidden"}],
+                },
+            },
+            "must recompute",
+        ),
+        ({"version": 1, "allocation_bridge": "unknown"}, "names no bridge"),
+    ],
+    ids=["non-additive axis that does not recompute", "unknown allocation bridge"],
+)
+def test_a_metric_declaration_that_has_no_faithful_translation_fails(
+    payload: dict[str, Any], reason: str
+) -> None:
+    def edit(model: dict[str, Any]) -> None:
+        metric = {"name": "m", "expression": {"sql": "SUM(orders.order_total)"}}
+        set_payload(metric, payload)
+        model["metrics"] = [metric]
+
+    with pytest.raises(adapter.UntranslatableKey, match=reason):
+        translated_or_error(edit)

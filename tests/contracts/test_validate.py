@@ -425,3 +425,24 @@ def test_an_applicator_of_an_open_object_is_still_reported(tmp_path: Path) -> No
     findings = [f.detail for f in validate_all(root) if f.code == "CONTRACT_OPEN_OBJECT"]
     assert any(detail.endswith("#/$defs/Conditional") for detail in findings)
     assert any("Conditional/if" in detail for detail in findings)
+
+
+def test_types_are_generated_from_the_structure_without_conditionals() -> None:
+    # #276: json2ts turns each conditional into a duplicated intersection; types carry shape only.
+    schema: dict[str, object] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"kind": {"enum": ["a", "b"]}, "x": {"type": "string"}},
+        "dependentRequired": {"x": ["kind"]},
+        "allOf": [
+            {"if": {"properties": {"kind": {"const": "a"}}}, "then": {"required": ["x"]}},
+            {"not": {"required": ["kind", "x"]}},
+            {"$ref": "#/$defs/Other"},
+        ],
+    }
+    assert generate.structure_only(schema) == {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"kind": {"enum": ["a", "b"]}, "x": {"type": "string"}},
+        "allOf": [{"$ref": "#/$defs/Other"}],
+    }

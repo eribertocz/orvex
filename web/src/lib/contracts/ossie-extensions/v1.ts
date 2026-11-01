@@ -8,21 +8,6 @@ export type OssieExtensionPayload =
  * An IANA time zone name, checked against the pinned database by the compiler (P2-04).
  */
 export type TimeZone = string;
-export type Calendar = {
-	name: Name;
-	kind: 'gregorian' | 'fiscal' | 'business';
-	year_start_month?: number;
-	dataset?: Name;
-	date?: Name;
-	business_day?: Name;
-} & {
-	name: Name;
-	kind: 'gregorian' | 'fiscal' | 'business';
-	year_start_month?: number;
-	dataset?: Name;
-	date?: Name;
-	business_day?: Name;
-};
 /**
  * An Ossie identifier (expression_language.md L86): at most 128 characters; compared case-insensitively unless quoted.
  */
@@ -48,50 +33,13 @@ export type Names = [Name, ...Name[]];
  */
 export type Duration = string;
 /**
- * S12: how the dataset keeps what was known when.
- */
-export type History = {
-	mode: 'snapshots' | 'versioned';
-	entity_key?: Names;
-	version?: Name;
-	recorded_at?: Name;
-	deleted?: Name;
-};
-/**
  * Who answers for a member: a person or team handle.
  */
 export type Owner = string;
 /**
- * An exact decimal as text, never a JSON number.
+ * An exact non-negative decimal as text.
  */
-export type Decimal = string;
-export type FieldPayload = {
-	version: 1;
-	element: 'field';
-	semantic_type?:
-		| 'identifier'
-		| 'category'
-		| 'quantity'
-		| 'amount'
-		| 'ratio'
-		| 'geo_region'
-		| 'latitude'
-		| 'longitude';
-	currency?: Currency;
-	unit?: Unit;
-	numeric?: Numeric;
-	geo_source?: GeoSource;
-	conformed_dimension?: Name;
-	time_zone?: TimeZoneDecl;
-	nullability?: 'nullable' | 'not_null';
-	calendar?: Name;
-	pii?: 'none' | 'personal' | 'sensitive';
-	calculated?: Calculated;
-	/**
-	 * This field is a business-time bucket (a local day, month...) derived in its `time_zone`.
-	 */
-	business_time?: boolean;
-};
+export type NonNegativeDecimal = string;
 /**
  * An ISO 4217 alphabetic code.
  */
@@ -108,48 +56,6 @@ export type TzdbVersion = string;
  * A non-negative integer as text.
  */
 export type Count = string;
-export type MetricPayload = {
-	version: 1;
-	element: 'metric';
-	additivity?: 'additive' | 'semi_additive' | 'non_additive' | 'recomputable' | 'ordered';
-	/**
-	 * @minItems 1
-	 */
-	non_additive_axes?: [Axis, ...Axis[]];
-	period_end?: PeriodEnd;
-	components?: Components;
-	/**
-	 * Checked against the aggregates of the Ossie expression (expression_language.md L281-L290).
-	 */
-	aggregate_class?: 'distributive' | 'algebraic' | 'holistic' | 'sketch';
-	approximate?: Approximate;
-	/**
-	 * S11/S13: an exact state that re-aggregates across groups.
-	 */
-	reaggregable_state?: 'exact_bitmap' | 'exact_sorted_set';
-	zero_denominator?: 'null' | 'reject';
-	rounding?: Rounding;
-	unit?: Unit;
-	currency?: Currency;
-	format?: string;
-	owner?: Owner;
-	status?: 'draft' | 'certified' | 'deprecated';
-	deprecation?: Deprecation;
-	over_metrics?: OverMetrics;
-	/**
-	 * @minItems 1
-	 */
-	context?: [ContextStep, ...ContextStep[]];
-	level_of_detail?: LevelOfDetail;
-	window?: Window;
-	allocation?: {
-		bridge: Name;
-	};
-	/**
-	 * An Ossie identifier (expression_language.md L86): at most 128 characters; compared case-insensitively unless quoted.
-	 */
-	home_dataset?: string;
-};
 export type Axis =
 	| {
 			dimension: Name;
@@ -167,6 +73,10 @@ export type FieldRefs = [FieldRef, ...FieldRef[]];
  * An ISO 8601 calendar date.
  */
 export type Date = string;
+/**
+ * Rows or range units from the current row, as text, or `unbounded`.
+ */
+export type FrameBound = string;
 
 export interface ModelPayload {
 	version: 1;
@@ -205,6 +115,14 @@ export interface ModelPayload {
 	 * @minItems 1
 	 */
 	preaggregations?: [Preaggregation, ...Preaggregation[]];
+}
+export interface Calendar {
+	name: Name;
+	kind: 'gregorian' | 'fiscal' | 'business';
+	year_start_month?: number;
+	dataset?: Name;
+	date?: Name;
+	business_day?: Name;
 }
 export interface DrillPath {
 	name: Name;
@@ -322,6 +240,16 @@ export interface Validity {
 	from: Name;
 	to: Name;
 }
+/**
+ * S12: how the dataset keeps what was known when.
+ */
+export interface History {
+	mode: 'snapshots' | 'versioned';
+	entity_key?: Names;
+	version?: Name;
+	recorded_at?: Name;
+	deleted?: Name;
+}
 export interface Cache {
 	enabled: boolean;
 	ttl?: Duration;
@@ -337,8 +265,8 @@ export interface Bridge {
 	left: Name;
 	right: Name;
 	weight: Name;
-	total: Decimal;
-	tolerance: Decimal;
+	total: NonNegativeDecimal;
+	tolerance: NonNegativeDecimal;
 	normalization_scope: NormalizationScope;
 }
 export interface NormalizationScope {
@@ -356,6 +284,33 @@ export interface AggregateTable {
 export interface AggregateMeasure {
 	name: Name;
 	expression: Expression;
+}
+export interface FieldPayload {
+	version: 1;
+	element: 'field';
+	semantic_type?:
+		| 'identifier'
+		| 'category'
+		| 'quantity'
+		| 'amount'
+		| 'ratio'
+		| 'geo_region'
+		| 'latitude'
+		| 'longitude';
+	currency?: Currency;
+	unit?: Unit;
+	numeric?: Numeric;
+	geo_source?: GeoSource;
+	conformed_dimension?: Name;
+	time_zone?: TimeZoneDecl;
+	nullability?: 'nullable' | 'not_null';
+	calendar?: Name;
+	pii?: 'none' | 'personal' | 'sensitive';
+	calculated?: Calculated;
+	/**
+	 * This field is a business-time bucket (a local day, month...) derived in its `time_zone`.
+	 */
+	business_time?: boolean;
 }
 /**
  * The exact numeric shape Ossie's Decimal and Integer leave unspecified (spec L74). Decimal fields give precision and scale; integer fields give width and signed.
@@ -396,6 +351,48 @@ export interface Calculated {
 	expression: Expression;
 	max_cardinality: Count;
 }
+export interface MetricPayload {
+	version: 1;
+	element: 'metric';
+	additivity?: 'additive' | 'semi_additive' | 'non_additive' | 'recomputable' | 'ordered';
+	/**
+	 * @minItems 1
+	 */
+	non_additive_axes?: [Axis, ...Axis[]];
+	period_end?: PeriodEnd;
+	components?: Components;
+	/**
+	 * Checked against the aggregates of the Ossie expression (expression_language.md L281-L290).
+	 */
+	aggregate_class?: 'distributive' | 'algebraic' | 'holistic' | 'sketch';
+	approximate?: Approximate;
+	/**
+	 * S11/S13: an exact state that re-aggregates across groups.
+	 */
+	reaggregable_state?: 'exact_bitmap' | 'exact_sorted_set';
+	zero_denominator?: 'null' | 'reject';
+	rounding?: Rounding;
+	unit?: Unit;
+	currency?: Currency;
+	format?: string;
+	owner?: Owner;
+	status?: 'draft' | 'certified' | 'deprecated';
+	deprecation?: Deprecation;
+	over_metrics?: OverMetrics;
+	/**
+	 * @minItems 1
+	 */
+	context?: [ContextStep, ...ContextStep[]];
+	level_of_detail?: LevelOfDetail;
+	window?: Window;
+	allocation?: {
+		bridge: Name;
+	};
+	/**
+	 * An Ossie identifier (expression_language.md L86): at most 128 characters; compared case-insensitively unless quoted.
+	 */
+	home_dataset?: string;
+}
 /**
  * S3: the value at a period's end: the last row by `order_by` per entity; `tie_breaker` names the unique key that breaks ties.
  */
@@ -409,7 +406,7 @@ export interface Components {
 	denominator: Expression;
 }
 export interface Approximate {
-	error_bound: Decimal;
+	error_bound: NonNegativeDecimal;
 }
 export interface Rounding {
 	scale: number;
@@ -465,8 +462,8 @@ export interface Window {
 }
 export interface Frame {
 	kind: 'rows' | 'range';
-	preceding: Count | 'unbounded';
-	following: Count | 'unbounded';
+	preceding: FrameBound;
+	following: FrameBound;
 }
 export interface RelationshipPayload {
 	version: 1;

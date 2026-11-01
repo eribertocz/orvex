@@ -79,7 +79,7 @@
       ],
       "properties": {
         "error_bound": {
-          "$ref": "#/$defs/Decimal"
+          "$ref": "#/$defs/NonNegativeDecimal"
         }
       }
     },
@@ -151,10 +151,10 @@
           "$ref": "#/$defs/Name"
         },
         "total": {
-          "$ref": "#/$defs/Decimal"
+          "$ref": "#/$defs/NonNegativeDecimal"
         },
         "tolerance": {
-          "$ref": "#/$defs/Decimal"
+          "$ref": "#/$defs/NonNegativeDecimal"
         },
         "normalization_scope": {
           "$ref": "#/$defs/NormalizationScope"
@@ -392,7 +392,29 @@
         "targets": {
           "$ref": "#/$defs/Names"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "keep",
+                  "remove"
+                ]
+              }
+            },
+            "required": [
+              "operation"
+            ]
+          },
+          "then": {
+            "required": [
+              "targets"
+            ]
+          }
+        }
+      ]
     },
     "Count": {
       "description": "A non-negative integer as text.",
@@ -721,6 +743,9 @@
         ],
         "business_time": [
           "time_zone"
+        ],
+        "currency": [
+          "semantic_type"
         ]
       }
     },
@@ -755,26 +780,17 @@
           ]
         },
         "preceding": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/Count"
-            },
-            {
-              "const": "unbounded"
-            }
-          ]
+          "$ref": "#/$defs/FrameBound"
         },
         "following": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/Count"
-            },
-            {
-              "const": "unbounded"
-            }
-          ]
+          "$ref": "#/$defs/FrameBound"
         }
       }
+    },
+    "FrameBound": {
+      "description": "Rows or range units from the current row, as text, or `unbounded`.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*|unbounded)$"
     },
     "Funnel": {
       "type": "object",
@@ -1126,6 +1142,107 @@
           }
         },
         {
+          "if": {
+            "properties": {
+              "additivity": {
+                "enum": [
+                  "additive",
+                  "non_additive",
+                  "recomputable",
+                  "ordered"
+                ]
+              }
+            },
+            "required": [
+              "additivity"
+            ]
+          },
+          "then": {
+            "properties": {
+              "non_additive_axes": false,
+              "period_end": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "additivity": {
+                "enum": [
+                  "additive",
+                  "semi_additive",
+                  "non_additive",
+                  "ordered"
+                ]
+              }
+            },
+            "required": [
+              "additivity"
+            ]
+          },
+          "then": {
+            "properties": {
+              "components": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "non_additive_axes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Axis"
+                },
+                "contains": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "dimension",
+                        "behavior"
+                      ],
+                      "properties": {
+                        "dimension": {
+                          "$ref": "#/$defs/Name"
+                        },
+                        "behavior": {
+                          "const": "period_end"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "entity",
+                        "behavior"
+                      ],
+                      "properties": {
+                        "entity": {
+                          "$ref": "#/$defs/Name"
+                        },
+                        "behavior": {
+                          "const": "period_end"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "required": [
+              "non_additive_axes"
+            ]
+          },
+          "then": {
+            "required": [
+              "period_end"
+            ]
+          }
+        },
+        {
           "not": {
             "required": [
               "over_metrics",
@@ -1251,6 +1368,11 @@
         "$ref": "#/$defs/Name"
       },
       "uniqueItems": true
+    },
+    "NonNegativeDecimal": {
+      "description": "An exact non-negative decimal as text.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$"
     },
     "NormalizationScope": {
       "type": "object",

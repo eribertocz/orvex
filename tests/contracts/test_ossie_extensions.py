@@ -17,7 +17,7 @@ from tools.repository import REPOSITORY_ROOT
 
 CONTRACT = REPOSITORY_ROOT / "contracts" / "ossie-extensions" / "v1"
 SCHEMA = json.loads((CONTRACT / "schema.json").read_text(encoding="utf-8"))
-SURFACE = Path(__file__).with_name("ossie_extensions_v1_surface.json")
+SURFACE = Path(__file__).with_name("ossie_extensions_v1_frozen.json")
 BRANCHES = {
     "model": "ModelPayload",
     "dataset": "DatasetPayload",
@@ -46,6 +46,12 @@ def branch_errors(payload: dict[str, Any]) -> list[str]:
 # The precise reason each invalid example is rejected for.
 REASONS = {
     "amount-without-currency": "'currency' is a required property",
+    "axes-on-additive": "False schema does not allow",
+    "components-on-additive": "False schema does not allow",
+    "currency-without-semantic-type": "'semantic_type' is a dependency of 'currency'",
+    "keep-without-targets": "'targets' is a required property",
+    "negative-tolerance": "'-0.01' does not match",
+    "period-end-axis-without-period-end": "'period_end' is a required property",
     "approximate-not-sketch": "False schema does not allow",
     "bridge-without-right": "'right' is a required property",
     "cardinality-many-to-many": "'many_to_many' is not one of",
@@ -138,6 +144,11 @@ STRUCTURAL = sorted(
         "quantity-without-unit",
         "recomputable-without-components",
         "semi-additive-without-axes",
+        "axes-on-additive",
+        "components-on-additive",
+        "currency-without-semantic-type",
+        "keep-without-targets",
+        "period-end-axis-without-period-end",
     }
 )
 
@@ -162,70 +173,120 @@ def test_the_schema_never_names_a_vendor() -> None:
     assert "vendor_name" not in text
 
 
-# --- Compatibility of the v1 surface -----------------------------------------------------------
+# --- Compatibility of v1 ---------------------------------------------------------------------
+#
+# `ossie_extensions_v1_frozen.json` is the schema as first released. Every node of it must still
+# exist in the current schema and accept at least what it accepted: the only allowed changes are a
+# new optional member, a new enum value, a new `$defs` entry and documentation.
+
+DOCUMENTATION = ("description", "title", "$comment", "examples")
 
 
-def surface(schema: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Every member path of every `$defs` object: its type or reference, whether it is required,
-    and its enum values."""
-    found: dict[str, dict[str, Any]] = {}
-    for name, definition in schema["$defs"].items():
-        for member, body in (definition.get("properties") or {}).items():
-            found[f"{name}.{member}"] = {
-                "type": body.get("type") or body.get("$ref") or body.get("const", "any"),
-                "required": member in definition.get("required", []),
-                "enum": sorted(body.get("enum", [])),
-            }
-    return found
+def incompatible(old: Any, new: Any, pointer: str = "#") -> list[str]:  # noqa: ANN401
+    """Every way `new` accepts less than `old`, node by node."""
+    if isinstance(old, dict) and isinstance(new, dict):
+        problems: list[str] = []
+        is_name_map = pointer.endswith(("/properties", "/$defs"))
+        for key, before in old.items():
+            here = f"{pointer}/{key}"
+            if key in DOCUMENTATION and not is_name_map:
+                continue
+            if key not in new:
+                problems.append(f"{here} removed")
+            elif key == "enum" and not is_name_map:
+                if {json.dumps(v) for v in before} - {json.dumps(v) for v in new[key]}:
+                    problems.append(f"{here} lost values")
+            elif key == "required" and not is_name_map:
+                if set(new[key]) - set(before):
+                    problems.append(f"{here} gained {sorted(set(new[key]) - set(before))}")
+            else:
+                problems.extend(incompatible(before, new[key], here))
+        # A new member name or definition is compatible; any other new keyword constrains more.
+        if not is_name_map:
+            added = set(new) - set(old) - set(DOCUMENTATION)
+            problems.extend(f"{pointer}/{key} added (a new constraint)" for key in sorted(added))
+        return problems
+    if isinstance(old, list) and isinstance(new, list):
+        if len(new) != len(old):
+            return [f"{pointer} changed length"]
+        return [
+            problem
+            for index, item in enumerate(old)
+            for problem in incompatible(item, new[index], f"{pointer}/{index}")
+        ]
+    return [] if old == new else [f"{pointer} changed"]
 
 
-def incompatible(old: dict[str, dict[str, Any]], new: dict[str, dict[str, Any]]) -> list[str]:
-    problems = []
-    for path, before in old.items():
-        after = new.get(path)
-        if after is None:
-            problems.append(f"{path} removed or renamed")
-            continue
-        if after["type"] != before["type"]:
-            problems.append(f"{path} retyped")
-        if after["required"] and not before["required"]:
-            problems.append(f"{path} became required")
-        if set(before["enum"]) - set(after["enum"]):
-            problems.append(f"{path} lost enum values")
-    for path, after in new.items():
-        if path not in old and after["required"]:
-            problems.append(f"{path} is a new required member")
-    return problems
+FROZEN = json.loads(SURFACE.read_text(encoding="utf-8"))
 
 
-def test_the_v1_surface_is_unchanged_or_compatibly_extended() -> None:
-    recorded = json.loads(SURFACE.read_text(encoding="utf-8"))
-    assert incompatible(recorded, surface(SCHEMA)) == []
+def test_v1_is_unchanged_or_compatibly_extended() -> None:
+    assert incompatible(FROZEN, SCHEMA) == []
 
 
 def mutated(change: str) -> dict[str, Any]:
     schema: dict[str, Any] = copy.deepcopy(SCHEMA)
-    field = schema["$defs"]["FieldPayload"]
-    if change == "remove":
-        del field["properties"]["pii"]
-    elif change == "retype":
-        field["properties"]["calendar"] = {"type": "integer"}
-    elif change == "require":
-        field["required"].append("pii")
-    elif change == "enum":
-        field["properties"]["pii"] = {"enum": ["none", "personal"]}
-    elif change == "new-required":
-        field["properties"]["owner"] = {"type": "string"}
-        field["required"].append("owner")
-    elif change == "new-optional":
-        field["properties"]["owner"] = {"type": "string"}
+    defs = schema["$defs"]
+    if change == "remove-member":
+        del defs["FieldPayload"]["properties"]["pii"]
+    elif change == "retype-member":
+        defs["FieldPayload"]["properties"]["calendar"] = {"type": "integer"}
+    elif change == "require-member":
+        defs["FieldPayload"]["required"].append("pii")
+    elif change == "remove-enum-value":
+        defs["FieldPayload"]["properties"]["pii"]["enum"].remove("sensitive")
+    elif change == "remove-nested-enum-value":
+        defs["Axis"]["oneOf"][0]["properties"]["behavior"]["enum"].remove("additive")
+    elif change == "remove-items-enum-value":
+        defs["DatasetPayload"]["properties"]["evidence"]["items"]["enum"].remove("append_only")
+    elif change == "retype-nested":
+        defs["MetricPayload"]["properties"]["allocation"]["properties"]["bridge"] = {
+            "type": "integer"
+        }
+    elif change == "tighten-pattern":
+        defs["Decimal"]["pattern"] = "^[0-9]+$"
+    elif change == "new-conditional":
+        defs["FieldPayload"]["allOf"].append(
+            {"if": {"required": ["pii"]}, "then": {"required": ["calendar"]}}
+        )
+    elif change == "new-dependency":
+        defs["FieldPayload"]["dependentRequired"]["pii"] = ["calendar"]
+    elif change == "new-required-member":
+        defs["FieldPayload"]["properties"]["owner"] = {"type": "string"}
+        defs["FieldPayload"]["required"].append("owner")
+    elif change == "new-optional-member":
+        defs["FieldPayload"]["properties"]["owner"] = {"type": "string"}
+    elif change == "new-enum-value":
+        defs["FieldPayload"]["properties"]["pii"]["enum"].append("secret")
+    elif change == "new-definition":
+        defs["Unused"] = {"type": "string"}
+    elif change == "documentation":
+        defs["FieldPayload"]["description"] = "reworded"
     return schema
 
 
-@pytest.mark.parametrize("change", ["remove", "retype", "require", "enum", "new-required"])
+INCOMPATIBLE = [
+    "remove-member",
+    "retype-member",
+    "require-member",
+    "remove-enum-value",
+    "remove-nested-enum-value",
+    "remove-items-enum-value",
+    "retype-nested",
+    "tighten-pattern",
+    "new-conditional",
+    "new-dependency",
+    "new-required-member",
+]
+
+
+@pytest.mark.parametrize("change", INCOMPATIBLE)
 def test_an_incompatible_change_is_caught(change: str) -> None:
-    assert incompatible(surface(SCHEMA), surface(mutated(change)))
+    assert incompatible(SCHEMA, mutated(change)), change
 
 
-def test_an_added_optional_member_is_compatible() -> None:
-    assert incompatible(surface(SCHEMA), surface(mutated("new-optional"))) == []
+@pytest.mark.parametrize(
+    "change", ["new-optional-member", "new-enum-value", "new-definition", "documentation"]
+)
+def test_a_compatible_change_passes(change: str) -> None:
+    assert incompatible(SCHEMA, mutated(change)) == []

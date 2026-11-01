@@ -131,6 +131,24 @@ def _take(data: dict[str, Any], known: set[str]) -> None:
         raise UntranslatableKey(f"no mapping for {sorted(unknown)}")
 
 
+def _shape(
+    value: object,
+    required: set[str],
+    optional: frozenset[str] | set[str] = frozenset(),
+    where: str = "",
+) -> dict[str, Any]:
+    """`value` as an object with exactly these keys: a missing or any other key fails."""
+    if not isinstance(value, dict):
+        raise UntranslatableKey(f"{where}: not an object: {value!r}")
+    missing = required - set(value)
+    unknown = set(value) - required - set(optional)
+    if missing or unknown:
+        raise UntranslatableKey(
+            f"{where}: missing {sorted(missing)}, no mapping for {sorted(unknown)}"
+        )
+    return value
+
+
 def _names(value: object) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise UntranslatableKey(f"not a list of names: {value!r}")
@@ -164,16 +182,15 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
         if "entity" in data:
             members["entity"] = data["entity"]
         if "grain" in data:
-            grain = data["grain"]
-            if not isinstance(grain, dict) or set(grain) != {"dimensions"}:
-                raise UntranslatableKey(f"grain {grain!r}")
+            grain = _shape(data["grain"], {"dimensions"}, where="dataset grain")
             members["grain"] = {"dimensions": _names(grain["dimensions"])}
         if "keys" in data:
             ossie_keys = [_names(dataset.get("primary_key") or [])] + [
                 _names(key) for key in dataset.get("unique_keys") or []
             ]
             entity_keys: list[Any] = []
-            for key in data["keys"]:
+            for written in data["keys"]:
+                key = _shape(written, {"entity", "fields"}, where="dataset keys")
                 fields = _names(key["fields"])
                 entry: dict[str, Any] = {"entity": key["entity"], "fields": fields}
                 if fields not in ossie_keys:
@@ -183,7 +200,8 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
         if "measures" in data:
             members["aggregate_table"] = {
                 "measures": [
-                    {"name": m["name"], "expression": m["expression"]} for m in data["measures"]
+                    dict(_shape(m, {"name", "expression"}, where="dataset measures"))
+                    for m in data["measures"]
                 ]
             }
         roles: dict[str, str] = {}
@@ -207,20 +225,55 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
         if members or _own(dataset) is not None:
             put(dataset, "dataset", members)
 
-    for bridge in bridges:
+    relationships = {
+        str(r.get("name")): r for r in translated.get("relationships") or [] if isinstance(r, dict)
+    }
+    bridge_datasets: dict[str, str] = {}  # bi-platform bridge name -> bridge dataset
+    for written in bridges:
+        bridge = _shape(
+            written,
+            {
+                "name",
+                "left",
+                "bridge",
+                "right",
+                "left_relationship",
+                "right_relationship",
+                "allocation",
+            },
+            where="bridge",
+        )
         target = next((d for d in datasets if d.get("name") == bridge["bridge"]), None)
         if target is None:
             raise UntranslatableKey(f"bridge dataset {bridge['bridge']!r} not found")
-        allocation = bridge["allocation"]
+        # `left` and `right` repeat the two relationships' ends: checked, then dropped.
+        for side, relationship_name in (
+            ("left", "left_relationship"),
+            ("right", "right_relationship"),
+        ):
+            relationship = relationships.get(str(bridge[relationship_name]))
+            if relationship is None or relationship.get("from") != bridge["bridge"]:
+                raise UntranslatableKey(
+                    f"bridge {relationship_name} must start at the bridge dataset"
+                )
+            if relationship.get("to") != bridge[side]:
+                raise UntranslatableKey(
+                    f"bridge {side} {bridge[side]!r} is not where {relationship_name} ends"
+                )
+        allocation = _shape(
+            bridge["allocation"],
+            {"weight", "normalization_scope", "required_total", "tolerance"},
+            where="bridge allocation",
+        )
+        scope = _shape(allocation["normalization_scope"], {"entities"}, where="normalization_scope")
+        bridge_datasets[str(bridge["name"])] = str(bridge["bridge"])
         payloads.setdefault(id(target), {"version": 1, "element": "dataset"})["bridge"] = {
             "left": bridge["left_relationship"],
             "right": bridge["right_relationship"],
             "weight": allocation["weight"],
             "total": allocation["required_total"],
             "tolerance": allocation["tolerance"],
-            "normalization_scope": {
-                "entities": _names(allocation["normalization_scope"]["entities"])
-            },
+            "normalization_scope": {"entities": _names(scope["entities"])},
         }
 
     for relationship in translated.get("relationships") or []:
@@ -228,6 +281,18 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
         if relationship_data is None:
             continue
         _take(relationship_data, {"optionality", "temporal"})
+        if "temporal" in relationship_data:
+            temporal = _shape(
+                relationship_data["temporal"],
+                {"event_time", "valid_from", "valid_to", "match"},
+                {"boundary"},
+                where="temporal",
+            )
+            if (
+                temporal.get("boundary", "closed_open") != "closed_open"
+                or temporal["match"] != "exactly_one"
+            ):
+                raise UntranslatableKey(f"temporal {temporal!r}")
         put(
             relationship,
             "relationship",
@@ -243,7 +308,11 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
         for metric in metrics:
             metric_data = _own(metric)
             if metric_data is not None:
-                put(metric, "metric", _translate_metric(metric, metric_data, time_dimensions))
+                put(
+                    metric,
+                    "metric",
+                    _translate_metric(metric, metric_data, time_dimensions, bridge_datasets),
+                )
 
     def replace(node: object) -> None:
         if isinstance(node, dict):
@@ -314,40 +383,75 @@ def _translate_field(field: dict[str, Any], roles: dict[str, str]) -> dict[str, 
 
 
 def _translate_metric(
-    metric: dict[str, Any], data: dict[str, Any], time_dimensions: set[str]
+    metric: dict[str, Any],
+    data: dict[str, Any],
+    time_dimensions: set[str],
+    bridge_datasets: dict[str, str],
 ) -> dict[str, Any]:
     _take(data, {"aggregation", "allocation_bridge", "dataset", "grain", "time_behavior", "unit"})
     members: dict[str, Any] = {}
+    period_end_axes: list[str] = []
     if "aggregation" in data:
-        aggregation = data["aggregation"]
-        if not isinstance(aggregation, dict) or set(aggregation) - {"class", "axes"}:
-            raise UntranslatableKey(f"aggregation {aggregation!r}")
+        aggregation = _shape(data["aggregation"], {"class"}, {"axes"}, where="aggregation")
         if aggregation["class"] not in ADDITIVITY:
             raise UntranslatableKey(f"aggregation class {aggregation['class']!r}")
         members["additivity"] = ADDITIVITY[str(aggregation["class"])]
         if "axes" in aggregation:
             axes: list[Any] = []
-            for axis in aggregation["axes"]:
+            for written in aggregation["axes"]:
+                side = (
+                    "dimension"
+                    if isinstance(written, dict) and "dimension" in written
+                    else "entity"
+                )
+                axis = _shape(written, {side, "behavior"}, where="aggregation axis")
                 behavior = AXIS_BEHAVIORS.get(str(axis["behavior"]))
                 if behavior is None:
                     raise UntranslatableKey(f"axis behavior {axis['behavior']!r}")
-                side = "dimension" if "dimension" in axis else "entity"
+                if behavior == "period_end":
+                    period_end_axes.append(f"{side}:{axis[side]}")
                 axes.append({side: axis[side], "behavior": behavior})
-            members["non_additive_axes"] = axes
+            if members["additivity"] == "semi_additive":
+                members["non_additive_axes"] = axes
+            elif any(axis["behavior"] != "recompute" for axis in axes):
+                raise UntranslatableKey(f"axes of a {aggregation['class']} metric must recompute")
+            # Otherwise every axis recomputes, which a non-semi-additive metric already means.
     if "time_behavior" in data:
-        behavior = data["time_behavior"]
-        if not isinstance(behavior, dict) or behavior.get("rule") != "period_end":
-            raise UntranslatableKey(f"time_behavior {behavior!r}")
-        if set(behavior) - {"axis", "rule", "order_by", "selection_scope", "ties"}:
-            raise UntranslatableKey(f"time_behavior {sorted(behavior)}")
-        period_end: dict[str, Any] = {"order_by": [item["field"] for item in behavior["order_by"]]}
-        if "selection_scope" in behavior:
-            period_end["per_entities"] = _names(behavior["selection_scope"]["entities"])
-        if "ties" in behavior:
-            period_end["tie_breaker"] = behavior["ties"]["unique_by_key"]
+        rule_of_time = _shape(
+            data["time_behavior"],
+            {"rule", "order_by"},
+            {"axis", "selection_scope", "ties"},
+            where="time_behavior",
+        )
+        if rule_of_time["rule"] != "period_end":
+            raise UntranslatableKey(f"time_behavior rule {rule_of_time['rule']!r}")
+        if "axis" in rule_of_time:
+            # The axis repeats a period_end axis of the aggregation: checked, then dropped.
+            axis = _shape(rule_of_time["axis"], {"dimension"}, where="time_behavior axis")
+            if f"dimension:{axis['dimension']}" not in period_end_axes:
+                raise UntranslatableKey(
+                    f"time_behavior axis {axis['dimension']!r} is no period_end axis"
+                )
+        order_by = [
+            _shape(item, {"field"}, where="time_behavior order_by")["field"]
+            for item in rule_of_time["order_by"]
+        ]
+        period_end: dict[str, Any] = {"order_by": order_by}
+        if "selection_scope" in rule_of_time:
+            scope = _shape(rule_of_time["selection_scope"], {"entities"}, where="selection_scope")
+            period_end["per_entities"] = _names(scope["entities"])
+        if "ties" in rule_of_time:
+            period_end["tie_breaker"] = _shape(
+                rule_of_time["ties"], {"unique_by_key"}, where="ties"
+            )["unique_by_key"]
         members["period_end"] = period_end
     if "allocation_bridge" in data:
-        members["allocation"] = {"bridge": data["allocation_bridge"]}
+        bridge_dataset = bridge_datasets.get(str(data["allocation_bridge"]))
+        if bridge_dataset is None:
+            raise UntranslatableKey(
+                f"allocation_bridge {data['allocation_bridge']!r} names no bridge"
+            )
+        members["allocation"] = {"bridge": bridge_dataset}
     if "dataset" in data:
         members["home_dataset"] = data["dataset"]
     if "unit" in data:
@@ -356,7 +460,7 @@ def _translate_metric(
         members["unit"] = "1"
     if "grain" in data:
         # A metric over metrics at a declared grain (CASE-010): S7 with explicit alignment.
-        grain = _names(data["grain"]["dimensions"])
+        grain = _names(_shape(data["grain"], {"dimensions"}, where="metric grain")["dimensions"])
         times = [dimension for dimension in grain if dimension in time_dimensions]
         if len(times) != 1:
             raise UntranslatableKey(f"grain {grain} has {len(times)} time dimensions, not one")

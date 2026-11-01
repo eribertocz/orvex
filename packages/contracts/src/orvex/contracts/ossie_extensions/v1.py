@@ -66,13 +66,11 @@ class FieldRefs(RootModel[list[FieldRef]]):
     root: Annotated[list[FieldRef], Field(min_length=1)]
 
 
-class Frame(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    kind: Literal["rows", "range"]
-    preceding: Count | Literal["unbounded"]
-    following: Count | Literal["unbounded"]
+class FrameBound(RootModel[str]):
+    root: Annotated[str, Field(pattern="^(0|[1-9][0-9]*|unbounded)$")]
+    """
+    Rows or range units from the current row, as text, or `unbounded`.
+    """
 
 
 class MetricRef(RootModel[str]):
@@ -91,6 +89,13 @@ class Name(RootModel[str]):
 
 class Names(RootModel[list[Name]]):
     root: Annotated[list[Name], Field(min_length=1)]
+
+
+class NonNegativeDecimal(RootModel[str]):
+    root: Annotated[str, Field(pattern="^(0|[1-9][0-9]*)(\\.[0-9]+)?$")]
+    """
+    An exact non-negative decimal as text.
+    """
 
 
 class NormalizationScope(BaseModel):
@@ -245,33 +250,6 @@ class Validity(BaseModel):
     to: Name
 
 
-class Window(BaseModel):
-    """
-    S9: a window over a metric. `partition_by`, `order_by` and `densify` are always explicit: nothing is inferred.
-    """
-
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    function: Literal[
-        "running_total",
-        "moving_average",
-        "rank",
-        "dense_rank",
-        "percent_of_total",
-        "difference",
-        "percent_difference",
-        "lag",
-        "lead",
-    ]
-    of: MetricRef
-    partition_by: Annotated[list[Name], Field(min_length=0)]
-    order_by: Names
-    densify: Literal["calendar", "none"]
-    frame: Frame | None = None
-    null_fill: Literal["null", "zero"] | None = None
-
-
 class AggregateMeasure(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -307,7 +285,7 @@ class Approximate(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    error_bound: Decimal
+    error_bound: NonNegativeDecimal
 
 
 class Axis1(BaseModel):
@@ -341,8 +319,8 @@ class Bridge(BaseModel):
     left: Name
     right: Name
     weight: Name
-    total: Decimal
-    tolerance: Decimal
+    total: NonNegativeDecimal
+    tolerance: NonNegativeDecimal
     normalization_scope: NormalizationScope
 
 
@@ -443,6 +421,15 @@ class EntityKey(BaseModel):
     entity: Name
     fields: Names
     coarser: bool | None = None
+
+
+class Frame(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["rows", "range"]
+    preceding: FrameBound
+    following: FrameBound
 
 
 class Funnel(BaseModel):
@@ -555,6 +542,33 @@ class TimeZoneDecl(BaseModel):
     )
     name: TimeZone
     database_version: TzdbVersion | None = None
+
+
+class Window(BaseModel):
+    """
+    S9: a window over a metric. `partition_by`, `order_by` and `densify` are always explicit: nothing is inferred.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    function: Literal[
+        "running_total",
+        "moving_average",
+        "rank",
+        "dense_rank",
+        "percent_of_total",
+        "difference",
+        "percent_difference",
+        "lag",
+        "lead",
+    ]
+    of: MetricRef
+    partition_by: Annotated[list[Name], Field(min_length=0)]
+    order_by: Names
+    densify: Literal["calendar", "none"]
+    frame: Frame | None = None
+    null_fill: Literal["null", "zero"] | None = None
 
 
 class CalculationGroup(BaseModel):
