@@ -28,6 +28,9 @@ SIZE_GUIDE = 400
 MAX_LISTED_FILES = 3000
 # Text that says the size needs no justification: it does not justify a larger pull request.
 NO_JUSTIFICATION = ("under the guide", "none", "n/a")
+# Dependency updates (tier C, `git-workflow.md` §3.5): their description is written by the bot,
+# so the description rules do not apply; the governed-path rule still does.
+DEPENDENCY_BOTS = frozenset({"dependabot[bot]"})
 
 
 class GovernanceError(Exception):
@@ -123,10 +126,24 @@ def section(body: str, title: str) -> str | None:
 
 
 def has_filled_row(text: str) -> bool:
-    """Whether a Markdown table in `text` has a data row with at least one non-empty cell."""
-    rows = [line.strip() for line in text.splitlines() if line.strip().startswith("|")]
-    # Data rows come after the header and its separator.
-    return any(any(cell.strip() for cell in row.strip("|").split("|")) for row in rows[2:])
+    """Whether the first Markdown table in `text`, outside code blocks, has a data row with a
+    cell that is not empty, not a separator and not only an escaped pipe."""
+    table: list[str] = []
+    fenced = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            fenced = not fenced
+            continue
+        if not fenced and stripped.startswith("|"):
+            table.append(stripped)
+        elif table:
+            break  # the first table has ended
+    for row in table[2:]:  # data rows come after the header and its separator
+        cells = [cell.strip() for cell in row.replace("\\|", "").strip("|").split("|")]
+        if any(cell and set(cell) - set("-: ") for cell in cells):
+            return True
+    return False
 
 
 def body_findings(
@@ -134,9 +151,12 @@ def body_findings(
     files: Sequence[ChangedFile],
     critical: GovernedPaths,
     uncounted: GovernedPaths,
+    author: str = "",
 ) -> list[tuple[str, str]]:
     """(code, message) for each rule of the description the pull request breaks."""
     findings: list[tuple[str, str]] = []
+    if author in DEPENDENCY_BOTS:
+        return findings
     if any(critical.is_governed(path) for file in files for path in file.paths()):
         matrix = section(body, "case matrix")
         if matrix is None or not has_filled_row(matrix):
@@ -202,12 +222,15 @@ def changed_files(client: GitHubReader, pull_number: int) -> list[ChangedFile]:
     return changed
 
 
-def pull_body(client: GitHubReader, pull_number: int) -> str:
+def pull_body(client: GitHubReader, pull_number: int) -> tuple[str, str]:
+    """The description (empty when there is none) and the author's login."""
     try:
-        body = client.request("GET", f"/pulls/{pull_number}").get("body")
-    except (GitHubApiError, AttributeError) as error:
+        pull = client.request("GET", f"/pulls/{pull_number}")
+        body = pull.get("body")
+        author = pull["user"]["login"]
+    except (GitHubApiError, AttributeError, KeyError, TypeError) as error:
         raise GovernanceError("DESCRIPTION_UNAVAILABLE", str(error)) from error
-    return body if isinstance(body, str) else ""
+    return (body if isinstance(body, str) else ""), str(author)
 
 
 def current_labels(client: GitHubReader, pull_number: int) -> list[str]:
@@ -224,23 +247,17 @@ def read_rules_document(path: Path) -> str:
         raise GovernanceError("GOVERNED_PATHS_NOT_FOUND", f"cannot read {path}: {error}") from error
 
 
-def main() -> int:
+def run(client: GitHubReader, pull_number: int, document: str) -> int:
+    """Every rule over one pull request: 0 when it may proceed, 1 otherwise (fail closed)."""
     try:
-        rules_document = Path(os.environ["GOVERNANCE_DOCUMENT"])
-        client = GitHubClient(os.environ["GITHUB_TOKEN"], os.environ["GITHUB_REPOSITORY"])
-        pull_number = int(os.environ["PULL_NUMBER"])
-    except (KeyError, ValueError) as error:
-        print(f"::error::GOVERNANCE_MISCONFIGURED: missing or invalid environment value {error}")
-        return 1
-    try:
-        document = read_rules_document(rules_document)
         governed = parse_governed_paths(document)
         critical = parse_path_block(document, CRITICAL_HEADING)
         uncounted = parse_path_block(document, UNCOUNTED_HEADING)
         files = changed_files(client, pull_number)
         paths = [path for file in files for path in file.paths()]
         blocking = evaluate(paths, current_labels(client, pull_number), governed)
-        broken = body_findings(pull_body(client, pull_number), files, critical, uncounted)
+        body, author = pull_body(client, pull_number)
+        broken = body_findings(body, files, critical, uncounted, author)
     except GovernanceError as error:
         print(f"::error::{error}")
         return 1
@@ -258,6 +275,22 @@ def main() -> int:
         return 1
     print("governance: ok")
     return 0
+
+
+def main() -> int:
+    try:
+        rules_document = Path(os.environ["GOVERNANCE_DOCUMENT"])
+        client = GitHubClient(os.environ["GITHUB_TOKEN"], os.environ["GITHUB_REPOSITORY"])
+        pull_number = int(os.environ["PULL_NUMBER"])
+    except (KeyError, ValueError) as error:
+        print(f"::error::GOVERNANCE_MISCONFIGURED: missing or invalid environment value {error}")
+        return 1
+    try:
+        document = read_rules_document(rules_document)
+    except GovernanceError as error:
+        print(f"::error::{error}")
+        return 1
+    return run(client, pull_number, document)
 
 
 if __name__ == "__main__":

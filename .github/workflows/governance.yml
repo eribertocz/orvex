@@ -1,4 +1,6 @@
-# Required check: pull requests that touch governed paths must carry the `owner-merge` label.
+# Required check (governance.py): a pull request that touches governed paths must carry the
+# `owner-merge` label; a tier A one needs a case matrix; one over the size guide needs a
+# justified size. The description is read on every run, so editing it runs the check again.
 # `pull_request_target` runs THIS file as it is on the base branch, so a pull request cannot
 # edit the workflow, the script or the rules to weaken its own check
 # (docs/process/git-workflow.md §2). No code from the pull request is checked out or run here.

@@ -107,10 +107,17 @@ docs/product/laws.md   laws
 pylock.toml                       lock files
 pylock.py314.toml
 web/package-lock.json
-packages/contracts/src/orvex/contracts/   generated contract types (the hand-written __init__.py is tiny)
+packages/contracts/src/orvex/contracts/   generated contract types
+!packages/contracts/src/orvex/contracts/__init__.py     hand-written: counted
+!packages/contracts/src/orvex/contracts/contracts.toml  hand-written: counted
+!packages/contracts/src/orvex/contracts/py.typed        hand-written: counted
 tests/contracts/generated/        generated contract fixtures
+!tests/contracts/generated/__init__.py                  hand-written: counted
 web/src/lib/contracts/            generated TypeScript types
+!web/src/lib/contracts/contracts.test.ts                hand-written: counted
 ```
+
+A test (`tests/tools/test_checks.py`, `TestUncountedFiles`) fails when a tracked file this list leaves uncounted is neither a lock file nor a file `tools/contracts/generate.py` generates.
 
 A `[Reviewer]` verdict of **changes requested** blocks the merge until the same reviewers confirm their findings are fixed (`review.md`). Only a finding that makes things worse blocks; everything else becomes a separate issue.
 

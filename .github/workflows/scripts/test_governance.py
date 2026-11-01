@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from github_api import GitHubApiError
 from governance import (
@@ -15,9 +15,11 @@ from governance import (
     changed_files,
     changed_paths,
     evaluate,
+    has_filled_row,
     parse_governed_paths,
     parse_path_block,
     read_rules_document,
+    run,
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -194,6 +196,100 @@ class BodyTests(unittest.TestCase):
     def test_a_missing_body_fails_like_an_empty_one(self) -> None:
         files = [ChangedFile("packages/store/src/x.py", None, 500)]
         self.assertEqual(self.findings("", files), ["CASE_MATRIX_MISSING", "SIZE_NOT_JUSTIFIED"])
+
+
+class FilledRowTests(unittest.TestCase):
+    def test_only_a_data_row_with_content_counts(self) -> None:
+        self.assertTrue(has_filled_row("| a | b |\n|---|---|\n| x | |\n"))
+        self.assertFalse(has_filled_row("| a | b |\n|---|---|\n| | |\n"))
+        self.assertFalse(has_filled_row("| a | b |\n|---|---|\n|---|---|\n|:-:|---|\n"))
+        self.assertFalse(has_filled_row("| a |\n|---|\n| \\| |\n"))
+
+    def test_a_table_inside_a_code_block_does_not_count(self) -> None:
+        self.assertFalse(has_filled_row("```\n| a |\n|---|\n| x |\n```\n"))
+
+    def test_a_second_table_does_not_fill_an_empty_first_one(self) -> None:
+        text = "| a |\n|---|\n| |\n\n| b |\n|---|\n"
+        self.assertFalse(has_filled_row(text))
+
+
+class DependabotTests(unittest.TestCase):
+    critical = GovernedPaths(included=(".github/workflows/",), excluded=())
+    uncounted = GovernedPaths(included=("pylock.toml",), excluded=())
+
+    def test_a_dependabot_update_needs_no_case_matrix_nor_size(self) -> None:
+        files = [ChangedFile(".github/workflows/python.yml", None, 900)]
+        found = body_findings("", files, self.critical, self.uncounted, "dependabot[bot]")
+        self.assertEqual(found, [])
+
+    def test_anyone_else_still_needs_them(self) -> None:
+        files = [ChangedFile(".github/workflows/python.yml", None, 900)]
+        found = body_findings("", files, self.critical, self.uncounted, "eribertocz")
+        self.assertEqual([code for code, _ in found], ["CASE_MATRIX_MISSING", "SIZE_NOT_JUSTIFIED"])
+
+
+RULES = (
+    DOCUMENT
+    + """
+### Critical paths (tier A)
+
+```
+packages/store/
+```
+
+### Not counted in a pull request's size
+
+```
+pylock.toml
+```
+"""
+)
+
+
+class PullClient:
+    """A fake GitHub API for one pull request."""
+
+    def __init__(self, body: Any, files: list[dict[str, Any]], labels: list[str]) -> None:
+        self.body = body
+        self.files = files
+        self.labels = labels
+
+    def request(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+        if self.body is GitHubApiError:
+            raise GitHubApiError("GET failed with HTTP 502")
+        return {"changed_files": len(self.files), "body": self.body, "user": {"login": "a"}}
+
+    def paginate(self, path: str) -> Iterator[Any]:
+        if path.endswith("/labels"):
+            yield from ({"name": name} for name in self.labels)
+        else:
+            yield from self.files
+
+
+class RunTests(unittest.TestCase):
+    store: ClassVar[list[dict[str, Any]]] = [
+        {"filename": "packages/store/src/x.py", "additions": 5, "deletions": 0}
+    ]
+
+    def run_with(self, client: PullClient) -> int:
+        return run(client, 7, RULES)
+
+    def test_the_check_fails_on_a_broken_description_rule(self) -> None:
+        self.assertEqual(self.run_with(PullClient("## What\nx\n", self.store, [])), 1)
+
+    def test_the_check_passes_a_compliant_pull_request(self) -> None:
+        self.assertEqual(self.run_with(PullClient(MATRIX, self.store, [])), 0)
+
+    def test_an_unreadable_description_fails_closed(self) -> None:
+        self.assertEqual(self.run_with(PullClient(GitHubApiError, self.store, [])), 1)
+
+    def test_a_null_description_is_an_empty_one(self) -> None:
+        self.assertEqual(self.run_with(PullClient(None, self.store, [])), 1)
+
+    def test_governed_paths_still_need_the_label(self) -> None:
+        governed = [{"filename": "docs/x.md", "additions": 1, "deletions": 0}]
+        self.assertEqual(self.run_with(PullClient("", governed, [])), 1)
+        self.assertEqual(self.run_with(PullClient("", governed, ["owner-merge"])), 0)
 
 
 class MatchingTests(unittest.TestCase):

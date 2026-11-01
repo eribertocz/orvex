@@ -1,14 +1,45 @@
 # Readers other than DuckDB allowed in `store` and `transform` (engineering.md §2, #261).
-# Each entry: the file, the reader module, why no source row is read or materialized in Python,
-# and the test that proves it stays within that reason.
+# Each entry allows one reader inside one function (and the module-level import of that
+# reader), says why no source row is read or materialized in Python, and names the test, in a
+# tests folder, that proves it stays within that reason.
 # [[allow]]
 # file = "packages/<module>/src/<namespace>/<module>/<file>.py"
 # reader = "sqlite3"
+# function = "<function>"
 # reason = "what it reads, and why no source row goes through Python"
 # test = "packages/<module>/tests/test_<x>.py::test_<name>"
 
 [[allow]]
 file = "packages/store/src/orvex/store/lake.py"
 reader = "sqlite3"
-reason = "The SQLite snapshot copy (#83): the backup API copies the file byte for byte, and only schema names (tables, views, column types) are read; DuckDB reads every row from the copy. Reviewed under #259"
-test = "packages/store/tests/test_database_sources.py::test_sqlite_table_is_copied_unchanged"
+function = "_sqlite_snapshot"
+reason = "The SQLite snapshot copy (#83): the backup API copies the file byte for byte and Python reads only schema names (views, tables, column types); DuckDB reads every row from the copy. Reviewed under #259"
+test = "packages/store/tests/test_database_sources.py::test_the_sqlite_copy_reads_only_schema_names_in_python"
+
+[[allow]]
+file = "packages/transform/src/orvex/transform/models.py"
+reader = "os.open"
+function = "_read_sql"
+reason = "Reads one model's SQL text from the project, never a data source: a regular file only, at most 1024 KiB"
+test = "packages/transform/tests/test_models.py::test_a_pipe_named_sql_does_not_hang"
+
+[[allow]]
+file = "packages/transform/src/orvex/transform/models.py"
+reader = "os.fdopen"
+function = "_read_sql"
+reason = "The descriptor `os.open` returned in the same function, read with the 1024 KiB bound"
+test = "packages/transform/tests/test_models.py::test_a_pipe_named_sql_does_not_hang"
+
+[[allow]]
+file = "packages/transform/src/orvex/transform/config_file.py"
+reader = "os.open"
+function = "__init__"
+reason = "Reads one project YAML file (project.yaml, connections.yaml, a model's sidecar), never a data source: a regular file only, at most 1 MiB"
+test = "packages/transform/tests/test_config_file.py::test_a_config_file_reader_reads_only_a_bounded_regular_file"
+
+[[allow]]
+file = "packages/transform/src/orvex/transform/config_file.py"
+reader = "os.fdopen"
+function = "__init__"
+reason = "The descriptor `os.open` returned in the same function, read with the 1 MiB bound"
+test = "packages/transform/tests/test_config_file.py::test_a_config_file_reader_reads_only_a_bounded_regular_file"
