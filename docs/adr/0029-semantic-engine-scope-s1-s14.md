@@ -32,7 +32,7 @@ This record amends **ADR-0010**: its first decision ("C1–C9 and S1–S6 for v1
    - an independent Reviewer pass.
 
    No capability ships in part or behind an empty contract field.
-4. **Contracts.** P2-01 to P2-06 define each capability's representation from the start. Each contract's compatibility matrix is approved by the Owner before the contract is specified. The contracts include #239's direction:
+4. **Contracts.** P2-01 to P2-06 define each capability's representation from the start. Ordinary technical choices within them, a compatibility matrix included, are decided by the Agent following the approved contracts and recorded in the issue or pull request; product questions still go to the Owner. The contracts include #239's direction:
    - one type system shared by S7, S8, S9 and S11;
    - answerability, which unifies the catalog, the correctness core and S14 repairs;
    - stability levels, extending ADR-0004 rule 6.
@@ -41,14 +41,15 @@ This record amends **ADR-0010**: its first decision ("C1–C9 and S1–S6 for v1
    - filter-context scopes follow one precedence;
    - no query, derived metric, window, cohort or repair bypasses an access restriction.
 6. **Schedule.**
-   - The new capabilities enter as new issues in P2–P5. The approved issues keep their order.
-   - The estimate is about 15–20 new issues. It is a count only: the roadmap has no durations.
+   - The new capabilities enter as issues in P2–P5, each created when its phase is planned. The approved issues keep their order.
+   - About 15–20 new issues is an estimate, not a list to create in advance. It is a count only: the roadmap has no durations.
    - Each phase's exit criteria include its new capabilities.
+   - Planning the new capabilities does not block P2-01, which starts at once.
 
 ## Consequences
 - v1.0.0 arrives later, in proportion to the new issues.
-- The engine's public contracts are complete from P2, so nothing is reworked after v1.0.0.
+- The engine's public contracts cover every capability from P2. Later changes follow compatible evolution (ADR-0004 rule 6 and the stability levels of decision 4): additions are optional fields, and an incompatible change needs a new contract version with a transition period.
 - ADR-0010's status line notes that it is amended by this record. `docs/architecture/semantic-engine.md` gains S7–S14 when their contracts are specified. `docs/roadmap.md` gains the new issues once they are created.
 
 ## Resumen en español
-v1 incluye el motor semántico completo, de S7 a S14, con las mismas exigencias de exactitud, pruebas y seguridad que lo ya existente. Solo quedan fuera la federación entre motores y la comparación con Power BI y Tableau. Los contratos de P2 nacen completos, así que no habrá que rehacer nada después de v1.
+v1 incluye el motor semántico completo, de S7 a S14, con las mismas exigencias de exactitud, pruebas y seguridad que lo ya existente. Solo quedan fuera la federación entre motores y la comparación con Power BI y Tableau. Los contratos de P2 cubren todas las capacidades desde el inicio y cambian después solo de forma compatible. P2-01 empieza ya, sin esperar la planificación del resto.
