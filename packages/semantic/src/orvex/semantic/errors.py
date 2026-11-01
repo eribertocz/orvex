@@ -140,5 +140,8 @@ class SemanticError(Exception):
 
     def to_json(self, locale: str | None = None, audience: str | None = None) -> str:
         """The message as canonical JSON text: the same input always gives the same bytes."""
-        message = self.to_message(locale, audience).model_dump(mode="json", by_alias=True)
+        # No contract field is nullable: an optional detail left out is absent, never `null`.
+        message = self.to_message(locale, audience).model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        )
         return json.dumps(message, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

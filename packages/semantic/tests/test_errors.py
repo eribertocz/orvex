@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from jsonschema import Draft202012Validator
 from orvex.semantic import SemanticError
 
 CODES: dict[str, Any] = json.loads(
@@ -194,3 +195,20 @@ def test_an_estimate_left_out_for_a_row_policy_gives_the_generic_text_to_everyon
     }
     assert builder.message == error.to_message("en").root.message
     assert "estimate" not in builder.message
+
+
+SCHEMA = json.loads((EXAMPLES.parent / "schema.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("code", sorted(CODES))
+@pytest.mark.parametrize("audience", ["other", "builder"])
+def test_every_rendered_message_is_valid_against_the_contract_schema(
+    code: str, audience: str
+) -> None:
+    variants = [valid_details(code)]
+    for optional in CODES[code]["optional"]:
+        variants.append({k: v for k, v in valid_details(code).items() if k != optional})
+    for details in variants:
+        for locale in ("es", "en"):
+            text = SemanticError(code, details).to_json(locale, audience)
+            assert Draft202012Validator(SCHEMA).is_valid(json.loads(text)), text
