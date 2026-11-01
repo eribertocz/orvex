@@ -98,6 +98,7 @@ ADDITIVITY = {
     "semi_additive": "semi_additive",
     "non_additive": "non_additive",
 }
+CORPUS_SEMANTIC_VERSION = "0.1.0"
 FIELD_TIME_ROLES = ("event", "snapshot", "validity_start", "validity_end")
 
 
@@ -170,6 +171,9 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
     bridges: list[Any] = []
     if model_data is not None:
         _take(model_data, {"semantic_version", "bridges", "policies"})
+        # The corpus version this adapter maps; another version may mean other things.
+        if model_data.get("semantic_version", CORPUS_SEMANTIC_VERSION) != CORPUS_SEMANTIC_VERSION:
+            raise UntranslatableKey(f"semantic_version {model_data['semantic_version']!r}")
         bridges = list(model_data.get("bridges") or [])
         policies = list(model_data.get("policies") or [])
         put(translated, "model", {})
@@ -329,14 +333,10 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
                     }
                 )
                 node["custom_extensions"] = kept
-            elif isinstance(node.get("custom_extensions"), list):
-                node["custom_extensions"] = [
-                    e
-                    for e in node["custom_extensions"]
-                    if not (isinstance(e, dict) and e.get("vendor_name") == VENDOR_NAME)
-                ]
-                if not node["custom_extensions"]:
-                    del node["custom_extensions"]
+            elif _own(node) is not None:
+                raise UntranslatableKey(
+                    "a bi-platform entry on an element this adapter never reads"
+                )
             for value in list(node.values()):
                 replace(value)
         elif isinstance(node, list):
@@ -371,6 +371,8 @@ def _translate_field(field: dict[str, Any], roles: dict[str, str]) -> dict[str, 
         role = str(data["time_role"])
         if role not in FIELD_TIME_ROLES:
             raise UntranslatableKey(f"time_role {role!r}")
+        if role in roles:
+            raise UntranslatableKey(f"two fields with time_role {role!r}")
         roles[role] = str(field["name"])
         members["time_role_seen"] = True
     if "unit" in data:
@@ -411,11 +413,16 @@ def _translate_metric(
                 if behavior == "period_end":
                     period_end_axes.append(f"{side}:{axis[side]}")
                 axes.append({side: axis[side], "behavior": behavior})
+            # Only a semi-additive metric carries axes. On an additive metric every axis adds,
+            # and on a non-additive one every axis recomputes: an axis saying so is implied.
+            implied = {"additive": "additive", "non_additive": "recompute"}
             if members["additivity"] == "semi_additive":
                 members["non_additive_axes"] = axes
-            elif any(axis["behavior"] != "recompute" for axis in axes):
-                raise UntranslatableKey(f"axes of a {aggregation['class']} metric must recompute")
-            # Otherwise every axis recomputes, which a non-semi-additive metric already means.
+            elif any(axis["behavior"] != implied[members["additivity"]] for axis in axes):
+                raise UntranslatableKey(
+                    f"an axis of a {aggregation['class']} metric must be "
+                    f"{implied[members['additivity']]}"
+                )
     if "time_behavior" in data:
         rule_of_time = _shape(
             data["time_behavior"],

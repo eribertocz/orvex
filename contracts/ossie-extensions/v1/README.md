@@ -52,7 +52,7 @@ Every member is optional unless marked required; ⇒ marks a condition the schem
 
 **Field (`element: field`).**
 - `semantic_type`, with these conditions:
-  - `amount` ⇒ `currency` (ISO 4217); `currency` appears only on an `amount`, and ⇒ `semantic_type`;
+  - `amount` ⇒ `currency` (ISO 4217) and no `unit`; `currency` appears only on an `amount`, and ⇒ `semantic_type`;
   - `quantity` ⇒ `unit` (UCUM syntax);
   - `geo_region` ⇔ `geo_source` (a `.geojson` under `assets/geo/`).
 - `numeric`:
@@ -68,7 +68,7 @@ Every member is optional unless marked required; ⇒ marks a condition the schem
 **Metric (`element: metric`).**
 - `additivity`, with its conditions:
   - `semi_additive` ⇒ `non_additive_axes`, each axis a dimension or an entity, with `behavior` (`additive`, `forbidden`, `period_end`, `recompute`);
-  - an axis whose behavior is `period_end` ⇒ `period_end` (its `order_by` and tie rule);
+  - an axis whose behavior is `period_end` ⇔ `period_end` (its `order_by` and tie rule);
   - `recomputable` ⇒ `components`;
   - `non_additive_axes` and `period_end` appear only on `semi_additive`, `components` only on `recomputable`.
 - `aggregate_class`: `distributive`, `algebraic`, `holistic` or `sketch`. P2-03 checks it against the aggregates of the Ossie expression (`expression_language.md` L281–L290).

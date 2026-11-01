@@ -735,6 +735,23 @@
               "currency": false
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "semantic_type": {
+                "const": "amount"
+              }
+            },
+            "required": [
+              "semantic_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "unit": false
+            }
+          }
         }
       ],
       "dependentRequired": {
@@ -1240,6 +1257,59 @@
             "required": [
               "period_end"
             ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "period_end"
+            ]
+          },
+          "then": {
+            "properties": {
+              "non_additive_axes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Axis"
+                },
+                "contains": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "dimension",
+                        "behavior"
+                      ],
+                      "properties": {
+                        "dimension": {
+                          "$ref": "#/$defs/Name"
+                        },
+                        "behavior": {
+                          "const": "period_end"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "entity",
+                        "behavior"
+                      ],
+                      "properties": {
+                        "entity": {
+                          "$ref": "#/$defs/Name"
+                        },
+                        "behavior": {
+                          "const": "period_end"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
           }
         },
         {

@@ -6,6 +6,7 @@ Rejection cases run on copies in a temporary folder; the imported files are neve
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -494,7 +495,7 @@ def test_an_axis_with_both_a_dimension_and_an_entity_fails() -> None:
                     "axes": [{"dimension": "region", "behavior": "forbidden"}],
                 },
             },
-            "must recompute",
+            "must be recompute",
         ),
         ({"version": 1, "allocation_bridge": "unknown"}, "names no bridge"),
     ],
@@ -509,4 +510,73 @@ def test_a_metric_declaration_that_has_no_faithful_translation_fails(
         model["metrics"] = [metric]
 
     with pytest.raises(adapter.UntranslatableKey, match=reason):
+        translated_or_error(edit)
+
+
+def axis_metric(additivity_class: str, behavior: str) -> dict[str, Any]:
+    metric = {"name": "m", "expression": {"sql": "SUM(orders.order_total)"}}
+    axes = [{"dimension": "region", "behavior": behavior}]
+    set_payload(metric, {"version": 1, "aggregation": {"class": additivity_class, "axes": axes}})
+    return metric
+
+
+@pytest.mark.parametrize(
+    ("additivity_class", "behavior"),
+    [
+        ("fully_additive", "distinct_recompute"),
+        ("fully_additive", "forbidden"),
+        ("non_additive", "additive"),
+    ],
+)
+def test_an_axis_a_metric_class_contradicts_fails(additivity_class: str, behavior: str) -> None:
+    def edit(model: dict[str, Any]) -> None:
+        model["metrics"] = [axis_metric(additivity_class, behavior)]
+
+    with pytest.raises(adapter.UntranslatableKey, match=r"an axis of a \w+ metric must be"):
+        translated_or_error(edit)
+
+
+@pytest.mark.parametrize(
+    ("additivity_class", "behavior", "additivity"),
+    [
+        ("fully_additive", "additive", "additive"),
+        ("non_additive", "distinct_recompute", "non_additive"),
+    ],
+)
+def test_an_axis_its_metric_class_implies_is_dropped(
+    additivity_class: str, behavior: str, additivity: str
+) -> None:
+    def edit(model: dict[str, Any]) -> None:
+        model["metrics"] = [axis_metric(additivity_class, behavior)]
+
+    translated = translated_or_error(edit)
+    assert extension_payloads(translated["metrics"][0], VENDOR) == [
+        {"version": 1, "element": "metric", "additivity": additivity}
+    ]
+
+
+def test_an_entry_on_an_element_the_adapter_never_reads_fails() -> None:
+    def edit(model: dict[str, Any]) -> None:
+        set_payload(model["datasets"][0]["fields"][0].setdefault("dimension", {}), {"version": 1})
+
+    with pytest.raises(adapter.UntranslatableKey, match="never reads"):
+        translated_or_error(edit)
+
+
+def test_two_fields_with_one_time_role_fail() -> None:
+    def edit(model: dict[str, Any]) -> None:
+        for field in model["datasets"][0]["fields"][:2]:
+            set_payload(field, {"version": 1, "time_role": "event"})
+
+    with pytest.raises(adapter.UntranslatableKey, match="two fields with time_role 'event'"):
+        translated_or_error(edit)
+
+
+def test_another_corpus_semantic_version_fails() -> None:
+    def edit(model: dict[str, Any]) -> None:
+        data = bridges(model)
+        data["semantic_version"] = "9.9.9"
+        set_payload(model, data)
+
+    with pytest.raises(adapter.UntranslatableKey, match=re.escape("semantic_version '9.9.9'")):
         translated_or_error(edit)

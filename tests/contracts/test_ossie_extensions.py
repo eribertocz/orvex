@@ -52,6 +52,8 @@ REASONS = {
     "keep-without-targets": "'targets' is a required property",
     "negative-tolerance": "'-0.01' does not match",
     "period-end-axis-without-period-end": "'period_end' is a required property",
+    "period-end-without-period-end-axis": "does not contain items matching",
+    "unit-on-amount": "False schema does not allow",
     "approximate-not-sketch": "False schema does not allow",
     "bridge-without-right": "'right' is a required property",
     "cardinality-many-to-many": "'many_to_many' is not one of",
@@ -149,6 +151,8 @@ STRUCTURAL = sorted(
         "currency-without-semantic-type",
         "keep-without-targets",
         "period-end-axis-without-period-end",
+        "period-end-without-period-end-axis",
+        "unit-on-amount",
     }
 )
 
@@ -177,13 +181,22 @@ def test_the_schema_never_names_a_vendor() -> None:
 #
 # `ossie_extensions_v1_frozen.json` is the schema as first released. Every node of it must still
 # exist in the current schema and accept at least what it accepted: the only allowed changes are a
-# new optional member, a new enum value, a new `$defs` entry and documentation.
+# new optional member, a new enum value, a new `$defs` entry and documentation. Below `if` and
+# `not` a looser subschema makes the schema stricter, so there nothing may change at all.
 
 DOCUMENTATION = ("description", "title", "$comment", "examples")
 
 
+# Keywords whose subschema counts against the instance (or only selects a rule): loosening it
+# tightens the schema, so their subtrees must stay identical.
+INVERTED = ("if", "not")
+
+
 def incompatible(old: Any, new: Any, pointer: str = "#") -> list[str]:  # noqa: ANN401
     """Every way `new` accepts less than `old`, node by node."""
+    parent, _, key = pointer.rpartition("/")
+    if key in INVERTED and not parent.endswith(("/properties", "/$defs")):
+        return [] if old == new else [f"{pointer} changed (inverted subschema)"]
     if isinstance(old, dict) and isinstance(new, dict):
         problems: list[str] = []
         is_name_map = pointer.endswith(("/properties", "/$defs"))
@@ -224,9 +237,19 @@ def test_v1_is_unchanged_or_compatibly_extended() -> None:
     assert incompatible(FROZEN, SCHEMA) == []
 
 
+def rule_index(conditions: list[dict[str, Any]], keyword: str, member: str) -> int:
+    """The position of the `keyword` rule that names `member` among a payload's conditions."""
+    return next(
+        index
+        for index, rule in enumerate(conditions)
+        if keyword in rule and member in json.dumps(rule[keyword])
+    )
+
+
 def mutated(change: str) -> dict[str, Any]:
     schema: dict[str, Any] = copy.deepcopy(SCHEMA)
     defs = schema["$defs"]
+    conditions = defs["MetricPayload"]["allOf"]
     if change == "remove-member":
         del defs["FieldPayload"]["properties"]["pii"]
     elif change == "retype-member":
@@ -260,6 +283,17 @@ def mutated(change: str) -> dict[str, Any]:
         defs["FieldPayload"]["properties"]["pii"]["enum"].append("secret")
     elif change == "new-definition":
         defs["Unused"] = {"type": "string"}
+    elif change == "loosen-not":
+        conditions[rule_index(conditions, "not", "window")]["not"]["required"].remove("window")
+    elif change == "widen-if":
+        # The rule that forbids the axes members unless the metric is semi-additive.
+        widened = next(
+            rule["if"]["properties"]["additivity"]["enum"]
+            for rule in conditions
+            if "enum" in rule.get("if", {}).get("properties", {}).get("additivity", {})
+            and "semi_additive" not in rule["if"]["properties"]["additivity"]["enum"]
+        )
+        widened.append("semi_additive")
     elif change == "documentation":
         defs["FieldPayload"]["description"] = "reworded"
     return schema
@@ -277,6 +311,8 @@ INCOMPATIBLE = [
     "new-conditional",
     "new-dependency",
     "new-required-member",
+    "loosen-not",
+    "widen-if",
 ]
 
 

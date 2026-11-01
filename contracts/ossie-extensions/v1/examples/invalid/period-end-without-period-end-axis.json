@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "element": "metric",
+  "additivity": "semi_additive",
+  "non_additive_axes": [
+    {
+      "dimension": "date",
+      "behavior": "forbidden"
+    }
+  ],
+  "period_end": {
+    "order_by": ["balances.snapshot_date"]
+  }
+}
