@@ -57,6 +57,9 @@ from orvex.contracts.store.v1 import (
     StatementRequest,
 )
 from orvex.store.errors import StoreError, register_secret
+from orvex.store.file_sources import view_query
+from orvex.store.sql_text import identifier as _identifier
+from orvex.store.sql_text import literal as _quote
 
 LAKE = "lake"
 MAX_TIMEOUT_MS = 3_600_000
@@ -271,10 +274,6 @@ class ReadHandle:
 
 # A DuckDB type name as `load_arrow` accepts it: a name, optionally with numeric arguments.
 _ARROW_LOAD_TYPE = re.compile(r"[A-Z][A-Z0-9_]*(?: [A-Z][A-Z0-9_]*)*(?:\([0-9]+(?:,[0-9]+)?\))?")
-
-
-def _quote(text: str) -> str:
-    return "'" + text.replace("'", "''") + "'"
 
 
 def _conninfo(text: str) -> dict[str, str]:
@@ -1696,14 +1695,12 @@ class Lake:
         folder = Path(self._spill) / "sources"
         folder.mkdir(exist_ok=True)
         catalog = (folder / f"{source.name}.duckdb").as_posix()
-        reader = "read_parquet" if source.type == "parquet" else "read_csv"
         builder = duckdb.connect(catalog)
         try:
             # The files matched now, listed one by one: the sandbox allows exactly these.
-            listed = ", ".join(_quote(str(file)) for file in matched_files)
-            builder.sql(
-                f"CREATE VIEW data AS SELECT * FROM {reader}([{listed}], union_by_name = true)"
-            )
+            # Every column carries the files' values exactly or fails when read (law 11).
+            query = view_query(builder, source.type, source.name, [str(f) for f in matched_files])
+            builder.sql(f"CREATE VIEW data AS {query}")
         except duckdb.Error as error:
             raise StoreError(
                 "STORE_SOURCE_INVALID",
@@ -3043,10 +3040,6 @@ def exact_select(sql: str, names: list[str], types: list[str]) -> str | None:
         for index, (name, kind) in enumerate(zip(names, types, strict=True), start=1)
     )
     return f"SELECT {columns} FROM ({sql})"
-
-
-def _identifier(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
 
 
 def _with_duckdb_types(schema: pa.Schema, types: list[str]) -> pa.Schema:
