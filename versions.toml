@@ -3,13 +3,13 @@
 # [project].version must equal its entry here (tests/workspace/test_versions.py), and the server
 # ships an identical copy to report the product version.
 
-product = "0.1.0-alpha.1"
+product = "0.2.0-alpha.1"
 
 access = "0.1.0"
-contracts = "0.1.0"
+contracts = "0.2.0"
 dashboards = "0.1.0"
 mcp = "0.1.0"
 semantic = "0.1.0"
-server = "0.1.0"
-store = "0.1.0"
-transform = "0.1.0"
+server = "0.2.0"
+store = "0.2.0"
+transform = "0.2.0"
