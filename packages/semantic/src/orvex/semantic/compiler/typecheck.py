@@ -1123,7 +1123,7 @@ class _Model:
             else:
                 typed = self._metric(member, payload)
             at = data_at
-            extra = self._payload_trees(member, payload)
+            extra = self._payload_trees(member, payload, zone)
             at = text_at
             typed = self._declarations(member, typed, payload, data_at, zone)
         except _Bad as bad:
@@ -1188,7 +1188,13 @@ class _Model:
             raise _Bad()  # a metric is an aggregate
         return tree, replace(tree.type, kind="metric", constant=False)
 
-    def _context(self, member: ParsedMember, payload: Json, own_row: str | None) -> _Context:
+    def _context(
+        self,
+        member: ParsedMember,
+        payload: Json,
+        own_row: str | None,
+        own_zone: str | None = None,
+    ) -> _Context:
         rounding = payload.get("rounding")
         scale = int(str(rounding["scale"])) if isinstance(rounding, Mapping) else None
         owner = member.id
@@ -1219,7 +1225,7 @@ class _Model:
         def dataset_of(ref: sql.Ref) -> str | None:
             return target(ref).dataset
 
-        return _Context(resolve, scale, None, dataset_of, self._zone_or_none())
+        return _Context(resolve, scale, own_zone, dataset_of, self._zone_or_none())
 
     def _opaque(self, member: ParsedMember) -> NodeType:
         """Typed from its declarations; a metric's aggregate class is holistic (#280 §2)."""
@@ -1244,12 +1250,13 @@ class _Model:
         )
 
     def _payload_trees(
-        self, member: ParsedMember, payload: Json
+        self, member: ParsedMember, payload: Json, zone: str | None
     ) -> tuple[tuple[str, TypedNode], ...]:
         found: list[tuple[str, TypedNode]] = []
         calculated = payload.get("calculated")
         if isinstance(calculated, Mapping):
-            context = self._context(member, payload, own_row=member.id.dataset)
+            # The field's own `time_zone` buckets its calculated expression too.
+            context = self._context(member, payload, member.id.dataset, zone)
             tree = _Checker(context).check(sql.parse(str(calculated["expression"])))
             if tree.type.kind != "row" or tree.type.aggregate_class is not None:
                 raise _Bad()

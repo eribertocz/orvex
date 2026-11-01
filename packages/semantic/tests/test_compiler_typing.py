@@ -679,3 +679,18 @@ def test_an_undeclared_opaque_type_is_of_unknown_exactness() -> None:
     for typed in typed_both(document, engines={"sales": "DUCKDB"}):
         assert typed.members[MemberId("metric", "SALES", "P90")].type.exactness == "unknown"
         assert typed.members[m("doubled")].type.exactness == "unknown"
+
+
+def test_a_calculated_expression_buckets_in_its_fields_own_zone() -> None:
+    calculated = {"expression": "DATE_TRUNC('DAY', zoned)", "max_cardinality": "100"}
+    document = base(
+        fields=[
+            field("zoned", "sold_at", time_zone={"name": "America/La_Paz"}),
+            field("day", "sold_at", time_zone={"name": "Asia/Tokyo"}, calculated=calculated),
+        ],
+        model={"default_time_zone": "UTC"},
+    )
+    for typed in typed_both(document):
+        (label, tree), *_ = typed.members[f("day")].payload
+        assert label == "calculated"
+        assert tree.type.bucket_zone == "Asia/Tokyo"
