@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 MAX_SAFE_INTEGER = 2**53 - 1
 _ESCAPES = {
@@ -43,7 +43,7 @@ def number(value: float | int) -> str:
     if isinstance(value, int):
         if abs(value) > MAX_SAFE_INTEGER:
             raise NotCanonical("an integer beyond +/-(2^53-1); write it as a decimal string")
-        return str(value)
+        return int.__repr__(value)  # a subclass's own __str__ never reaches the bytes
     if not math.isfinite(value):
         raise NotCanonical("NaN and Infinity have no JSON form")
     if value == 0:
@@ -113,7 +113,7 @@ def _write(value: object, out: list[str]) -> None:
             out.append(":")
             _write(value[key], out)
         out.append("}")
-    elif isinstance(value, Sequence) and not isinstance(value, bytes | bytearray):
+    elif isinstance(value, list | tuple):
         out.append("[")
         for index, item in enumerate(value):
             if index:
@@ -125,10 +125,13 @@ def _write(value: object, out: list[str]) -> None:
 
 
 def canonicalize(value: object) -> bytes:
-    """The RFC 8785 bytes of plain values (mappings, sequences, strings, numbers, booleans,
-    None)."""
+    """The RFC 8785 bytes of plain values (mappings, lists and tuples, strings, numbers,
+    booleans, None)."""
     out: list[str] = []
-    _write(value, out)
+    try:
+        _write(value, out)
+    except RecursionError:
+        raise NotCanonical("nested too deeply") from None
     return "".join(out).encode("utf-8")
 
 
@@ -157,11 +160,33 @@ def canonicalize_text(text: str) -> bytes:
         )
     except json.JSONDecodeError as error:
         raise NotCanonical("not JSON text") from error
+    except RecursionError:
+        raise NotCanonical("nested too deeply") from None
     return canonicalize(value)
+
+
+def _integers_only(value: object) -> None:
+    """A canonical document holds integers within +/-(2^53-1) only (#280 §4): any other number,
+    a float included, is written as a decimal string by its producer, so no value is
+    fingerprinted after passing through binary floating point."""
+    stack = [value]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, float):
+            raise NotCanonical("a canonical document holds integers only; write it as text")
+        if isinstance(current, Mapping):
+            stack.extend(current.values())
+        elif isinstance(current, list | tuple):
+            stack.extend(current)
 
 
 def fingerprint(kind: str, format: int, document: object) -> str:
     """`sha256:` and the lowercase hex digest of the canonical bytes of `document` tagged with
     its `kind` and the `format` version of its layout."""
+    if not isinstance(kind, str) or not kind:
+        raise NotCanonical("a fingerprint's kind is a non-empty string")
+    if isinstance(format, bool) or not isinstance(format, int) or format < 0:
+        raise NotCanonical("a fingerprint's format is a non-negative integer")
+    _integers_only(document)
     tagged = {"format": format, "kind": kind, "value": document}
     return "sha256:" + hashlib.sha256(canonicalize(tagged)).hexdigest()

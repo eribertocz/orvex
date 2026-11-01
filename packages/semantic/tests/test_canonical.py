@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import json
 import math
 import os
 import struct
@@ -46,8 +47,9 @@ def test_every_vendored_file_matches_its_pin() -> None:
 
 @pytest.mark.parametrize("case", CASES)
 def test_upstream_files_canonicalize_byte_exact(case: str) -> None:
-    """The six upstream pairs. `values` is RFC 8785 §3.2.2's example, `weird` §3.2.3's sorting
-    example, and its byte dump `outhex/values.txt` is §3.2.4's."""
+    """The six upstream pairs. `values` is RFC 8785 §3.2.2's example, and its byte dump
+    `outhex/values.txt` is §3.2.4's UTF-8. (`weird` extends the sorting idea with more members;
+    §3.2.3's own example is tested literally below.)"""
     produced = canonicalize_text((VENDOR / "input" / f"{case}.json").read_text("utf-8"))
     assert produced == (VENDOR / "output" / f"{case}.json").read_bytes()
     assert produced == bytes.fromhex((VENDOR / "outhex" / f"{case}.txt").read_text("ascii"))
@@ -149,6 +151,74 @@ def test_text_that_is_not_i_json_is_refused(text: str) -> None:
 def test_values_without_a_canonical_form_are_refused(value: object) -> None:
     with pytest.raises(NotCanonical):
         canonicalize(value)
+
+
+def test_rfc_section_3_2_3_sorting_example() -> None:
+    """RFC 8785 §3.2.3, transcribed from the RFC text: property names compare as UTF-16 code
+    units, so the emoji (lead surrogate U+D83D) precedes U+FB33. Its expected value order is
+    the RFC's own list, not derived from this code."""
+    rfc_input = (
+        '{"\\u20ac": "Euro Sign", "\\r": "Carriage Return", '
+        '"\\ufb33": "Hebrew Letter Dalet With Dagesh", "1": "One", '
+        '"\\ud83d\\ude00": "Emoji: Grinning Face", "\\u0080": "Control", '
+        '"\\u00f6": "Latin Small Letter O With Diaeresis"}'
+    )
+    rfc_order = [
+        "Carriage Return",
+        "One",
+        "Control",
+        "Latin Small Letter O With Diaeresis",
+        "Euro Sign",
+        "Emoji: Grinning Face",
+        "Hebrew Letter Dalet With Dagesh",
+    ]
+    expected = (
+        '{"\\r":"Carriage Return","1":"One","\u0080":"Control",'
+        '"\u00f6":"Latin Small Letter O With Diaeresis","\u20ac":"Euro Sign",'
+        '"\U0001f600":"Emoji: Grinning Face","\ufb33":"Hebrew Letter Dalet With Dagesh"}'
+    ).encode("utf-8")
+    produced = canonicalize_text(rfc_input)
+    assert produced == expected
+    assert list(json.loads(produced).values()) == rfc_order
+
+
+@pytest.mark.parametrize(
+    "document",
+    [{"x": 2.0**80}, {"x": 0.1}, [1.0], {"a": {"b": [math.pi]}}, -0.0],
+)
+def test_a_fingerprinted_document_holds_integers_only(document: object) -> None:
+    """#280 §4: a canonical document holds integers within +/-(2^53-1) only; any other number,
+    a float that looks integral included, is written as a decimal string by its producer."""
+    with pytest.raises(NotCanonical):
+        fingerprint("model", 1, document)
+    assert fingerprint("model", 1, {"x": "0.1"}).startswith("sha256:")
+
+
+@pytest.mark.parametrize(
+    ("kind", "format"), [("", 1), (1, 1), ("model", True), ("model", -1), ("model", 1.0)]
+)
+def test_a_fingerprint_checks_its_tag(kind: object, format: object) -> None:
+    with pytest.raises(NotCanonical):
+        fingerprint(kind, format, {})  # type: ignore[arg-type]
+
+
+class _LoudInt(int):
+    def __str__(self) -> str:
+        return "[oops]"
+
+
+def test_odd_values_get_their_json_form_or_are_refused() -> None:
+    assert canonicalize([_LoudInt(7)]) == b"[7]"
+    for value in (memoryview(b"ab"), range(3), bytearray(b"a")):
+        with pytest.raises(NotCanonical):
+            canonicalize(value)
+    deep: object = []
+    for _ in range(100_000):
+        deep = [deep]
+    with pytest.raises(NotCanonical):
+        canonicalize(deep)
+    with pytest.raises(NotCanonical):
+        canonicalize_text("[" * 100_000 + "]" * 100_000)
 
 
 def test_plain_values() -> None:
