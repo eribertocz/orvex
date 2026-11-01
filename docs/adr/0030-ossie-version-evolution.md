@@ -1,6 +1,6 @@
 # 0030 — Evolving with Apache Ossie: version registry, staged reading and three identities
 
-**Status:** Proposed (2026-11-01). Owner direction recorded in the conversation of 2026-11-01: plan A1–A4 and B1 approved.
+**Status:** Proposed (2026-11-01). Owner direction recorded in the conversation of 2026-11-01: plan A1–A4 and B1 approved. The Ossie-first policy (§8) and the separation of conformance and executability (§2) were approved by the Owner on 2026-11-01.
 
 This record amends **ADR-0009** and **ADR-0012**.
 
@@ -41,11 +41,16 @@ This record amends **ADR-0009** and **ADR-0012**.
 ### 2. Five stages, kept apart
 1. **Preservation.** The document's bytes are kept as written. Nothing in Orvex rewrites what it does not own (ADR-0024). Unknown and foreign content survives every edit.
 2. **Structural validation**, against the schema of the registry entry that matches the document's `version`. An unknown version → `UNSUPPORTED_OSSIE_VERSION`.
-3. **Semantic validation:** names, references, the official validator's checks as errors, the `ORVEX` payloads (#278).
+3. **Semantic validation:** names, references, the specification's rules and the official validator's errors as errors, the `ORVEX` payloads (#278).
 4. **Compilation**, into the version-independent `CompiledModel` (#280). The core never sees an Ossie version, only the reader's output.
 5. **Execution**, only for an entry that is `stable`, or `experimental` in a project that opted in.
 
 A document can pass stage 1 and fail stage 2 or stage 5. It can still be opened, preserved and exported, never executed.
+
+**Conformance and executability are separate.**
+- Stages 2 and 3 decide only conformance with Ossie. A document Ossie accepts is never refused there for a rule stricter than Ossie's. An official validator warning, such as `to_columns` covering no key of `to`, stays a warning.
+- Where the product needs more to compile or execute safely, stage 3 records an advisory on the element. Examples: a key or an as-of declaration for that relationship, or a selectable expression for a field.
+- Stage 4 or 5 refuses, with a typed error, the operation that needs the element. It never returns a result that could be wrong.
 
 ### 3. Unknown capabilities fail closed
 - **Inside `ORVEX` entries**, an unknown member is an error. The contract is closed (`ossie-extensions/v1`).
@@ -101,15 +106,24 @@ When a registry entry's reader understands a standard concept that an `ORVEX` me
 - A change touching expressions, nulls, aggregates, relational semantics or the schema is flagged for a critical review; the classification is a warning, not a verdict.
 - Adopting a revision is a normal issue (and an ADR when semantics change), tested on the corpus, the security suite, round-trip preservation and, when available, the upstream compliance suite.
 
+### 8. Ossie-first, with explicit extensions
+- **Ossie is the authority** for every capability the pinned registry entry specifies. Its representation is the one the product reads, and its rules are never relaxed to accept a model.
+- **Product extensions are explicit and versioned.** A capability Ossie does not yet specify uses an `ORVEX` entry of `ossie-extensions` (versioned by the contract), kept apart from standard semantics. It is never presented as an Ossie feature. An invalid standard expression is never read as an extension: an extension applies only where it is declared. For example, an expression over metrics is a derived metric (`over_metrics` or `window`) with its text under the product's dialect token.
+- **The standard takes precedence once it exists.** When Ossie specifies an equivalent capability, new models use the standard representation. Equivalence is first verified aspect by aspect (§4).
+- **Earlier extensions are not removed automatically.** They stay readable through a controlled transition. Moving a document to the standard form is an explicit migration through the project writer (ADR-0024, §5): it shows its differences and is refused if a meaning or a result could change.
+- **Explicit declarations, nothing inferred.** A capability that needs information Ossie does not carry is refused until that information is declared: an alignment grain, a dependency, a window, an as-of match. The issues that build these capabilities require the declarations: P2-13, P2-17 and P2-20 for the corpus's derived, combined and cumulative metrics.
+- **The capability matrix** in `docs/architecture/ossie-capabilities.md` records, for each capability: the standard, the extension, the upstream status (§7) and the migration state.
+
 ## Alternatives considered
 - **Keep one exact pin (ADR-0009 as written).** Simplest, but every upstream revision would break every model until a manual migration, and the version number cannot even tell revisions apart.
 - **One full adapter per revision.** Isolates revisions, but duplicates code for revisions that change nothing the engine reads.
 - **Follow upstream automatically.** Fast, but lets unapproved upstream changes reach production results.
+- **Refuse at load what the product cannot yet execute.** Simpler, but it calls documents invalid that Ossie accepts, and confuses fidelity to the standard with the correctness of results.
 - **Ignore foreign extensions, as the Ossie text allows.** Interoperable, but a foreign declaration that changes a metric in its own tool would silently give different numbers here.
 - **Precedence by textual or tree equality.** Easy to implement, but it accepts declarations that differ in meaning and rejects ones that differ only in form.
 
 ## Consequences
-- P2-03 (#278) resolves versions through the registry, keeps a reference to the preserved document and to the registry entry used, takes dialect tokens from the registry, and records foreign extensions. Its scope does not grow beyond that. Executing and refusing execution belong to later issues.
+- P2-03 (#278) resolves versions through the registry, keeps a reference to the preserved document and to the registry entry used, takes dialect tokens from the registry, records foreign extensions, and records advisories where a conformant document is not yet executable. Its scope does not grow beyond that. Executing and refusing execution belong to later issues.
 - P2-04 (#280) adds the reader's id and capabilities version to the compiled identity. Per the Owner's decision, it also rejects at compile time a metric whose aggregation is ambiguous without its declarations.
 - `semantic-error/v1` gains the rules `unsupported_capability` and `extension_conflict`. These are compatible additions to a detail's enumeration, and its README's compatibility list says so explicitly when P2-03 adds them. The refusal of queries that reach unreviewed foreign extensions gets its code in P2-12.
 - `UNSUPPORTED_OSSIE_VERSION.supported` names the newest `stable` version. A list of every supported version, when there is more than one, is an optional detail (compatible).
