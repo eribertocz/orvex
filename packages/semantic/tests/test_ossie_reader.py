@@ -492,7 +492,9 @@ def test_dialect_selection() -> None:
         )
 
 
-def test_the_product_dialect_carries_an_expression_over_metrics() -> None:
+def test_an_expression_only_in_the_product_dialect_is_not_selected() -> None:
+    """Ossie expressions cannot name metrics; an entry under the product's token is kept in
+    the document, never selected by this revision's reader (Owner policy of 2026-11-01)."""
     model = base()
     model["metrics"].append(
         {
@@ -500,8 +502,11 @@ def test_the_product_dialect_carries_an_expression_over_metrics() -> None:
             "expression": {"dialects": [{"dialect": CURRENT, "expression": "revenue * 2"}]},
         }
     )
-    (selected,) = [e for e in load(as_yaml(model), "yaml").expressions if e.element == "/metrics/1"]
-    assert (selected.dialect, selected.text) == (CURRENT, "revenue * 2")
+    error = failure(as_yaml(model), "yaml", {"sales": "DUCKDB", "customers": "DUCKDB"})
+    assert (error.code, dict(error.details)) == (
+        "UNSUPPORTED_OPERATION",
+        {"operation": "expression_dialect"},
+    )
 
 
 # --- temporal relationships (Owner decision of 2026-11-01, CASE-013) ---------------------------

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import csv
 import json
-import re
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -372,7 +371,7 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
                 replace(item)
 
     replace(translated)
-    return move_metric_expressions(translated, vendor_name), policies
+    return translated, policies
 
 
 def _translate_field(field: dict[str, Any], roles: dict[str, str]) -> dict[str, Any] | None:
@@ -516,51 +515,3 @@ def _ossie_expression(element: dict[str, Any]) -> str:
             if isinstance(dialect, dict) and dialect.get("dialect") == "OSSIE_SQL_2026":
                 return str(dialect["expression"])
     raise UntranslatableKey(f"no OSSIE_SQL_2026 expression on {element.get('name')!r}")
-
-
-# A single-quoted string (skipped), or a name of one or two parts, each a double-quoted
-# identifier or a word, that is not a function call.
-_PART = r'(?:"(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*)'
-_EXPRESSION_TOKEN = re.compile(rf"'(?:[^']|'')*'|((?>{_PART}(?:\.{_PART})?))(?!\s*\()")
-
-
-def _identifier(part: str) -> str:
-    quoted = len(part) >= 2 and part.startswith('"') and part.endswith('"')
-    return part[1:-1].replace('""', '"') if quoted else part.casefold()
-
-
-def move_metric_expressions(model: dict[str, Any], product_dialect: str) -> dict[str, Any]:
-    """A copy of `model` where a metric whose OSSIE_SQL_2026 expression names another metric
-    (`metric` for a model metric, `dataset.metric` for a dataset metric) carries that text,
-    unchanged, as its only entry under `product_dialect`.
-
-    An Ossie metric expression cannot refer to another metric (spec L424, L692-L699); the
-    corpus's derived metrics do, so they are written in the product's expression language, whose
-    dialect token is the product's vendor name (ossie-extensions v1 README).
-    """
-    moved: dict[str, Any] = json.loads(json.dumps(model))
-    datasets = [d for d in moved.get("datasets") or [] if isinstance(d, dict)]
-    metric_names: set[tuple[str, ...]] = {
-        (_identifier(str(m["name"])),) for m in moved.get("metrics") or [] if isinstance(m, dict)
-    }
-    for dataset in datasets:
-        metric_names |= {
-            (_identifier(str(dataset["name"])), _identifier(str(m["name"])))
-            for m in dataset.get("metrics") or []
-            if isinstance(m, dict)
-        }
-    for metrics in [moved.get("metrics") or []] + [d.get("metrics") or [] for d in datasets]:
-        for metric in metrics:
-            if not isinstance(metric, dict):
-                continue
-            text = _ossie_expression(metric)
-            used = {
-                tuple(_identifier(part) for part in re.findall(_PART, match.group(1)))
-                for match in _EXPRESSION_TOKEN.finditer(text)
-                if match.group(1)
-            }
-            if used & metric_names:
-                metric["expression"] = {
-                    "dialects": [{"dialect": product_dialect, "expression": text}]
-                }
-    return moved

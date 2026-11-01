@@ -627,7 +627,6 @@ def _dialects(
     document: Json,
     index: _Index,
     problems: _Problems,
-    vendor_names: Sequence[str],
     engines: Mapping[str, str],
 ) -> list[SelectedExpression]:
     members: list[tuple[Path, Json, str | None]] = []
@@ -654,7 +653,7 @@ def _dialects(
     problems.raise_if_any()
     selected: list[SelectedExpression] = []
     for path, member, engine in members:
-        choice = _select(member["expression"], path, (PORTABLE, *vendor_names, engine))
+        choice = _select(member["expression"], path, (PORTABLE, engine))
         if choice is None:
             raise SemanticError("UNSUPPORTED_OPERATION", {"operation": NO_DIALECT})
         selected.append(choice)
@@ -662,8 +661,9 @@ def _dialects(
 
 
 def _select(expression: Json, path: Path, order: Sequence[str | None]) -> SelectedExpression | None:
-    """`sql` first; else the dialect entries in `order`: OSSIE_SQL_2026, the product's own
-    token (its vendor names), then the dataset's engine token."""
+    """`sql` first; else the dialect entries in `order`: OSSIE_SQL_2026, then the dataset's
+    engine token (#278 step 7). Any other entry, the product's own token included, is kept in
+    the document and never selected here."""
     element = "".join("/" + _escape(part) for part in path)
     if "sql" in expression:
         return SelectedExpression(element, f"{element}/expression/sql", PORTABLE, expression["sql"])
@@ -708,7 +708,7 @@ def read(
     index = _Index.of(document)
     _references(document, index, problems, vendor_names)
     found = _extensions(document, index, problems, vendor_names)
-    selected = _dialects(document, index, problems, vendor_names, engines_by_name)
+    selected = _dialects(document, index, problems, engines_by_name)
     return OssieModel(
         path=path,
         format=written,

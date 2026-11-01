@@ -1,11 +1,18 @@
-"""P2-03 (#278): the 21 corpus models load through the Ossie adapter, in YAML and in JSON.
+"""P2-03 (#278): the 21 corpus models through the Ossie adapter, in YAML and in JSON.
 
-The imported models are read as written, with two additions from the conformance adapter:
-- a metric expression that names other metrics moves, text unchanged, to the product's dialect
-  (an Ossie expression cannot name a metric);
-- a relationship whose bi-platform entry declares an as-of match gets that rule as a product
-  entry too (Owner decision of 2026-11-01, CASE-013). The bi-platform entries stay as they are:
+Every model is read exactly as imported; nothing is rewritten to make it pass. The corpus splits
+three ways against the pinned revision (`c721ffc`, Owner policy of 2026-11-01):
+
+- **Conformant** (16): valid Ossie documents; they load, and their bi-platform entries are
   preserved, listed and never interpreted.
+- **Future** (4): a metric expression names another metric, which this revision does not support
+  ("a metric expression that refers to another metric", spec L692-L699; L424). They are refused
+  with `reference` at that expression, unchanged, until a revision specifies derived metrics.
+- **CASE-013**: a valid Ossie document (the official validator only warns when `to_columns`
+  cover no key of `to`) that the product refuses, because `from` is the many side only if `to` is
+  unique. It loads only with the product's own as-of declaration, a product capability that is
+  not part of Ossie (Owner decision of 2026-11-01). The test adds that entry beside the preserved
+  bi-platform entry.
 """
 
 from __future__ import annotations
@@ -27,19 +34,27 @@ MODELS = sorted((ROOT / CORPUS / "models").glob("CASE-0??.yaml"))
 _PRODUCT = tomllib.loads((ROOT / "identity.toml").read_text("utf-8"))["product"]
 VENDORS = (_PRODUCT["ossie_vendor_name"], *_PRODUCT["previous_vendor_names"])
 
+# Case -> the metric expression that names another metric.
+FUTURE = {
+    "CASE-006": "/metrics/2/expression/dialects/0/expression",
+    "CASE-009": "/metrics/2/expression/dialects/0/expression",
+    "CASE-010": "/metrics/2/expression/dialects/0/expression",
+    "CASE-021": "/metrics/1/expression/dialects/0/expression",
+}
+PRODUCT_DECLARATION = {"CASE-013"}
+CONFORMANT = [p for p in MODELS if p.stem not in FUTURE and p.stem not in PRODUCT_DECLARATION]
 
-def corpus_model(path: Path) -> dict[str, Any]:
-    raw = adapter.load_yaml(path)
-    assert isinstance(raw, dict)
-    model = adapter.move_metric_expressions(dict(raw), VENDORS[0])
-    translated, _ = adapter.translate(dict(raw), VENDORS[0])
-    for written, done in zip(
-        model.get("relationships") or [], translated.get("relationships") or [], strict=True
-    ):
-        product = [e for e in done.get("custom_extensions") or [] if e["vendor_name"] == VENDORS[0]]
-        if product and "temporal" in json.loads(product[0]["data"]):
-            written["custom_extensions"] = [*(written.get("custom_extensions") or []), product[0]]
-    return model
+
+def raw(path: Path) -> dict[str, Any]:
+    model = adapter.load_yaml(path)
+    assert isinstance(model, dict)
+    return dict(model)
+
+
+def both_formats(path: Path, model: dict[str, Any] | None = None) -> list[tuple[str, bytes]]:
+    """The imported file as written, and the same model as JSON."""
+    yaml_bytes = path.read_bytes() if model is None else yaml.safe_dump(model).encode()
+    return [("yaml", yaml_bytes), ("json", json.dumps(model or raw(path)).encode())]
 
 
 def bi_platform_entries(model: object, at: str = "") -> list[str]:
@@ -57,62 +72,73 @@ def bi_platform_entries(model: object, at: str = "") -> list[str]:
     return found
 
 
-@pytest.mark.parametrize("path", MODELS, ids=lambda path: path.stem)
-def test_every_corpus_model_loads_in_yaml_and_json(path: Path) -> None:
-    model = corpus_model(path)
-    expected = bi_platform_entries(model)
+def test_the_corpus_splits_16_conformant_4_future_and_case_013() -> None:
+    assert len(MODELS) == 21
+    assert len(CONFORMANT) == 16
+
+
+@pytest.mark.parametrize("path", CONFORMANT, ids=lambda path: path.stem)
+def test_every_conformant_model_loads_unchanged(path: Path) -> None:
+    expected = sorted(bi_platform_entries(raw(path)))
     assert expected
     loaded = []
-    for form, content in (
-        ("yaml", yaml.safe_dump(model, sort_keys=False).encode()),
-        ("json", json.dumps(model).encode()),
-    ):
+    for form, content in both_formats(path):
         result = read(content, f"semantic/{path.stem}.ossie.{form}", VENDORS)
-        assert [e.pointer for e in result.foreign_extensions] == sorted(
-            expected, key=[e.pointer for e in result.foreign_extensions].index
-        )
+        assert sorted(e.pointer for e in result.foreign_extensions) == expected
         assert {e.vendor_name for e in result.foreign_extensions} == {adapter.VENDOR_NAME}
+        assert result.product_extensions == ()
         loaded.append(result)
+    assert loaded[0].content == path.read_bytes()
     assert loaded[0] == loaded[1]
 
 
-def test_the_imported_file_itself_loads_when_it_needs_no_addition() -> None:
-    path = ROOT / CORPUS / "models" / "CASE-001.yaml"
-    content = path.read_bytes()
-    result = read(content, "semantic/CASE-001.ossie.yaml", VENDORS)
-    assert result.content == content
+@pytest.mark.parametrize("case", sorted(FUTURE))
+def test_a_metric_naming_a_metric_is_refused_unchanged(case: str) -> None:
+    path = ROOT / CORPUS / "models" / f"{case}.yaml"
+    for form, content in both_formats(path):
+        with pytest.raises(SemanticError) as caught:
+            read(content, f"semantic/{case}.ossie.{form}", VENDORS)
+        (problem,) = cast(list[dict[str, str]], caught.value.details["problems"])
+        assert (problem["rule"], problem["pointer"]) == ("reference", FUTURE[case])
 
 
-def test_case_013_without_its_product_temporal_entry_is_refused() -> None:
-    raw = adapter.load_yaml(ROOT / CORPUS / "models" / "CASE-013.yaml")
-    assert isinstance(raw, dict)
-    model = adapter.move_metric_expressions(dict(raw), VENDORS[0])
-    with pytest.raises(SemanticError) as caught:
-        read(json.dumps(model).encode(), "semantic/CASE-013.ossie.json", VENDORS)
-    (problem,) = cast(list[dict[str, str]], caught.value.details["problems"])
-    assert (problem["rule"], problem["pointer"]) == ("reference", "/relationships/0/to_columns")
+def with_product_temporal(path: Path) -> dict[str, Any]:
+    """The model with its as-of rule also declared as a product entry, taken from the
+    conformance adapter's translation; the bi-platform entry stays as written."""
+    model = raw(path)
+    translated, _ = adapter.translate(raw(path), VENDORS[0])
+    for written, done in zip(model["relationships"], translated["relationships"], strict=True):
+        product = [e for e in done["custom_extensions"] if e["vendor_name"] == VENDORS[0]]
+        if product and "temporal" in json.loads(product[0]["data"]):
+            written["custom_extensions"] = [*written["custom_extensions"], product[0]]
+    return model
+
+
+def test_case_013_is_refused_as_written_and_loads_with_the_product_declaration() -> None:
+    path = ROOT / CORPUS / "models" / "CASE-013.yaml"
+    for form, content in both_formats(path):
+        with pytest.raises(SemanticError) as caught:
+            read(content, f"semantic/CASE-013.ossie.{form}", VENDORS)
+        (problem,) = cast(list[dict[str, str]], caught.value.details["problems"])
+        assert (problem["rule"], problem["pointer"]) == ("reference", "/relationships/0/to_columns")
+    model = with_product_temporal(path)
+    expected = sorted(bi_platform_entries(model))
+    for form, content in both_formats(path, model):
+        result = read(content, f"semantic/CASE-013.ossie.{form}", VENDORS)
+        assert sorted(e.pointer for e in result.foreign_extensions) == expected
+        assert [e.element for e in result.product_extensions] == ["relationship"]
 
 
 @pytest.mark.parametrize("path", MODELS, ids=lambda path: path.stem)
-def test_every_translated_corpus_model_loads(path: Path) -> None:
-    raw = adapter.load_yaml(path)
-    assert isinstance(raw, dict)
-    translated, _ = adapter.translate(dict(raw), VENDORS[0])
-    result = read(json.dumps(translated).encode(), f"semantic/{path.stem}.ossie.json", VENDORS)
+def test_translated_models_follow_the_same_split(path: Path) -> None:
+    translated, _ = adapter.translate(raw(path), VENDORS[0])
+    content = json.dumps(translated).encode()
+    if path.stem in FUTURE:
+        with pytest.raises(SemanticError) as caught:
+            read(content, f"semantic/{path.stem}.ossie.json", VENDORS)
+        (problem,) = cast(list[dict[str, str]], caught.value.details["problems"])
+        assert (problem["rule"], problem["pointer"]) == ("reference", FUTURE[path.stem])
+        return
+    result = read(content, f"semantic/{path.stem}.ossie.json", VENDORS)
     assert result.foreign_extensions == ()
     assert result.product_extensions
-
-
-def test_moved_expressions_keep_their_text() -> None:
-    loaded = adapter.load_yaml(ROOT / CORPUS / "models" / "CASE-009.yaml")
-    assert isinstance(loaded, dict)
-    raw: dict[str, Any] = dict(loaded)
-    before = {m["name"]: m["expression"] for m in raw["metrics"]}
-    after = {
-        m["name"]: m["expression"]
-        for m in adapter.move_metric_expressions(dict(raw), "T")["metrics"]
-    }
-    moved = {name for name in before if before[name] != after[name]}
-    assert moved == {"net_revenue"}
-    (text,) = [d["expression"] for d in before["net_revenue"]["dialects"]]
-    assert after["net_revenue"] == {"dialects": [{"dialect": "T", "expression": text}]}
