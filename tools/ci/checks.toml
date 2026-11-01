@@ -1,0 +1,243 @@
+# The mandatory checks, in one place (#240, #261). `tools/ci/verify.py` reads this list and
+# runs every check it can; CI runs the same checks in the workflows named here. A test
+# (tests/tools/test_ci_checks.py) fails when a workflow job that pull requests run is missing
+# here, or when a job's `run` steps differ from its checks and setup steps below (each step is
+# named by its first line).
+#
+# [[job]]: workflow, job, kind, setup (first lines of the steps that prepare the job), and
+#   `pythons` when the job runs on a matrix of Python versions. Kinds:
+#   "check": gates every pull request; "scoped": gates only pull requests that change the
+#   workflow's `paths`, and the local verification does not run it (its `reason` says why);
+#   "automation": acts on the repository and checks nothing.
+# [[job.check]]: name, run (the step's first line), directory (the step's working directory,
+#   when not the repository root), and `local`: true when the local full verification runs
+#   it; false with the `reason` it can run only in CI.
+
+[[job]]
+workflow = "checks.yml"
+job = "product-name"
+kind = "check"
+setup = []
+[[job.check]]
+name = "product-name"
+run = "python -m tools.checks.product_name"
+local = true
+
+[[job]]
+workflow = "checks.yml"
+job = "boundaries"
+kind = "check"
+setup = []
+[[job.check]]
+name = "boundaries"
+run = "python -m tools.checks.boundaries"
+local = true
+
+[[job]]
+workflow = "contracts.yml"
+job = "contracts"
+kind = "check"
+setup = ["python -m pip install --quiet pip==26.2.2"]
+[[job.check]]
+name = "contracts-validate"
+run = "python -m tools.contracts.validate"
+local = true
+[[job.check]]
+name = "contracts-generated"
+run = "python -m tools.contracts.generate --check"
+local = true
+
+[[job]]
+workflow = "governance-scripts.yml"
+job = "governance-scripts"
+kind = "check"
+setup = []
+[[job.check]]
+name = "governance-scripts"
+run = "python3 -m unittest discover -p 'test_*.py' -v"
+directory = ".github/workflows/scripts"
+local = true
+
+[[job]]
+workflow = "python.yml"
+job = "python-lint"
+kind = "check"
+setup = ["python -m pip install --quiet pip==26.2.2"]
+[[job.check]]
+name = "ruff-format"
+run = "ruff format --check ."
+local = true
+[[job.check]]
+name = "ruff-check"
+run = "ruff check ."
+local = true
+
+[[job]]
+workflow = "python.yml"
+job = "python-types"
+kind = "check"
+setup = ["python -m pip install --quiet pip==26.2.2"]
+[[job.check]]
+name = "mypy-modules"
+run = "mypy -p orvex.store -p orvex.transform -p orvex.semantic -p orvex.access -p orvex.dashboards -p orvex.mcp -p orvex.server -p orvex.contracts"
+local = true
+[[job.check]]
+name = "mypy-tests"
+run = "mypy packages/*/tests tests tools conformance .github/workflows/scripts"
+local = true
+
+[[job]]
+workflow = "python.yml"
+job = "python-tests-part"
+kind = "check"
+pythons = ["3.15", "3.14"]
+setup = [
+  "python -m pip install --quiet pip==26.2.2",
+  'dir="$RUNNER_TEMP/postgres-tls"',
+  "docker run --detach --name azurite --publish 10000:10000 \\",
+  "python -m tools.ci.junit_annotations junit.xml",
+]
+[[job.check]]
+# Locally: the whole suite on each Python of the matrix, in one part. Tests that need the
+# PostgreSQL, ClickHouse or Azurite services CI starts are reported as not run, by reason.
+name = "python-tests"
+run = "python -m pytest -p tools.ci.shard --junitxml=junit.xml"
+local = true
+
+[[job]]
+workflow = "python.yml"
+job = "python-tests"
+kind = "check"
+pythons = ["3.15", "3.14"]
+setup = ['test "$RESULT" = success']
+# Reports the parts of python-tests-part as the required checks; nothing to run locally.
+
+[[job]]
+workflow = "python.yml"
+job = "python-lock"
+kind = "check"
+setup = []
+[[job.check]]
+name = "python-lock"
+run = "for attempt in first second; do"
+local = true
+
+[[job]]
+workflow = "web.yml"
+job = "licenses"
+kind = "check"
+setup = ["python -m pip install --quiet pip==26.2.2"]
+[[job.check]]
+name = "licenses"
+run = "python tools/licenses/check_licenses.py"
+local = true
+
+[[job]]
+workflow = "web.yml"
+job = "web-check"
+kind = "check"
+setup = ["npm ci"]
+[[job.check]]
+name = "web-check"
+directory = "web"
+run = "npm run check"
+local = false
+reason = "the web tools need Node 24 (web/package.json engines); the sandbox has Node 22"
+
+[[job]]
+workflow = "web.yml"
+job = "web-lint"
+kind = "check"
+setup = ["npm ci"]
+[[job.check]]
+name = "web-lint"
+directory = "web"
+run = "npm run lint"
+local = false
+reason = "the web tools need Node 24 (web/package.json engines); the sandbox has Node 22"
+
+[[job]]
+workflow = "web.yml"
+job = "web-test"
+kind = "check"
+setup = ["npm ci"]
+[[job.check]]
+name = "web-test"
+directory = "web"
+run = "npm run test"
+local = false
+reason = "the web tools need Node 24 (web/package.json engines); the sandbox has Node 22"
+
+[[job]]
+workflow = "web.yml"
+job = "web-build"
+kind = "check"
+setup = ["npm ci"]
+[[job.check]]
+name = "web-build"
+directory = "web"
+run = "npm run build"
+local = false
+reason = "the web tools need Node 24 (web/package.json engines); the sandbox has Node 22"
+[[job.check]]
+name = "web-build-static"
+directory = "web"
+run = "test -f build/index.html"
+local = false
+reason = "checks the web build, which needs Node 24"
+[[job.check]]
+name = "web-notices"
+directory = "web"
+run = "python3 ../tools/licenses/web_notices.py build"
+local = false
+reason = "reads the web build, which needs Node 24"
+
+[[job]]
+workflow = "docker.yml"
+job = "docker-build"
+kind = "scoped"
+reason = "runs only when the Dockerfile changes; its base image comes from Docker Hub, which the sandbox cannot reach"
+setup = []
+
+[[job]]
+workflow = "governance.yml"
+job = "governance"
+kind = "check"
+setup = []
+[[job.check]]
+name = "governance"
+run = "python3 .github/workflows/scripts/governance.py"
+local = false
+reason = "reads the pull request's body and files from GitHub; governance-scripts tests its rules"
+
+[[job]]
+workflow = "load-baseline.yml"
+job = "baseline"
+kind = "scoped"
+reason = "runs only when its workflow or tools/benchmarks change, on the synthetic small dataset"
+setup = []
+
+[[job]]
+workflow = "release.yml"
+job = "build"
+kind = "scoped"
+reason = "runs only when the release workflow changes; it builds the web application with Node 24"
+setup = []
+
+[[job]]
+workflow = "dependabot-auto-merge.yml"
+job = "auto-merge"
+kind = "automation"
+setup = []
+
+[[job]]
+workflow = "issue-status.yml"
+job = "status"
+kind = "automation"
+setup = []
+
+[[job]]
+workflow = "release.yml"
+job = "publish"
+kind = "automation"
+setup = []
