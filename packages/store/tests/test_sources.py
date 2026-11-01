@@ -286,7 +286,7 @@ LEAKING_COLUMN = (
 
 
 def test_duckdb_runs_a_generated_column_in_the_reading_session(tmp_path: Path) -> None:
-    """Why #268 refuses them: DuckDB's own behaviour, outside Orvex. If DuckDB stops doing this,
+    """Why #268 refuses them: DuckDB's own behaviour, outside the product. If DuckDB stops doing this,
     the refusal stays (no source SQL on read) and this test documents the change."""
     path = tmp_path / "leaking.duckdb"
     with duckdb.connect(str(path)) as writer:
