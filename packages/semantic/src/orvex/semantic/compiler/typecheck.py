@@ -18,10 +18,13 @@ restrictive below it) and volatility. The rules are the engine's own, never a di
   `SUM` of integers stay integers (`SUM` → signed 128-bit). A precision above 38 is capped at
   38 with an overflow obligation on that node; a scale above 38 is rejected. `/`, `AVG`,
   `MEDIAN` and `PERCENTILE_CONT` over exact inputs take the metric's `rounding` scale (undecided
-  without it: P2-04e records the missing declaration);
+  without it: P2-04e records the missing declaration). A quotient, a mean or a narrowing `CAST`
+  that may exceed its type carries the overflow obligation too;
+- a calendar operation on an instant applies the bucketing field's own `time_zone`, then the
+  bucketed value's, then the model's `default_time_zone`;
 - approximation only when explicit: `CAST … AS DOUBLE`/`FLOAT`, `APPROX_*`, `STDDEV` and
-  `VARIANCE`, `SQRT`/`LN`/`EXP`/`POWER`/`LOG`/trigonometry/`PI`, a literal with an exponent, or a
-  `Float` column;
+  `VARIANCE`, `SQRT`/`LN`/`EXP`/`POWER`/`LOG`/trigonometry/`PI`, or a `Float` column. A
+  number literal is exact, exponent included;
 - a declared `datatype` (and `numeric`) equals the inferred one;
 - `identifier`, `category`, `geo_region`, `latitude` and `longitude` admit no arithmetic, `SUM`
   or `AVG`; `ratio` admits no `SUM`;
@@ -43,6 +46,8 @@ import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time
+from decimal import Decimal
+from fractions import Fraction
 from types import MappingProxyType
 from typing import Literal, TypedDict
 
@@ -61,7 +66,7 @@ from orvex.semantic.ossie import sql
 from orvex.semantic.ossie.model import OssieModel
 
 Kind = Literal["row", "aggregate", "metric"]
-Exactness = Literal["exact", "approximate"]
+Exactness = Literal["exact", "approximate", "unknown"]  # unknown: an undeclared opaque type
 Volatility = Literal["immutable", "query_instant"]
 Json = Mapping[str, object]
 
@@ -164,6 +169,48 @@ def _decimal(logical: LogicalType) -> tuple[int | None, int | None]:
     return logical.precision, logical.scale
 
 
+def _exceeds(
+    precision: int | None, scale: int | None, extra: int | None, rounding: int | None
+) -> bool:
+    """True when a quotient or a mean of that shape may need more than 38 digits: its integer
+    digits (precision - scale + extra) plus the rounding scale; unknown shapes may."""
+    if precision is None or scale is None or extra is None or rounding is None:
+        return True
+    return precision - scale + extra + rounding > MAX_PRECISION
+
+
+def _bounds(logical: LogicalType, scale: int) -> tuple[Fraction, Fraction] | None:
+    """The smallest and largest value of an exact shape once rounded to `scale` digits; None
+    when the shape is unknown. Rounding 9.99 to one digit reaches 10.0."""
+    if logical.datatype == "Integer":
+        if logical.width is None or logical.signed is None:
+            return None
+        if logical.signed:
+            return Fraction(-(2 ** (logical.width - 1))), Fraction(2 ** (logical.width - 1) - 1)
+        return Fraction(0), Fraction(2**logical.width - 1)
+    if logical.precision is None or logical.scale is None:
+        return None
+    if scale < logical.scale:
+        largest = Fraction(10 ** (logical.precision - logical.scale))
+    else:
+        largest = Fraction(10**logical.precision - 1, 10**logical.scale)
+    return -largest, largest
+
+
+def _narrows(source: LogicalType, target: LogicalType) -> bool:
+    """True when a CAST to an exact type may receive a value its target cannot hold (#280 §2:
+    overflow is an obligation, never wraparound). Text, floats and unknown shapes may."""
+    if target.datatype not in ("Integer", "Decimal"):
+        return False
+    if source.datatype not in ("Integer", "Decimal"):
+        return source.datatype not in ("Boolean", "Date", "Time", "DateTime", "DateTimeTz")
+    scale = target.scale if target.datatype == "Decimal" and target.scale is not None else 0
+    held, holds = _bounds(source, scale), _bounds(target, scale)
+    if held is None or holds is None:
+        return True
+    return held[0] < holds[0] or held[1] > holds[1]
+
+
 def _decimal_type(precision: int | None, scale: int | None) -> tuple[LogicalType, bool]:
     if scale is not None and scale > MAX_PRECISION:
         raise _Bad()
@@ -181,23 +228,19 @@ def _widest_integer(types: Iterable[LogicalType]) -> LogicalType:
     return LogicalType("Integer", width=width, signed=True)
 
 
-def _literal_number(text: str) -> tuple[LogicalType, bool]:
-    """(type, approximate) of a number as written."""
-    if "e" in text.lower():
-        return LogicalType("Float"), True
-    if "." in text:
-        whole, fraction = text.split(".", 1)
-        digits = len(whole.lstrip("0")) + len(fraction)
-        precision = max(digits, len(fraction), 1)
-        if precision > MAX_PRECISION:
-            raise _Bad()
-        return LogicalType("Decimal", precision, len(fraction)), False
-    value = int(text)
-    if value < 2**63:
-        return LogicalType("Integer", width=64, signed=True), False
-    if len(str(value)) > MAX_PRECISION:
+def _literal_number(text: str) -> LogicalType:
+    """The exact type of a number as written. A literal is exact, exponent included (`1e3` is
+    1000): approximation comes only from the closed list of #280 §2."""
+    value = Decimal(text)
+    _, digits, exponent = value.as_tuple()  # the scale as written: `2.50` is Decimal(3,2)
+    assert isinstance(exponent, int)
+    scale = max(-exponent, 0)
+    precision = max(len(digits) + max(exponent, 0), scale, 1)
+    if scale > MAX_PRECISION or precision > MAX_PRECISION:
         raise _Bad()
-    return LogicalType("Decimal", len(str(value)), 0), False
+    if scale == 0 and abs(value) < 2**63:
+        return LogicalType("Integer", width=64, signed=True)
+    return LogicalType("Decimal", precision, scale)
 
 
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
@@ -234,8 +277,9 @@ Resolver = Callable[[sql.Ref], NodeType]
 class _Context:
     resolve: Resolver
     rounding: int | None  # the metric's `rounding.scale`
-    zone: str | None  # the zone calendar operations on instants apply, when declared
+    zone: str | None  # the bucketing field's own declared zone (field expressions only)
     dataset_of: Callable[[sql.Ref], str | None]  # the dataset a reference reads, for FILTER
+    default_zone: str | None = None  # the model's `default_time_zone`
 
 
 def _merge(
@@ -267,11 +311,7 @@ def _merge(
         logical=logical,
         semantic_type=semantic,
         nullable=any(t.nullable for t in types) if nullable is None else nullable,
-        exactness="exact"
-        if exact
-        else "approximate"
-        if approximate or any(t.exactness == "approximate" for t in types)
-        else "exact",
+        exactness=_exactness(types, logical, approximate=approximate, exact=exact),
         kind=kind,
         aggregate_class=max(classes, key=sql.AGGREGATE_CLASSES.index) if classes else None,
         volatility="query_instant"
@@ -284,6 +324,18 @@ def _merge(
         bucket_zone=bucket_zone,
         buckets_instant=buckets_instant,
     )
+
+
+def _exactness(
+    types: Sequence[NodeType], logical: LogicalType, *, approximate: bool, exact: bool
+) -> Exactness:
+    if exact:
+        return "exact"
+    if approximate or any(t.exactness == "approximate" for t in types):
+        return "approximate"
+    if any(t.exactness == "unknown" for t in types):
+        return "unknown"
+    return "exact"
 
 
 def _need(child: TypedNode, allowed: frozenset[str]) -> None:
@@ -350,8 +402,16 @@ def _unify(children: Sequence[TypedNode]) -> tuple[LogicalType, bool]:
 
 
 def _semantic(children: Sequence[TypedNode]) -> str | None:
+    """The semantic type of alternatives: theirs when they agree; otherwise the most
+    restrictive among them, so that a restriction never disappears by mixing."""
     kinds = {c.type.semantic_type for c in children if not c.type.constant}
-    return kinds.pop() if len(kinds) == 1 else None
+    if len(kinds) == 1:
+        return kinds.pop()
+    named = {kind for kind in kinds if kind is not None}
+    for restricted in (sorted(named & NO_ARITHMETIC), sorted(named & NO_SUM)):
+        if restricted:
+            return restricted[0]
+    return None
 
 
 class _Checker:
@@ -369,8 +429,7 @@ class _Checker:
     # literals and references
 
     def _number(self, node: sql.Number) -> TypedNode:
-        logical, approximate = _literal_number(node.text)
-        return TypedNode(node, _merge((), logical, nullable=False, approximate=approximate), ())
+        return TypedNode(node, _merge((), _literal_number(node.text), nullable=False), ())
 
     def _string(self, node: sql.String) -> TypedNode:
         return self._leaf(node, LogicalType("String"))
@@ -443,7 +502,10 @@ class _Checker:
         overflow = False
         nullable: bool | None = None
         if node.op == "/":
+            # The quotient needs p1 - s1 + s2 integer digits plus the rounding scale.
+            (p1, s1), (_, s2) = _decimal(a), _decimal(b)
             logical, _ = _decimal_type(MAX_PRECISION, self.context.rounding)
+            overflow = _exceeds(p1, s1, s2, self.context.rounding)
             nullable = True  # a zero denominator follows `zero_denominator`
         elif a.datatype == "Integer" and b.datatype == "Integer":
             logical, overflow = _widest_integer((a, b)), True
@@ -579,6 +641,7 @@ class _Checker:
                 semantic=operand.type.semantic_type,
                 nullable=operand.type.nullable or node.safe,
                 approximate=logical.datatype == "Float",
+                overflow=_narrows(operand.type.logical, logical),
                 bucket_zone=zone,
                 buckets_instant=instant,
             ),
@@ -586,7 +649,10 @@ class _Checker:
         )
 
     def _zone(self, operand: TypedNode) -> str | None:
-        return self.context.zone or operand.type.logical.zone
+        """The zone a calendar operation on an instant applies, the declaration closest to it
+        first: the bucketing field's own `time_zone`, then the bucketed value's, then the
+        model's `default_time_zone`; None when nothing declares one (P2-04e records it)."""
+        return self.context.zone or operand.type.logical.zone or self.context.default_zone
 
     def _window(self, node: sql.Window) -> TypedNode:
         raise _Bad()  # excluded by P2-04b (`window_function`); never reaches typing
@@ -598,11 +664,9 @@ class _Checker:
             return self._aggregate(node)
         if node.filter is not None or node.order is not None or node.distinct:
             raise _Bad()
-        if (
-            node.arguments
-            and isinstance(node.arguments[0], sql.DatePart | sql.String)
-            and (node.name in ("DATE_TRUNC", "DATE_PART", "EXTRACT", "DATEADD", "DATEDIFF"))
-        ):
+        if node.name in ("DATE_TRUNC", "DATE_PART", "EXTRACT", "DATEADD", "DATEDIFF"):
+            if not node.arguments or not isinstance(node.arguments[0], sql.DatePart | sql.String):
+                raise _Bad()  # a calendar function names its date part first
             return self._calendar(node)
         arguments = tuple(self.check(argument) for argument in node.arguments)
         return _Scalars.type(node, arguments, self)
@@ -758,7 +822,9 @@ class _Checker:
         # AVG, MEDIAN, PERCENTILE_CONT: an exact mean or interpolation takes `rounding`.
         if logical.datatype in ("Integer", "Decimal"):
             typed, _ = _decimal_type(MAX_PRECISION, self.context.rounding)
-            return typed, False, False, False, True, semantic
+            precision, scale = _decimal(logical)
+            overflow = _exceeds(precision, scale, 0, self.context.rounding)
+            return typed, False, False, overflow, True, semantic
         return logical, False, False, False, True, semantic
 
 
@@ -827,6 +893,31 @@ class _Scalars:
             "CURRENT_DATE": (0, 0),
             "CURRENT_TIME": (0, 0),
             "CURRENT_TIMESTAMP": (0, 0),
+            **dict.fromkeys(
+                (
+                    "YEAR",
+                    "QUARTER",
+                    "MONTH",
+                    "DAY",
+                    "DAYOFYEAR",
+                    "HOUR",
+                    "MINUTE",
+                    "SECOND",
+                    "SQRT",
+                    "EXP",
+                    "LN",
+                    "LOG10",
+                    "SIN",
+                    "COS",
+                    "TAN",
+                    "ASIN",
+                    "ACOS",
+                    "ATAN",
+                    "RADIANS",
+                    "DEGREES",
+                ),
+                (1, 1),
+            ),
         }
     )
     STRING_ARGUMENTS: Mapping[str, tuple[int, ...]] = MappingProxyType(
@@ -842,7 +933,10 @@ class _Scalars:
     @classmethod
     def type(cls, node: sql.Call, arguments: tuple[TypedNode, ...], checker: _Checker) -> TypedNode:
         name = node.name
-        low, high = cls.ARITY.get(name, (1, 1))
+        arity = cls.ARITY.get(name)
+        if arity is None:
+            raise _Bad()  # every scalar has an explicit signature; anything else is refused
+        low, high = arity
         if not low <= len(arguments) <= high:
             raise _Bad()
         logical, extra = cls._result(name, arguments, checker)
@@ -942,7 +1036,9 @@ class _Scalars:
             whole = max(p - s for p, s in shapes if p is not None and s is not None)
             typed, overflow = _decimal_type(whole + scale, scale)
             return typed, {"semantic": semantic, "overflow": overflow, "nullable": True}
-        return cls._rounding(name, arguments, logical, semantic)
+        if name in ("ROUND", "TRUNC", "TRUNCATE", "FLOOR", "CEIL", "CEILING"):
+            return cls._rounding(name, arguments, logical, semantic)
+        raise _Bad()
 
     @staticmethod
     def _rounding(
@@ -1075,7 +1171,7 @@ class _Model:
                 constant=False,
             )
 
-        context = _Context(column, None, zone or self._zone_or_none(), lambda ref: own)
+        context = _Context(column, None, zone, lambda ref: own, self._zone_or_none())
         tree = _Checker(context).check(member.tree)
         if tree.type.kind != "row" or tree.type.aggregate_class is not None:
             raise _Bad()  # a field is row-level
@@ -1123,7 +1219,7 @@ class _Model:
         def dataset_of(ref: sql.Ref) -> str | None:
             return target(ref).dataset
 
-        return _Context(resolve, scale, self._zone_or_none(), dataset_of)
+        return _Context(resolve, scale, None, dataset_of, self._zone_or_none())
 
     def _opaque(self, member: ParsedMember) -> NodeType:
         """Typed from its declarations; a metric's aggregate class is holistic (#280 §2)."""
@@ -1135,7 +1231,11 @@ class _Model:
             logical=logical,
             semantic_type=None,
             nullable=True,
-            exactness="approximate" if logical.datatype == "Float" else "exact",
+            exactness="approximate"
+            if logical.datatype == "Float"
+            else "unknown"
+            if logical.datatype is None
+            else "exact",
             kind="metric" if metric else "row",
             aggregate_class="holistic" if metric else None,
             volatility="query_instant",  # never interpreted: assumed to vary

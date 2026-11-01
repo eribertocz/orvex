@@ -447,8 +447,6 @@ def _explicit(tree: TypedNode) -> bool:
             current.name in _EXPLICIT or current.name in ("SQRT", "LN", "EXP", "POWER", "PI", "SIN")
         ):
             return True
-        if isinstance(current, sql.Number) and "e" in current.text.lower():
-            return True
         if isinstance(current, sql.Ref) and node.type.logical.datatype == "Float":
             return True
     return False
@@ -476,6 +474,7 @@ _ROW = st.recursive(
         inner.map(lambda t: f"SQRT({t})"),
         inner.map(lambda t: f"ABS({t})"),
         st.tuples(inner, inner).map(lambda t: f"COALESCE({t[0]}, {t[1]})"),
+        st.tuples(inner, inner).map(lambda t: f"CASE WHEN sales.flag THEN {t[0]} ELSE {t[1]} END"),
     ),
     max_leaves=6,
 )
@@ -500,3 +499,183 @@ def test_no_approximate_node_without_an_explicit_approximation(expression: str) 
     for node in walk(tree):
         if node.type.exactness == "approximate":
             assert _explicit(node), expression
+
+
+# --- the Reviewer's first pass: each finding covered for its class ------------------------------
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "SUM(sales.amount + 1e3)",
+        "SUM(COALESCE(sales.amount, 0E0))",
+        "SUM(CASE WHEN sales.flag THEN sales.amount ELSE 0e0 END)",
+        "SUM(sales.amount) + 1.5e-2",
+    ],
+)
+def test_a_number_literal_is_exact_exponent_included(expression: str) -> None:
+    for typed in typed_both(base(metric("x", expression))):
+        x = typed.members[m("x")].type
+        assert x.logical.datatype == "Decimal"
+        assert x.exactness == "exact"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("1e3", LogicalType("Integer", width=64, signed=True)),
+        ("2.50", LogicalType("Decimal", 3, 2)),
+        ("1.5e-2", LogicalType("Decimal", 3, 3)),
+        ("0.05", LogicalType("Decimal", 2, 2)),
+        ("99999999999999999999", LogicalType("Decimal", 20, 0)),
+    ],
+)
+def test_literal_shapes(text: str, expected: LogicalType) -> None:
+    for typed in typed_both(base(metric("x", f"SUM(sales.amount) + {text}"))):
+        tree = typed.members[m("x")].tree
+        assert tree is not None
+        assert tree.children[1].type.logical == expected
+
+
+def overflow_at(document: Model, member: MemberId, path: tuple[int, ...]) -> list[bool]:
+    found = []
+    for typed in typed_both(document):
+        node = typed.members[member].tree
+        assert node is not None
+        for at in path:
+            node = node.children[at]
+        found.append(node.type.overflow_check)
+    return found
+
+
+ROUNDING = {"scale": 4, "mode": "half_even"}
+
+
+@pytest.mark.parametrize(
+    ("expression", "rounding", "expected"),
+    [
+        ("AVG(sales.amount)", ROUNDING, True),  # 36 integer digits + 4 > 38
+        ("AVG(sales.unit_price)", ROUNDING, False),  # 16 + 4
+        ("AVG(sales.unit_price)", None, True),  # undecided scale: may exceed
+        ("SUM(sales.amount) / 3", ROUNDING, True),
+        ("SUM(sales.unit_price) / SUM(sales.quantity)", ROUNDING, True),  # 36 + 0 + 4
+        ("MAX(sales.unit_price) / 2", ROUNDING, False),  # 16 + 0 + 4
+    ],
+)
+def test_quotients_and_means_carry_the_overflow_obligation(
+    expression: str, rounding: object, expected: bool
+) -> None:
+    payload = {"rounding": rounding} if rounding is not None else {}
+    found = overflow_at(base(metric("x", expression, **payload)), m("x"), ())
+    assert found == [expected, expected]
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("CAST(amount AS DECIMAL(5, 2))", True),
+        ("CAST(unit_price AS DECIMAL(18, 2))", False),
+        ("CAST(unit_price AS DECIMAL(17, 1))", True),  # rounding 9.99 reaches 10.0
+        ("CAST(unit_price AS DECIMAL(18, 1))", False),
+        ("CAST(amount AS BIGINT)", True),
+        ("CAST(quantity AS INTEGER)", True),
+        ("CAST(quantity AS BIGINT)", False),
+        ("CAST(quantity AS DECIMAL(19, 0))", False),
+        ("CAST(quantity AS DECIMAL(18, 0))", True),
+        ("CAST(region AS BIGINT)", True),
+        ("CAST(score AS DECIMAL(10, 2))", True),
+        ("CAST(quantity AS VARCHAR)", False),
+    ],
+)
+def test_a_narrowing_cast_carries_the_overflow_obligation(expression: str, expected: bool) -> None:
+    document = base(fields=[field("narrowed", expression)])
+    assert overflow_at(document, f("narrowed"), ()) == [expected, expected]
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "SUM(CASE WHEN sales.flag THEN sales.customer_id ELSE sales.quantity END)",
+        "SUM(GREATEST(sales.customer_id, sales.quantity))",
+        "SUM(COALESCE(sales.customer_id, sales.quantity))",
+        "AVG(CASE WHEN sales.flag THEN sales.customer_id ELSE sales.quantity END)",
+        "SUM(IF(sales.flag, sales.share, sales.unit_price))",
+        "SUM(NVL2(sales.flag, sales.share, sales.unit_price))",
+    ],
+)
+def test_a_semantic_restriction_survives_alternatives(expression: str) -> None:
+    expect_type_error(expression)
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "SUM(DATE_TRUNC(sales.amount))",
+        "SUM(DATE_PART(sales.quantity))",
+        "SUM(DATEDIFF(sales.amount))",
+        "SUM(DATEADD(sales.quantity, 1, sales.sold_on))",
+        "MAX(DATE_TRUNC())",
+        "SUM(ABS(sales.amount, 1))",
+        "SUM(SQRT(sales.amount, 2))",
+        "MAX(YEAR(sales.sold_on, 1))",
+    ],
+)
+def test_every_scalar_has_an_explicit_signature(expression: str) -> None:
+    expect_type_error(expression)
+
+
+def test_the_bucketing_zone_does_not_depend_on_where_it_is_written() -> None:
+    """The bucketing field's own zone, then the bucketed value's, then the model default."""
+    document = base(
+        metric("days", "COUNT(DISTINCT DATE_TRUNC('DAY', sales.zoned))"),
+        metric("utc_days", "COUNT(DISTINCT DATE_TRUNC('DAY', sales.sold_at))"),
+        fields=[
+            field("zoned", "sold_at", time_zone={"name": "America/La_Paz"}),
+            field("zoned_day", "DATE_TRUNC('DAY', sold_at)", time_zone={"name": "Asia/Tokyo"}),
+            field("plain_day", "DATE_TRUNC('DAY', sold_at)"),
+        ],
+        model={"default_time_zone": "UTC"},
+    )
+    for typed in typed_both(document):
+
+        def zone(member: MemberId, *path: int, typed: TypedModel = typed) -> str | None:
+            node = typed.members[member].tree
+            assert node is not None
+            for at in path:
+                node = node.children[at]
+            return node.type.bucket_zone
+
+        assert typed.members[f("zoned")].type.logical.zone == "America/La_Paz"
+        assert zone(m("days"), 0) == "America/La_Paz"  # the value's zone over the default
+        assert zone(m("utc_days"), 0) == "UTC"
+        assert zone(f("zoned_day")) == "Asia/Tokyo"  # the bucketing field's own zone
+        assert zone(f("plain_day")) == "UTC"
+
+
+def test_an_undeclared_opaque_type_is_of_unknown_exactness() -> None:
+    opaque = {
+        "name": "p90",
+        "expression": {"dialects": [{"dialect": "DUCKDB", "expression": "quantile(amount, 0.9)"}]},
+    }
+    document = base()
+    document["datasets"][0]["metrics"] = [opaque]
+    document["metrics"] = [
+        {
+            "name": "doubled",
+            "expression": {"dialects": [{"dialect": CURRENT, "expression": "sales.p90 * 2"}]},
+            "custom_extensions": [
+                extension(
+                    {
+                        "element": "metric",
+                        "over_metrics": {
+                            "expression": "sales.p90 * 2",
+                            "align": {"grain": ["month"], "time": "month"},
+                        },
+                    }
+                )
+            ],
+        }
+    ]
+    for typed in typed_both(document, engines={"sales": "DUCKDB"}):
+        assert typed.members[MemberId("metric", "SALES", "P90")].type.exactness == "unknown"
+        assert typed.members[m("doubled")].type.exactness == "unknown"

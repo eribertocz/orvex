@@ -29,18 +29,6 @@ Datatype = Literal[
     "DateTimeTz",
     "Opaque",
 ]
-DATATYPES: tuple[Datatype, ...] = (
-    "String",
-    "Integer",
-    "Decimal",
-    "Float",
-    "Boolean",
-    "Date",
-    "Time",
-    "DateTime",
-    "DateTimeTz",
-    "Opaque",
-)
 MAX_PRECISION = 38
 
 
