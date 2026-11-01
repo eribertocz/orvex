@@ -300,10 +300,12 @@ def _schema(document: Json, problems: _Problems, entry: Entry, registry: Registr
 
 
 def _names(document: Json, problems: _Problems) -> None:
-    def unique(members: Iterator[tuple[Path, str]]) -> None:
+    def unique(members: Iterator[tuple[Path, str]], sql_names: bool = True) -> None:
         seen: set[str] = set()
         for at, name in members:
-            if expressions.identifier_length(name) > expressions.MAX_IDENTIFIER:
+            too_long = expressions.identifier_length(name) > expressions.MAX_IDENTIFIER
+            # Datasets, fields and metrics are named in expressions: ANSI SQL names (L86).
+            if too_long or (sql_names and not expressions.is_valid_identifier(name)):
                 problems.add(at, "schema")
             key = normalize(name)
             if key in seen:
@@ -314,14 +316,15 @@ def _names(document: Json, problems: _Problems) -> None:
         for at, member in enumerate(_list(node, key)):
             yield (*prefix, key, at, "name"), member["name"]
 
-    unique(iter([(("name",), document["name"])]))
+    # The model and relationships are never named inside an expression.
+    unique(iter([(("name",), document["name"])]), sql_names=False)
     unique(named("datasets", document))
     for at, dataset in enumerate(_list(document, "datasets")):
         path: Path = ("datasets", at)
         # A dataset's fields and dataset metrics share one namespace (spec §Metric Scoping).
         unique(iter([*named("fields", dataset, path), *named("metrics", dataset, path)]))
     unique(named("metrics", document))
-    unique(named("relationships", document))
+    unique(named("relationships", document), sql_names=False)
     problems.raise_if_any()
 
 
@@ -629,7 +632,7 @@ def _dialects(
     problems: _Problems,
     engines: Mapping[str, str],
     vendor_names: Sequence[str],
-    derived: frozenset[str],
+    derived: Mapping[str, Mapping[str, object]],
 ) -> list[SelectedExpression]:
     """Two entries for one dialect are `schema`. An entry under the product's own token is a
     product construct, so it is explicit only on a metric whose product entry declares a derived
@@ -657,8 +660,16 @@ def _dialects(
             if entry["dialect"] in seen:
                 problems.add(at_dialect, "schema")
             seen.add(entry["dialect"])
-            if entry["dialect"] in vendor_names and _pointer(path) not in derived:
-                problems.add(at_dialect, "extension")
+            if entry["dialect"] in vendor_names:
+                payload = derived.get(_pointer(path))
+                if payload is None:
+                    problems.add(at_dialect, "extension")
+                else:
+                    over = cast(Mapping[str, object], payload.get("over_metrics") or {})
+                    if over.get("expression", entry["expression"]) != entry["expression"]:
+                        # The payload and the dialect entry state one expression twice.
+                        at_text: Path = (*path, "expression", "dialects", at, "expression")
+                        problems.add(at_text, "extension_conflict")
     problems.raise_if_any()
     selected: list[SelectedExpression] = []
     for path, member, engine in members:
@@ -722,11 +733,11 @@ def read(
     index = _Index.of(document)
     _references(document, index, problems, vendor_names)
     found = _extensions(document, index, problems, vendor_names)
-    derived = frozenset(
-        extension.pointer.rsplit("/custom_extensions/", 1)[0]
+    derived = {
+        extension.pointer.rsplit("/custom_extensions/", 1)[0]: extension.payload
         for extension in found.product
         if "over_metrics" in extension.payload or "window" in extension.payload
-    )
+    }
     selected = _dialects(document, index, problems, engines_by_name, vendor_names, derived)
     return OssieModel(
         path=path,

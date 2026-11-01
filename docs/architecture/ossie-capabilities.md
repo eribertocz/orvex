@@ -21,11 +21,11 @@ Pinned revision: `c721ffc` (`0.2.0.dev0`). "Upstream" is what the watch tracks; 
 | `to_columns` covering a key of `to` | the official validator warns | the product refuses, unless a declared as-of match is coherent (`temporal`) | — | — |
 | Data types; `is_time` | specified | `numeric` (precision, scale, width), `time_zone`, `calendar` | — | — |
 | Expressions in OSSIE_SQL_2026; dialect entries | specified; `sql` is authoritative | — | — | — |
-| A metric naming another metric (derived metric) | not supported (spec L424, L692–L699) | `over_metrics` or `window`, with the expression under the product's dialect token | derived and cumulative metrics are on the roadmap | none yet |
+| A metric naming another metric (derived metric) | not supported (spec L424, L692–L699) | `over_metrics` or `window`, with the expression under the product's dialect token; for `over_metrics`, that entry and the payload state the same expression | derived and cumulative metrics are on the roadmap | none yet |
 | Aggregation method, additivity | decomposability table (`expression_language.md` L281) | `additivity`, `aggregate_class`, `non_additive_axes`, `period_end` | aggregation method is on the roadmap | none yet |
 | Grain and entity | — | `entity`, `entity_keys`, `grain` | on the roadmap | none yet |
 | Semantic filters | — | `segments`, `context`, `level_of_detail` | on the roadmap | none yet |
-| Units and formats | — | `unit`, `format`, `semantic_type` | Ossie PR #287 (`measurement`, `display_format`) | names already aligned |
+| Units and formats | — | `unit`, `format`, `semantic_type` | Ossie PR #287 (`measurement`, `display_format`) | a mapped rename (`unit` → `measurement`, `format` → `display_format`) |
 | `custom_extensions.data` | an opaque string | JSON text of one object | Ossie PR #522 (an object) | only the decoding changes |
 | Other vendors' extensions | carried, not interpreted | listed, never interpreted; reviewed before execution (P2-12) | — | — |
 
@@ -33,7 +33,7 @@ Pinned revision: `c721ffc` (`0.2.0.dev0`). "Upstream" is what the watch tracks; 
 
 | Cases | Class | Product representation |
 |---|---|---|
-| 16 models | conformant Ossie | — |
+| 16 models | accepted by P2-03's checks; the syntax and types of expressions are checked by P2-04 | — |
 | CASE-006, -009, -010, -021 | not conformant: a metric names a metric | a derived metric. CASE-010's translation declares `over_metrics` from bi-platform's grain. The other three need a declaration that the corpus does not give: an alignment for -006 and -009, a `window` for -021. |
 | CASE-013 | conformant Ossie, refused by the product's key-coverage rule | a declared as-of match (`temporal`) |
 

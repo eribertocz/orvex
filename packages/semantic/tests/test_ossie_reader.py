@@ -179,6 +179,13 @@ ROWS: list[tuple[str, Change, str, str, str]] = [
         "/datasets/0/fields/4/name",
     ),
     (
+        "name-not-an-ansi-identifier",
+        lambda m: fld(m, "note").update(name="my note"),
+        "OSSIE_INVALID",
+        "schema",
+        "/datasets/0/fields/4/name",
+    ),
+    (
         "relationship-to-unknown",
         lambda m: rel(m).update(to="nobody"),
         "OSSIE_INVALID",
@@ -520,6 +527,52 @@ def test_the_product_dialect_needs_an_explicit_derived_declaration() -> None:
         content = as_yaml(model) if form == "yaml" else as_json(model)
         (selected,) = [e for e in load(content, form).expressions if e.element == "/metrics/1"]
         assert (selected.dialect, selected.text) == (CURRENT, "revenue * 2")
+
+
+WINDOW = {
+    "function": "running_total",
+    "of": "revenue",
+    "partition_by": [],
+    "order_by": ["month"],
+    "densify": "calendar",
+}
+
+
+@pytest.mark.parametrize("form", ["yaml", "json"])
+def test_derived_declarations_and_the_product_dialect(form: str) -> None:
+    def render(model: Model) -> bytes:
+        return as_yaml(model) if form == "yaml" else as_json(model)
+
+    def chosen(model: Model) -> tuple[str, str]:
+        (selected,) = [
+            e for e in load(render(model), form).expressions if e.element == "/metrics/1"
+        ]
+        return selected.dialect, selected.text
+
+    # A `window` declaration makes the product dialect explicit, as `over_metrics` does.
+    model = derived(base(), declare=False)
+    put(model["metrics"][1], {"version": 1, "element": "metric", "window": WINDOW})
+    assert chosen(model) == (CURRENT, "revenue * 2")
+    # A portable form always wins on a declared derived metric.
+    model = derived(base(), declare=True)
+    model["metrics"][1]["expression"]["sql"] = "SUM(sales.amount) * 2"
+    assert chosen(model) == ("OSSIE_SQL_2026", "SUM(sales.amount) * 2")
+    # On a field, the product's token is never explicit.
+    model = base()
+    fld(model, "note")["expression"] = {"dialects": [{"dialect": CURRENT, "expression": "note"}]}
+    (problem,) = problems(failure(render(model), form))
+    assert (problem["rule"], problem["pointer"]) == (
+        "extension",
+        "/datasets/0/fields/4/expression/dialects/0/dialect",
+    )
+    # The payload and the dialect entry must state the same expression.
+    model = derived(base(), declare=True)
+    model["metrics"][1]["expression"]["dialects"][0]["expression"] = "revenue * 3"
+    (problem,) = problems(failure(render(model), form))
+    assert (problem["rule"], problem["pointer"]) == (
+        "extension_conflict",
+        "/metrics/1/expression/dialects/0/expression",
+    )
 
 
 def test_a_declared_derived_metric_still_cannot_name_metrics_in_ossie_sql() -> None:

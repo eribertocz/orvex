@@ -84,6 +84,18 @@ def identifier_length(name: str) -> int:
     return len(normalize(name))
 
 
+_REGULAR = re.compile(r"[^\W\d]\w*")
+
+
+def is_valid_identifier(name: str) -> bool:
+    """`expression_language.md` L86: identifiers follow ANSI SQL naming. A regular identifier
+    starts with a letter or `_` and continues with letters, digits or `_`; a double-quoted
+    identifier holds any non-empty text, with `""` for a quote."""
+    if len(name) >= 2 and name.startswith('"') and name.endswith('"'):
+        return bool(normalize(name)) and '"' not in name[1:-1].replace('""', "")
+    return _REGULAR.fullmatch(name) is not None
+
+
 @dataclass(frozen=True)
 class Reference:
     """A column reference: one part (`field`) or two (`dataset.field`), each normalized."""
