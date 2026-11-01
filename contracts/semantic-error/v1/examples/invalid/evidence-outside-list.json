@@ -1,0 +1,18 @@
+{
+  "kind": "semantic_error",
+  "code": "EVIDENCE_VIOLATED",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "builder",
+  "message": "The data of sales.amount breaks what is declared (unique) on region, month: 37 cases.",
+  "locale": "en",
+  "details": {
+    "dataset": "sales.amount",
+    "evidence": "trusted",
+    "fields": [
+      "region",
+      "month"
+    ],
+    "violations": "37"
+  }
+}

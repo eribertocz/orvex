@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_error",
+  "code": "EVIDENCE_VIOLATED",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "builder",
+  "message": "The data of sales.amount breaks what is declared (unique); the query does not run.",
+  "locale": "en",
+  "details": {
+    "dataset": "sales.amount",
+    "evidence": "unique"
+  }
+}

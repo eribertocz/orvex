@@ -1,0 +1,14 @@
+{
+  "kind": "semantic_error",
+  "code": "POLICY_NOT_SUPPORTED_ON_ENGINE",
+  "severity": "error",
+  "category": "security",
+  "audience": "builder",
+  "message": "The dataset sales.amount cannot be used: the policy zone_rows cannot be applied safely (subquery_outside_lake).",
+  "locale": "en",
+  "details": {
+    "dataset": "sales.amount",
+    "policy": "zone_rows",
+    "reason": "subquery_outside_lake"
+  }
+}

@@ -20,6 +20,8 @@ python -m tools.contracts.validate   # CONTRACT_SCHEMA_INVALID, CONTRACT_EXAMPLE
 python -m tools.contracts.generate   # Python (packages/contracts) and TypeScript (web/src/lib/contracts); CONTRACT_TYPES_STALE, CONTRACT_TOOLING_MISSING
 ```
 
+A contract may also ship data beside its schema, such as a message catalog: every other `*.json` of a version (not `schema.json`, not `examples/`) is copied verbatim into the generated Python package under `<contract>/v<N>_data/`.
+
 Generated code is committed and never edited by hand; CI fails when it is stale (`CONTRACT_TYPES_STALE`, including orphaned files).
 
 `CONTRACT_EXAMPLE_ACCEPTED` covers both an invalid example that validates and one rejected for a reason other than its `.expected.txt`; the finding's detail says which.

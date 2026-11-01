@@ -1,0 +1,19 @@
+{
+  "kind": "semantic_error",
+  "code": "CROSS_ENGINE_QUERY",
+  "severity": "error",
+  "category": "engine",
+  "audience": "builder",
+  "message": "The query combines billing_customer, shipping_customer, which live on the engines billing_customer, shipping_customer.",
+  "locale": "en",
+  "details": {
+    "datasets": [
+      "billing_customer",
+      "shipping_customer"
+    ],
+    "engines": [
+      "billing_customer",
+      "shipping_customer"
+    ]
+  }
+}

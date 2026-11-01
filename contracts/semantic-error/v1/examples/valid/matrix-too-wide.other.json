@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_error",
+  "code": "MATRIX_TOO_WIDE",
+  "severity": "error",
+  "category": "budget",
+  "audience": "other",
+  "message": "La matriz supera el máximo de columns (37); agregue un filtro o un nivel más general.",
+  "locale": "es",
+  "details": {
+    "limit": "columns",
+    "maximum": "37"
+  }
+}

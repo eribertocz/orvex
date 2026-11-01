@@ -1,0 +1,10 @@
+{
+  "kind": "semantic_error",
+  "code": "METRIC_CYCLE",
+  "severity": "error",
+  "category": "model",
+  "audience": "other",
+  "message": "Unas métricas se definen en círculo.",
+  "locale": "es",
+  "details": {}
+}

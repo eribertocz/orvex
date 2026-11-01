@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_error",
+  "code": "BRIDGE_WEIGHTS_INVALID",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "builder",
+  "message": "The weights of the bridge sales.amount do not add up to the declared total in 37 groups.",
+  "locale": "en",
+  "details": {
+    "bridge": "sales.amount",
+    "groups": "37"
+  }
+}

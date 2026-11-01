@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_error",
+  "code": "QUERY_BUDGET_EXCEEDED",
+  "severity": "error",
+  "category": "budget",
+  "audience": "builder",
+  "message": "The query exceeds the rows_scanned budget (37); add a filter or a coarser level.",
+  "locale": "en",
+  "details": {
+    "budget": "rows_scanned",
+    "limit": "37"
+  }
+}

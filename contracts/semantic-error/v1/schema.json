@@ -1,0 +1,3461 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.invalid/semantic-error/v1/schema.json",
+  "title": "SemanticError",
+  "description": "A rejection, warning or notice of the semantic engine: a stable code, its fixed severity and category, a rendered message and typed details.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/AmbiguousRelationshipPathError"
+    },
+    {
+      "$ref": "#/$defs/AmbiguousRelationshipPathPublicError"
+    },
+    {
+      "$ref": "#/$defs/AsKnownAtUnsupportedError"
+    },
+    {
+      "$ref": "#/$defs/BridgeWeightsInvalidError"
+    },
+    {
+      "$ref": "#/$defs/BridgeWeightsInvalidPublicError"
+    },
+    {
+      "$ref": "#/$defs/ContextConflictError"
+    },
+    {
+      "$ref": "#/$defs/ContextConflictPublicError"
+    },
+    {
+      "$ref": "#/$defs/CoveragePolicyRequiredError"
+    },
+    {
+      "$ref": "#/$defs/CrossEngineQueryError"
+    },
+    {
+      "$ref": "#/$defs/CrossEngineQueryPublicError"
+    },
+    {
+      "$ref": "#/$defs/DeprecatedMetricError"
+    },
+    {
+      "$ref": "#/$defs/DivisionPolicyViolationError"
+    },
+    {
+      "$ref": "#/$defs/EngineVersionUntestedError"
+    },
+    {
+      "$ref": "#/$defs/EngineVersionUntestedPublicError"
+    },
+    {
+      "$ref": "#/$defs/EvidenceViolatedError"
+    },
+    {
+      "$ref": "#/$defs/EvidenceViolatedPublicError"
+    },
+    {
+      "$ref": "#/$defs/FanoutNotIsolatableError"
+    },
+    {
+      "$ref": "#/$defs/FanoutNotIsolatablePublicError"
+    },
+    {
+      "$ref": "#/$defs/FilterCycleError"
+    },
+    {
+      "$ref": "#/$defs/FilterCyclePublicError"
+    },
+    {
+      "$ref": "#/$defs/IllegalGrainTransitionError"
+    },
+    {
+      "$ref": "#/$defs/IllegalGrainTransitionPublicError"
+    },
+    {
+      "$ref": "#/$defs/IllegalTemporalReaggregationError"
+    },
+    {
+      "$ref": "#/$defs/IllegalTemporalReaggregationPublicError"
+    },
+    {
+      "$ref": "#/$defs/IncompatibleUnitsError"
+    },
+    {
+      "$ref": "#/$defs/MatrixTooWideError"
+    },
+    {
+      "$ref": "#/$defs/MatrixTooWidePublicError"
+    },
+    {
+      "$ref": "#/$defs/MemberMaskedError"
+    },
+    {
+      "$ref": "#/$defs/MemberNotFoundError"
+    },
+    {
+      "$ref": "#/$defs/MetricAlignmentAmbiguousError"
+    },
+    {
+      "$ref": "#/$defs/MetricCycleError"
+    },
+    {
+      "$ref": "#/$defs/MetricCyclePublicError"
+    },
+    {
+      "$ref": "#/$defs/MetricInUseError"
+    },
+    {
+      "$ref": "#/$defs/MetricInUsePublicError"
+    },
+    {
+      "$ref": "#/$defs/MissingAdditivityDeclarationError"
+    },
+    {
+      "$ref": "#/$defs/MissingCardinalityDeclarationError"
+    },
+    {
+      "$ref": "#/$defs/MissingCardinalityDeclarationPublicError"
+    },
+    {
+      "$ref": "#/$defs/MissingExtensionDeclarationError"
+    },
+    {
+      "$ref": "#/$defs/NoRelationshipPathError"
+    },
+    {
+      "$ref": "#/$defs/OssieInvalidError"
+    },
+    {
+      "$ref": "#/$defs/OssieInvalidPublicError"
+    },
+    {
+      "$ref": "#/$defs/ParameterInvalidError"
+    },
+    {
+      "$ref": "#/$defs/PolicyAttributeMissingError"
+    },
+    {
+      "$ref": "#/$defs/PolicyNotSupportedOnEngineError"
+    },
+    {
+      "$ref": "#/$defs/PolicyNotSupportedOnEnginePublicError"
+    },
+    {
+      "$ref": "#/$defs/QueryBudgetExceededError"
+    },
+    {
+      "$ref": "#/$defs/QueryBudgetExceededPublicError"
+    },
+    {
+      "$ref": "#/$defs/ReaggregationNotAllowedError"
+    },
+    {
+      "$ref": "#/$defs/TemporalMatchNotUniqueError"
+    },
+    {
+      "$ref": "#/$defs/TemporalMatchNotUniquePublicError"
+    },
+    {
+      "$ref": "#/$defs/UnsupportedOperationError"
+    },
+    {
+      "$ref": "#/$defs/UnsupportedOssieVersionError"
+    },
+    {
+      "$ref": "#/$defs/WindowUndefinedAtTotalError"
+    }
+  ],
+  "$defs": {
+    "Name": {
+      "description": "A name from the model or the query (a member, dataset, relationship, policy, unit, role). Never a data value, a secret or SQL.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "Names": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/Name"
+      }
+    },
+    "Names2": {
+      "description": "Two names or more (a cycle repeats its first name at the end).",
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/Name"
+      }
+    },
+    "Path": {
+      "description": "A project-relative file path.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\u0000-\\u001f\\u007f/\\\\][^\\u0000-\\u001f\\u007f\\\\]*$"
+    },
+    "Version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[0-9A-Za-z][0-9A-Za-z.+-]*$"
+    },
+    "Versions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/Version"
+      }
+    },
+    "Count": {
+      "description": "An exact non-negative count, as text.",
+      "type": "string",
+      "maxLength": 40,
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "Problem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pointer",
+        "line",
+        "rule"
+      ],
+      "properties": {
+        "pointer": {
+          "description": "JSON Pointer (RFC 6901) into the document.",
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^(/([^/~\\u0000-\\u001f]|~[01])*)*$"
+        },
+        "line": {
+          "$ref": "#/$defs/Count"
+        },
+        "rule": {
+          "enum": [
+            "syntax",
+            "schema",
+            "duplicate_name",
+            "reference",
+            "extension",
+            "extension_duplicate"
+          ]
+        }
+      }
+    },
+    "Problems": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/Problem"
+      }
+    },
+    "SemanticErrorCode": {
+      "description": "Every v1 code. Each is stable: a new code is a compatible addition; removing one or changing its meaning needs v2.",
+      "enum": [
+        "AMBIGUOUS_RELATIONSHIP_PATH",
+        "AS_KNOWN_AT_UNSUPPORTED",
+        "BRIDGE_WEIGHTS_INVALID",
+        "CONTEXT_CONFLICT",
+        "COVERAGE_POLICY_REQUIRED",
+        "CROSS_ENGINE_QUERY",
+        "DEPRECATED_METRIC",
+        "DIVISION_POLICY_VIOLATION",
+        "ENGINE_VERSION_UNTESTED",
+        "EVIDENCE_VIOLATED",
+        "FANOUT_NOT_ISOLATABLE",
+        "FILTER_CYCLE",
+        "ILLEGAL_GRAIN_TRANSITION",
+        "ILLEGAL_TEMPORAL_REAGGREGATION",
+        "INCOMPATIBLE_UNITS",
+        "MATRIX_TOO_WIDE",
+        "MEMBER_MASKED",
+        "MEMBER_NOT_FOUND",
+        "METRIC_ALIGNMENT_AMBIGUOUS",
+        "METRIC_CYCLE",
+        "METRIC_IN_USE",
+        "MISSING_ADDITIVITY_DECLARATION",
+        "MISSING_CARDINALITY_DECLARATION",
+        "MISSING_EXTENSION_DECLARATION",
+        "NO_RELATIONSHIP_PATH",
+        "OSSIE_INVALID",
+        "PARAMETER_INVALID",
+        "POLICY_ATTRIBUTE_MISSING",
+        "POLICY_NOT_SUPPORTED_ON_ENGINE",
+        "QUERY_BUDGET_EXCEEDED",
+        "REAGGREGATION_NOT_ALLOWED",
+        "TEMPORAL_MATCH_NOT_UNIQUE",
+        "UNSUPPORTED_OPERATION",
+        "UNSUPPORTED_OSSIE_VERSION",
+        "WINDOW_UNDEFINED_AT_TOTAL"
+      ]
+    },
+    "Severity": {
+      "enum": [
+        "error",
+        "warning",
+        "notice"
+      ]
+    },
+    "Category": {
+      "enum": [
+        "model",
+        "query",
+        "correctness",
+        "security",
+        "budget",
+        "engine"
+      ]
+    },
+    "Locale": {
+      "enum": [
+        "es",
+        "en"
+      ]
+    },
+    "Audience": {
+      "description": "Who the message was rendered for. `other`, the default, gets the generic message and public details; `builder` may also see builder details. Never a data permission.",
+      "enum": [
+        "other",
+        "builder"
+      ]
+    },
+    "AmbiguousRelationshipPathDetails": {
+      "description": "Details of AMBIGUOUS_RELATIONSHIP_PATH, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to",
+        "roles"
+      ],
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/Name"
+        },
+        "to": {
+          "$ref": "#/$defs/Name"
+        },
+        "roles": {
+          "$ref": "#/$defs/Names2"
+        }
+      }
+    },
+    "AmbiguousRelationshipPathPublicDetails": {
+      "description": "Details of AMBIGUOUS_RELATIONSHIP_PATH for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/Name"
+        },
+        "to": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "AmbiguousRelationshipPathError": {
+      "description": "AMBIGUOUS_RELATIONSHIP_PATH as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "AMBIGUOUS_RELATIONSHIP_PATH"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/AmbiguousRelationshipPathDetails"
+        }
+      }
+    },
+    "AmbiguousRelationshipPathPublicError": {
+      "description": "AMBIGUOUS_RELATIONSHIP_PATH as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "AMBIGUOUS_RELATIONSHIP_PATH"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/AmbiguousRelationshipPathPublicDetails"
+        }
+      }
+    },
+    "AsKnownAtUnsupportedDetails": {
+      "description": "Details of AS_KNOWN_AT_UNSUPPORTED, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "AsKnownAtUnsupportedError": {
+      "description": "AS_KNOWN_AT_UNSUPPORTED: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "AS_KNOWN_AT_UNSUPPORTED"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/AsKnownAtUnsupportedDetails"
+        }
+      }
+    },
+    "BridgeWeightsInvalidDetails": {
+      "description": "Details of BRIDGE_WEIGHTS_INVALID, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bridge",
+        "groups"
+      ],
+      "properties": {
+        "bridge": {
+          "$ref": "#/$defs/Name"
+        },
+        "groups": {
+          "$ref": "#/$defs/Count"
+        }
+      }
+    },
+    "BridgeWeightsInvalidPublicDetails": {
+      "description": "Details of BRIDGE_WEIGHTS_INVALID for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bridge"
+      ],
+      "properties": {
+        "bridge": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "BridgeWeightsInvalidError": {
+      "description": "BRIDGE_WEIGHTS_INVALID as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "BRIDGE_WEIGHTS_INVALID"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/BridgeWeightsInvalidDetails"
+        }
+      }
+    },
+    "BridgeWeightsInvalidPublicError": {
+      "description": "BRIDGE_WEIGHTS_INVALID as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "BRIDGE_WEIGHTS_INVALID"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/BridgeWeightsInvalidPublicDetails"
+        }
+      }
+    },
+    "ContextConflictDetails": {
+      "description": "Details of CONTEXT_CONFLICT, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scopes"
+      ],
+      "properties": {
+        "scopes": {
+          "$ref": "#/$defs/Names2"
+        }
+      }
+    },
+    "ContextConflictPublicDetails": {
+      "description": "Details of CONTEXT_CONFLICT for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "ContextConflictError": {
+      "description": "CONTEXT_CONFLICT as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "CONTEXT_CONFLICT"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/ContextConflictDetails"
+        }
+      }
+    },
+    "ContextConflictPublicError": {
+      "description": "CONTEXT_CONFLICT as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "CONTEXT_CONFLICT"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/ContextConflictPublicDetails"
+        }
+      }
+    },
+    "CoveragePolicyRequiredDetails": {
+      "description": "Details of COVERAGE_POLICY_REQUIRED, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dimension"
+      ],
+      "properties": {
+        "dimension": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "CoveragePolicyRequiredError": {
+      "description": "COVERAGE_POLICY_REQUIRED: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "COVERAGE_POLICY_REQUIRED"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/CoveragePolicyRequiredDetails"
+        }
+      }
+    },
+    "CrossEngineQueryDetails": {
+      "description": "Details of CROSS_ENGINE_QUERY, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "datasets",
+        "engines"
+      ],
+      "properties": {
+        "datasets": {
+          "$ref": "#/$defs/Names2"
+        },
+        "engines": {
+          "$ref": "#/$defs/Names2"
+        }
+      }
+    },
+    "CrossEngineQueryPublicDetails": {
+      "description": "Details of CROSS_ENGINE_QUERY for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "datasets"
+      ],
+      "properties": {
+        "datasets": {
+          "$ref": "#/$defs/Names2"
+        }
+      }
+    },
+    "CrossEngineQueryError": {
+      "description": "CROSS_ENGINE_QUERY as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "CROSS_ENGINE_QUERY"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "engine"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/CrossEngineQueryDetails"
+        }
+      }
+    },
+    "CrossEngineQueryPublicError": {
+      "description": "CROSS_ENGINE_QUERY as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "CROSS_ENGINE_QUERY"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "engine"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/CrossEngineQueryPublicDetails"
+        }
+      }
+    },
+    "DeprecatedMetricDetails": {
+      "description": "Details of DEPRECATED_METRIC, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "DeprecatedMetricError": {
+      "description": "DEPRECATED_METRIC: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "DEPRECATED_METRIC"
+        },
+        "severity": {
+          "const": "warning"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/DeprecatedMetricDetails"
+        }
+      }
+    },
+    "DivisionPolicyViolationDetails": {
+      "description": "Details of DIVISION_POLICY_VIOLATION, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "DivisionPolicyViolationError": {
+      "description": "DIVISION_POLICY_VIOLATION: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "DIVISION_POLICY_VIOLATION"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/DivisionPolicyViolationDetails"
+        }
+      }
+    },
+    "EngineVersionUntestedDetails": {
+      "description": "Details of ENGINE_VERSION_UNTESTED, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engine",
+        "found",
+        "tested"
+      ],
+      "properties": {
+        "engine": {
+          "$ref": "#/$defs/Name"
+        },
+        "found": {
+          "$ref": "#/$defs/Version"
+        },
+        "tested": {
+          "$ref": "#/$defs/Versions"
+        }
+      }
+    },
+    "EngineVersionUntestedPublicDetails": {
+      "description": "Details of ENGINE_VERSION_UNTESTED for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engine"
+      ],
+      "properties": {
+        "engine": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "EngineVersionUntestedError": {
+      "description": "ENGINE_VERSION_UNTESTED as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "ENGINE_VERSION_UNTESTED"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "engine"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/EngineVersionUntestedDetails"
+        }
+      }
+    },
+    "EngineVersionUntestedPublicError": {
+      "description": "ENGINE_VERSION_UNTESTED as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "ENGINE_VERSION_UNTESTED"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "engine"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/EngineVersionUntestedPublicDetails"
+        }
+      }
+    },
+    "EvidenceViolatedDetails": {
+      "description": "Details of EVIDENCE_VIOLATED, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset",
+        "evidence",
+        "fields",
+        "violations"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/Name"
+        },
+        "evidence": {
+          "enum": [
+            "unique",
+            "cardinality",
+            "referential_integrity",
+            "non_overlap",
+            "append_only",
+            "bridge_weights"
+          ]
+        },
+        "fields": {
+          "$ref": "#/$defs/Names"
+        },
+        "violations": {
+          "$ref": "#/$defs/Count"
+        }
+      }
+    },
+    "EvidenceViolatedPublicDetails": {
+      "description": "Details of EVIDENCE_VIOLATED for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset",
+        "evidence"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/Name"
+        },
+        "evidence": {
+          "enum": [
+            "unique",
+            "cardinality",
+            "referential_integrity",
+            "non_overlap",
+            "append_only",
+            "bridge_weights"
+          ]
+        }
+      }
+    },
+    "EvidenceViolatedError": {
+      "description": "EVIDENCE_VIOLATED as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "EVIDENCE_VIOLATED"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/EvidenceViolatedDetails"
+        }
+      }
+    },
+    "EvidenceViolatedPublicError": {
+      "description": "EVIDENCE_VIOLATED as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "EVIDENCE_VIOLATED"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/EvidenceViolatedPublicDetails"
+        }
+      }
+    },
+    "FanoutNotIsolatableDetails": {
+      "description": "Details of FANOUT_NOT_ISOLATABLE, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "relationship"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Name"
+        },
+        "relationship": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "FanoutNotIsolatablePublicDetails": {
+      "description": "Details of FANOUT_NOT_ISOLATABLE for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "FanoutNotIsolatableError": {
+      "description": "FANOUT_NOT_ISOLATABLE as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "FANOUT_NOT_ISOLATABLE"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/FanoutNotIsolatableDetails"
+        }
+      }
+    },
+    "FanoutNotIsolatablePublicError": {
+      "description": "FANOUT_NOT_ISOLATABLE as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "FANOUT_NOT_ISOLATABLE"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/FanoutNotIsolatablePublicDetails"
+        }
+      }
+    },
+    "FilterCycleDetails": {
+      "description": "Details of FILTER_CYCLE, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "filters"
+      ],
+      "properties": {
+        "filters": {
+          "$ref": "#/$defs/Names2"
+        }
+      }
+    },
+    "FilterCyclePublicDetails": {
+      "description": "Details of FILTER_CYCLE for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "FilterCycleError": {
+      "description": "FILTER_CYCLE as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "FILTER_CYCLE"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/FilterCycleDetails"
+        }
+      }
+    },
+    "FilterCyclePublicError": {
+      "description": "FILTER_CYCLE as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "FILTER_CYCLE"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/FilterCyclePublicDetails"
+        }
+      }
+    },
+    "IllegalGrainTransitionDetails": {
+      "description": "Details of ILLEGAL_GRAIN_TRANSITION, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "grain"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Name"
+        },
+        "grain": {
+          "$ref": "#/$defs/Names"
+        }
+      }
+    },
+    "IllegalGrainTransitionPublicDetails": {
+      "description": "Details of ILLEGAL_GRAIN_TRANSITION for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "IllegalGrainTransitionError": {
+      "description": "ILLEGAL_GRAIN_TRANSITION as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "ILLEGAL_GRAIN_TRANSITION"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/IllegalGrainTransitionDetails"
+        }
+      }
+    },
+    "IllegalGrainTransitionPublicError": {
+      "description": "ILLEGAL_GRAIN_TRANSITION as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "ILLEGAL_GRAIN_TRANSITION"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/IllegalGrainTransitionPublicDetails"
+        }
+      }
+    },
+    "IllegalTemporalReaggregationDetails": {
+      "description": "Details of ILLEGAL_TEMPORAL_REAGGREGATION, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "axis"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Name"
+        },
+        "axis": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "IllegalTemporalReaggregationPublicDetails": {
+      "description": "Details of ILLEGAL_TEMPORAL_REAGGREGATION for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "IllegalTemporalReaggregationError": {
+      "description": "ILLEGAL_TEMPORAL_REAGGREGATION as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "ILLEGAL_TEMPORAL_REAGGREGATION"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/IllegalTemporalReaggregationDetails"
+        }
+      }
+    },
+    "IllegalTemporalReaggregationPublicError": {
+      "description": "ILLEGAL_TEMPORAL_REAGGREGATION as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "ILLEGAL_TEMPORAL_REAGGREGATION"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/IllegalTemporalReaggregationPublicDetails"
+        }
+      }
+    },
+    "IncompatibleUnitsDetails": {
+      "description": "Details of INCOMPATIBLE_UNITS, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "units"
+      ],
+      "properties": {
+        "units": {
+          "$ref": "#/$defs/Names2"
+        }
+      }
+    },
+    "IncompatibleUnitsError": {
+      "description": "INCOMPATIBLE_UNITS: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "INCOMPATIBLE_UNITS"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/IncompatibleUnitsDetails"
+        }
+      }
+    },
+    "MatrixTooWideDetails": {
+      "description": "Details of MATRIX_TOO_WIDE, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "limit",
+        "maximum",
+        "requested"
+      ],
+      "properties": {
+        "limit": {
+          "enum": [
+            "columns",
+            "cells"
+          ]
+        },
+        "maximum": {
+          "$ref": "#/$defs/Count"
+        },
+        "requested": {
+          "$ref": "#/$defs/Count"
+        }
+      }
+    },
+    "MatrixTooWidePublicDetails": {
+      "description": "Details of MATRIX_TOO_WIDE for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "limit",
+        "maximum"
+      ],
+      "properties": {
+        "limit": {
+          "enum": [
+            "columns",
+            "cells"
+          ]
+        },
+        "maximum": {
+          "$ref": "#/$defs/Count"
+        }
+      }
+    },
+    "MatrixTooWideError": {
+      "description": "MATRIX_TOO_WIDE as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "MATRIX_TOO_WIDE"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "budget"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/MatrixTooWideDetails"
+        }
+      }
+    },
+    "MatrixTooWidePublicError": {
+      "description": "MATRIX_TOO_WIDE as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "MATRIX_TOO_WIDE"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "budget"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/MatrixTooWidePublicDetails"
+        }
+      }
+    },
+    "MemberMaskedDetails": {
+      "description": "Details of MEMBER_MASKED, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "member",
+        "operation"
+      ],
+      "properties": {
+        "member": {
+          "$ref": "#/$defs/Name"
+        },
+        "operation": {
+          "enum": [
+            "group_by",
+            "filter",
+            "sort",
+            "distinct_count",
+            "possible_values"
+          ]
+        }
+      }
+    },
+    "MemberMaskedError": {
+      "description": "MEMBER_MASKED: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "MEMBER_MASKED"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "security"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/MemberMaskedDetails"
+        }
+      }
+    },
+    "MemberNotFoundDetails": {
+      "description": "Details of MEMBER_NOT_FOUND, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "member"
+      ],
+      "properties": {
+        "member": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "MemberNotFoundError": {
+      "description": "MEMBER_NOT_FOUND: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "MEMBER_NOT_FOUND"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/MemberNotFoundDetails"
+        }
+      }
+    },
+    "MetricAlignmentAmbiguousDetails": {
+      "description": "Details of METRIC_ALIGNMENT_AMBIGUOUS, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "missing"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Name"
+        },
+        "missing": {
+          "enum": [
+            "grain",
+            "time"
+          ]
+        }
+      }
+    },
+    "MetricAlignmentAmbiguousError": {
+      "description": "METRIC_ALIGNMENT_AMBIGUOUS: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "METRIC_ALIGNMENT_AMBIGUOUS"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/MetricAlignmentAmbiguousDetails"
+        }
+      }
+    },
+    "MetricCycleDetails": {
+      "description": "Details of METRIC_CYCLE, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cycle"
+      ],
+      "properties": {
+        "cycle": {
+          "$ref": "#/$defs/Names2"
+        }
+      }
+    },
+    "MetricCyclePublicDetails": {
+      "description": "Details of METRIC_CYCLE for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "MetricCycleError": {
+      "description": "METRIC_CYCLE as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "METRIC_CYCLE"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/MetricCycleDetails"
+        }
+      }
+    },
+    "MetricCyclePublicError": {
+      "description": "METRIC_CYCLE as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "METRIC_CYCLE"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/MetricCyclePublicDetails"
+        }
+      }
+    },
+    "MetricInUseDetails": {
+      "description": "Details of METRIC_IN_USE, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "dependents"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Name"
+        },
+        "dependents": {
+          "$ref": "#/$defs/Names"
+        }
+      }
+    },
+    "MetricInUsePublicDetails": {
+      "description": "Details of METRIC_IN_USE for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "MetricInUseError": {
+      "description": "METRIC_IN_USE as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "METRIC_IN_USE"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/MetricInUseDetails"
+        }
+      }
+    },
+    "MetricInUsePublicError": {
+      "description": "METRIC_IN_USE as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "METRIC_IN_USE"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/MetricInUsePublicDetails"
+        }
+      }
+    },
+    "MissingAdditivityDeclarationDetails": {
+      "description": "Details of MISSING_ADDITIVITY_DECLARATION, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "MissingAdditivityDeclarationError": {
+      "description": "MISSING_ADDITIVITY_DECLARATION: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "MISSING_ADDITIVITY_DECLARATION"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/MissingAdditivityDeclarationDetails"
+        }
+      }
+    },
+    "MissingCardinalityDeclarationDetails": {
+      "description": "Details of MISSING_CARDINALITY_DECLARATION, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relationship"
+      ],
+      "properties": {
+        "relationship": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "MissingCardinalityDeclarationPublicDetails": {
+      "description": "Details of MISSING_CARDINALITY_DECLARATION for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "MissingCardinalityDeclarationError": {
+      "description": "MISSING_CARDINALITY_DECLARATION as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "MISSING_CARDINALITY_DECLARATION"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/MissingCardinalityDeclarationDetails"
+        }
+      }
+    },
+    "MissingCardinalityDeclarationPublicError": {
+      "description": "MISSING_CARDINALITY_DECLARATION as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "MISSING_CARDINALITY_DECLARATION"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/MissingCardinalityDeclarationPublicDetails"
+        }
+      }
+    },
+    "MissingExtensionDeclarationDetails": {
+      "description": "Details of MISSING_EXTENSION_DECLARATION, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "element",
+        "name",
+        "declaration"
+      ],
+      "properties": {
+        "element": {
+          "enum": [
+            "model",
+            "dataset",
+            "field",
+            "metric",
+            "relationship"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "declaration": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "MissingExtensionDeclarationError": {
+      "description": "MISSING_EXTENSION_DECLARATION: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "MISSING_EXTENSION_DECLARATION"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/MissingExtensionDeclarationDetails"
+        }
+      }
+    },
+    "NoRelationshipPathDetails": {
+      "description": "Details of NO_RELATIONSHIP_PATH, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/Name"
+        },
+        "to": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "NoRelationshipPathError": {
+      "description": "NO_RELATIONSHIP_PATH: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "NO_RELATIONSHIP_PATH"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/NoRelationshipPathDetails"
+        }
+      }
+    },
+    "OssieInvalidDetails": {
+      "description": "Details of OSSIE_INVALID, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "problems",
+        "problems_omitted"
+      ],
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/Path"
+        },
+        "problems": {
+          "$ref": "#/$defs/Problems"
+        },
+        "problems_omitted": {
+          "$ref": "#/$defs/Count"
+        }
+      }
+    },
+    "OssieInvalidPublicDetails": {
+      "description": "Details of OSSIE_INVALID for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file"
+      ],
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/Path"
+        }
+      }
+    },
+    "OssieInvalidError": {
+      "description": "OSSIE_INVALID as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "OSSIE_INVALID"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/OssieInvalidDetails"
+        }
+      }
+    },
+    "OssieInvalidPublicError": {
+      "description": "OSSIE_INVALID as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "OSSIE_INVALID"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/OssieInvalidPublicDetails"
+        }
+      }
+    },
+    "ParameterInvalidDetails": {
+      "description": "Details of PARAMETER_INVALID, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parameter",
+        "expected"
+      ],
+      "properties": {
+        "parameter": {
+          "$ref": "#/$defs/Name"
+        },
+        "expected": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "ParameterInvalidError": {
+      "description": "PARAMETER_INVALID: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "PARAMETER_INVALID"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/ParameterInvalidDetails"
+        }
+      }
+    },
+    "PolicyAttributeMissingDetails": {
+      "description": "Details of POLICY_ATTRIBUTE_MISSING, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy"
+      ],
+      "properties": {
+        "policy": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "PolicyAttributeMissingError": {
+      "description": "POLICY_ATTRIBUTE_MISSING: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "POLICY_ATTRIBUTE_MISSING"
+        },
+        "severity": {
+          "const": "notice"
+        },
+        "category": {
+          "const": "security"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/PolicyAttributeMissingDetails"
+        }
+      }
+    },
+    "PolicyNotSupportedOnEngineDetails": {
+      "description": "Details of POLICY_NOT_SUPPORTED_ON_ENGINE, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset",
+        "policy",
+        "reason"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/Name"
+        },
+        "policy": {
+          "$ref": "#/$defs/Name"
+        },
+        "reason": {
+          "enum": [
+            "subquery_outside_lake",
+            "value_cap",
+            "engine_unsupported"
+          ]
+        }
+      }
+    },
+    "PolicyNotSupportedOnEnginePublicDetails": {
+      "description": "Details of POLICY_NOT_SUPPORTED_ON_ENGINE for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "PolicyNotSupportedOnEngineError": {
+      "description": "POLICY_NOT_SUPPORTED_ON_ENGINE as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "POLICY_NOT_SUPPORTED_ON_ENGINE"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "security"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/PolicyNotSupportedOnEngineDetails"
+        }
+      }
+    },
+    "PolicyNotSupportedOnEnginePublicError": {
+      "description": "POLICY_NOT_SUPPORTED_ON_ENGINE as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "POLICY_NOT_SUPPORTED_ON_ENGINE"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "security"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/PolicyNotSupportedOnEnginePublicDetails"
+        }
+      }
+    },
+    "QueryBudgetExceededDetails": {
+      "description": "Details of QUERY_BUDGET_EXCEEDED, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "budget",
+        "limit"
+      ],
+      "properties": {
+        "budget": {
+          "enum": [
+            "rows_scanned",
+            "result_rows",
+            "matrix_cells",
+            "time_ms",
+            "memory_bytes"
+          ]
+        },
+        "limit": {
+          "$ref": "#/$defs/Count"
+        },
+        "estimate": {
+          "$ref": "#/$defs/Count"
+        }
+      }
+    },
+    "QueryBudgetExceededPublicDetails": {
+      "description": "Details of QUERY_BUDGET_EXCEEDED for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "budget",
+        "limit"
+      ],
+      "properties": {
+        "budget": {
+          "enum": [
+            "rows_scanned",
+            "result_rows",
+            "matrix_cells",
+            "time_ms",
+            "memory_bytes"
+          ]
+        },
+        "limit": {
+          "$ref": "#/$defs/Count"
+        }
+      }
+    },
+    "QueryBudgetExceededError": {
+      "description": "QUERY_BUDGET_EXCEEDED as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "QUERY_BUDGET_EXCEEDED"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "budget"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/QueryBudgetExceededDetails"
+        }
+      }
+    },
+    "QueryBudgetExceededPublicError": {
+      "description": "QUERY_BUDGET_EXCEEDED as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "QUERY_BUDGET_EXCEEDED"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "budget"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/QueryBudgetExceededPublicDetails"
+        }
+      }
+    },
+    "ReaggregationNotAllowedDetails": {
+      "description": "Details of REAGGREGATION_NOT_ALLOWED, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "class"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Name"
+        },
+        "class": {
+          "enum": [
+            "distributive",
+            "algebraic",
+            "holistic",
+            "sketch"
+          ]
+        }
+      }
+    },
+    "ReaggregationNotAllowedError": {
+      "description": "REAGGREGATION_NOT_ALLOWED: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "REAGGREGATION_NOT_ALLOWED"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/ReaggregationNotAllowedDetails"
+        }
+      }
+    },
+    "TemporalMatchNotUniqueDetails": {
+      "description": "Details of TEMPORAL_MATCH_NOT_UNIQUE, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relationship",
+        "violations"
+      ],
+      "properties": {
+        "relationship": {
+          "$ref": "#/$defs/Name"
+        },
+        "violations": {
+          "$ref": "#/$defs/Count"
+        }
+      }
+    },
+    "TemporalMatchNotUniquePublicDetails": {
+      "description": "Details of TEMPORAL_MATCH_NOT_UNIQUE for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "TemporalMatchNotUniqueError": {
+      "description": "TEMPORAL_MATCH_NOT_UNIQUE as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "TEMPORAL_MATCH_NOT_UNIQUE"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/TemporalMatchNotUniqueDetails"
+        }
+      }
+    },
+    "TemporalMatchNotUniquePublicError": {
+      "description": "TEMPORAL_MATCH_NOT_UNIQUE as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "TEMPORAL_MATCH_NOT_UNIQUE"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "correctness"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/TemporalMatchNotUniquePublicDetails"
+        }
+      }
+    },
+    "UnsupportedOperationDetails": {
+      "description": "Details of UNSUPPORTED_OPERATION, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation"
+      ],
+      "properties": {
+        "operation": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "UnsupportedOperationError": {
+      "description": "UNSUPPORTED_OPERATION: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "UNSUPPORTED_OPERATION"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "engine"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/UnsupportedOperationDetails"
+        }
+      }
+    },
+    "UnsupportedOssieVersionDetails": {
+      "description": "Details of UNSUPPORTED_OSSIE_VERSION, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "found",
+        "supported"
+      ],
+      "properties": {
+        "found": {
+          "$ref": "#/$defs/Version"
+        },
+        "supported": {
+          "$ref": "#/$defs/Version"
+        }
+      }
+    },
+    "UnsupportedOssieVersionError": {
+      "description": "UNSUPPORTED_OSSIE_VERSION: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "UNSUPPORTED_OSSIE_VERSION"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/UnsupportedOssieVersionDetails"
+        }
+      }
+    },
+    "WindowUndefinedAtTotalDetails": {
+      "description": "Details of WINDOW_UNDEFINED_AT_TOTAL, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "level"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Name"
+        },
+        "level": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "WindowUndefinedAtTotalError": {
+      "description": "WINDOW_UNDEFINED_AT_TOTAL: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "WINDOW_UNDEFINED_AT_TOTAL"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/WindowUndefinedAtTotalDetails"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "MISSING_ADDITIVITY_DECLARATION",
+  "severity": "error",
+  "category": "model",
+  "audience": "builder",
+  "message": "The metric sales.amount does not declare how it adds up; declare its additivity.",
+  "locale": "en",
+  "details": {
+    "metric": "sales.amount"
+  }
+}

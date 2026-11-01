@@ -1,0 +1,142 @@
+{
+  "AMBIGUOUS_RELATIONSHIP_PATH": {
+    "generic": "There is more than one path between {from} and {to}; say which one to use.",
+    "builder": "There is more than one path between {from} and {to}; name a role: {roles}."
+  },
+  "AS_KNOWN_AT_UNSUPPORTED": {
+    "generic": "The dataset {dataset} keeps no history; it cannot be queried as it was known before.",
+    "builder": "The dataset {dataset} keeps no history; it cannot be queried as it was known before."
+  },
+  "BRIDGE_WEIGHTS_INVALID": {
+    "generic": "The weights of the bridge {bridge} do not add up to the declared total.",
+    "builder": "The weights of the bridge {bridge} do not add up to the declared total in {groups} groups."
+  },
+  "CONTEXT_CONFLICT": {
+    "generic": "Two context rules contradict each other.",
+    "builder": "The context rules contradict each other: {scopes}."
+  },
+  "COVERAGE_POLICY_REQUIRED": {
+    "generic": "An incomplete period of {dimension} is compared; choose aligned or full periods.",
+    "builder": "An incomplete period of {dimension} is compared; choose aligned or full periods."
+  },
+  "CROSS_ENGINE_QUERY": {
+    "generic": "The query combines {datasets}, which live on different engines.",
+    "builder": "The query combines {datasets}, which live on the engines {engines}."
+  },
+  "DEPRECATED_METRIC": {
+    "generic": "The metric {metric} is deprecated.",
+    "builder": "The metric {metric} is deprecated."
+  },
+  "DIVISION_POLICY_VIOLATION": {
+    "generic": "The metric {metric} divides by zero, which its rule rejects.",
+    "builder": "The metric {metric} divides by zero, which its rule rejects."
+  },
+  "ENGINE_VERSION_UNTESTED": {
+    "generic": "The version of the engine {engine} is not tested.",
+    "builder": "Version {found} of the engine {engine} is not tested; the tested ones are {tested}."
+  },
+  "EVIDENCE_VIOLATED": {
+    "generic": "The data of {dataset} breaks what is declared ({evidence}); the query does not run.",
+    "builder": "The data of {dataset} breaks what is declared ({evidence}) on {fields}: {violations} cases."
+  },
+  "FANOUT_NOT_ISOLATABLE": {
+    "generic": "The metric {metric} would count repeated rows in this query.",
+    "builder": "The metric {metric} would count repeated rows through {relationship}, which cannot be isolated."
+  },
+  "FILTER_CYCLE": {
+    "generic": "Some filters depend on each other in a circle.",
+    "builder": "The filters depend on each other in a circle: {filters}."
+  },
+  "ILLEGAL_GRAIN_TRANSITION": {
+    "generic": "The metric {metric} cannot be computed at this level of detail.",
+    "builder": "The metric {metric} cannot be taken to the level {grain}."
+  },
+  "ILLEGAL_TEMPORAL_REAGGREGATION": {
+    "generic": "The metric {metric} cannot be added over time this way.",
+    "builder": "The metric {metric} cannot be added along {axis}; choose a period or a period-end rule."
+  },
+  "INCOMPATIBLE_UNITS": {
+    "generic": "Values in different units cannot be combined: {units}.",
+    "builder": "Values in different units cannot be combined: {units}. Convert the units in the transformation."
+  },
+  "MATRIX_TOO_WIDE": {
+    "generic": "The matrix exceeds the maximum {limit} ({maximum}); add a filter or a coarser level.",
+    "builder": "The matrix asks for {requested} {limit} and the maximum is {maximum}. Add a filter or a coarser level."
+  },
+  "MEMBER_MASKED": {
+    "generic": "The member {member} is masked and does not allow this operation ({operation}).",
+    "builder": "The member {member} is masked and does not allow this operation ({operation})."
+  },
+  "MEMBER_NOT_FOUND": {
+    "generic": "The member {member} does not exist.",
+    "builder": "The member {member} does not exist."
+  },
+  "METRIC_ALIGNMENT_AMBIGUOUS": {
+    "generic": "The metric {metric} combines metrics without declaring how to align them ({missing}).",
+    "builder": "The metric {metric} combines metrics without declaring how to align them ({missing})."
+  },
+  "METRIC_CYCLE": {
+    "generic": "Some metrics are defined in a circle.",
+    "builder": "The metrics are defined in a circle: {cycle}."
+  },
+  "METRIC_IN_USE": {
+    "generic": "The metric {metric} is used elsewhere and cannot be deleted or renamed.",
+    "builder": "The metric {metric} is used by {dependents} and cannot be deleted or renamed."
+  },
+  "MISSING_ADDITIVITY_DECLARATION": {
+    "generic": "The metric {metric} does not declare how it adds up.",
+    "builder": "The metric {metric} does not declare how it adds up; declare its additivity."
+  },
+  "MISSING_CARDINALITY_DECLARATION": {
+    "generic": "A relationship of the model does not declare its cardinality.",
+    "builder": "The relationship {relationship} does not declare its cardinality."
+  },
+  "MISSING_EXTENSION_DECLARATION": {
+    "generic": "The declaration {declaration} is missing on {name} ({element}).",
+    "builder": "The declaration {declaration} is missing on {name} ({element})."
+  },
+  "NO_RELATIONSHIP_PATH": {
+    "generic": "There is no path between {from} and {to}.",
+    "builder": "No relationship connects {from} to {to}."
+  },
+  "OSSIE_INVALID": {
+    "generic": "The model {file} is not valid.",
+    "builder": "The model {file} is not valid: {problems} problems, {problems_omitted} more not shown."
+  },
+  "PARAMETER_INVALID": {
+    "generic": "The value of the parameter {parameter} is not valid; {expected} is expected.",
+    "builder": "The value of the parameter {parameter} is not valid; {expected} is expected."
+  },
+  "POLICY_ATTRIBUTE_MISSING": {
+    "generic": "The policy {policy} lacks an attribute it needs from your profile; no rows are shown. Ask an administrator.",
+    "builder": "The policy {policy} lacks an attribute it needs from your profile; no rows are shown. Ask an administrator."
+  },
+  "POLICY_NOT_SUPPORTED_ON_ENGINE": {
+    "generic": "The dataset {dataset} cannot be used: a policy cannot be applied safely.",
+    "builder": "The dataset {dataset} cannot be used: the policy {policy} cannot be applied safely ({reason})."
+  },
+  "QUERY_BUDGET_EXCEEDED": {
+    "generic": "The query exceeds the {budget} budget ({limit}); add a filter or a coarser level.",
+    "builder": "The query exceeds the {budget} budget: the estimate is {estimate} and the limit is {limit}. Add a filter or a coarser level."
+  },
+  "REAGGREGATION_NOT_ALLOWED": {
+    "generic": "The metric {metric} ({class}) cannot be re-aggregated from aggregated results.",
+    "builder": "The metric {metric} ({class}) cannot be re-aggregated from aggregated results."
+  },
+  "TEMPORAL_MATCH_NOT_UNIQUE": {
+    "generic": "A time-dependent relationship does not find exactly one version.",
+    "builder": "The relationship {relationship} does not find exactly one version in {violations} cases."
+  },
+  "UNSUPPORTED_OPERATION": {
+    "generic": "The operation {operation} is not supported.",
+    "builder": "The operation {operation} is not supported."
+  },
+  "UNSUPPORTED_OSSIE_VERSION": {
+    "generic": "The model's version {found} is not supported; the supported one is {supported}.",
+    "builder": "The model's version {found} is not supported; the supported one is {supported}."
+  },
+  "WINDOW_UNDEFINED_AT_TOTAL": {
+    "generic": "The metric {metric} has no value at the total of {level}.",
+    "builder": "The metric {metric} has no value at the total of {level}."
+  }
+}

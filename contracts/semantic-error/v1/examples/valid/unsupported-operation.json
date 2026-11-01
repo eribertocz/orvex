@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "UNSUPPORTED_OPERATION",
+  "severity": "error",
+  "category": "engine",
+  "audience": "builder",
+  "message": "The operation group_by is not supported.",
+  "locale": "en",
+  "details": {
+    "operation": "group_by"
+  }
+}

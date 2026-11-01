@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_error",
+  "code": "NO_RELATIONSHIP_PATH",
+  "severity": "error",
+  "category": "query",
+  "audience": "builder",
+  "message": "No relationship connects sales.amount to sales.amount.",
+  "locale": "en",
+  "details": {
+    "from": "sales.amount",
+    "to": "sales.amount"
+  }
+}

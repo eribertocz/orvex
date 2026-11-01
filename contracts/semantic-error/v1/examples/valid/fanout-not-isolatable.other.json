@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "FANOUT_NOT_ISOLATABLE",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "other",
+  "message": "La métrica sales.amount contaría filas repetidas en esta consulta.",
+  "locale": "es",
+  "details": {
+    "metric": "sales.amount"
+  }
+}

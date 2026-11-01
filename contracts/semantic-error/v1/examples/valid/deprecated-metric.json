@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "DEPRECATED_METRIC",
+  "severity": "warning",
+  "category": "model",
+  "audience": "builder",
+  "message": "The metric sales.amount is deprecated.",
+  "locale": "en",
+  "details": {
+    "metric": "sales.amount"
+  }
+}

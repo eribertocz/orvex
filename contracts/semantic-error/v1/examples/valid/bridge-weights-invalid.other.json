@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "BRIDGE_WEIGHTS_INVALID",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "other",
+  "message": "Los pesos del puente sales.amount no suman lo declarado.",
+  "locale": "es",
+  "details": {
+    "bridge": "sales.amount"
+  }
+}

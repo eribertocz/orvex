@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_error",
+  "code": "MEMBER_MASKED",
+  "severity": "error",
+  "category": "security",
+  "audience": "builder",
+  "message": "The member sales.amount is masked and does not allow this operation (group_by).",
+  "locale": "en",
+  "details": {
+    "member": "sales.amount",
+    "operation": "group_by"
+  }
+}

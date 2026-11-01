@@ -1,0 +1,11 @@
+{
+  "kind": "semantic_error",
+  "code": "MEMBER_NOT_FOUND",
+  "severity": "error",
+  "category": "query",
+  "message": "The member sales.amount does not exist.",
+  "locale": "en",
+  "details": {
+    "member": "sales.amount"
+  }
+}

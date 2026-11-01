@@ -1,0 +1,15 @@
+{
+  "kind": "semantic_error",
+  "code": "CROSS_ENGINE_QUERY",
+  "severity": "error",
+  "category": "engine",
+  "audience": "other",
+  "message": "La consulta combina billing_customer, shipping_customer, que están en motores distintos.",
+  "locale": "es",
+  "details": {
+    "datasets": [
+      "billing_customer",
+      "shipping_customer"
+    ]
+  }
+}

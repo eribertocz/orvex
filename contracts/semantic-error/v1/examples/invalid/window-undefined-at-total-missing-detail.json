@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "WINDOW_UNDEFINED_AT_TOTAL",
+  "severity": "error",
+  "category": "query",
+  "audience": "builder",
+  "message": "The metric sales.amount has no value at the total of sales.amount.",
+  "locale": "en",
+  "details": {
+    "level": "sales.amount"
+  }
+}

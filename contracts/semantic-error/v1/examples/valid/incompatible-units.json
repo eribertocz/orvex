@@ -1,0 +1,15 @@
+{
+  "kind": "semantic_error",
+  "code": "INCOMPATIBLE_UNITS",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "builder",
+  "message": "Values in different units cannot be combined: billing_customer, shipping_customer. Convert the units in the transformation.",
+  "locale": "en",
+  "details": {
+    "units": [
+      "billing_customer",
+      "shipping_customer"
+    ]
+  }
+}

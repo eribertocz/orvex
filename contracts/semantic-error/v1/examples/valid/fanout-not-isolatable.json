@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_error",
+  "code": "FANOUT_NOT_ISOLATABLE",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "builder",
+  "message": "The metric sales.amount would count repeated rows through sales.amount, which cannot be isolated.",
+  "locale": "en",
+  "details": {
+    "metric": "sales.amount",
+    "relationship": "sales.amount"
+  }
+}

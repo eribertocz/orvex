@@ -1,0 +1,10 @@
+{
+  "kind": "semantic_error",
+  "code": "CONTEXT_CONFLICT",
+  "severity": "error",
+  "category": "query",
+  "audience": "other",
+  "message": "Dos reglas de contexto se contradicen.",
+  "locale": "es",
+  "details": {}
+}

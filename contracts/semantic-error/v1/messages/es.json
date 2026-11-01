@@ -1,0 +1,142 @@
+{
+  "AMBIGUOUS_RELATIONSHIP_PATH": {
+    "generic": "Hay más de un camino entre {from} y {to}; indique cuál usar.",
+    "builder": "Hay más de un camino entre {from} y {to}; indique un rol: {roles}."
+  },
+  "AS_KNOWN_AT_UNSUPPORTED": {
+    "generic": "El conjunto {dataset} no guarda su historia; no se puede consultar como se conocía antes.",
+    "builder": "El conjunto {dataset} no guarda su historia; no se puede consultar como se conocía antes."
+  },
+  "BRIDGE_WEIGHTS_INVALID": {
+    "generic": "Los pesos del puente {bridge} no suman lo declarado.",
+    "builder": "Los pesos del puente {bridge} no suman lo declarado en {groups} grupos."
+  },
+  "CONTEXT_CONFLICT": {
+    "generic": "Dos reglas de contexto se contradicen.",
+    "builder": "Las reglas de contexto se contradicen: {scopes}."
+  },
+  "COVERAGE_POLICY_REQUIRED": {
+    "generic": "Se compara un periodo incompleto en {dimension}; elija comparar periodos alineados o completos.",
+    "builder": "Se compara un periodo incompleto en {dimension}; elija comparar periodos alineados o completos."
+  },
+  "CROSS_ENGINE_QUERY": {
+    "generic": "La consulta combina {datasets}, que están en motores distintos.",
+    "builder": "La consulta combina {datasets}, que están en los motores {engines}."
+  },
+  "DEPRECATED_METRIC": {
+    "generic": "La métrica {metric} está en desuso.",
+    "builder": "La métrica {metric} está en desuso."
+  },
+  "DIVISION_POLICY_VIOLATION": {
+    "generic": "La métrica {metric} divide entre cero y su regla lo rechaza.",
+    "builder": "La métrica {metric} divide entre cero y su regla lo rechaza."
+  },
+  "ENGINE_VERSION_UNTESTED": {
+    "generic": "La versión del motor {engine} no está probada.",
+    "builder": "La versión {found} del motor {engine} no está probada; las probadas son {tested}."
+  },
+  "EVIDENCE_VIOLATED": {
+    "generic": "Los datos de {dataset} no cumplen lo declarado ({evidence}); la consulta no se ejecuta.",
+    "builder": "Los datos de {dataset} no cumplen lo declarado ({evidence}) en {fields}: {violations} casos."
+  },
+  "FANOUT_NOT_ISOLATABLE": {
+    "generic": "La métrica {metric} contaría filas repetidas en esta consulta.",
+    "builder": "La métrica {metric} contaría filas repetidas a través de {relationship}, y no se puede aislar."
+  },
+  "FILTER_CYCLE": {
+    "generic": "Unos filtros dependen unos de otros en círculo.",
+    "builder": "Los filtros dependen unos de otros en círculo: {filters}."
+  },
+  "ILLEGAL_GRAIN_TRANSITION": {
+    "generic": "La métrica {metric} no se puede calcular con este nivel de detalle.",
+    "builder": "La métrica {metric} no se puede llevar al nivel {grain}."
+  },
+  "ILLEGAL_TEMPORAL_REAGGREGATION": {
+    "generic": "La métrica {metric} no se puede sumar en el tiempo de esta forma.",
+    "builder": "La métrica {metric} no se puede sumar a lo largo de {axis}; elija un periodo o una regla de cierre."
+  },
+  "INCOMPATIBLE_UNITS": {
+    "generic": "No se pueden combinar valores en unidades distintas: {units}.",
+    "builder": "No se pueden combinar valores en unidades distintas: {units}. Convierta las unidades en la transformación."
+  },
+  "MATRIX_TOO_WIDE": {
+    "generic": "La matriz supera el máximo de {limit} ({maximum}); agregue un filtro o un nivel más general.",
+    "builder": "La matriz pide {requested} {limit} y el máximo es {maximum}. Agregue un filtro o un nivel más general."
+  },
+  "MEMBER_MASKED": {
+    "generic": "El miembro {member} está enmascarado y no admite esta operación ({operation}).",
+    "builder": "El miembro {member} está enmascarado y no admite esta operación ({operation})."
+  },
+  "MEMBER_NOT_FOUND": {
+    "generic": "No existe el miembro {member}.",
+    "builder": "No existe el miembro {member}."
+  },
+  "METRIC_ALIGNMENT_AMBIGUOUS": {
+    "generic": "La métrica {metric} combina métricas sin declarar cómo alinearlas ({missing}).",
+    "builder": "La métrica {metric} combina métricas sin declarar cómo alinearlas ({missing})."
+  },
+  "METRIC_CYCLE": {
+    "generic": "Unas métricas se definen en círculo.",
+    "builder": "Las métricas se definen en círculo: {cycle}."
+  },
+  "METRIC_IN_USE": {
+    "generic": "La métrica {metric} se usa en otros lugares y no se puede borrar ni renombrar.",
+    "builder": "La métrica {metric} se usa en {dependents} y no se puede borrar ni renombrar."
+  },
+  "MISSING_ADDITIVITY_DECLARATION": {
+    "generic": "La métrica {metric} no declara cómo se suma.",
+    "builder": "La métrica {metric} no declara cómo se suma; declare su aditividad."
+  },
+  "MISSING_CARDINALITY_DECLARATION": {
+    "generic": "Una relación del modelo no declara su cardinalidad.",
+    "builder": "La relación {relationship} no declara su cardinalidad."
+  },
+  "MISSING_EXTENSION_DECLARATION": {
+    "generic": "Falta la declaración {declaration} en {name} ({element}).",
+    "builder": "Falta la declaración {declaration} en {name} ({element})."
+  },
+  "NO_RELATIONSHIP_PATH": {
+    "generic": "No hay ningún camino entre {from} y {to}.",
+    "builder": "No hay ninguna relación que conecte {from} con {to}."
+  },
+  "OSSIE_INVALID": {
+    "generic": "El modelo {file} no es válido.",
+    "builder": "El modelo {file} no es válido: {problems} problemas, {problems_omitted} más sin mostrar."
+  },
+  "PARAMETER_INVALID": {
+    "generic": "El valor del parámetro {parameter} no es válido; se espera {expected}.",
+    "builder": "El valor del parámetro {parameter} no es válido; se espera {expected}."
+  },
+  "POLICY_ATTRIBUTE_MISSING": {
+    "generic": "La política {policy} no tiene un dato que necesita de su perfil; no se muestran filas. Consulte a un administrador.",
+    "builder": "La política {policy} no tiene un dato que necesita de su perfil; no se muestran filas. Consulte a un administrador."
+  },
+  "POLICY_NOT_SUPPORTED_ON_ENGINE": {
+    "generic": "El conjunto {dataset} no se puede usar: una política no se puede aplicar con seguridad.",
+    "builder": "El conjunto {dataset} no se puede usar: la política {policy} no se puede aplicar con seguridad ({reason})."
+  },
+  "QUERY_BUDGET_EXCEEDED": {
+    "generic": "La consulta supera el límite {budget} ({limit}); agregue un filtro o un nivel más general.",
+    "builder": "La consulta supera el límite {budget}: se estima {estimate} y el límite es {limit}. Agregue un filtro o un nivel más general."
+  },
+  "REAGGREGATION_NOT_ALLOWED": {
+    "generic": "La métrica {metric} ({class}) no se puede volver a agregar desde resultados ya agregados.",
+    "builder": "La métrica {metric} ({class}) no se puede volver a agregar desde resultados ya agregados."
+  },
+  "TEMPORAL_MATCH_NOT_UNIQUE": {
+    "generic": "Una relación en el tiempo no encuentra exactamente una versión.",
+    "builder": "La relación {relationship} no encuentra exactamente una versión en {violations} casos."
+  },
+  "UNSUPPORTED_OPERATION": {
+    "generic": "La operación {operation} no está soportada.",
+    "builder": "La operación {operation} no está soportada."
+  },
+  "UNSUPPORTED_OSSIE_VERSION": {
+    "generic": "La versión {found} del modelo no está soportada; la soportada es {supported}.",
+    "builder": "La versión {found} del modelo no está soportada; la soportada es {supported}."
+  },
+  "WINDOW_UNDEFINED_AT_TOTAL": {
+    "generic": "La métrica {metric} no tiene valor en el total de {level}.",
+    "builder": "La métrica {metric} no tiene valor en el total de {level}."
+  }
+}

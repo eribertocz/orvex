@@ -1,0 +1,16 @@
+{
+  "kind": "semantic_error",
+  "code": "METRIC_IN_USE",
+  "severity": "error",
+  "category": "model",
+  "audience": "builder",
+  "message": "The metric sales.amount is used by region, month and cannot be deleted or renamed.",
+  "locale": "en",
+  "details": {
+    "metric": "sales.amount",
+    "dependents": [
+      "region",
+      "month"
+    ]
+  }
+}
