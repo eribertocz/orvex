@@ -6,6 +6,8 @@
 Python: datamodel-code-generator (Pydantic v2) into the `contracts` distribution.
 TypeScript: json-schema-to-typescript (run from `web/`) into `web/src/lib/contracts/`.
 Contracts whose name starts with `_` are fixtures: their Python types go to `tests/contracts/`.
+Data: every other `*.json` of a contract version (not `schema.json`, not `examples/`), such as a
+message catalog, is copied verbatim into the Python package under `<contract>/v<N>_data/`.
 """
 
 from __future__ import annotations
@@ -58,6 +60,7 @@ def generated_files_on_disk() -> set[Path]:
     fixture = re.compile(r"[a-z0-9_]+_v[1-9][0-9]*\.py")
     typescript = re.compile(r"v[1-9][0-9]*\.ts")
     found = {p for p in namespace_contracts().glob("*/*.py") if python_version.fullmatch(p.name)}
+    found |= set(namespace_contracts().glob("*/v*_data/**/*.json"))
     found |= {
         p
         for p in (REPOSITORY_ROOT / "tests" / "contracts" / "generated").glob("*.py")
@@ -175,6 +178,10 @@ def typescript_types(contract: ContractVersion, scratch: Path) -> str:
         cwd=WEB,
     )
     types = output.read_text(encoding="utf-8")
+    # A closed object without properties is the empty object, not "any non-nullish value".
+    types = re.sub(
+        r"export interface (\w+) \{\}\n", r"export type \1 = Record<string, never>;\n", types
+    )
     if contract.is_openapi:
         # The OpenAPI bundle itself is not a type; drop the open placeholder json2ts emits for it.
         title = json_schema_bundle(contract)["title"]
@@ -186,6 +193,19 @@ def typescript_types(contract: ContractVersion, scratch: Path) -> str:
     return header(contract, "//") + types
 
 
+def data_files(contract: ContractVersion) -> dict[Path, str]:
+    """The data a contract ships beside its types, copied verbatim into the Python package."""
+    if contract.name.startswith("_"):
+        return {}
+    target = python_path(contract).with_name(f"{contract.version}_data")
+    files: dict[Path, str] = {}
+    for path in sorted(contract.directory.rglob("*.json")):
+        relative = path.relative_to(contract.directory)
+        if relative.parts[0] != "examples" and relative != Path("schema.json"):
+            files[target / relative] = path.read_text(encoding="utf-8")
+    return files
+
+
 def generate_all() -> dict[Path, str]:
     files: dict[Path, str] = {}
     with tempfile.TemporaryDirectory() as directory:
@@ -193,6 +213,7 @@ def generate_all() -> dict[Path, str]:
         for contract in contract_versions():
             files[python_path(contract)] = python_types(contract, scratch)
             files[typescript_path(contract)] = typescript_types(contract, scratch)
+            files |= data_files(contract)
     return files
 
 
@@ -236,8 +257,15 @@ def main() -> int:
     for path in orphans:
         path.unlink()
         print(f"removed {path.relative_to(REPOSITORY_ROOT)}")
-        if path.parent != namespace_contracts() and not any(path.parent.iterdir()):
-            path.parent.rmdir()
+        folder = path.parent
+        roots = {
+            namespace_contracts(),
+            WEB / "src" / "lib" / "contracts",
+            REPOSITORY_ROOT / "tests" / "contracts" / "generated",
+        }
+        while folder not in roots and not any(folder.iterdir()):
+            folder.rmdir()
+            folder = folder.parent
     return 0
 
 

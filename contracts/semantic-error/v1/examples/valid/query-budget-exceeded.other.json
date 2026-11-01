@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_error",
+  "code": "QUERY_BUDGET_EXCEEDED",
+  "severity": "error",
+  "category": "budget",
+  "audience": "other",
+  "message": "La consulta supera el límite rows_scanned (37); agregue un filtro o un nivel más general.",
+  "locale": "es",
+  "details": {
+    "budget": "rows_scanned",
+    "limit": "37"
+  }
+}

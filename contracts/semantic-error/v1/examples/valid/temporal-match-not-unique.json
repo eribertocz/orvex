@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_error",
+  "code": "TEMPORAL_MATCH_NOT_UNIQUE",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "builder",
+  "message": "The relationship sales.amount does not find exactly one version in 37 cases.",
+  "locale": "en",
+  "details": {
+    "relationship": "sales.amount",
+    "violations": "37"
+  }
+}

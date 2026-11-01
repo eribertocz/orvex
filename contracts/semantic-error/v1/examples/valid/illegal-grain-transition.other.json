@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "ILLEGAL_GRAIN_TRANSITION",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "other",
+  "message": "La métrica sales.amount no se puede calcular con este nivel de detalle.",
+  "locale": "es",
+  "details": {
+    "metric": "sales.amount"
+  }
+}

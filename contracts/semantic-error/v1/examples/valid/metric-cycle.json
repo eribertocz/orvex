@@ -1,0 +1,15 @@
+{
+  "kind": "semantic_error",
+  "code": "METRIC_CYCLE",
+  "severity": "error",
+  "category": "model",
+  "audience": "builder",
+  "message": "The metrics are defined in a circle: billing_customer, shipping_customer.",
+  "locale": "en",
+  "details": {
+    "cycle": [
+      "billing_customer",
+      "shipping_customer"
+    ]
+  }
+}

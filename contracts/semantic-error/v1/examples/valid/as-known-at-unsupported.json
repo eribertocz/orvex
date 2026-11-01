@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "AS_KNOWN_AT_UNSUPPORTED",
+  "severity": "error",
+  "category": "query",
+  "audience": "builder",
+  "message": "The dataset sales.amount keeps no history; it cannot be queried as it was known before.",
+  "locale": "en",
+  "details": {
+    "dataset": "sales.amount"
+  }
+}

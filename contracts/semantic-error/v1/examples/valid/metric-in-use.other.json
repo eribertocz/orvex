@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "METRIC_IN_USE",
+  "severity": "error",
+  "category": "model",
+  "audience": "other",
+  "message": "La métrica sales.amount se usa en otros lugares y no se puede borrar ni renombrar.",
+  "locale": "es",
+  "details": {
+    "metric": "sales.amount"
+  }
+}

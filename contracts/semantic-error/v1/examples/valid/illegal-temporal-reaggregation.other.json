@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "ILLEGAL_TEMPORAL_REAGGREGATION",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "other",
+  "message": "La métrica sales.amount no se puede sumar en el tiempo de esta forma.",
+  "locale": "es",
+  "details": {
+    "metric": "sales.amount"
+  }
+}

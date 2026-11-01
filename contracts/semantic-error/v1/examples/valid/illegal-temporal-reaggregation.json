@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_error",
+  "code": "ILLEGAL_TEMPORAL_REAGGREGATION",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "builder",
+  "message": "The metric sales.amount cannot be added along sales.amount; choose a period or a period-end rule.",
+  "locale": "en",
+  "details": {
+    "metric": "sales.amount",
+    "axis": "sales.amount"
+  }
+}

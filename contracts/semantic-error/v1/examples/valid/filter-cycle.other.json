@@ -1,0 +1,10 @@
+{
+  "kind": "semantic_error",
+  "code": "FILTER_CYCLE",
+  "severity": "error",
+  "category": "query",
+  "audience": "other",
+  "message": "Unos filtros dependen unos de otros en círculo.",
+  "locale": "es",
+  "details": {}
+}

@@ -1,0 +1,14 @@
+{
+  "kind": "semantic_error",
+  "code": "MISSING_EXTENSION_DECLARATION",
+  "severity": "error",
+  "category": "model",
+  "audience": "builder",
+  "message": "The declaration sales.amount is missing on sales.amount (model).",
+  "locale": "en",
+  "details": {
+    "element": "model",
+    "name": "sales.amount",
+    "declaration": "sales.amount"
+  }
+}

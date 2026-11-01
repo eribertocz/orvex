@@ -303,6 +303,8 @@ def test_generated_files_on_disk_include_orphans_only(
         web / "src/lib/contracts/thing/v1.ts",
         package / "thing/v1.py",
         package / "thing/__init__.py",
+        package / "thing/v1_data/codes.json",
+        package / "thing/v1_data/messages/es.json",
         tmp_path / "tests/contracts/generated/example_v1.py",
     ]
     hand_written = [
@@ -315,6 +317,28 @@ def test_generated_files_on_disk_include_orphans_only(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("x\n")
     assert generate.generated_files_on_disk() == set(generated)
+
+
+def test_a_contract_ships_its_data_files_verbatim_but_not_its_schema_or_examples(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "packages/contracts/src/ns/contracts"
+    monkeypatch.setattr(generate, "namespace_contracts", lambda: package)
+    version = tmp_path / "contracts/thing/v1"
+    for relative, text in {
+        "schema.json": "{}",
+        "codes.json": '{"A": 1}\n',
+        "messages/es.json": '{"A": "á"}\n',
+        "examples/valid/a.json": "{}",
+    }.items():
+        (version / relative).parent.mkdir(parents=True, exist_ok=True)
+        (version / relative).write_text(text, encoding="utf-8")
+    shipped = generate.data_files(ContractVersion("thing", "v1", version))
+    assert shipped == {
+        package / "thing/v1_data/codes.json": '{"A": 1}\n',
+        package / "thing/v1_data/messages/es.json": '{"A": "á"}\n',
+    }
+    assert generate.data_files(ContractVersion("_fixture", "v1", version)) == {}
 
 
 @pytest.mark.parametrize("name", ["Bad Name", "1x", "a_b", "Upper"])

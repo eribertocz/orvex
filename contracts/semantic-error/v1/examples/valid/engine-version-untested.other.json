@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "ENGINE_VERSION_UNTESTED",
+  "severity": "error",
+  "category": "engine",
+  "audience": "other",
+  "message": "La versión del motor sales.amount no está probada.",
+  "locale": "es",
+  "details": {
+    "engine": "sales.amount"
+  }
+}

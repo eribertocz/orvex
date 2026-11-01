@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "POLICY_ATTRIBUTE_MISSING",
+  "severity": "notice",
+  "category": "security",
+  "audience": "builder",
+  "message": "The policy sales.amount lacks an attribute it needs from your profile; no rows are shown. Ask an administrator.",
+  "locale": "en",
+  "details": {
+    "policy": "sales.amount"
+  }
+}

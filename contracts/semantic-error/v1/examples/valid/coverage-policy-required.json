@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "COVERAGE_POLICY_REQUIRED",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "builder",
+  "message": "An incomplete period of sales.amount is compared; choose aligned or full periods.",
+  "locale": "en",
+  "details": {
+    "dimension": "sales.amount"
+  }
+}

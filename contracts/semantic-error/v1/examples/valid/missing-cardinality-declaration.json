@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "MISSING_CARDINALITY_DECLARATION",
+  "severity": "error",
+  "category": "model",
+  "audience": "builder",
+  "message": "The relationship sales.amount does not declare its cardinality.",
+  "locale": "en",
+  "details": {
+    "relationship": "sales.amount"
+  }
+}

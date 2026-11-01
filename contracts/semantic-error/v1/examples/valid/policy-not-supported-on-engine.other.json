@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "POLICY_NOT_SUPPORTED_ON_ENGINE",
+  "severity": "error",
+  "category": "security",
+  "audience": "other",
+  "message": "El conjunto sales.amount no se puede usar: una política no se puede aplicar con seguridad.",
+  "locale": "es",
+  "details": {
+    "dataset": "sales.amount"
+  }
+}

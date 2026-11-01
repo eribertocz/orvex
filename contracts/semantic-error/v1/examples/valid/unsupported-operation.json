@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "UNSUPPORTED_OPERATION",
+  "severity": "error",
+  "category": "engine",
+  "audience": "builder",
+  "message": "The operation sales.amount is not supported.",
+  "locale": "en",
+  "details": {
+    "operation": "sales.amount"
+  }
+}

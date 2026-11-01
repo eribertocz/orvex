@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "PARAMETER_INVALID",
+  "severity": "error",
+  "category": "query",
+  "audience": "builder",
+  "message": "The value of the parameter sales.amount is not valid; sales.amount is expected.",
+  "locale": "en",
+  "details": {
+    "expected": "sales.amount"
+  }
+}

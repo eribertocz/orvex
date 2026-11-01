@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "OSSIE_INVALID",
+  "severity": "error",
+  "category": "model",
+  "audience": "other",
+  "message": "El modelo semantic/sales.ossie.yaml no es válido.",
+  "locale": "es",
+  "details": {
+    "file": "semantic/sales.ossie.yaml"
+  }
+}

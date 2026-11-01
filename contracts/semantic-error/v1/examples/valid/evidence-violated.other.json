@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_error",
+  "code": "EVIDENCE_VIOLATED",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "other",
+  "message": "Los datos de sales.amount no cumplen lo declarado (unique); la consulta no se ejecuta.",
+  "locale": "es",
+  "details": {
+    "dataset": "sales.amount",
+    "evidence": "unique"
+  }
+}

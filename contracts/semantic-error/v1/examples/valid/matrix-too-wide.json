@@ -1,0 +1,14 @@
+{
+  "kind": "semantic_error",
+  "code": "MATRIX_TOO_WIDE",
+  "severity": "error",
+  "category": "budget",
+  "audience": "builder",
+  "message": "The matrix asks for 37 columns and the maximum is 37. Add a filter or a coarser level.",
+  "locale": "en",
+  "details": {
+    "limit": "columns",
+    "maximum": "37",
+    "requested": "37"
+  }
+}

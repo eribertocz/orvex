@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_error",
+  "code": "AMBIGUOUS_RELATIONSHIP_PATH",
+  "severity": "error",
+  "category": "query",
+  "audience": "other",
+  "message": "Hay más de un camino entre sales.amount y sales.amount; indique cuál usar.",
+  "locale": "es",
+  "details": {
+    "from": "sales.amount",
+    "to": "sales.amount"
+  }
+}

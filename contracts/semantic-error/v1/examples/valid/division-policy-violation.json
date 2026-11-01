@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "DIVISION_POLICY_VIOLATION",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "builder",
+  "message": "The metric sales.amount divides by zero, which its rule rejects.",
+  "locale": "en",
+  "details": {
+    "metric": "sales.amount"
+  }
+}

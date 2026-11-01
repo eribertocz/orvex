@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_error",
+  "code": "UNSUPPORTED_OSSIE_VERSION",
+  "severity": "error",
+  "category": "model",
+  "audience": "builder",
+  "message": "The model's version 0.2.0.dev0 is not supported; the supported one is 0.2.0.dev0.",
+  "locale": "en",
+  "details": {
+    "found": "0.2.0.dev0",
+    "supported": "0.2.0.dev0"
+  }
+}

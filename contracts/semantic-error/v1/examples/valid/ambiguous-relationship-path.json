@@ -1,0 +1,17 @@
+{
+  "kind": "semantic_error",
+  "code": "AMBIGUOUS_RELATIONSHIP_PATH",
+  "severity": "error",
+  "category": "query",
+  "audience": "builder",
+  "message": "There is more than one path between sales.amount and sales.amount; name a role: billing_customer, shipping_customer.",
+  "locale": "en",
+  "details": {
+    "from": "sales.amount",
+    "to": "sales.amount",
+    "roles": [
+      "billing_customer",
+      "shipping_customer"
+    ]
+  }
+}

@@ -35,7 +35,7 @@ def table_codes(contract: str) -> set[str]:
     return set(re.findall(r"^\| `([A-Z][A-Z0-9_]+)` \|", readme, re.MULTILINE))
 
 
-@pytest.mark.parametrize("contract", ["store", "model-config", "project"])
+@pytest.mark.parametrize("contract", ["store", "model-config", "project", "semantic-error"])
 def test_every_enumerated_error_code_is_in_the_readme_table(contract: str) -> None:
     codes = enum_codes(contract)
     assert codes, f"no ErrorCode enum found in {contract}"

@@ -1,0 +1,278 @@
+{
+  "AMBIGUOUS_RELATIONSHIP_PATH": {
+    "severity": "error",
+    "category": "query",
+    "details": {
+      "from": "public",
+      "to": "public",
+      "roles": "builder"
+    }
+  },
+  "AS_KNOWN_AT_UNSUPPORTED": {
+    "severity": "error",
+    "category": "query",
+    "details": {
+      "dataset": "public"
+    }
+  },
+  "BRIDGE_WEIGHTS_INVALID": {
+    "severity": "error",
+    "category": "correctness",
+    "details": {
+      "bridge": "public",
+      "groups": "builder"
+    }
+  },
+  "CONTEXT_CONFLICT": {
+    "severity": "error",
+    "category": "query",
+    "details": {
+      "scopes": "builder"
+    }
+  },
+  "COVERAGE_POLICY_REQUIRED": {
+    "severity": "error",
+    "category": "correctness",
+    "details": {
+      "dimension": "public"
+    }
+  },
+  "CROSS_ENGINE_QUERY": {
+    "severity": "error",
+    "category": "engine",
+    "details": {
+      "datasets": "public",
+      "engines": "builder"
+    }
+  },
+  "DEPRECATED_METRIC": {
+    "severity": "warning",
+    "category": "model",
+    "details": {
+      "metric": "public"
+    }
+  },
+  "DIVISION_POLICY_VIOLATION": {
+    "severity": "error",
+    "category": "correctness",
+    "details": {
+      "metric": "public"
+    }
+  },
+  "ENGINE_VERSION_UNTESTED": {
+    "severity": "error",
+    "category": "engine",
+    "details": {
+      "engine": "public",
+      "found": "builder",
+      "tested": "builder"
+    }
+  },
+  "EVIDENCE_VIOLATED": {
+    "severity": "error",
+    "category": "correctness",
+    "details": {
+      "dataset": "public",
+      "evidence": "public",
+      "fields": "builder",
+      "violations": "builder"
+    }
+  },
+  "FANOUT_NOT_ISOLATABLE": {
+    "severity": "error",
+    "category": "correctness",
+    "details": {
+      "metric": "public",
+      "relationship": "builder"
+    }
+  },
+  "FILTER_CYCLE": {
+    "severity": "error",
+    "category": "query",
+    "details": {
+      "filters": "builder"
+    }
+  },
+  "ILLEGAL_GRAIN_TRANSITION": {
+    "severity": "error",
+    "category": "correctness",
+    "details": {
+      "metric": "public",
+      "grain": "builder"
+    }
+  },
+  "ILLEGAL_TEMPORAL_REAGGREGATION": {
+    "severity": "error",
+    "category": "correctness",
+    "details": {
+      "metric": "public",
+      "axis": "builder"
+    }
+  },
+  "INCOMPATIBLE_UNITS": {
+    "severity": "error",
+    "category": "correctness",
+    "details": {
+      "units": "public"
+    }
+  },
+  "MATRIX_TOO_WIDE": {
+    "severity": "error",
+    "category": "budget",
+    "details": {
+      "limit": "public",
+      "maximum": "public",
+      "requested": "builder"
+    }
+  },
+  "MEMBER_MASKED": {
+    "severity": "error",
+    "category": "security",
+    "details": {
+      "member": "public",
+      "operation": "public"
+    }
+  },
+  "MEMBER_NOT_FOUND": {
+    "severity": "error",
+    "category": "query",
+    "details": {
+      "member": "public"
+    }
+  },
+  "METRIC_ALIGNMENT_AMBIGUOUS": {
+    "severity": "error",
+    "category": "model",
+    "details": {
+      "metric": "public",
+      "missing": "public"
+    }
+  },
+  "METRIC_CYCLE": {
+    "severity": "error",
+    "category": "model",
+    "details": {
+      "cycle": "builder"
+    }
+  },
+  "METRIC_IN_USE": {
+    "severity": "error",
+    "category": "model",
+    "details": {
+      "metric": "public",
+      "dependents": "builder"
+    }
+  },
+  "MISSING_ADDITIVITY_DECLARATION": {
+    "severity": "error",
+    "category": "model",
+    "details": {
+      "metric": "public"
+    }
+  },
+  "MISSING_CARDINALITY_DECLARATION": {
+    "severity": "error",
+    "category": "model",
+    "details": {
+      "relationship": "builder"
+    }
+  },
+  "MISSING_EXTENSION_DECLARATION": {
+    "severity": "error",
+    "category": "model",
+    "details": {
+      "element": "public",
+      "name": "public",
+      "declaration": "public"
+    }
+  },
+  "NO_RELATIONSHIP_PATH": {
+    "severity": "error",
+    "category": "query",
+    "details": {
+      "from": "public",
+      "to": "public"
+    }
+  },
+  "OSSIE_INVALID": {
+    "severity": "error",
+    "category": "model",
+    "details": {
+      "file": "public",
+      "problems": "builder",
+      "problems_omitted": "builder"
+    }
+  },
+  "PARAMETER_INVALID": {
+    "severity": "error",
+    "category": "query",
+    "details": {
+      "parameter": "public",
+      "expected": "public"
+    }
+  },
+  "POLICY_ATTRIBUTE_MISSING": {
+    "severity": "notice",
+    "category": "security",
+    "details": {
+      "policy": "public"
+    }
+  },
+  "POLICY_NOT_SUPPORTED_ON_ENGINE": {
+    "severity": "error",
+    "category": "security",
+    "details": {
+      "dataset": "public",
+      "policy": "builder",
+      "reason": "builder"
+    }
+  },
+  "QUERY_BUDGET_EXCEEDED": {
+    "severity": "error",
+    "category": "budget",
+    "details": {
+      "budget": "public",
+      "limit": "public",
+      "estimate": "builder"
+    }
+  },
+  "REAGGREGATION_NOT_ALLOWED": {
+    "severity": "error",
+    "category": "correctness",
+    "details": {
+      "metric": "public",
+      "class": "public"
+    }
+  },
+  "TEMPORAL_MATCH_NOT_UNIQUE": {
+    "severity": "error",
+    "category": "correctness",
+    "details": {
+      "relationship": "builder",
+      "violations": "builder"
+    }
+  },
+  "UNSUPPORTED_OPERATION": {
+    "severity": "error",
+    "category": "engine",
+    "details": {
+      "operation": "public"
+    }
+  },
+  "UNSUPPORTED_OSSIE_VERSION": {
+    "severity": "error",
+    "category": "model",
+    "details": {
+      "found": "public",
+      "supported": "public"
+    }
+  },
+  "WINDOW_UNDEFINED_AT_TOTAL": {
+    "severity": "error",
+    "category": "query",
+    "details": {
+      "metric": "public",
+      "level": "public"
+    }
+  }
+}

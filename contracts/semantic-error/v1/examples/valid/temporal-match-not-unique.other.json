@@ -1,0 +1,10 @@
+{
+  "kind": "semantic_error",
+  "code": "TEMPORAL_MATCH_NOT_UNIQUE",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "other",
+  "message": "Una relación en el tiempo no encuentra exactamente una versión.",
+  "locale": "es",
+  "details": {}
+}

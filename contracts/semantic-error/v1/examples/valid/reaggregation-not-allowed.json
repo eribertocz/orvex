@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_error",
+  "code": "REAGGREGATION_NOT_ALLOWED",
+  "severity": "error",
+  "category": "correctness",
+  "audience": "builder",
+  "message": "The metric sales.amount (distributive) cannot be re-aggregated from aggregated results.",
+  "locale": "en",
+  "details": {
+    "metric": "sales.amount",
+    "class": "distributive"
+  }
+}

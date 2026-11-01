@@ -1,0 +1,17 @@
+{
+  "kind": "semantic_error",
+  "code": "ENGINE_VERSION_UNTESTED",
+  "severity": "error",
+  "category": "engine",
+  "audience": "builder",
+  "message": "Version 0.2.0.dev0 of the engine sales.amount is not tested; the tested ones are 1.4.0, 1.5.0.",
+  "locale": "en",
+  "details": {
+    "engine": "sales.amount",
+    "found": "0.2.0.dev0",
+    "tested": [
+      "1.4.0",
+      "1.5.0"
+    ]
+  }
+}

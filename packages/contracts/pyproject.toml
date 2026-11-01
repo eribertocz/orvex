@@ -17,4 +17,4 @@ where = ["src"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"orvex.contracts" = ["py.typed", "contracts.toml"]
+"orvex.contracts" = ["py.typed", "contracts.toml", "*/v*_data/*.json", "*/v*_data/*/*.json"]

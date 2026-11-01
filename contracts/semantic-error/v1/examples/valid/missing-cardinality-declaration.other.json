@@ -1,0 +1,10 @@
+{
+  "kind": "semantic_error",
+  "code": "MISSING_CARDINALITY_DECLARATION",
+  "severity": "error",
+  "category": "model",
+  "audience": "other",
+  "message": "Una relación del modelo no declara su cardinalidad.",
+  "locale": "es",
+  "details": {}
+}

@@ -1,0 +1,10 @@
+{
+  "kind": "semantic_error",
+  "code": "FILTER_CYCLE",
+  "severity": "error",
+  "category": "query",
+  "audience": "builder",
+  "message": "The filters depend on each other in a circle: billing_customer, shipping_customer.",
+  "locale": "en",
+  "details": {}
+}
