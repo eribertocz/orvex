@@ -116,6 +116,12 @@ def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return dict(pairs)
 
 
+def _unique_names(names: list[object], kind: str) -> None:
+    repeated = sorted({str(name) for name in names if names.count(name) > 1})
+    if repeated:
+        raise UntranslatableKey(f"two {kind}s named {repeated}")
+
+
 def _payload(entry: object) -> dict[str, Any]:
     if not isinstance(entry, dict) or not isinstance(entry.get("data"), str):
         raise UntranslatableKey(f"not a payload entry: {entry!r}")
@@ -239,9 +245,15 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
         if members or _own(dataset) is not None:
             put(dataset, "dataset", members)
 
+    # Every lookup by name refuses a repeated name: a later element would replace an earlier one.
+    _unique_names([d.get("name") for d in datasets], "dataset")
     relationships = {
         str(r.get("name")): r for r in translated.get("relationships") or [] if isinstance(r, dict)
     }
+    _unique_names(
+        [r.get("name") for r in translated.get("relationships") or [] if isinstance(r, dict)],
+        "relationship",
+    )
     bridge_datasets: dict[str, str] = {}  # bi-platform bridge name -> bridge dataset
     for written in bridges:
         bridge = _shape(
@@ -257,6 +269,8 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
             },
             where="bridge",
         )
+        if str(bridge["name"]) in bridge_datasets:
+            raise UntranslatableKey(f"two bridges named {bridge['name']!r}")
         target = next((d for d in datasets if d.get("name") == bridge["bridge"]), None)
         if target is None:
             raise UntranslatableKey(f"bridge dataset {bridge['bridge']!r} not found")

@@ -5,6 +5,7 @@ Rejection cases run on copies in a temporary folder; the imported files are neve
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import shutil
@@ -599,4 +600,20 @@ def test_a_payload_that_repeats_a_key_fails() -> None:
         field["custom_extensions"] = [{"vendor_name": adapter.VENDOR_NAME, "data": text}]
 
     with pytest.raises(adapter.UntranslatableKey, match=re.escape("repeats a key: ['dimension']")):
+        translated_or_error(edit)
+
+
+@pytest.mark.parametrize("kind", ["bridge", "dataset", "relationship"])
+def test_a_repeated_name_fails_instead_of_replacing_an_element(kind: str) -> None:
+    def edit(model: dict[str, Any]) -> None:
+        if kind == "bridge":
+            data = bridges(model)
+            data["bridges"].append({**data["bridges"][0], "bridge": "orders"})
+            set_payload(model, data)
+        elif kind == "dataset":
+            model["datasets"].append(copy.deepcopy(model["datasets"][0]))
+        else:
+            model["relationships"].append(copy.deepcopy(model["relationships"][0]))
+
+    with pytest.raises(adapter.UntranslatableKey, match=f"two {kind}s? named"):
         translated_or_error(edit)
