@@ -1,0 +1,10 @@
+{
+  "kind": "semantic_error",
+  "code": "FILTER_INTERSECTION_EMPTY",
+  "severity": "notice",
+  "category": "query",
+  "audience": "other",
+  "message": "Los filtros se excluyen entre sí, así que ninguna fila coincide.",
+  "locale": "es",
+  "details": {}
+}

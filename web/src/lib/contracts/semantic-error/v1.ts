@@ -23,6 +23,8 @@ export type SemanticError =
 	| FanoutNotIsolatablePublicError
 	| FilterCycleError
 	| FilterCyclePublicError
+	| FilterIntersectionEmptyError
+	| FilterIntersectionEmptyPublicError
 	| IllegalGrainTransitionError
 	| IllegalGrainTransitionPublicError
 	| IllegalTemporalReaggregationError
@@ -505,6 +507,42 @@ export interface FilterCyclePublicError {
  * Details of FILTER_CYCLE for any other audience: its builder fields are left out.
  */
 export type FilterCyclePublicDetails = Record<string, never>;
+/**
+ * FILTER_INTERSECTION_EMPTY as a builder sees it.
+ */
+export interface FilterIntersectionEmptyError {
+	kind: 'semantic_error';
+	code: 'FILTER_INTERSECTION_EMPTY';
+	severity: 'notice';
+	category: 'query';
+	audience: 'builder';
+	message: string;
+	locale: Locale;
+	details: FilterIntersectionEmptyDetails;
+}
+/**
+ * Details of FILTER_INTERSECTION_EMPTY, as a builder sees them.
+ */
+export interface FilterIntersectionEmptyDetails {
+	member: Name;
+}
+/**
+ * FILTER_INTERSECTION_EMPTY as any other audience sees it: the generic message and public details only.
+ */
+export interface FilterIntersectionEmptyPublicError {
+	kind: 'semantic_error';
+	code: 'FILTER_INTERSECTION_EMPTY';
+	severity: 'notice';
+	category: 'query';
+	audience: 'other';
+	message: string;
+	locale: Locale;
+	details: FilterIntersectionEmptyPublicDetails;
+}
+/**
+ * Details of FILTER_INTERSECTION_EMPTY for any other audience: its builder fields are left out.
+ */
+export type FilterIntersectionEmptyPublicDetails = Record<string, never>;
 /**
  * ILLEGAL_GRAIN_TRANSITION as a builder sees it.
  */

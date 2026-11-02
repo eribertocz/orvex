@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "FILTER_INTERSECTION_EMPTY",
+  "severity": "notice",
+  "category": "query",
+  "audience": "other",
+  "message": "The filters exclude each other, so no rows match.",
+  "locale": "en",
+  "details": {
+    "member": "consumers.region"
+  }
+}

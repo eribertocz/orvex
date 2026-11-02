@@ -65,6 +65,12 @@
       "$ref": "#/$defs/FilterCyclePublicError"
     },
     {
+      "$ref": "#/$defs/FilterIntersectionEmptyError"
+    },
+    {
+      "$ref": "#/$defs/FilterIntersectionEmptyPublicError"
+    },
+    {
       "$ref": "#/$defs/IllegalGrainTransitionError"
     },
     {
@@ -282,6 +288,7 @@
         "EVIDENCE_VIOLATED",
         "FANOUT_NOT_ISOLATABLE",
         "FILTER_CYCLE",
+        "FILTER_INTERSECTION_EMPTY",
         "ILLEGAL_GRAIN_TRANSITION",
         "ILLEGAL_TEMPORAL_REAGGREGATION",
         "INCOMPATIBLE_UNITS",
@@ -3670,6 +3677,112 @@
         },
         "details": {
           "$ref": "#/$defs/WindowUndefinedAtTotalDetails"
+        }
+      }
+    },
+    "FilterIntersectionEmptyDetails": {
+      "description": "Details of FILTER_INTERSECTION_EMPTY, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "member"
+      ],
+      "properties": {
+        "member": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "FilterIntersectionEmptyPublicDetails": {
+      "description": "Details of FILTER_INTERSECTION_EMPTY for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "FilterIntersectionEmptyError": {
+      "description": "FILTER_INTERSECTION_EMPTY as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "FILTER_INTERSECTION_EMPTY"
+        },
+        "severity": {
+          "const": "notice"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/FilterIntersectionEmptyDetails"
+        }
+      }
+    },
+    "FilterIntersectionEmptyPublicError": {
+      "description": "FILTER_INTERSECTION_EMPTY as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "FILTER_INTERSECTION_EMPTY"
+        },
+        "severity": {
+          "const": "notice"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/FilterIntersectionEmptyPublicDetails"
         }
       }
     }

@@ -105,6 +105,14 @@
     },
     "optional": []
   },
+  "FILTER_INTERSECTION_EMPTY": {
+    "severity": "notice",
+    "category": "query",
+    "details": {
+      "member": "builder"
+    },
+    "optional": []
+  },
   "ILLEGAL_GRAIN_TRANSITION": {
     "severity": "error",
     "category": "correctness",

@@ -3,4 +3,4 @@
 # The server checks the installed combination before it starts.
 
 produces = { "semantic-error" = "v1", "semantic-query" = "v1", "semantic-result" = "v1" }
-consumes = {}
+consumes = { "store" = ["v1"] }

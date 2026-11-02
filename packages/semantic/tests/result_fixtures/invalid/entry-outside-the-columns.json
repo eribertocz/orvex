@@ -1,0 +1,100 @@
+{
+  "cell_states": [
+    {
+      "row": 0,
+      "column": 4,
+      "state": "undefined_at_total"
+    }
+  ],
+  "columns": [
+    {
+      "encoding": "VARCHAR",
+      "exactness": "exact",
+      "logical": {
+        "family": "String"
+      },
+      "member": {
+        "dataset": "sales",
+        "name": "name"
+      },
+      "name": "name",
+      "nullable": true,
+      "role": "field"
+    },
+    {
+      "encoding": "VARCHAR",
+      "mask": "***",
+      "masked": true,
+      "member": {
+        "dataset": "consumers",
+        "name": "phone"
+      },
+      "name": "phone",
+      "nullable": false,
+      "role": "field"
+    },
+    {
+      "encoding": "DECIMAL(18,2)",
+      "exactness": "exact",
+      "logical": {
+        "family": "Decimal",
+        "precision": 18,
+        "scale": 2
+      },
+      "member": {
+        "dataset": "sales",
+        "name": "amount"
+      },
+      "name": "amount",
+      "nullable": true,
+      "role": "field"
+    },
+    {
+      "encoding": "BIGINT",
+      "exactness": "exact",
+      "logical": {
+        "family": "Integer",
+        "signed": true,
+        "width": 64
+      },
+      "member": {
+        "dataset": "sales",
+        "name": "units"
+      },
+      "name": "units",
+      "nullable": false,
+      "role": "field"
+    }
+  ],
+  "kind": "semantic_result",
+  "mode": "detail",
+  "model_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "notices": [],
+  "page": {
+    "next": "c2VhbGVk",
+    "size": 3
+  },
+  "query_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "row_count": 3,
+  "version": 1,
+  "rows": [
+    [
+      "***",
+      "***",
+      "1250.00",
+      "1"
+    ],
+    [
+      "",
+      "***",
+      null,
+      "2"
+    ],
+    [
+      null,
+      "***",
+      "7.00",
+      "3"
+    ]
+  ]
+}
