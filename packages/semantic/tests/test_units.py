@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from orvex.semantic.compiler import units
-from orvex.semantic.compiler.units import ONE, UnitError, currency, parse
+from orvex.semantic.compiler.units import MAX_EXPONENT, ONE, UnitError, currency, parse
 
 ROOT = Path(__file__).resolve().parents[3]
 VENDOR = ROOT / "vendor" / "iso-4217"
@@ -100,8 +100,40 @@ def test_factors_are_exact() -> None:
         "m.",
         "x" * 65,
         "(m/s)2",  # UCUM puts no exponent on a parenthesis
+        "(m){x}",  # nor an annotation
+        "m{}",
+        "m{\x01}",  # annotations are printable ASCII
+        "m{é}",
+        "m0",
+        "0",  # a factor of zero measures nothing
+        "m/0",
+        "km13",  # beyond the exponent bound
+        "km999999999",
+        "10*999999999999",
+        "10*61",
     ],
 )
 def test_unknown_units_are_refused(text: str) -> None:
     with pytest.raises(UnitError):
         parse(text)
+
+
+def test_computed_units_stay_bounded_and_their_text_short() -> None:
+    unit = parse("km")
+    for _ in range(MAX_EXPONENT - 1):
+        unit = unit * parse("km")
+    assert len(unit.text) <= 300
+    with pytest.raises(UnitError):
+        unit * parse("km")
+    with pytest.raises(UnitError):
+        parse("km").power(999_999_999_999)
+    assert (parse("km") * parse("h")).text == "km.h"
+    assert parse("km").power(2).text == "km2"
+    assert (parse("USD") * parse("BOB/USD")).text == "BOB"
+
+
+def test_versions_identify_the_registry_and_the_snapshot() -> None:
+    registry_version, snapshot = units.versions()
+    assert registry_version == "units/1"
+    digest = hashlib.sha256(SNAPSHOT.read_bytes()).hexdigest()
+    assert snapshot == f"iso4217/sha256:{digest}"

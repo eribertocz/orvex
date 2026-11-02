@@ -61,7 +61,7 @@ from orvex.semantic.compiler.catalog import (
     logical_of,
 )
 from orvex.semantic.compiler.parsing import MemberId, ParsedMember, ParsedModel, Problems
-from orvex.semantic.compiler.units import ONE, Unit, UnitError
+from orvex.semantic.compiler.units import ONE, Unit, UnitError, versions
 from orvex.semantic.compiler.units import currency as currency_unit
 from orvex.semantic.compiler.units import parse as parse_unit
 from orvex.semantic.compiler.zones import TZDATA_VERSION, is_zone
@@ -131,6 +131,8 @@ class TypedModel:
     members: Mapping[MemberId, TypedMember]
     expressions: tuple[tuple[str, TypedNode], ...]  # model payload expressions, by pointer
     tzdata: str
+    units: str  # the units registry's version
+    currencies: str  # the ISO 4217 snapshot's identity
 
 
 class _Extra(TypedDict, total=False):
@@ -1190,9 +1192,13 @@ def _call_unit(node: sql.Call, children: tuple[TypedNode, ...]) -> Unit | None:
 
 
 def _units(tree: TypedNode) -> TypedNode:
-    """The tree with each node's unit, bottom up (#280 §2 units and aggregates)."""
+    """The tree with each node's unit, bottom up (#280 §2 units and aggregates). A unit beyond
+    the registry's bounds (`POWER(x, 999)`) is a `type` error."""
     children = tuple(_units(child) for child in tree.children)
-    unit = _unit_of(tree.node, tree.type, children)
+    try:
+        unit = _unit_of(tree.node, tree.type, children)
+    except UnitError:
+        raise _Bad() from None
     return TypedNode(tree.node, replace(tree.type, unit=unit), children)
 
 
@@ -1582,8 +1588,17 @@ def type_model(model: OssieModel, parsed: ParsedModel, catalog: SourceCatalog) -
             continue
     expressions = state.model_expressions()
     state.problems.raise_if_any()
-    # The first mismatch in a fixed order: members, then model expressions as written.
-    found = [state.mismatches[m] for m in sorted(state.mismatches)] + state.expression_mismatches
+
+    # The first mismatch in document order: members, then model expressions.
+    def position(member: MemberId) -> tuple[int, str]:
+        pointer = parsed.members[member].pointer
+        return model.line(pointer), pointer
+
+    ordered = sorted(state.mismatches, key=position)
+    found = [state.mismatches[m] for m in ordered] + state.expression_mismatches
     if found:
         raise SemanticError("INCOMPATIBLE_UNITS", {"units": found[0]})
-    return TypedModel(parsed, MappingProxyType(dict(state.typed)), expressions, TZDATA_VERSION)
+    units, currencies = versions()
+    return TypedModel(
+        parsed, MappingProxyType(dict(state.typed)), expressions, TZDATA_VERSION, units, currencies
+    )

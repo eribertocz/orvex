@@ -20,6 +20,7 @@ snapshot is a currency and takes no prefix or exponent restrictions beyond the g
 from __future__ import annotations
 
 import csv
+import hashlib
 import re
 import tomllib
 from collections.abc import Mapping
@@ -31,6 +32,11 @@ from importlib import resources
 from math import isqrt
 
 MAX_TEXT = 64
+# Bounds that keep every unit small and every shown text within the error contract (a `Name`
+# holds at most 300 characters): no real measure comes near them.
+MAX_EXPONENT = 12
+MAX_DIMENSIONS = 8
+MAX_FACTOR_DIGITS = 60
 
 
 class UnitError(ValueError):
@@ -53,8 +59,13 @@ class Unit:
         return _make(self.factor / other.factor, _combine(self, other, -1), _join(self, other, "/"))
 
     def power(self, exponent: int) -> Unit:
+        largest = max((abs(power) for _, power in self.dimensions), default=0)
+        digits = max(len(str(self.factor.numerator)), len(str(self.factor.denominator)))
+        if largest * abs(exponent) > MAX_EXPONENT or digits * abs(exponent) > MAX_FACTOR_DIGITS + 1:
+            raise UnitError(self.text)
         dimensions = {name: power * exponent for name, power in self.dimensions}
-        text = self.text if exponent == 1 else f"({self.text}){exponent}"
+        simple = not any(c in self.text for c in "./(){}") and not self.text[-1:].isdigit()
+        text = self.text if exponent == 1 else f"{self.text}{exponent}" if simple else ""
         return _make(self.factor**exponent, dimensions, text)
 
     def root(self) -> Unit | None:
@@ -90,19 +101,32 @@ def _join(left: Unit, right: Unit, operator: str) -> str:
     return f"{wrap(left)}{operator}{wrap(right)}"
 
 
-def _canonical(factor: Fraction, dimensions: tuple[tuple[str, int], ...]) -> str | None:
-    """UCUM text of a unit whose factor is 1: `BOB/USD`, `m2`, `1`."""
-    if factor != 1:
-        return None
+def _canonical(factor: Fraction, dimensions: tuple[tuple[str, int], ...]) -> str:
+    """UCUM text of any unit, from its dimensions: `BOB/USD`, `m2`, `1`, `1000.m`, `m3/1000`."""
     above = [f"{name}{power if power != 1 else ''}" for name, power in dimensions if power > 0]
     below = [f"{name}{-power if power != -1 else ''}" for name, power in dimensions if power < 0]
-    text = ".".join(above) or "1"
-    return text + "".join(f"/{name}" for name in below)
+    if factor.numerator != 1:
+        above.insert(0, str(factor.numerator))
+    if factor.denominator != 1:
+        below.append(str(factor.denominator))
+    return (".".join(above) or "1") + "".join(f"/{name}" for name in below)
 
 
 def _make(factor: Fraction, dimensions: Mapping[str, int], text: str) -> Unit:
+    """A computed unit, within the bounds; shown as its operands wrote it when that is short,
+    and in canonical form otherwise (always when its factor is 1)."""
     kept = tuple(sorted((name, power) for name, power in dimensions.items() if power != 0))
-    return Unit(factor, kept, _canonical(factor, kept) or text)
+    if (
+        factor <= 0
+        or len(kept) > MAX_DIMENSIONS
+        or any(abs(power) > MAX_EXPONENT for _, power in kept)
+        or len(str(factor.numerator)) > MAX_FACTOR_DIGITS
+        or len(str(factor.denominator)) > MAX_FACTOR_DIGITS
+    ):
+        raise UnitError(text or "unit")
+    if factor == 1 or not text or len(text) > MAX_TEXT:
+        text = _canonical(factor, kept)
+    return Unit(factor, kept, text)
 
 
 ONE = Unit(Fraction(1), (), "1")
@@ -145,16 +169,12 @@ def currency(code: str) -> Unit:
     return Unit(Fraction(1), ((code, 1),), code)
 
 
-def is_currency(code: str) -> bool:
-    return code in registry().currencies
-
-
 # --- the parser ----------------------------------------------------------------------------------
 
 _SIMPLE = re.compile(r"(?P<name>\[[^\[\]]+\]|[^.\/(){}\[\]0-9+-]+)(?P<exponent>[+-]?[0-9]+)?")
-_INTEGER = re.compile(r"[0-9]+")
+_INTEGER = re.compile(r"[0-9]{1,60}(?![0-9])")
 _TEN = re.compile(r"10[*^](?P<exponent>[+-]?[0-9]+)")
-_ANNOTATION = re.compile(r"\{[^{}]*\}")
+_ANNOTATION = re.compile(r"\{[!-z|~]+\}")  # printable ASCII but braces, as UCUM defines
 
 
 class _Parser:
@@ -194,18 +214,22 @@ class _Parser:
             if not self.peek(")"):
                 raise UnitError(self.text)
             self.at += 1
-            self.annotation()
-            return unit
+            return unit  # UCUM puts no exponent or annotation on a parenthesis
         if self.peek("{"):
             self.annotation(required=True)
             return ONE
         ten = _TEN.match(self.text, self.at)
         if ten is not None:
             self.at = ten.end()
-            return Unit(Fraction(10) ** int(ten.group("exponent")), (), ten.group(0))
+            power = int(ten.group("exponent"))
+            if abs(power) > MAX_FACTOR_DIGITS:
+                raise UnitError(self.text)
+            return Unit(Fraction(10) ** power, (), ten.group(0))
         integer = _INTEGER.match(self.text, self.at)
         if integer is not None:
             self.at = integer.end()
+            if int(integer.group(0)) == 0:
+                raise UnitError(self.text)  # a factor of zero measures nothing
             return Unit(Fraction(int(integer.group(0))), (), integer.group(0))
         simple = _SIMPLE.match(self.text, self.at)
         if simple is None:
@@ -214,6 +238,8 @@ class _Parser:
         unit = self.simple(simple.group("name"))
         exponent = simple.group("exponent")
         if exponent is not None:
+            if int(exponent) == 0 or abs(int(exponent)) > MAX_EXPONENT:
+                raise UnitError(self.text)
             unit = unit.power(int(exponent))
         self.annotation()
         return unit
@@ -224,8 +250,6 @@ class _Parser:
             if required:
                 raise UnitError(self.text)
             return
-        if not found.group(0)[1:-1].isascii():
-            raise UnitError(self.text)
         self.at = found.end()
 
     def simple(self, name: str) -> Unit:
@@ -248,5 +272,9 @@ def parse(text: str) -> Unit:
     return _Parser(text, registry()).parse()
 
 
-def units_version() -> int:
-    return registry().version
+def versions() -> tuple[str, str]:
+    """The registry's version and the snapshot's identity (the SHA-256 of its file), for the
+    model fingerprint (P2-04e)."""
+    data = resources.files("orvex.semantic.compiler").joinpath("registries")
+    snapshot = hashlib.sha256(data.joinpath("iso4217.csv").read_bytes()).hexdigest()
+    return f"units/{registry().version}", f"iso4217/sha256:{snapshot}"

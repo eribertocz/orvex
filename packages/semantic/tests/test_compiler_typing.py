@@ -873,3 +873,31 @@ def test_addition_succeeds_iff_normalized_units_are_equal(
         with pytest.raises(SemanticError) as caught:
             type_model(loaded, parsed, CATALOG)
         assert caught.value.code == "INCOMPATIBLE_UNITS"
+
+
+def test_a_power_beyond_the_unit_bounds_is_a_type_error_never_a_hang() -> None:
+    document = measured(metric("x", "MAX(POWER(sales.distance, 999999999999))"))
+    for error in failure_both(document):
+        assert problems(error) == [("type", TEXT)]
+
+
+def test_incompatible_units_details_always_meet_the_contract() -> None:
+    chain = " * ".join(["sales.distance"] * 12)
+    document = measured(metric("x", f"SUM({chain}) + SUM(sales.metres)"))
+    for units in incompatible(document):
+        assert all(len(unit) <= 300 for unit in units)
+        assert units[1] == "m"
+
+
+def test_the_first_mismatch_in_document_order_is_reported() -> None:
+    document = measured(
+        metric("b_second", "SUM(sales.distance + sales.metres)"),
+        metric("a_first", "SUM(sales.amount_usd + sales.amount_bob)"),
+    )
+    assert incompatible(document) == [["km", "m"], ["km", "m"]]
+
+
+def test_the_typed_model_records_its_registries() -> None:
+    for typed in typed_both(base()):
+        assert typed.units == "units/1"
+        assert typed.currencies.startswith("iso4217/sha256:")
