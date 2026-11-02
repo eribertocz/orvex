@@ -50,6 +50,8 @@ export type SemanticError =
 	| PolicyNotSupportedOnEnginePublicError
 	| QueryBudgetExceededError
 	| QueryBudgetExceededPublicError
+	| QueryInvalidError
+	| QueryInvalidPublicError
 	| ReaggregationNotAllowedError
 	| TemporalMatchNotUniqueError
 	| TemporalMatchNotUniquePublicError
@@ -96,6 +98,11 @@ export type Path = string;
  * @maxItems 50
  */
 export type Problems = [Problem, ...Problem[]];
+/**
+ * @minItems 1
+ * @maxItems 50
+ */
+export type QueryProblems = [QueryProblem, ...QueryProblem[]];
 
 /**
  * AMBIGUOUS_RELATIONSHIP_PATH as a builder sees it.
@@ -1043,6 +1050,50 @@ export interface QueryBudgetExceededPublicDetails {
 	budget: 'rows_scanned' | 'result_rows' | 'matrix_cells' | 'time_ms' | 'memory_bytes';
 	limit: Count;
 }
+/**
+ * QUERY_INVALID as a builder sees it.
+ */
+export interface QueryInvalidError {
+	kind: 'semantic_error';
+	code: 'QUERY_INVALID';
+	severity: 'error';
+	category: 'query';
+	audience: 'builder';
+	message: string;
+	locale: Locale;
+	details: QueryInvalidDetails;
+}
+/**
+ * Details of QUERY_INVALID, as a builder sees them.
+ */
+export interface QueryInvalidDetails {
+	problems: QueryProblems;
+	problems_omitted: Count;
+}
+export interface QueryProblem {
+	/**
+	 * JSON Pointer (RFC 6901) into the query.
+	 */
+	pointer: string;
+	rule: 'syntax' | 'schema' | 'kind' | 'zone';
+}
+/**
+ * QUERY_INVALID as any other audience sees it: the generic message and public details only.
+ */
+export interface QueryInvalidPublicError {
+	kind: 'semantic_error';
+	code: 'QUERY_INVALID';
+	severity: 'error';
+	category: 'query';
+	audience: 'other';
+	message: string;
+	locale: Locale;
+	details: QueryInvalidPublicDetails;
+}
+/**
+ * Details of QUERY_INVALID for any other audience: its builder fields are left out.
+ */
+export type QueryInvalidPublicDetails = Record<string, never>;
 /**
  * REAGGREGATION_NOT_ALLOWED: every detail is public, so both audiences see them all.
  */

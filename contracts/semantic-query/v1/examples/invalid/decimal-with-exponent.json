@@ -1,0 +1,25 @@
+{
+  "kind": "semantic_query",
+  "version": 1,
+  "mode": "aggregate",
+  "metrics": [
+    {
+      "metric": "revenue"
+    }
+  ],
+  "filters": [
+    {
+      "scope": "visual",
+      "member": "sales.region",
+      "predicate": {
+        "op": "in",
+        "values": [
+          {
+            "type": "decimal",
+            "value": "1e3"
+          }
+        ]
+      }
+    }
+  ]
+}

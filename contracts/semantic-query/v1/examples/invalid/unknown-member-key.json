@@ -1,0 +1,11 @@
+{
+  "kind": "semantic_query",
+  "version": 1,
+  "mode": "aggregate",
+  "metrics": [
+    {
+      "metric": "revenue",
+      "colour": "red"
+    }
+  ]
+}

@@ -146,6 +146,12 @@
       "$ref": "#/$defs/QueryBudgetExceededPublicError"
     },
     {
+      "$ref": "#/$defs/QueryInvalidError"
+    },
+    {
+      "$ref": "#/$defs/QueryInvalidPublicError"
+    },
+    {
       "$ref": "#/$defs/ReaggregationNotAllowedError"
     },
     {
@@ -291,6 +297,7 @@
         "POLICY_ATTRIBUTE_MISSING",
         "POLICY_NOT_SUPPORTED_ON_ENGINE",
         "QUERY_BUDGET_EXCEEDED",
+        "QUERY_INVALID",
         "REAGGREGATION_NOT_ALLOWED",
         "TEMPORAL_MATCH_NOT_UNIQUE",
         "UNSUPPORTED_OPERATION",
@@ -3109,6 +3116,148 @@
           "$ref": "#/$defs/QueryBudgetExceededPublicDetails"
         }
       }
+    },
+    "QueryProblem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pointer",
+        "rule"
+      ],
+      "properties": {
+        "pointer": {
+          "description": "JSON Pointer (RFC 6901) into the query.",
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^(/([^/~\\u0000-\\u001f]|~[01])*)*$"
+        },
+        "rule": {
+          "enum": [
+            "syntax",
+            "schema",
+            "kind",
+            "zone"
+          ]
+        }
+      }
+    },
+    "QueryProblems": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/QueryProblem"
+      }
+    },
+    "QueryInvalidError": {
+      "description": "QUERY_INVALID as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "QUERY_INVALID"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/QueryInvalidDetails"
+        }
+      }
+    },
+    "QueryInvalidPublicError": {
+      "description": "QUERY_INVALID as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "QUERY_INVALID"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/QueryInvalidPublicDetails"
+        }
+      }
+    },
+    "QueryInvalidDetails": {
+      "description": "Details of QUERY_INVALID, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "problems",
+        "problems_omitted"
+      ],
+      "properties": {
+        "problems": {
+          "$ref": "#/$defs/QueryProblems"
+        },
+        "problems_omitted": {
+          "$ref": "#/$defs/Count"
+        }
+      }
+    },
+    "QueryInvalidPublicDetails": {
+      "description": "Details of QUERY_INVALID for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
     },
     "ReaggregationNotAllowedDetails": {
       "description": "Details of REAGGREGATION_NOT_ALLOWED, as a builder sees them.",

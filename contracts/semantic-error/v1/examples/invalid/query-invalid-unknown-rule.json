@@ -1,0 +1,18 @@
+{
+  "kind": "semantic_error",
+  "code": "QUERY_INVALID",
+  "severity": "error",
+  "category": "query",
+  "audience": "builder",
+  "message": "The query is not valid: 2 problems, 0 more not shown.",
+  "locale": "en",
+  "details": {
+    "problems": [
+      {
+        "pointer": "/metrics/0",
+        "rule": "reference"
+      }
+    ],
+    "problems_omitted": "0"
+  }
+}

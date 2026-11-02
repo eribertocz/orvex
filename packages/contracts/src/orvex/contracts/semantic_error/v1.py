@@ -118,6 +118,7 @@ class SemanticErrorCode(
             "POLICY_ATTRIBUTE_MISSING",
             "POLICY_NOT_SUPPORTED_ON_ENGINE",
             "QUERY_BUDGET_EXCEEDED",
+            "QUERY_INVALID",
             "REAGGREGATION_NOT_ALLOWED",
             "TEMPORAL_MATCH_NOT_UNIQUE",
             "UNSUPPORTED_OPERATION",
@@ -157,6 +158,7 @@ class SemanticErrorCode(
         "POLICY_ATTRIBUTE_MISSING",
         "POLICY_NOT_SUPPORTED_ON_ENGINE",
         "QUERY_BUDGET_EXCEEDED",
+        "QUERY_INVALID",
         "REAGGREGATION_NOT_ALLOWED",
         "TEMPORAL_MATCH_NOT_UNIQUE",
         "UNSUPPORTED_OPERATION",
@@ -1591,6 +1593,43 @@ class QueryBudgetExceededPublicError(BaseModel):
     details: QueryBudgetExceededPublicDetails
 
 
+class QueryProblem(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    pointer: Annotated[str, Field(max_length=1024, pattern="^(/([^/~\\u0000-\\u001f]|~[01])*)*$")]
+    """
+    JSON Pointer (RFC 6901) into the query.
+    """
+    rule: Literal["syntax", "schema", "kind", "zone"]
+
+
+class QueryProblems(RootModel[list[QueryProblem]]):
+    root: Annotated[list[QueryProblem], Field(max_length=50, min_length=1)]
+
+
+class QueryInvalidDetails(BaseModel):
+    """
+    Details of QUERY_INVALID, as a builder sees them.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    problems: QueryProblems
+    problems_omitted: Count
+
+
+class QueryInvalidPublicDetails(BaseModel):
+    """
+    Details of QUERY_INVALID for any other audience: its builder fields are left out.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+
 class ReaggregationNotAllowedDetails(BaseModel):
     """
     Details of REAGGREGATION_NOT_ALLOWED, as a builder sees them.
@@ -1770,6 +1809,42 @@ class WindowUndefinedAtTotalError(BaseModel):
     details: WindowUndefinedAtTotalDetails
 
 
+class QueryInvalidError(BaseModel):
+    """
+    QUERY_INVALID as a builder sees it.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["QUERY_INVALID"]
+    severity: Literal["error"]
+    category: Literal["query"]
+    audience: Literal["builder"]
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: QueryInvalidDetails
+
+
+class QueryInvalidPublicError(BaseModel):
+    """
+    QUERY_INVALID as any other audience sees it: the generic message and public details only.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["QUERY_INVALID"]
+    severity: Literal["error"]
+    category: Literal["query"]
+    audience: Literal["other"]
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: QueryInvalidPublicDetails
+
+
 class SemanticError(
     RootModel[
         AmbiguousRelationshipPathError
@@ -1819,6 +1894,8 @@ class SemanticError(
         | PolicyNotSupportedOnEnginePublicError
         | QueryBudgetExceededError
         | QueryBudgetExceededPublicError
+        | QueryInvalidError
+        | QueryInvalidPublicError
         | ReaggregationNotAllowedError
         | TemporalMatchNotUniqueError
         | TemporalMatchNotUniquePublicError
@@ -1875,6 +1952,8 @@ class SemanticError(
         | PolicyNotSupportedOnEnginePublicError
         | QueryBudgetExceededError
         | QueryBudgetExceededPublicError
+        | QueryInvalidError
+        | QueryInvalidPublicError
         | ReaggregationNotAllowedError
         | TemporalMatchNotUniqueError
         | TemporalMatchNotUniquePublicError

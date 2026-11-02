@@ -31,9 +31,12 @@ NEW_CODES = (
     "AS_KNOWN_AT_UNSUPPORTED",
     "PARAMETER_INVALID",
     "REAGGREGATION_NOT_ALLOWED",
+    "QUERY_INVALID",
 )
 # The kinds of value a detail may hold. None of them is a data value, a secret or SQL.
-DETAIL_TYPES = {"Name", "Names", "Names2", "Path", "Version", "Versions", "Count", "Problems"}
+DETAIL_TYPES = {
+    "Name", "Names", "Names2", "Path", "Version", "Versions", "Count", "Problems", "QueryProblems"
+}  # fmt: skip
 FORBIDDEN_FIELD_NAMES = re.compile(r"value|sample|row|sql|secret|password|token|predicate|mask")
 
 
@@ -50,9 +53,9 @@ def placeholders(template: str) -> set[str]:
     return {field for _, field, _, _ in string.Formatter().parse(template) if field is not None}
 
 
-def test_the_catalog_has_35_codes_and_every_file_lists_them_all() -> None:
+def test_the_catalog_has_36_codes_and_every_file_lists_them_all() -> None:
     enumerated = set(DEFS["SemanticErrorCode"]["enum"])
-    assert len(enumerated) == 35
+    assert len(enumerated) == 36
     assert set(CODES) == enumerated
     assert {variant["properties"]["code"]["const"] for variant in variants()} == enumerated
     for locale, catalog in MESSAGES.items():

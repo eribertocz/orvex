@@ -1,0 +1,27 @@
+{
+  "kind": "semantic_query",
+  "version": 1,
+  "mode": "aggregate",
+  "metrics": [
+    {
+      "metric": "revenue"
+    }
+  ],
+  "filters": [
+    {
+      "scope": "visual",
+      "member": "sales.region",
+      "predicate": {
+        "op": "range",
+        "gt": {
+          "type": "integer",
+          "value": "1"
+        },
+        "gte": {
+          "type": "integer",
+          "value": "2"
+        }
+      }
+    }
+  ]
+}

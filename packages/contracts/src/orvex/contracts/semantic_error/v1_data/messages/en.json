@@ -119,6 +119,10 @@
     "generic": "The query exceeds the {budget} budget ({limit}); add a filter or a coarser level.",
     "builder": "The query exceeds the {budget} budget: the estimate is {estimate} and the limit is {limit}. Add a filter or a coarser level."
   },
+  "QUERY_INVALID": {
+    "generic": "The query is not valid.",
+    "builder": "The query is not valid: {problems} problems, {problems_omitted} more not shown."
+  },
   "REAGGREGATION_NOT_ALLOWED": {
     "generic": "The metric {metric} ({class}) cannot be re-aggregated from aggregated results.",
     "builder": "The metric {metric} ({class}) cannot be re-aggregated from aggregated results."

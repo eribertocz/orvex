@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_query",
+  "version": 1,
+  "mode": "detail",
+  "fields": [
+    {
+      "member": "sales.sale_id"
+    }
+  ],
+  "page": {
+    "size": "10"
+  }
+}

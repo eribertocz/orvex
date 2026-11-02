@@ -1,0 +1,15 @@
+{
+  "kind": "semantic_query",
+  "version": 1,
+  "mode": "detail",
+  "fields": [
+    {
+      "member": "sales.sale_id"
+    }
+  ],
+  "order": [
+    {
+      "by": "sales.sale_id"
+    }
+  ]
+}
