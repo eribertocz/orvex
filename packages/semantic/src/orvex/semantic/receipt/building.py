@@ -37,6 +37,8 @@ INSTANT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0
 ROUTES = frozenset({"managed", "existing_ducklake", "live"})
 APPLIED = frozenset({"restricted", "exempt", "no_rows"})
 FIGURES = frozenset({"rows_scanned", "groups", "cells"})
+SEAL_DOMAIN = b"receipt-seal/v1"
+RESULT_DOMAIN = b"result-mac/v1"
 
 
 class InvalidReceipt(ValueError):
@@ -77,10 +79,12 @@ class Key:
             "a key has 32 bytes or more",
         )
 
-    def mac(self, data: bytes) -> dict[str, str]:
+    def mac(self, domain: bytes, data: bytes) -> dict[str, str]:
+        """HMAC-SHA-256 of `data` under this key, separated by `domain`, so one key given for
+        two purposes never makes a seal and a result MAC interchangeable."""
         return {
             "key_id": self.key_id,
-            "mac": hmac.new(self.secret, data, hashlib.sha256).hexdigest(),
+            "mac": hmac.new(self.secret, domain + b"\n" + data, hashlib.sha256).hexdigest(),
         }
 
 
@@ -211,10 +215,37 @@ def _is_builder(viewer: object) -> bool:
 # --- the question, restricted to the viewer ------------------------------------------------
 
 
-def _predicate_values(predicate: Mapping[str, Any]) -> list[Mapping[str, object]]:
-    values = list(predicate.get("values", ()))
-    values += [predicate[bound] for bound in ("gte", "gt", "lte", "lt") if bound in predicate]
-    return values
+PREDICATE_PLAIN = (
+    "op",
+    "include_null",
+    "exclude_null",
+    "unit",
+    "offset",
+    "count",
+    "to_date",
+    "segment",
+    "hierarchy",
+)
+PREDICATE_ONE_VALUE = ("gte", "gt", "lte", "lt")
+PREDICATE_VALUES = ("values", "nodes")
+
+
+def _named(entry: Mapping[str, Any], keys: Sequence[str]) -> dict[str, Any]:
+    """`entry`'s members named in `keys`, and only those: the allow-list of a view."""
+    return {key: entry[key] for key in keys if key in entry}
+
+
+def _predicate(member: str, predicate: Mapping[str, Any], viewer: object) -> dict[str, Any] | None:
+    """The predicate rebuilt from its allowed members, or None when it holds a value the
+    viewer may not see or a member this view does not know."""
+    known = {*PREDICATE_PLAIN, *PREDICATE_ONE_VALUE, *PREDICATE_VALUES}
+    if not set(predicate) <= known:
+        return None
+    values = [predicate[key] for key in PREDICATE_ONE_VALUE if key in predicate]
+    values += [value for key in PREDICATE_VALUES for value in predicate.get(key, ())]
+    if not all(_asks(viewer, "sees_value", member, value) for value in values):
+        return None
+    return _named(predicate, [*PREDICATE_PLAIN, *PREDICATE_ONE_VALUE, *PREDICATE_VALUES])
 
 
 def _filters(
@@ -226,19 +257,20 @@ def _filters(
         if not _asks(viewer, "sees_member", member):
             cut.append(True)
             continue
-        shown = {k: v for k, v in entry.items() if k != "predicate"}
-        values = _predicate_values(entry["predicate"])
-        if all(_asks(viewer, "sees_value", member, value) for value in values):
-            shown["predicate"] = entry["predicate"]
-        else:
+        shown = _named(entry, ("scope", "member", "role"))
+        predicate = _predicate(member, entry["predicate"], viewer)
+        if predicate is None:
             shown["withheld"] = True
             cut.append(True)
+        else:
+            shown["predicate"] = predicate
         kept.append(shown)
     return kept
 
 
 def question(canonical: Mapping[str, Any], viewer: object) -> dict[str, Any]:
-    """The canonical query restricted to what `viewer` may know (README, "Views")."""
+    """The canonical query restricted to what `viewer` may know (README, "Views"). Every entry
+    is rebuilt from the members this view allows; parameters never appear."""
 
     def sees(member: str) -> bool:
         return _asks(viewer, "sees_member", member)
@@ -246,33 +278,55 @@ def question(canonical: Mapping[str, Any], viewer: object) -> dict[str, Any]:
     cut: list[bool] = []
 
     def keep(
-        entries: Sequence[Mapping[str, Any]], *members: Callable[[Mapping[str, Any]], list[str]]
-    ) -> list[Any]:
+        entries: Sequence[Mapping[str, Any]],
+        keys: Sequence[str],
+        members: Callable[[Mapping[str, Any]], list[str]],
+    ) -> list[dict[str, Any]]:
         kept = []
         for entry in entries:
-            named = [member for pick in members for member in pick(entry)]
-            if all(sees(member) for member in named):
-                kept.append(dict(entry))
+            if all(sees(member) for member in members(entry)):
+                kept.append(_named(entry, keys))
             else:
                 cut.append(True)
         return kept
 
     shown: dict[str, Any] = {"mode": canonical["mode"]}
-    for key in ("coverage", "limit", "as_known_at", "parameters"):
-        if key in canonical:
-            shown[key] = canonical[key]
+    shown.update(_named(canonical, ("coverage", "limit", "as_known_at")))
     if "page" in canonical:
         shown["page"] = {"size": canonical["page"]["size"]}
-    lists = {
-        "metrics": keep(canonical.get("metrics", ()), lambda e: [e["metric"]]),
-        "group_by": keep(canonical.get("group_by", ()), lambda e: [e["member"]]),
-        "fields": keep(canonical.get("fields", ()), lambda e: [e["member"]]),
-        "order": keep(canonical.get("order", ()), lambda e: [e["by"]]),
-        "metric_filters": keep(
-            canonical.get("metric_filters", ()),
-            lambda e: [e["metric"], e["dimension"]],
-            lambda e: list(e.get("grain", ())),
+    if "parameters" in canonical:
+        cut.append(True)  # parameter values are never shown (Owner decision of 2026-11-02)
+    group_by = keep(canonical.get("group_by", ()), ("member", "role"), lambda e: [e["member"]])
+    for entry, source in zip(
+        group_by, [e for e in canonical.get("group_by", ()) if sees(e["member"])], strict=True
+    ):
+        if "bucket" in source:
+            entry["bucket"] = _named(source["bucket"], ("unit", "calendar"))
+    metric_filters = keep(
+        canonical.get("metric_filters", ()),
+        ("scope", "metric", "dimension", "grain"),
+        lambda e: [e["metric"], e["dimension"], *e.get("grain", ())],
+    )
+    for entry, source in zip(
+        metric_filters,
+        [
+            e
+            for e in canonical.get("metric_filters", ())
+            if all(sees(m) for m in [e["metric"], e["dimension"], *e.get("grain", ())])
+        ],
+        strict=True,
+    ):
+        entry["condition"] = _named(source["condition"], ("op", "value", "n"))
+    lists: dict[str, list[dict[str, Any]]] = {
+        "metrics": keep(
+            canonical.get("metrics", ()), ("metric", "context", "apply"), lambda e: [e["metric"]]
         ),
+        "group_by": group_by,
+        "fields": keep(canonical.get("fields", ()), ("member", "role"), lambda e: [e["member"]]),
+        "order": keep(
+            canonical.get("order", ()), ("by", "direction", "nulls"), lambda e: [e["by"]]
+        ),
+        "metric_filters": metric_filters,
         "filters": _filters(canonical.get("filters", ()), viewer, cut),
     }
     contexts = []
@@ -289,7 +343,7 @@ def question(canonical: Mapping[str, Any], viewer: object) -> dict[str, Any]:
         if len(members) != len(modifier["members"]):
             cut.append(True)
         if members:
-            modifiers.append({**modifier, "members": members})
+            modifiers.append({**_named(modifier, ("op", "scope")), "members": members})
     lists["context_modifiers"] = modifiers
     for key, entries in lists.items():
         if entries:
@@ -297,7 +351,7 @@ def question(canonical: Mapping[str, Any], viewer: object) -> dict[str, Any]:
     if "top_n" in canonical:
         top = canonical["top_n"]
         if all(sees(member) for member in [top["by"], *top.get("per", ())]):
-            shown["top_n"] = top
+            shown["top_n"] = _named(top, ("by", "n", "per", "others"))
         else:
             cut.append(True)
     if cut:
@@ -420,6 +474,12 @@ def execution_fingerprint(
     )
 
 
+def _unordered(items: list[Any]) -> list[Any]:
+    """An unordered collection in one fixed order, so the record's identity never depends on
+    the order it was given in."""
+    return sorted(items, key=canonicalize)
+
+
 def _plain(value: object) -> Any:  # noqa: ANN401 - a JSON document
     """A dataclass input as a JSON document, `None` members left out."""
     if hasattr(value, "__dataclass_fields__"):
@@ -444,7 +504,7 @@ class ReceiptRecord:
         canonical = canonicalize(document)
         self._document = canonical
         self.receipt_id = fingerprint("receipt", 1, document)
-        self._seal = seal_key.mac(canonical)
+        self._seal = seal_key.mac(SEAL_DOMAIN, canonical)
 
     def document(self) -> dict[str, Any]:
         found: dict[str, Any] = json.loads(self._document)
@@ -566,23 +626,25 @@ def build_receipt(
     document: dict[str, Any] = {
         "query": {"canonical": dict(query_canonical), "fingerprint": query_fingerprint},
         "model": _plain(model),
-        "plan": {"obligations": _plain(list(obligations))}
+        "plan": {"obligations": _unordered(_plain(list(obligations)))}
         | ({"plan_fingerprint": plan_fingerprint} if plan_fingerprint else {}),
         "security": {
             "permission_fingerprint": permission_fingerprint,
-            "policies": _plain(list(policies)),
+            "policies": _unordered(_plain(list(policies))),
         },
-        "evidence": _plain(list(evidence)),
-        "data": [
-            {**_plain(read), "for_policy": read.for_policy, "retained": read.retained}
-            for read in data
-        ],
-        "freshness": _plain(list(freshness)),
+        "evidence": _unordered(_plain(list(evidence))),
+        "data": _unordered(
+            [
+                {**_plain(read), "for_policy": read.for_policy, "retained": read.retained}
+                for read in data
+            ]
+        ),
+        "freshness": _unordered(_plain(list(freshness))),
         "execution": _plain(execution),
         "execution_fingerprint": execution_fingerprint(
             model.model_fingerprint, query_fingerprint, permission_fingerprint, data, execution
         ),
-        "result": result_key.mac(result_canonical),
+        "result": result_key.mac(RESULT_DOMAIN, result_canonical),
         "reproducibility": _reproducibility(model, data, execution),
     }
     record = ReceiptRecord(document, seal_key)
@@ -617,7 +679,7 @@ def verify_receipt(
 ) -> bool:
     """Whether `view` is genuine: the record's seal holds under `seal_key`, and `view` is
     exactly the record's view for `viewer`."""
-    expected = seal_key.mac(record.canonical())
+    expected = seal_key.mac(SEAL_DOMAIN, record.canonical())
     seal = view.get("seal")
     if not isinstance(seal, Mapping) or seal.get("key_id") != expected["key_id"]:
         return False
@@ -637,7 +699,7 @@ def verify_replay(
         document["reproducibility"]["class"] == "exact", "replay", "only an exact record replays"
     )
     expected = document["result"]
-    given = result_key.mac(replayed_canonical)
+    given = result_key.mac(RESULT_DOMAIN, replayed_canonical)
     same = given["key_id"] == expected["key_id"] and hmac.compare_digest(
         given["mac"], expected["mac"]
     )

@@ -1099,14 +1099,6 @@
         "filters": {
           "$ref": "#/$defs/Filters"
         },
-        "parameters": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 64,
-          "items": {
-            "$ref": "#/$defs/Parameter"
-          }
-        },
         "as_known_at": {
           "$ref": "#/$defs/Timestamp"
         },
@@ -1207,7 +1199,7 @@
       ],
       "properties": {
         "restricted": {
-          "description": "Whether any row or column policy restricted this result.",
+          "description": "Whether any row or column policy was evaluated for this result, an exemption included, so an exemption is never told apart from a restriction.",
           "type": "boolean"
         },
         "policies": {

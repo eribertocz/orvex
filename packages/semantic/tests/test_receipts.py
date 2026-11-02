@@ -15,9 +15,13 @@ import pytest
 from orvex.semantic.canonical import canonicalize, fingerprint
 from orvex.semantic.receipt import (
     NO_ONE,
+    DataRead,
+    EvidenceUse,
+    FreshnessUse,
     InvalidReceipt,
     Key,
     ModelUse,
+    Obligation,
     PolicyUse,
     ReceiptRecord,
     verify_receipt,
@@ -349,3 +353,123 @@ def test_canonical_bytes_are_equal_across_processes_and_hash_seeds() -> None:
 def test_the_package_reads_the_contracts_own_schema() -> None:
     packaged = ROOT / "packages/semantic/src/orvex/semantic/receipt/receipt-v1.json"
     assert packaged.read_bytes() == (ROOT / "contracts/receipt/v1/schema.json").read_bytes()
+
+
+# --- the Reviewer's first pass: each finding covered for its class ----------------------------
+
+
+def with_query(query: dict[str, Any], **change: Any) -> ReceiptRecord:  # noqa: ANN401
+    return receipt(
+        query_canonical=query, query_fingerprint=fingerprint("semantic_query", 1, query), **change
+    )
+
+
+def test_parameter_values_never_reach_a_view() -> None:
+    query = {
+        **QUERY,
+        "parameters": [{"name": "discount", "value": {"type": "text", "value": "param-c4n4ry"}}],
+    }
+    record = with_query(query)
+    for viewer in (NO_ONE, SampleViewer(), SampleViewer(builder=True), EVERYTHING):
+        view = record.view(viewer)
+        assert "param-c4n4ry" not in json.dumps(view)
+        assert "parameters" not in view["question"]
+        assert view["question"]["withheld"] is True
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        {
+            "op": "descendants_of",
+            "hierarchy": "geo",
+            "nodes": [{"type": "text", "value": "node-c4n4ry"}],
+        },
+        {"op": "range", "gte": {"type": "text", "value": "low-c4n4ry"}},
+        {"op": "in", "values": [{"type": "text", "value": "v-c4n4ry"}], "include_null": True},
+    ],
+)
+def test_every_value_bearing_predicate_member_is_checked(predicate: dict[str, Any]) -> None:
+    query = {
+        **QUERY,
+        "filters": [{"scope": "page", "member": "customers.region", "predicate": predicate}],
+    }
+    record = with_query(query)
+    hidden = record.view(SampleViewer())
+    assert "c4n4ry" not in json.dumps(hidden)
+    assert hidden["question"]["filters"] == [
+        {"scope": "page", "member": "customers.region", "withheld": True}
+    ]
+    values = {str(v["value"]) for key in ("values", "nodes") for v in predicate.get(key, ())}
+    values |= {str(predicate[k]["value"]) for k in ("gte", "gt", "lte", "lt") if k in predicate}
+    seen = record.view(SampleViewer(values=frozenset(values)))
+    assert seen["question"]["filters"][0]["predicate"] == predicate
+
+
+def test_a_predicate_member_the_view_does_not_know_is_withheld() -> None:
+    from orvex.semantic.receipt.building import question
+
+    canonical = {
+        "mode": "aggregate",
+        "filters": [
+            {
+                "scope": "page",
+                "member": "customers.region",
+                "predicate": {"op": "is_null", "future_values": ["c4n4ry"]},
+            }
+        ],
+    }
+    shown = question(canonical, SampleViewer())
+    assert shown["filters"] == [{"scope": "page", "member": "customers.region", "withheld": True}]
+
+
+def test_an_entry_is_rebuilt_from_its_allowed_members() -> None:
+    from orvex.semantic.receipt.building import question
+
+    canonical = {"mode": "aggregate", "metrics": [{"metric": "revenue", "note": "c4n4ry"}]}
+    assert question(canonical, SampleViewer())["metrics"] == [{"metric": "revenue"}]
+
+
+def test_reordering_an_unordered_list_keeps_the_receipt_id() -> None:
+    base = receipt()
+    policies = [
+        PolicyUse("national_id_hidden", "column", "restricted"),
+        PolicyUse("own_zone_only", "row", "restricted"),
+    ]
+    freshness = [
+        FreshnessUse("audit_log", "2026-11-02T10:00:00.000000Z"),
+        FreshnessUse("payments", "2026-11-02T11:00:00.000000Z"),
+    ]
+    two = [Obligation("C1", "grain_preserved"), Obligation("C9", "discharged")]
+    evidence = [
+        EvidenceUse("customers", "unique_key", "verified", verified_by_run="run-7"),
+        EvidenceUse("payments", "unique_key", "declared"),
+    ]
+    assert receipt(data=list(reversed(reads()))).receipt_id == base.receipt_id
+    assert receipt(policies=policies).receipt_id == base.receipt_id
+    assert receipt(freshness=freshness).receipt_id == base.receipt_id
+    assert receipt(obligations=two).receipt_id == receipt(obligations=two[::-1]).receipt_id
+    assert receipt(evidence=evidence).receipt_id == receipt(evidence=evidence[::-1]).receipt_id
+    assert receipt(policies=policies[:1]).receipt_id != base.receipt_id
+
+
+def test_inputs_cannot_carry_a_predicate_a_value_set_size_or_a_type() -> None:
+    """No receipt input has a member for a predicate, a parameter, a mapping value, a value-set
+    size or a member's type, so none can reach a record, and so no view."""
+    assert set(PolicyUse.__dataclass_fields__) == {"name", "kind", "applied"}
+    assert set(DataRead.__dataclass_fields__) == {
+        "name", "route", "retained", "for_policy", "snapshot_id", "committed_at", "project",
+        "connection", "read_at", "table",
+    }  # fmt: skip
+    record = with_query({**QUERY, "fields": [{"member": "consumers.phone"}], "mode": "detail"})
+    text = json.dumps(record.view(EVERYTHING)) + record.canonical().decode()
+    for word in ("VARCHAR", "DECIMAL", "logical", "encoding", "mask", "size"):
+        assert word not in text, word
+
+
+def test_one_key_for_both_purposes_never_makes_a_seal_a_result_mac() -> None:
+    same = Key("one", b"k" * 32)
+    record = receipt(result_key=same, seal_key=same)
+    view = record.view(EVERYTHING)
+    assert view["seal"]["mac"] != view["result"]["mac"]
+    assert verify_receipt(view, record, same, EVERYTHING)

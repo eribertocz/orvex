@@ -309,11 +309,6 @@ export interface Question {
 	 */
 	order?: [Order, ...Order[]];
 	filters?: Filters;
-	/**
-	 * @minItems 1
-	 * @maxItems 64
-	 */
-	parameters?: [Parameter, ...Parameter[]];
 	as_known_at?: Timestamp;
 	/**
 	 * @minItems 1
@@ -479,14 +474,6 @@ export interface Order {
 	nulls?: 'first' | 'last';
 }
 /**
- * This interface was referenced by `Receipt`'s JSON-Schema
- * via the `definition` "Parameter".
- */
-export interface Parameter {
-	name: Name;
-	value: Value;
-}
-/**
  * A visual's declared exception to the filter context (#238 rule 3.3), recorded in the receipt.
  *
  * This interface was referenced by `Receipt`'s JSON-Schema
@@ -507,7 +494,7 @@ export interface ContextModifier {
  */
 export interface Security {
 	/**
-	 * Whether any row or column policy restricted this result.
+	 * Whether any row or column policy was evaluated for this result, an exemption included, so an exemption is never told apart from a restriction.
 	 */
 	restricted: boolean;
 	/**
@@ -653,4 +640,12 @@ export interface Figures {
 	rows_scanned?: Natural;
 	groups?: Natural;
 	cells?: Natural;
+}
+/**
+ * This interface was referenced by `Receipt`'s JSON-Schema
+ * via the `definition` "Parameter".
+ */
+export interface Parameter {
+	name: Name;
+	value: Value;
 }

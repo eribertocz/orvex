@@ -319,7 +319,6 @@ class Question(BaseModel):
     page: Page | None = None
     order: Annotated[list[Order] | None, Field(max_length=64, min_length=1)] = None
     filters: Filters | None = None
-    parameters: Annotated[list[Parameter] | None, Field(max_length=64, min_length=1)] = None
     as_known_at: Timestamp | None = None
     context_modifiers: Annotated[
         list[ContextModifier] | None, Field(max_length=64, min_length=1)
@@ -398,7 +397,7 @@ class Security(BaseModel):
     )
     restricted: bool
     """
-    Whether any row or column policy restricted this result.
+    Whether any row or column policy was evaluated for this result, an exemption included, so an exemption is never told apart from a restriction.
     """
     policies: Annotated[list[Policy], Field(max_length=256)]
 
