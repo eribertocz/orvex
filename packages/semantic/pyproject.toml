@@ -20,3 +20,4 @@ namespaces = true
 "orvex.semantic" = ["py.typed", "contracts.toml"]
 "orvex.semantic.ossie" = ["ossie-extensions-v1.json", "revisions/*/*"]
 "orvex.semantic.compiler" = ["registries/*"]
+"orvex.semantic.query" = ["semantic-query-v1.json"]

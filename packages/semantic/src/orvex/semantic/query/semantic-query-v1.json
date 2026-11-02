@@ -1,0 +1,1022 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.invalid/semantic-query/v1/schema.json",
+  "title": "SemanticQuery",
+  "description": "What a caller may ask the semantic engine: one closed, exact query in `aggregate` or `detail` mode (README).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "version",
+    "mode"
+  ],
+  "properties": {
+    "kind": {
+      "const": "semantic_query"
+    },
+    "version": {
+      "const": 1
+    },
+    "mode": {
+      "enum": [
+        "aggregate",
+        "detail"
+      ]
+    },
+    "metrics": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/MetricEntry"
+      }
+    },
+    "group_by": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/GroupBy"
+      }
+    },
+    "metric_filters": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/MetricFilter"
+      }
+    },
+    "contexts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/Context"
+      }
+    },
+    "top_n": {
+      "$ref": "#/$defs/TopN"
+    },
+    "coverage": {
+      "description": "S3: the explicit choice for comparing a partial period with a complete one (`COVERAGE_POLICY_REQUIRED`); bound in P2-05b and P2-11.",
+      "enum": [
+        "aligned",
+        "full"
+      ]
+    },
+    "limit": {
+      "$ref": "#/$defs/Count"
+    },
+    "fields": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/Field"
+      }
+    },
+    "page": {
+      "$ref": "#/$defs/Page"
+    },
+    "order": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/Order"
+      }
+    },
+    "filters": {
+      "$ref": "#/$defs/Filters"
+    },
+    "parameters": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/Parameter"
+      }
+    },
+    "as_known_at": {
+      "$ref": "#/$defs/Timestamp"
+    },
+    "context_modifiers": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/ContextModifier"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "aggregate"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "metrics"
+        ],
+        "properties": {
+          "fields": false,
+          "page": false
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "detail"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "fields",
+          "order",
+          "page"
+        ],
+        "properties": {
+          "metrics": false,
+          "group_by": false,
+          "metric_filters": false,
+          "contexts": false,
+          "top_n": false,
+          "coverage": false,
+          "limit": false
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "Member": {
+      "description": "A member reference of the product's expression language: `dataset.field`, `metric` (a model metric) or `dataset.metric` (a dataset metric). Each identifier is regular or double-quoted, at most 128 characters, compared case-insensitively unless quoted (Ossie `expression_language.md` L86-L88; the length is checked at binding).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 520,
+      "pattern": "^(?:[A-Za-z_À-￿][A-Za-z0-9_À-￿]*|\"(?:[^\"]|\"\")+\")(\\.(?:[A-Za-z_À-￿][A-Za-z0-9_À-￿]*|\"(?:[^\"]|\"\")+\"))?$"
+    },
+    "Name": {
+      "description": "A name declared in the model: a relationship (role), context, calendar, segment, hierarchy, calculation item or parameter.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 260,
+      "pattern": "^(?:[A-Za-z_À-￿][A-Za-z0-9_À-￿]*|\"(?:[^\"]|\"\")+\")$"
+    },
+    "Scope": {
+      "description": "Where a filter comes from (#238 rule 3). Scopes combine with AND in this order; an inner scope never replaces an outer one.",
+      "enum": [
+        "board",
+        "page",
+        "visual",
+        "cross_filter",
+        "drill"
+      ]
+    },
+    "Count": {
+      "description": "A positive count, as text.",
+      "type": "string",
+      "maxLength": 18,
+      "pattern": "^[1-9][0-9]{0,17}$"
+    },
+    "Integer": {
+      "description": "A signed integer, as text.",
+      "type": "string",
+      "maxLength": 80,
+      "pattern": "^-?(0|[1-9][0-9]*)$"
+    },
+    "Timestamp": {
+      "description": "An instant: RFC 3339 with an offset.",
+      "type": "string",
+      "maxLength": 40,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "Unit": {
+      "description": "A calendar unit.",
+      "enum": [
+        "minute",
+        "hour",
+        "day",
+        "week",
+        "month",
+        "quarter",
+        "year"
+      ]
+    },
+    "Value": {
+      "description": "An exact, tagged value. Numbers, dates and timestamps are text; `NULL` is never a value (`include_null`, `exclude_null`, `is_null`).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "value"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "text",
+            "integer",
+            "decimal",
+            "boolean",
+            "date",
+            "timestamp",
+            "local_timestamp"
+          ]
+        },
+        "value": {
+          "type": [
+            "string",
+            "boolean"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "text"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "string",
+                "maxLength": 65536
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "integer"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/Integer"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "decimal"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "string",
+                "maxLength": 80,
+                "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "boolean"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "date"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "string",
+                "maxLength": 10,
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "timestamp"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/Timestamp"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "local_timestamp"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "string",
+                "maxLength": 40,
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,9})?$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Values": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/Value"
+      }
+    },
+    "Predicate": {
+      "description": "One closed variant, chosen by `op` (README).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op"
+      ],
+      "properties": {
+        "op": {
+          "enum": [
+            "in",
+            "not_in",
+            "range",
+            "is_null",
+            "is_not_null",
+            "relative_date",
+            "in_segment",
+            "descendants_of"
+          ]
+        },
+        "values": {
+          "$ref": "#/$defs/Values"
+        },
+        "include_null": {
+          "type": "boolean"
+        },
+        "exclude_null": {
+          "type": "boolean"
+        },
+        "gte": {
+          "$ref": "#/$defs/Value"
+        },
+        "gt": {
+          "$ref": "#/$defs/Value"
+        },
+        "lte": {
+          "$ref": "#/$defs/Value"
+        },
+        "lt": {
+          "$ref": "#/$defs/Value"
+        },
+        "unit": {
+          "$ref": "#/$defs/Unit"
+        },
+        "offset": {
+          "$ref": "#/$defs/Integer"
+        },
+        "count": {
+          "$ref": "#/$defs/Count"
+        },
+        "to_date": {
+          "type": "boolean"
+        },
+        "segment": {
+          "$ref": "#/$defs/Name"
+        },
+        "hierarchy": {
+          "$ref": "#/$defs/Name"
+        },
+        "nodes": {
+          "$ref": "#/$defs/Values"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "in"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "values"
+            ],
+            "properties": {
+              "exclude_null": false,
+              "gte": false,
+              "gt": false,
+              "lte": false,
+              "lt": false,
+              "unit": false,
+              "offset": false,
+              "count": false,
+              "to_date": false,
+              "segment": false,
+              "hierarchy": false,
+              "nodes": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "not_in"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "values"
+            ],
+            "properties": {
+              "include_null": false,
+              "gte": false,
+              "gt": false,
+              "lte": false,
+              "lt": false,
+              "unit": false,
+              "offset": false,
+              "count": false,
+              "to_date": false,
+              "segment": false,
+              "hierarchy": false,
+              "nodes": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "range"
+              }
+            }
+          },
+          "then": {
+            "required": [],
+            "properties": {
+              "values": false,
+              "include_null": false,
+              "exclude_null": false,
+              "unit": false,
+              "offset": false,
+              "count": false,
+              "to_date": false,
+              "segment": false,
+              "hierarchy": false,
+              "nodes": false
+            },
+            "minProperties": 2,
+            "allOf": [
+              {
+                "not": {
+                  "required": [
+                    "gte",
+                    "gt"
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "required": [
+                    "lte",
+                    "lt"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "is_null"
+              }
+            }
+          },
+          "then": {
+            "required": [],
+            "properties": {
+              "values": false,
+              "include_null": false,
+              "exclude_null": false,
+              "gte": false,
+              "gt": false,
+              "lte": false,
+              "lt": false,
+              "unit": false,
+              "offset": false,
+              "count": false,
+              "to_date": false,
+              "segment": false,
+              "hierarchy": false,
+              "nodes": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "is_not_null"
+              }
+            }
+          },
+          "then": {
+            "required": [],
+            "properties": {
+              "values": false,
+              "include_null": false,
+              "exclude_null": false,
+              "gte": false,
+              "gt": false,
+              "lte": false,
+              "lt": false,
+              "unit": false,
+              "offset": false,
+              "count": false,
+              "to_date": false,
+              "segment": false,
+              "hierarchy": false,
+              "nodes": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "relative_date"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "unit",
+              "offset",
+              "count"
+            ],
+            "properties": {
+              "values": false,
+              "include_null": false,
+              "exclude_null": false,
+              "gte": false,
+              "gt": false,
+              "lte": false,
+              "lt": false,
+              "segment": false,
+              "hierarchy": false,
+              "nodes": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "in_segment"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "segment"
+            ],
+            "properties": {
+              "values": false,
+              "include_null": false,
+              "exclude_null": false,
+              "gte": false,
+              "gt": false,
+              "lte": false,
+              "lt": false,
+              "unit": false,
+              "offset": false,
+              "count": false,
+              "to_date": false,
+              "hierarchy": false,
+              "nodes": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "const": "descendants_of"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "hierarchy",
+              "nodes"
+            ],
+            "properties": {
+              "values": false,
+              "include_null": false,
+              "exclude_null": false,
+              "gte": false,
+              "gt": false,
+              "lte": false,
+              "lt": false,
+              "unit": false,
+              "offset": false,
+              "count": false,
+              "to_date": false,
+              "segment": false
+            }
+          }
+        }
+      ]
+    },
+    "Filter": {
+      "description": "A filter on a row-level member.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "member",
+        "predicate"
+      ],
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "member": {
+          "$ref": "#/$defs/Member"
+        },
+        "role": {
+          "$ref": "#/$defs/Name"
+        },
+        "predicate": {
+          "$ref": "#/$defs/Predicate"
+        }
+      }
+    },
+    "Filters": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/Filter"
+      }
+    },
+    "Condition": {
+      "description": "A comparison (`gt`, `ge`, `lt`, `le`, `eq`, `ne` with `value`) or a rank (`top`, `bottom` with `n`).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op"
+      ],
+      "properties": {
+        "op": {
+          "enum": [
+            "gt",
+            "ge",
+            "lt",
+            "le",
+            "eq",
+            "ne",
+            "top",
+            "bottom"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/Value"
+        },
+        "n": {
+          "$ref": "#/$defs/Count"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "enum": [
+                  "gt",
+                  "ge",
+                  "lt",
+                  "le",
+                  "eq",
+                  "ne"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "value"
+            ],
+            "properties": {
+              "n": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "op": {
+                "enum": [
+                  "top",
+                  "bottom"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "n"
+            ],
+            "properties": {
+              "value": false
+            }
+          }
+        }
+      ]
+    },
+    "MetricFilter": {
+      "description": "A filter on a dimension by a metric's value (#238 rule 5), applied as a semi-join.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "metric",
+        "dimension",
+        "condition"
+      ],
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "metric": {
+          "$ref": "#/$defs/Member"
+        },
+        "dimension": {
+          "$ref": "#/$defs/Member"
+        },
+        "grain": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/Member"
+          }
+        },
+        "condition": {
+          "$ref": "#/$defs/Condition"
+        }
+      }
+    },
+    "MetricEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Member"
+        },
+        "context": {
+          "$ref": "#/$defs/Name"
+        },
+        "apply": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/Name"
+          }
+        }
+      }
+    },
+    "Bucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit"
+      ],
+      "properties": {
+        "unit": {
+          "$ref": "#/$defs/Unit"
+        },
+        "calendar": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "GroupBy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "member"
+      ],
+      "properties": {
+        "member": {
+          "$ref": "#/$defs/Member"
+        },
+        "role": {
+          "$ref": "#/$defs/Name"
+        },
+        "bucket": {
+          "$ref": "#/$defs/Bucket"
+        }
+      }
+    },
+    "Context": {
+      "description": "An S2 analysis context: a named filter set, evaluated independently and aligned for comparison.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "filters"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "filters": {
+          "$ref": "#/$defs/Filters"
+        }
+      }
+    },
+    "TopN": {
+      "description": "S10: the first `n` members by a metric, ties broken by the member's value ascending.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "by",
+        "n",
+        "others"
+      ],
+      "properties": {
+        "by": {
+          "$ref": "#/$defs/Member"
+        },
+        "n": {
+          "$ref": "#/$defs/Count"
+        },
+        "per": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/Member"
+          }
+        },
+        "others": {
+          "type": "boolean"
+        }
+      }
+    },
+    "Order": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "by"
+      ],
+      "properties": {
+        "by": {
+          "$ref": "#/$defs/Member"
+        },
+        "direction": {
+          "enum": [
+            "asc",
+            "desc"
+          ]
+        },
+        "nulls": {
+          "enum": [
+            "first",
+            "last"
+          ]
+        }
+      }
+    },
+    "Field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "member"
+      ],
+      "properties": {
+        "member": {
+          "$ref": "#/$defs/Member"
+        },
+        "role": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "Page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "size"
+      ],
+      "properties": {
+        "size": {
+          "$ref": "#/$defs/Count"
+        },
+        "after": {
+          "description": "An opaque cursor from a previous page (P2-06).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      }
+    },
+    "Parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "value"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "value": {
+          "$ref": "#/$defs/Value"
+        }
+      }
+    },
+    "ContextModifier": {
+      "description": "A visual's declared exception to the filter context (#238 rule 3.3), recorded in the receipt.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "op",
+        "scope",
+        "members"
+      ],
+      "properties": {
+        "op": {
+          "enum": [
+            "remove",
+            "keep"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "members": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/Member"
+          }
+        }
+      }
+    }
+  }
+}

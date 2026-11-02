@@ -1,0 +1,345 @@
+{
+  "_comment": "The requested semantic query of each corpus case (its README's 'Requested semantic query'), written once as a semantic-query v1 query (#283). Not normative: the cases' prose is. CASE-015's tenant comes from the caller's security context (P2-08), not from the query; CASE-016 names no role on purpose; CASE-017's combination is a derived metric, so the query asks for both metrics. CASE-007 buckets the daily snapshots by month, as its expected results are per month. CASE-008's overall count is a total, which v1 queries do not express (totals are P7); the query asks for the count by region. CASE-020 sums the year's balances with no filter, as its README asks.",
+  "queries": {
+    "CASE-001": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "revenue"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "sales.region"
+        }
+      ]
+    },
+    "CASE-002": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "revenue"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "customers.region"
+        },
+        {
+          "member": "products.category"
+        }
+      ]
+    },
+    "CASE-003": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "billed_amount"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "customer.segment"
+        }
+      ]
+    },
+    "CASE-004": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "order_revenue"
+        },
+        {
+          "metric": "item_count"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "customers.region"
+        }
+      ]
+    },
+    "CASE-005": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "revenue"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "region.region_name"
+        }
+      ]
+    },
+    "CASE-006": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "average_order_value"
+        }
+      ]
+    },
+    "CASE-007": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "balance"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "accounts.region"
+        },
+        {
+          "member": "balances.snapshot_date",
+          "bucket": {
+            "unit": "month"
+          }
+        }
+      ]
+    },
+    "CASE-008": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "active_customers"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "activity.region"
+        }
+      ]
+    },
+    "CASE-009": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "gross_revenue"
+        },
+        {
+          "metric": "refunds"
+        },
+        {
+          "metric": "net_revenue"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "sales_monthly.month"
+        },
+        {
+          "member": "sales_monthly.region"
+        }
+      ]
+    },
+    "CASE-010": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "actual_revenue"
+        },
+        {
+          "metric": "target_revenue"
+        },
+        {
+          "metric": "attainment"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "invoices.month"
+        },
+        {
+          "member": "invoices.region"
+        }
+      ]
+    },
+    "CASE-011": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "allocated_revenue"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "campaign.name"
+        }
+      ]
+    },
+    "CASE-012": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "revenue"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "events.month"
+        }
+      ]
+    },
+    "CASE-013": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "revenue"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "customer_history.region"
+        }
+      ]
+    },
+    "CASE-014": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "amount_sum"
+        },
+        {
+          "metric": "amount_count"
+        },
+        {
+          "metric": "row_count"
+        }
+      ]
+    },
+    "CASE-015": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "revenue"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "sales.region"
+        }
+      ]
+    },
+    "CASE-016": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "revenue"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "customer.country"
+        }
+      ]
+    },
+    "CASE-017": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "revenue_usd"
+        },
+        {
+          "metric": "revenue_bob"
+        }
+      ]
+    },
+    "CASE-018": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "revenue"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "sales.month"
+        },
+        {
+          "member": "sales.category"
+        }
+      ]
+    },
+    "CASE-019": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "revenue"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "events.business_day"
+        }
+      ]
+    },
+    "CASE-020": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "balance"
+        }
+      ]
+    },
+    "CASE-021": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "daily_revenue"
+        },
+        {
+          "metric": "cumulative_revenue"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "sales_daily.date"
+        }
+      ]
+    }
+  }
+}
