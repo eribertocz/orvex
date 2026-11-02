@@ -529,7 +529,9 @@ def test_edits_that_cannot_change_meaning_keep_the_semantic_fingerprint(
     edited = cast(Model, _shuffle_keys(edited, order))  # YAML and JSON key order
     semantic, whole = fingerprints(edited, form)
     assert semantic == original[0]
-    assert (whole == original[1]) == ("description" not in edits)
+    # The model fingerprint covers the text as written too; reordering alone keeps it.
+    written = {"description", "whitespace", "keyword case", "identifier case"}
+    assert (whole == original[1]) == (not written & set(edits))
 
 
 @pytest.mark.parametrize("mutation", sorted(MUTATIONS))
@@ -580,3 +582,141 @@ def test_any_input_gives_a_model_or_a_semantic_error(text: str, payload: dict[st
     except SemanticError:
         return
     assert compiled.semantic_fingerprint.startswith("sha256:")
+
+
+# --- the Reviewer's first pass: each finding covered for its class ------------------------------
+
+
+def test_a_ratio_stays_a_ratio_one_level_up() -> None:
+    ratio = {
+        "additivity": "non_additive",
+        "zero_denominator": "null",
+        "rounding": {"scale": 4, "mode": "half_even"},
+    }
+    for derived_text, base_text in (
+        ("r * 1", "SUM(sales.amount) / SUM(sales.cost)"),
+        ("r + r", "SUM(sales.amount) / SUM(sales.cost)"),
+        ("r + 0", "AVG(sales.amount)"),
+    ):
+        document = base(metric("r", base_text, **ratio))
+        document["metrics"].append(derived("r2", derived_text, additivity="additive"))
+        assert missing_declaration(document) == ["additivity"] * 2
+        document["metrics"][-1] = derived("r2", derived_text, **ratio)
+        assert compile_both(document)
+
+
+def derived(name: str, text: str, **payload: Any) -> Model:  # noqa: ANN401
+    data = {
+        "element": "metric",
+        "over_metrics": {"expression": text, "align": {"grain": ["month"], "time": "month"}},
+        **payload,
+    }
+    return {
+        "name": name,
+        "expression": {"dialects": [{"dialect": CURRENT, "expression": text}]},
+        "custom_extensions": [extension(data)],
+    }
+
+
+@pytest.mark.parametrize("value", [1.5, 9007199254740993, -9007199254740993, "1e400"])
+def test_any_number_in_a_document_gives_a_model(value: object) -> None:
+    document = base(metric("revenue", "SUM(sales.amount)"))
+    document["datasets"][0]["ai_context"] = {"x": value}
+    for compiled in compile_both(document):
+        assert compiled.model_fingerprint.startswith("sha256:")
+
+
+def test_a_member_fingerprint_covers_what_it_reads_beyond_its_expression() -> None:
+    def member_print(document: Model, catalog: SourceCatalog = CATALOG) -> str:
+        loaded = read(content(document, "json"), "semantic/shop.ossie.json", VENDORS)
+        return compile_model(loaded, catalog, VENDORS).members[m("revenue")].semantic_fingerprint
+
+    original = base(metric("revenue", "SUM(sales.amount)"))
+    moved = copy.deepcopy(original)
+    moved["datasets"][0]["source"] = "sales2"
+    catalog = {**CATALOG, "sales2": CATALOG["sales"]}
+    assert member_print(moved, catalog) != member_print(original)
+    keyed = copy.deepcopy(original)
+    keyed["datasets"][0]["primary_key"] = ["sale_id", "store_id"]
+    assert member_print(keyed) != member_print(original)
+    # A dependent sees the change through its dependency.
+    for document in (original, moved):
+        document["metrics"].append(derived("doubled", "revenue * 2"))
+    first = read(content(original, "json"), "semantic/a.ossie.json", VENDORS)
+    second = read(content(moved, "json"), "semantic/b.ossie.json", VENDORS)
+    doubled = MemberId("metric", None, "DOUBLED")
+    assert (
+        compile_model(first, CATALOG, VENDORS).members[doubled].semantic_fingerprint
+        != compile_model(second, catalog, VENDORS).members[doubled].semantic_fingerprint
+    )
+
+
+def test_the_model_fingerprint_covers_everything_else() -> None:
+    original = base(metric("revenue", "SUM(sales.amount)"))
+    original["metrics"][0]["expression"] = {
+        "dialects": [
+            {"dialect": "OSSIE_SQL_2026", "expression": "SUM(sales.amount)"},
+            {"dialect": "DUCKDB", "expression": "sum(sales.amount)"},
+        ]
+    }
+    other_dialect = copy.deepcopy(original)
+    other_dialect["metrics"][0]["expression"]["dialects"][1]["expression"] = "sum(amount)"
+    renamed = copy.deepcopy(original)
+    renamed["name"] = "store"
+    for edited in (other_dialect, renamed):
+        semantic, whole = fingerprints(edited)
+        assert semantic == fingerprints(original)[0]
+        assert whole != fingerprints(original)[1]
+
+
+def test_unordered_payload_collections_are_sorted() -> None:
+    axes = [{"behavior": "forbidden", "dimension": "day"}, {"behavior": "additive", "entity": "a"}]
+    payload = {"additivity": "semi_additive", "non_additive_axes": axes}
+    document = base(metric("total", "SUM(balances.balance)", **payload))
+    reordered = base(
+        metric("total", "SUM(balances.balance)", **{**payload, "non_additive_axes": axes[::-1]})
+    )
+    for model in (document, reordered):
+        model["datasets"][1]["custom_extensions"] = [
+            extension({"element": "dataset", "entity": "a", "time_roles": {"snapshot": "day"}})
+        ]
+    assert fingerprints(document)[0] == fingerprints(reordered)[0]
+
+
+def test_payload_conditions_are_p2_03s_own() -> None:
+    """`components` with `recomputable`, axes with `semi_additive` and `period_end` with a
+    period-end axis are refused by P2-03 before compiling (`ossie-extensions/v1`), so they never
+    reach `MISSING_EXTENSION_DECLARATION`."""
+    for payload in (
+        {"additivity": "recomputable"},
+        {"additivity": "semi_additive"},
+        {
+            "additivity": "semi_additive",
+            "non_additive_axes": [{"behavior": "period_end", "dimension": "day"}],
+        },
+    ):
+        document = base(metric("x", "SUM(balances.balance)", **payload))
+        for form in FORMS:
+            with pytest.raises(SemanticError) as caught:
+                read(content(document, form), f"semantic/shop.ossie.{form}", VENDORS)
+            assert caught.value.code == "OSSIE_INVALID"
+            problems = cast(list[dict[str, str]], caught.value.details["problems"])
+            assert {p["rule"] for p in problems} == {"extension"}
+
+
+def test_the_first_ambiguous_metric_is_the_same_in_yaml_and_json() -> None:
+    document = base(*(metric(f"ok{i}", "SUM(sales.amount)") for i in range(10)))
+    document["metrics"].insert(2, metric("bad2", "COUNT(DISTINCT sales.customer_id)"))
+    document["metrics"].append(metric("bad10", "AVG(sales.amount)"))
+    for form in FORMS:
+        loaded = read(content(document, form), f"semantic/shop.ossie.{form}", VENDORS)
+        with pytest.raises(SemanticError) as caught:
+            compile_model(loaded, CATALOG, VENDORS)
+        assert caught.value.details["name"] == "bad2"
+
+
+def test_requiring_an_unknown_member_is_member_not_found() -> None:
+    for compiled in compile_both(base(metric("revenue", "SUM(sales.amount)"))):
+        with pytest.raises(SemanticError) as caught:
+            compiled.require(m("nothing"))
+        assert caught.value.code == "MEMBER_NOT_FOUND"

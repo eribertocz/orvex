@@ -32,9 +32,8 @@ EXPLICIT_DECLARATIONS: dict[tuple[str, str], dict[str, Any]] = {
     # COUNT(DISTINCT ...): bi-platform asks to recompute the distinct count on every axis
     # ("distinct_recompute"), which is a holistic aggregate.
     ("case-008", "active_customers"): {"aggregate_class": "holistic"},
-    # actual_revenue / target_revenue: a ratio recomputed from its two metrics. No target is
-    # zero in the case's data, so a zero denominator is refused; the rounding is the case's own
-    # CAST to DECIMAL(18, 2), which rounds half away from zero.
+    # actual_revenue / target_revenue: a ratio recomputed from its two metrics, a zero denominator
+    # refused, rounded as the case's own CAST to DECIMAL(18, 2) rounds (Owner decision).
     ("case-010", "attainment"): {
         "additivity": "recomputable",
         "components": {"numerator": "actual_revenue", "denominator": "target_revenue"},
@@ -363,7 +362,14 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
                 metric_data = {}
             if metric_data is not None:
                 members = _translate_metric(metric, metric_data, time_dimensions, bridge_datasets)
-                members.update(explicit or {})
+                if explicit is not None:
+                    # Never masks what bi-platform itself states.
+                    overlap = set(explicit) & set(members)
+                    if overlap:
+                        raise UntranslatableKey(
+                            f"explicit declarations already stated: {sorted(overlap)}"
+                        )
+                    members.update(explicit)
                 if "over_metrics" in members:
                     # An expression over metrics is no Ossie expression (spec L424): it moves,
                     # text unchanged, under the product's dialect token, which the declared

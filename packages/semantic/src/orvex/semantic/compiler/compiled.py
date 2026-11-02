@@ -38,8 +38,10 @@ trees, never text: unordered collections sorted, ordered ones kept.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
+from decimal import Decimal
 from types import MappingProxyType
 
 from orvex.semantic.canonical import fingerprint
@@ -105,7 +107,11 @@ class CompiledModel:
     model_fingerprint: str
 
     def require(self, member: MemberId) -> CompiledMember:
-        """The compiled member, or `UNSUPPORTED_OPERATION` when it was not compiled."""
+        """The compiled member; `UNSUPPORTED_OPERATION` when it was not compiled and
+        `MEMBER_NOT_FOUND` when the model has no such member."""
+        if member not in self.members and member not in self.excluded:
+            name = f"{member.dataset}.{member.name}" if member.dataset else member.name
+            raise SemanticError("MEMBER_NOT_FOUND", {"member": name})
         self.typed.parsed.require(member)
         return self.members[member]
 
@@ -113,16 +119,49 @@ class CompiledModel:
 # --- JSON documents -------------------------------------------------------------------------
 
 
+_SAFE_INTEGER = 2**53 - 1
+
+
 def _json(value: object) -> object:
-    """A document value as plain JSON: tuples become lists, mappings dicts; a float, which the
-    canonical form does not hold, becomes its shortest text."""
+    """A document value as plain JSON: tuples become lists, mappings dicts. A number the
+    canonical form does not hold (a decimal, an integer beyond ±(2^53-1)) becomes its text
+    (#280 §4), tagged so that it never equals a string."""
     if isinstance(value, Mapping):
         return {str(key): _json(item) for key, item in value.items()}
     if isinstance(value, tuple | list):
         return [_json(item) for item in value]
-    if isinstance(value, float):
-        return repr(value)
+    if isinstance(value, Decimal):
+        return {"decimal": str(value)}
+    if isinstance(value, int) and not isinstance(value, bool) and abs(value) > _SAFE_INTEGER:
+        return {"decimal": str(value)}
     return value
+
+
+# Payload collections whose order carries no meaning (sets of names, axes or named objects); every
+# other list, such as `order_by`, drill-path `levels`, funnel `steps` or `context`, is ordered.
+UNORDERED = frozenset(
+    """
+    allowed dimensions entities entity_key entity_keys evidence fields grain ignore_filters
+    metrics non_additive_axes partition_by per_entities targets calculation_groups calendars
+    cohorts drill_paths funnels parameters preaggregations segments
+    """.split()  # noqa: SIM905 - a word list reads better than one string per line
+)
+
+
+def _payload_document(payload: Json) -> object:
+    """A payload without its descriptive members, its unordered collections sorted."""
+
+    def walk(value: object, key: str | None) -> object:
+        if isinstance(value, Mapping):
+            return {str(k): walk(v, str(k)) for k, v in value.items()}
+        if isinstance(value, tuple | list):
+            items = [walk(item, None) for item in value]
+            if key in UNORDERED:
+                items.sort(key=lambda item: json.dumps(item, sort_keys=True))
+            return items
+        return _json(value)
+
+    return walk({k: v for k, v in payload.items() if k not in DESCRIPTIVE_PAYLOAD}, None)
 
 
 def _without(value: object, excluded: frozenset[str]) -> object:
@@ -198,6 +237,15 @@ def _tree_document(tree: TypedNode) -> dict[str, object]:
 # --- the model's elements ---------------------------------------------------------------------
 
 
+def position(model: OssieModel, pointer: str) -> tuple[int, tuple[tuple[int, int | str], ...]]:
+    """Document order of an element in either format: its line, then its pointer read by
+    segment (`/metrics/2` before `/metrics/10`)."""
+    segments = tuple(
+        (0, int(part)) if part.isdigit() else (1, part) for part in pointer.split("/")[1:]
+    )
+    return model.line(pointer), segments
+
+
 def _items(node: object, key: str) -> list[Json]:
     value = node.get(key) if isinstance(node, Mapping) else None
     return [item for item in value if isinstance(item, Mapping)] if isinstance(value, tuple) else []
@@ -225,6 +273,9 @@ def _names(value: object) -> list[str]:
     return [sql.normalize(str(item)) for item in value] if isinstance(value, tuple) else []
 
 
+# Child collections, fingerprinted as elements of their own; product payloads are read apart and
+# foreign ones are listed by their hash.
+_CHILDREN = frozenset({"fields", "metrics", "datasets", "relationships", "custom_extensions"})
 _STRUCTURE = frozenset(
     {"name", "expression", "custom_extensions", "fields", "metrics", "datasets", "relationships"}
 )
@@ -306,9 +357,56 @@ class _Model:
             self.links.setdefault(left, set()).add(right)
             self.links.setdefault(right, set()).add(left)
         self.selected = {e.element: e for e in model.expressions}
+        self.ratios: dict[MemberId, bool] = {}
 
     def payload(self, member: ParsedMember) -> Json:
         return self.payloads.get(member.pointer, {})
+
+    def context(self, member: ParsedMember, payload: Json) -> object:
+        """What a member's meaning rests on beyond its own expressions: the datasets it reads
+        (source, keys, payload), the relationships when it reads more than one, the reader's
+        identity, the compiler rules and the pinned data versions."""
+        datasets = self.datasets_of(member, payload)
+        read = [
+            {
+                "key": key,
+                "ossie": _ossie_document("dataset", node),
+                "payload": _payload_document(self.payloads.get(pointer, {})),
+            }
+            for pointer, key, node in sorted(
+                (
+                    e
+                    for e in _elements(self.model.document)
+                    if e[1][0] == "dataset" and e[1][1] in datasets
+                ),
+                key=lambda e: e[1],
+            )
+        ]
+        relationships = (
+            [
+                {
+                    "key": key,
+                    "ossie": _ossie_document("relationship", node),
+                    "payload": _payload_document(self.payloads.get(pointer, {})),
+                }
+                for pointer, key, node in sorted(
+                    (e for e in _elements(self.model.document) if e[1][0] == "relationship"),
+                    key=lambda e: e[1],
+                )
+            ]
+            if len(datasets) > 1
+            else []
+        )
+        return {
+            "identity": _identity(self.model),
+            "data": {
+                "tzdata": self.typed.tzdata,
+                "units": self.typed.units,
+                "currencies": self.typed.currencies,
+            },
+            "datasets": read,
+            "relationships": relationships,
+        }
 
     # the compile-time classes
 
@@ -351,7 +449,7 @@ class _Model:
         # `components` with `recomputable`, `non_additive_axes` with `semi_additive` and
         # `period_end` with a period-end axis are the payload's own conditions, which P2-03
         # already enforces (`ossie-extensions/v1`); a payload that reaches here meets them.
-        if any(_is_ratio(n) or _is_exact_mean(n) for n in nodes):
+        if self.is_ratio(member.id):
             needs |= {"additivity", "zero_denominator", "rounding"}
         datasets = self.datasets_of(member, payload)
         roles = [self.dataset_payloads.get(d, {}).get("time_roles") for d in datasets]
@@ -361,12 +459,28 @@ class _Model:
             needs.add("allocation")
         return needs
 
+    def is_ratio(self, member_id: MemberId) -> bool:
+        """A ratio of aggregates or an exact mean, in the member's own expressions or in a
+        metric it is computed from: a ratio stays a ratio one level up (#280 §3)."""
+        if member_id not in self.ratios:
+            typed = self.typed.members[member_id]
+            own = any(
+                _is_ratio(n) or _is_exact_mean(n)
+                for tree in (typed.tree, *(t for _, t in typed.payload))
+                for n in _walk(tree)
+            )
+            self.ratios[member_id] = own or any(
+                dependency.kind == "metric"
+                and dependency in self.typed.members
+                and self.is_ratio(dependency)
+                for dependency in self.parsed.members[member_id].depends_on
+            )
+        return self.ratios[member_id]
+
     def refuse_ambiguous(self, member: ParsedMember, typed: TypedMember) -> None:
         payload = self.payload(member)
         needs = self.required(member, typed)
-        ratio = any(_is_ratio(n) or _is_exact_mean(n) for n in _walk(typed.tree)) or any(
-            _is_ratio(n) or _is_exact_mean(n) for _, tree in typed.payload for n in _walk(tree)
-        )
+        ratio = self.is_ratio(member.id)
         for declaration in DECLARATION_ORDER:
             if declaration not in needs:
                 continue
@@ -454,7 +568,7 @@ def compile_model(
     # The first ambiguous metric in document order is reported.
     for member_id in sorted(
         typed.members,
-        key=lambda m: (model.line(parsed.members[m].pointer), parsed.members[m].pointer),
+        key=lambda m: position(model, parsed.members[m].pointer),
     ):
         if member_id.kind == "metric":
             state.refuse_ambiguous(parsed.members[member_id], typed.members[member_id])
@@ -478,13 +592,14 @@ def compile_model(
         node = next(n for p, _, n in _elements(model.document) if p == parsed_member.pointer)
         document = {
             "member": _key(member_id),
+            "context": state.context(parsed_member, payload),
             "language": parsed_member.language,
             "dialect": choice.dialect if choice is not None else None,
             "tree": _tree_document(typed_member.tree) if typed_member.tree is not None else None,
             "text": choice.text if typed_member.tree is None and choice is not None else None,
             "type": _type_document(typed_member.type),
             "ossie": _ossie_document(member_id.kind, node),
-            "payload": _without(payload, DESCRIPTIVE_PAYLOAD),
+            "payload": _payload_document(payload),
             "payload_trees": {label: _tree_document(tree) for label, tree in typed_member.payload},
             "depends_on": dependencies,
             "missing": list(missing),
@@ -504,11 +619,14 @@ def compile_model(
     semantic = fingerprint(
         "orvex.semantic.model", FINGERPRINT_FORMAT, _model_document(state, compiled)
     )
-    descriptive = _descriptive_document(model, state)
     whole = fingerprint(
         "orvex.semantic.model.all",
         FINGERPRINT_FORMAT,
-        {"semantic": semantic, "descriptive": descriptive, "foreign": _foreign_document(model)},
+        {
+            "semantic": semantic,
+            "rest": _rest_document(model, state),
+            "foreign": _foreign_document(model),
+        },
     )
     return CompiledModel(
         registry_entry=model.registry_entry,
@@ -528,6 +646,14 @@ def compile_model(
     )
 
 
+def _identity(model: OssieModel) -> dict[str, object]:
+    return {
+        "reader": model.reader,
+        "capabilities": model.capabilities,
+        "compiler_rules": COMPILER_RULES,
+    }
+
+
 def _model_document(state: _Model, compiled: Mapping[MemberId, CompiledMember]) -> object:
     model = state.model
     elements: dict[str, list[dict[str, object]]] = {"dataset": [], "relationship": []}
@@ -537,17 +663,13 @@ def _model_document(state: _Model, compiled: Mapping[MemberId, CompiledMember]) 
                 {
                     "key": key,
                     "ossie": _ossie_document(key[0], node),
-                    "payload": _without(state.payloads.get(pointer, {}), DESCRIPTIVE_PAYLOAD),
+                    "payload": _payload_document(state.payloads.get(pointer, {})),
                 }
             )
     for found in elements.values():
-        found.sort(key=lambda item: str(item["key"]))
+        found.sort(key=lambda item: json.dumps(item["key"]))
     return {
-        "identity": {
-            "reader": model.reader,
-            "capabilities": model.capabilities,
-            "compiler_rules": COMPILER_RULES,
-        },
+        "identity": _identity(model),
         "data": {
             "tzdata": state.typed.tzdata,
             "units": state.typed.units,
@@ -555,7 +677,7 @@ def _model_document(state: _Model, compiled: Mapping[MemberId, CompiledMember]) 
         },
         "model": {
             "ossie": _ossie_document("model", model.document),
-            "payload": _without(state.payloads.get("", {}), DESCRIPTIVE_PAYLOAD),
+            "payload": _payload_document(state.payloads.get("", {})),
         },
         "datasets": elements["dataset"],
         "relationships": elements["relationship"],
@@ -571,37 +693,22 @@ def _model_document(state: _Model, compiled: Mapping[MemberId, CompiledMember]) 
     }
 
 
-def _descriptive(value: object, excluded: frozenset[str]) -> object:
-    """Only the descriptive members of `value`, at any depth."""
-    if isinstance(value, Mapping):
-        found = {}
-        for key, item in value.items():
-            if str(key) in excluded:
-                found[str(key)] = _json(item)
-            elif isinstance(item, Mapping | tuple):
-                nested = _descriptive(item, excluded)
-                if nested:
-                    found[str(key)] = nested
-        return found
-    if isinstance(value, tuple):
-        nested = [_descriptive(item, excluded) for item in value]
-        return nested if any(nested) else []
-    return None
-
-
-def _descriptive_document(model: OssieModel, state: _Model) -> object:
+def _rest_document(model: OssieModel, state: _Model) -> object:
+    """Everything of each element that the semantic fingerprint leaves out: names as written,
+    every dialect's text (those not selected included), descriptions, labels, `ai_context` and
+    the descriptive payload members."""
     found = []
     for pointer, key, node in _elements(model.document):
-        kept = {k: v for k, v in node.items() if k not in _STRUCTURE}
+        kept = {k: v for k, v in node.items() if k not in _CHILDREN}
         payload = state.payloads.get(pointer, {})
         found.append(
             {
                 "key": key,
-                "ossie": _descriptive(kept, DESCRIPTIVE),
+                "ossie": _json(kept),
                 "payload": {k: _json(v) for k, v in payload.items() if k in DESCRIPTIVE_PAYLOAD},
             }
         )
-    return sorted(found, key=lambda item: str(item["key"]))
+    return sorted(found, key=lambda item: json.dumps(item["key"]))
 
 
 def _foreign_document(model: OssieModel) -> object:
