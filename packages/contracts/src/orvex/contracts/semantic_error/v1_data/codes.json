@@ -229,6 +229,14 @@
     },
     "optional": []
   },
+  "PAGE_CURSOR_INVALID": {
+    "severity": "error",
+    "category": "query",
+    "details": {
+      "reason": "public"
+    },
+    "optional": []
+  },
   "PARAMETER_INVALID": {
     "severity": "error",
     "category": "query",

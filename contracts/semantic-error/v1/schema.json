@@ -128,6 +128,9 @@
       "$ref": "#/$defs/OssieInvalidPublicError"
     },
     {
+      "$ref": "#/$defs/PageCursorInvalidError"
+    },
+    {
       "$ref": "#/$defs/ParameterInvalidError"
     },
     {
@@ -293,6 +296,7 @@
         "MISSING_EXTENSION_DECLARATION",
         "NO_RELATIONSHIP_PATH",
         "OSSIE_INVALID",
+        "PAGE_CURSOR_INVALID",
         "PARAMETER_INVALID",
         "POLICY_ATTRIBUTE_MISSING",
         "POLICY_NOT_SUPPORTED_ON_ENGINE",
@@ -2739,6 +2743,65 @@
         },
         "details": {
           "$ref": "#/$defs/OssieInvalidPublicDetails"
+        }
+      }
+    },
+    "PageCursorInvalidError": {
+      "description": "PAGE_CURSOR_INVALID: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "PAGE_CURSOR_INVALID"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "query"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/PageCursorInvalidDetails"
+        }
+      }
+    },
+    "PageCursorInvalidDetails": {
+      "description": "Details of PAGE_CURSOR_INVALID: `expired` when the cursor's snapshot is no longer available, `invalid` for every other refusal, which says nothing about which binding failed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "reason": {
+          "enum": [
+            "expired",
+            "invalid"
+          ]
         }
       }
     },

@@ -1,0 +1,1359 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.invalid/semantic-result/v1/schema.json",
+  "title": "SemanticResult",
+  "description": "Every answer of the semantic engine: typed, exact, self-describing columns, rows, cell states and paging (README).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "version",
+    "mode",
+    "query_fingerprint",
+    "model_fingerprint",
+    "columns",
+    "rows",
+    "row_count",
+    "cell_states",
+    "page",
+    "notices"
+  ],
+  "properties": {
+    "kind": {
+      "const": "semantic_result"
+    },
+    "version": {
+      "const": 1
+    },
+    "mode": {
+      "enum": [
+        "aggregate",
+        "detail"
+      ]
+    },
+    "query_fingerprint": {
+      "$ref": "#/$defs/Fingerprint"
+    },
+    "model_fingerprint": {
+      "$ref": "#/$defs/Fingerprint"
+    },
+    "columns": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": {
+        "$ref": "#/$defs/Column"
+      }
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/Cell"
+        }
+      }
+    },
+    "row_count": {
+      "$ref": "#/$defs/Count"
+    },
+    "cell_states": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/CellState"
+      }
+    },
+    "page": {
+      "$ref": "#/$defs/Page"
+    },
+    "others_row": {
+      "$ref": "#/$defs/Count"
+    },
+    "notices": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/Notice"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "detail"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "page": {
+            "$ref": "#/$defs/DetailPage"
+          },
+          "others_row": false
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "aggregate"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "page": {
+            "$ref": "#/$defs/AggregatePage"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "Fingerprint": {
+      "description": "`sha256:` and 64 lowercase hex digits.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "Count": {
+      "description": "A small count, within ±(2^53-1).",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "Name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "StateName": {
+      "description": "A cell state. v1 knows `undefined_at_total` and `others`; a reader treats any other as unavailable.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+    },
+    "Cursor": {
+      "description": "An opaque page cursor: URL-safe base64, at most 1,024 characters.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "Zone": {
+      "type": "string",
+      "pattern": "^(UTC|[A-Z][A-Za-z_]+(/[A-Za-z0-9_+-]+){1,2})$"
+    },
+    "Logical": {
+      "description": "The engine-independent type (P2-04): a family and its parameters.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family"
+      ],
+      "properties": {
+        "family": {
+          "enum": [
+            "String",
+            "Integer",
+            "Decimal",
+            "Float",
+            "Boolean",
+            "Date",
+            "DateTime",
+            "DateTimeTz",
+            "Opaque"
+          ]
+        },
+        "precision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 38
+        },
+        "scale": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 38
+        },
+        "width": {
+          "enum": [
+            8,
+            16,
+            32,
+            64,
+            128
+          ]
+        },
+        "signed": {
+          "type": "boolean"
+        },
+        "zone": {
+          "$ref": "#/$defs/Zone"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "const": "Decimal"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "precision",
+              "scale"
+            ],
+            "properties": {
+              "width": false,
+              "signed": false,
+              "zone": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "const": "Integer"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "width",
+              "signed"
+            ],
+            "properties": {
+              "precision": false,
+              "scale": false,
+              "zone": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "enum": [
+                  "DateTime",
+                  "DateTimeTz"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "precision": false,
+              "scale": false,
+              "width": false,
+              "signed": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "family": {
+                "enum": [
+                  "String",
+                  "Float",
+                  "Boolean",
+                  "Date",
+                  "Opaque"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "precision": false,
+              "scale": false,
+              "width": false,
+              "signed": false,
+              "zone": false
+            }
+          }
+        }
+      ]
+    },
+    "Member": {
+      "description": "The bound query's canonical member: normalized identifiers; no `dataset` for a model metric.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/Name"
+        },
+        "name": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "Bucket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit"
+      ],
+      "properties": {
+        "unit": {
+          "enum": [
+            "minute",
+            "hour",
+            "day",
+            "week",
+            "month",
+            "quarter",
+            "year"
+          ]
+        },
+        "calendar": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "Integer8Signed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "width",
+        "signed"
+      ],
+      "properties": {
+        "family": {
+          "const": "Integer"
+        },
+        "width": {
+          "const": 8
+        },
+        "signed": {
+          "const": true
+        }
+      }
+    },
+    "Integer8Unsigned": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "width",
+        "signed"
+      ],
+      "properties": {
+        "family": {
+          "const": "Integer"
+        },
+        "width": {
+          "const": 8
+        },
+        "signed": {
+          "const": false
+        }
+      }
+    },
+    "Integer16Signed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "width",
+        "signed"
+      ],
+      "properties": {
+        "family": {
+          "const": "Integer"
+        },
+        "width": {
+          "const": 16
+        },
+        "signed": {
+          "const": true
+        }
+      }
+    },
+    "Integer16Unsigned": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "width",
+        "signed"
+      ],
+      "properties": {
+        "family": {
+          "const": "Integer"
+        },
+        "width": {
+          "const": 16
+        },
+        "signed": {
+          "const": false
+        }
+      }
+    },
+    "Integer32Signed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "width",
+        "signed"
+      ],
+      "properties": {
+        "family": {
+          "const": "Integer"
+        },
+        "width": {
+          "const": 32
+        },
+        "signed": {
+          "const": true
+        }
+      }
+    },
+    "Integer32Unsigned": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "width",
+        "signed"
+      ],
+      "properties": {
+        "family": {
+          "const": "Integer"
+        },
+        "width": {
+          "const": 32
+        },
+        "signed": {
+          "const": false
+        }
+      }
+    },
+    "Integer64Signed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "width",
+        "signed"
+      ],
+      "properties": {
+        "family": {
+          "const": "Integer"
+        },
+        "width": {
+          "const": 64
+        },
+        "signed": {
+          "const": true
+        }
+      }
+    },
+    "Integer64Unsigned": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "width",
+        "signed"
+      ],
+      "properties": {
+        "family": {
+          "const": "Integer"
+        },
+        "width": {
+          "const": 64
+        },
+        "signed": {
+          "const": false
+        }
+      }
+    },
+    "Integer128Signed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "width",
+        "signed"
+      ],
+      "properties": {
+        "family": {
+          "const": "Integer"
+        },
+        "width": {
+          "const": 128
+        },
+        "signed": {
+          "const": true
+        }
+      }
+    },
+    "Integer128Unsigned": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "width",
+        "signed"
+      ],
+      "properties": {
+        "family": {
+          "const": "Integer"
+        },
+        "width": {
+          "const": 128
+        },
+        "signed": {
+          "const": false
+        }
+      }
+    },
+    "StringLogical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family"
+      ],
+      "properties": {
+        "family": {
+          "const": "String"
+        }
+      }
+    },
+    "FloatLogical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family"
+      ],
+      "properties": {
+        "family": {
+          "const": "Float"
+        }
+      }
+    },
+    "BooleanLogical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family"
+      ],
+      "properties": {
+        "family": {
+          "const": "Boolean"
+        }
+      }
+    },
+    "DateLogical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family"
+      ],
+      "properties": {
+        "family": {
+          "const": "Date"
+        }
+      }
+    },
+    "OpaqueLogical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family"
+      ],
+      "properties": {
+        "family": {
+          "const": "Opaque"
+        }
+      }
+    },
+    "DateTimeLogical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family"
+      ],
+      "properties": {
+        "family": {
+          "const": "DateTime"
+        },
+        "zone": {
+          "$ref": "#/$defs/Zone"
+        }
+      }
+    },
+    "DateTimeTzLogical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family"
+      ],
+      "properties": {
+        "family": {
+          "const": "DateTimeTz"
+        },
+        "zone": {
+          "$ref": "#/$defs/Zone"
+        }
+      }
+    },
+    "DecimalLogical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "precision",
+        "scale"
+      ],
+      "properties": {
+        "family": {
+          "const": "Decimal"
+        },
+        "precision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 38
+        },
+        "scale": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 38
+        }
+      }
+    },
+    "Column": {
+      "description": "A column: what it is and how its values are encoded.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "member",
+        "role",
+        "encoding",
+        "nullable"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "member": {
+          "$ref": "#/$defs/Member"
+        },
+        "role": {
+          "enum": [
+            "dimension",
+            "metric",
+            "field"
+          ]
+        },
+        "context": {
+          "$ref": "#/$defs/Name"
+        },
+        "apply": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/Name"
+          }
+        },
+        "bucket": {
+          "$ref": "#/$defs/Bucket"
+        },
+        "logical": {
+          "$ref": "#/$defs/Logical"
+        },
+        "encoding": {
+          "description": "The `store/v1` transport type, which fixes the Arrow type and the `ResultJson` encoding (README mapping table).",
+          "type": "string",
+          "pattern": "^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|UHUGEINT|VARCHAR|BOOLEAN|FLOAT|DOUBLE|DATE|TIMESTAMP|TIMESTAMP WITH TIME ZONE|UUID|BLOB|INTERVAL|DECIMAL\\(([1-9]|[12][0-9]|3[0-8]),([0-9]|[12][0-9]|3[0-8])\\))$"
+        },
+        "semantic_type": {
+          "enum": [
+            "identifier",
+            "category",
+            "quantity",
+            "amount",
+            "ratio",
+            "geo_region",
+            "latitude",
+            "longitude"
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "pattern": "^[!-~]+$"
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "exactness": {
+          "enum": [
+            "exact",
+            "approximate"
+          ]
+        },
+        "nullable": {
+          "type": "boolean"
+        },
+        "masked": {
+          "const": true
+        },
+        "mask": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "TINYINT"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/Integer8Signed"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "SMALLINT"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/Integer16Signed"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "INTEGER"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/Integer32Signed"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "BIGINT"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/Integer64Signed"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "HUGEINT"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/Integer128Signed"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "UTINYINT"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/Integer8Unsigned"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "USMALLINT"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/Integer16Unsigned"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "UINTEGER"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/Integer32Unsigned"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "UBIGINT"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/Integer64Unsigned"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "UHUGEINT"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/Integer128Unsigned"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "VARCHAR"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/StringLogical"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "BOOLEAN"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/BooleanLogical"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "FLOAT"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/FloatLogical"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "DOUBLE"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/FloatLogical"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "DATE"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/DateLogical"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "TIMESTAMP"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/DateTimeLogical"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "TIMESTAMP WITH TIME ZONE"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/DateTimeTzLogical"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "UUID"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/OpaqueLogical"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "BLOB"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/OpaqueLogical"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "const": "INTERVAL"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/OpaqueLogical"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "encoding": {
+                "type": "string",
+                "pattern": "^DECIMAL"
+              }
+            },
+            "required": [
+              "encoding"
+            ]
+          },
+          "then": {
+            "properties": {
+              "logical": {
+                "$ref": "#/$defs/DecimalLogical"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "masked": {
+                "const": true
+              }
+            },
+            "required": [
+              "masked"
+            ]
+          },
+          "then": {
+            "required": [
+              "mask"
+            ],
+            "properties": {
+              "encoding": {
+                "const": "VARCHAR"
+              },
+              "nullable": {
+                "const": false
+              },
+              "logical": false,
+              "semantic_type": false,
+              "unit": false,
+              "currency": false,
+              "exactness": false
+            }
+          },
+          "else": {
+            "required": [
+              "logical",
+              "exactness"
+            ],
+            "properties": {
+              "mask": false
+            }
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "unit",
+              "currency"
+            ]
+          }
+        }
+      ]
+    },
+    "StateCell": {
+      "description": "A cell with no ordinary value (README: cell states).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/StateName"
+        }
+      }
+    },
+    "Cell": {
+      "description": "A value (its `ResultJson` encoding), `null`, the mask of a masked column, or a state.",
+      "anyOf": [
+        {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "$ref": "#/$defs/StateCell"
+        }
+      ]
+    },
+    "CellState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "row",
+        "column",
+        "state"
+      ],
+      "properties": {
+        "row": {
+          "$ref": "#/$defs/Count"
+        },
+        "column": {
+          "$ref": "#/$defs/Count"
+        },
+        "state": {
+          "$ref": "#/$defs/StateName"
+        }
+      }
+    },
+    "Page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "next": {
+          "$ref": "#/$defs/Cursor"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "DetailPage": {
+      "description": "A detail page: its size and, unless it is the last, the cursor to the next one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "size"
+      ],
+      "properties": {
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "next": {
+          "$ref": "#/$defs/Cursor"
+        }
+      }
+    },
+    "AggregatePage": {
+      "description": "An aggregate result: never a cursor.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "truncated"
+      ],
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "Notice": {
+      "description": "A `semantic-error/v1` warning or notice in the caller's audience view (that contract is the authority on each code).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{1,62}$"
+        },
+        "severity": {
+          "enum": [
+            "warning",
+            "notice"
+          ]
+        },
+        "category": {
+          "enum": [
+            "model",
+            "query",
+            "correctness",
+            "security",
+            "budget",
+            "engine"
+          ]
+        },
+        "audience": {
+          "enum": [
+            "builder",
+            "other"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "enum": [
+            "es",
+            "en"
+          ]
+        },
+        "details": {
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^[a-z][a-z0-9_]{0,62}$": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Name"
+                },
+                {
+                  "type": "array",
+                  "maxItems": 50,
+                  "items": {
+                    "$ref": "#/$defs/Name"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

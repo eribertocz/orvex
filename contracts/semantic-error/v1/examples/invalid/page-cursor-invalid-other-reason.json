@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "PAGE_CURSOR_INVALID",
+  "severity": "error",
+  "category": "query",
+  "audience": "builder",
+  "message": "The requested page is no longer valid (expired); ask for the first page again.",
+  "locale": "en",
+  "details": {
+    "reason": "permissions"
+  }
+}
