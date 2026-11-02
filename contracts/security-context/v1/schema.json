@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.invalid/security-context/v1/schema.json",
+  "title": "SecurityContext",
+  "description": "Who the caller is and what they may see, for one project: produced by `access`, consumed by `semantic` (README). Lists are normalized before validation: sorted by code point after NFC, without duplicates.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "version",
+    "user",
+    "project",
+    "role",
+    "groups",
+    "attributes",
+    "permission_fingerprint"
+  ],
+  "properties": {
+    "kind": {
+      "const": "security_context"
+    },
+    "version": {
+      "const": 1
+    },
+    "user": {
+      "$ref": "#/$defs/Id"
+    },
+    "project": {
+      "$ref": "#/$defs/Id"
+    },
+    "role": {
+      "enum": [
+        "builder",
+        "author",
+        "viewer"
+      ]
+    },
+    "groups": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/Group"
+      }
+    },
+    "attributes": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 64,
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{0,62}$"
+      },
+      "patternProperties": {
+        "^[a-z][a-z0-9_]{0,62}$": {
+          "$ref": "#/$defs/Attribute"
+        }
+      }
+    },
+    "permission_fingerprint": {
+      "$ref": "#/$defs/Fingerprint"
+    }
+  },
+  "$defs": {
+    "Id": {
+      "description": "An opaque internal id: never an email or a display name.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,128}$"
+    },
+    "Group": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "Fingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "Attribute": {
+      "description": "A typed, exact attribute value. A missing attribute is absent, never null or empty.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "text"
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "integer"
+            },
+            "value": {
+              "type": "string",
+              "pattern": "^(0|-?[1-9][0-9]{0,37})$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "boolean"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "values"
+          ],
+          "properties": {
+            "type": {
+              "const": "list"
+            },
+            "values": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1000,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

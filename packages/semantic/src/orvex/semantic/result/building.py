@@ -19,6 +19,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 from jsonschema import Draft202012Validator
 from orvex.semantic.canonical import canonicalize
+from orvex.semantic.ossie.extensions import full_match_validator
 from orvex.semantic.result.descriptors import (
     KNOWN_STATES,
     ColumnSpec,
@@ -62,7 +63,7 @@ type ValueEncoder = Callable[[pa.RecordBatchReader], Iterable[str]]
 @cache
 def schema_validator() -> Draft202012Validator:
     schema = json.loads(files("orvex.semantic.result").joinpath(SCHEMA_FILE).read_bytes())
-    return Draft202012Validator(schema)
+    return full_match_validator(schema)
 
 
 def _strict(pairs: list[tuple[str, object]]) -> dict[str, object]:

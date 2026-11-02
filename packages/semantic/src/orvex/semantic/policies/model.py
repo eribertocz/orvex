@@ -34,6 +34,7 @@ from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
+from orvex.semantic.ossie.extensions import full_match_validator
 from orvex.semantic.policies import predicate as grammar
 from orvex.semantic.policies.strict_yaml import StrictYamlError, load
 
@@ -48,7 +49,7 @@ _RANK: dict[str, int] = {"visible": 0, "masked": 1, "hidden": 2}
 @cache
 def _validator() -> Draft202012Validator:
     schema = json.loads(files("orvex.semantic.policies").joinpath(SCHEMA_FILE).read_bytes())
-    return Draft202012Validator(schema)
+    return full_match_validator(schema)
 
 
 def _split(reference: str) -> list[str]:
@@ -278,6 +279,15 @@ class PolicyModel:
     def inherited(self, member: MemberId) -> tuple[MemberId, ...]:
         """The protected members `member` reads, for the compile report."""
         return tuple(sorted(s for s in self._sources.get(member, ()) if s in self.column_policies))
+
+    def missing_attributes(self, policy: str, attributes: Collection[str]) -> frozenset[str]:
+        """The attributes a row policy needs that a caller's context lacks. A missing attribute
+        is absent from the context, never null or empty (`security-context` v1), and makes
+        the policy give zero rows with `POLICY_ATTRIBUTE_MISSING`."""
+        rule = next((r for r in self.row_policies if r.name == policy), None)
+        if rule is None:
+            raise KeyError(policy)
+        return frozenset(rule.attributes - set(attributes))
 
     def check_usable(self, datasets: Iterable[str]) -> None:
         """`UNSUPPORTED_OPERATION` when a dataset needs a policy that cannot run yet: never
