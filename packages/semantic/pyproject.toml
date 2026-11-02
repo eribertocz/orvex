@@ -21,5 +21,6 @@ namespaces = true
 "orvex.semantic.ossie" = ["ossie-extensions-v1.json", "revisions/*/*"]
 "orvex.semantic.compiler" = ["registries/*"]
 "orvex.semantic.query" = ["semantic-query-v1.json"]
+"orvex.semantic.policies" = ["security-policies-v1.json"]
 "orvex.semantic.receipt" = ["receipt-v1.json"]
 "orvex.semantic.result" = ["semantic-result-v1.json"]

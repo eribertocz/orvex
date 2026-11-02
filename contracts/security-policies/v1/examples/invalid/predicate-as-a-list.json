@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "row_policies": [
+    {
+      "name": "own_zone_only",
+      "dataset": "customers",
+      "kind": "predicate",
+      "predicate": [
+        "zone_id IN (SELECT zone_id FROM security.user_zone WHERE user_id = $user_id)"
+      ],
+      "exempt_groups": [
+        "management"
+      ]
+    },
+    {
+      "name": "blocked_zones",
+      "dataset": "customers",
+      "kind": "predicate",
+      "predicate": "zone_id NOT IN (SELECT zone_id FROM security.blocked_zone WHERE user_id = $user_id)",
+      "registration": {
+        "table": "security.registered",
+        "key": "user_id"
+      }
+    }
+  ],
+  "column_policies": [
+    {
+      "member": "customers.national_id",
+      "default": "hidden",
+      "visible_to_groups": [
+        "collections"
+      ]
+    },
+    {
+      "member": "customers.phone",
+      "default": "masked",
+      "mask": "***"
+    }
+  ],
+  "limits": {
+    "policy_values": 1000
+  }
+}

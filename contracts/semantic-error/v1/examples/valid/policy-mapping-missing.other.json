@@ -1,0 +1,10 @@
+{
+  "kind": "semantic_error",
+  "code": "POLICY_MAPPING_MISSING",
+  "severity": "notice",
+  "category": "security",
+  "audience": "other",
+  "message": "You have no access assigned for this query. Request authorization.",
+  "locale": "en",
+  "details": {}
+}

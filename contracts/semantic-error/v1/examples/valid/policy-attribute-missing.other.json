@@ -1,0 +1,10 @@
+{
+  "kind": "semantic_error",
+  "code": "POLICY_ATTRIBUTE_MISSING",
+  "severity": "notice",
+  "category": "security",
+  "audience": "other",
+  "message": "No tienes acceso asignado para esta consulta. Solicita autorización.",
+  "locale": "es",
+  "details": {}
+}

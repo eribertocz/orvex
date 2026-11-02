@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "row_policies": [
+    {
+      "name": "org",
+      "dataset": "customers",
+      "kind": "hierarchy",
+      "closure": {
+        "table": "security.org_closure",
+        "ancestor": "ancestor",
+        "descendant": "descendant"
+      },
+      "node": "org_node",
+      "field": "zone_id",
+      "orphans": "hidden"
+    }
+  ],
+  "column_policies": [
+    {
+      "member": "customers.segment",
+      "default": "visible",
+      "mask": "***",
+      "visible_when": "zone_id = $zone_id"
+    }
+  ],
+  "aggregate_thresholds": [
+    {
+      "dataset": "payments",
+      "entity": "payments.customer_id",
+      "min_group_size": 1
+    }
+  ]
+}

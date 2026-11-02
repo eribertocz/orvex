@@ -15,6 +15,8 @@ export type SemanticError =
 	| CrossEngineQueryPublicError
 	| DeprecatedMetricError
 	| DivisionPolicyViolationError
+	| DuplicateColumnPolicyError
+	| DuplicateColumnPolicyPublicError
 	| EngineVersionUntestedError
 	| EngineVersionUntestedPublicError
 	| EvidenceViolatedError
@@ -49,6 +51,11 @@ export type SemanticError =
 	| PageCursorInvalidError
 	| ParameterInvalidError
 	| PolicyAttributeMissingError
+	| PolicyAttributeMissingPublicError
+	| PolicyInvalidError
+	| PolicyInvalidPublicError
+	| PolicyMappingMissingError
+	| PolicyMappingMissingPublicError
 	| PolicyNotSupportedOnEngineError
 	| PolicyNotSupportedOnEnginePublicError
 	| QueryBudgetExceededError
@@ -101,6 +108,11 @@ export type Path = string;
  * @maxItems 50
  */
 export type Problems = [Problem, ...Problem[]];
+/**
+ * @minItems 1
+ * @maxItems 50
+ */
+export type PolicyProblems = [PolicyProblem, ...PolicyProblem[]];
 /**
  * @minItems 1
  * @maxItems 50
@@ -338,6 +350,42 @@ export interface DivisionPolicyViolationError {
 export interface DivisionPolicyViolationDetails {
 	metric: Name;
 }
+/**
+ * DUPLICATE_COLUMN_POLICY as a builder sees it.
+ */
+export interface DuplicateColumnPolicyError {
+	kind: 'semantic_error';
+	code: 'DUPLICATE_COLUMN_POLICY';
+	severity: 'error';
+	category: 'model';
+	audience: 'builder';
+	message: string;
+	locale: Locale;
+	details: DuplicateColumnPolicyDetails;
+}
+/**
+ * Details of DUPLICATE_COLUMN_POLICY, as a builder sees them.
+ */
+export interface DuplicateColumnPolicyDetails {
+	member: Name;
+}
+/**
+ * DUPLICATE_COLUMN_POLICY as any other audience sees it: the generic message and public details only.
+ */
+export interface DuplicateColumnPolicyPublicError {
+	kind: 'semantic_error';
+	code: 'DUPLICATE_COLUMN_POLICY';
+	severity: 'error';
+	category: 'model';
+	audience: 'other';
+	message: string;
+	locale: Locale;
+	details: DuplicateColumnPolicyPublicDetails;
+}
+/**
+ * Details of DUPLICATE_COLUMN_POLICY for any other audience: its builder fields are left out.
+ */
+export type DuplicateColumnPolicyPublicDetails = Record<string, never>;
 /**
  * ENGINE_VERSION_UNTESTED as a builder sees it.
  */
@@ -1009,14 +1057,14 @@ export interface ParameterInvalidDetails {
 	expected: Name;
 }
 /**
- * POLICY_ATTRIBUTE_MISSING: every detail is public, so both audiences see them all.
+ * POLICY_ATTRIBUTE_MISSING as a builder sees it.
  */
 export interface PolicyAttributeMissingError {
 	kind: 'semantic_error';
 	code: 'POLICY_ATTRIBUTE_MISSING';
 	severity: 'notice';
 	category: 'security';
-	audience: Audience;
+	audience: 'builder';
 	message: string;
 	locale: Locale;
 	details: PolicyAttributeMissingDetails;
@@ -1027,6 +1075,117 @@ export interface PolicyAttributeMissingError {
 export interface PolicyAttributeMissingDetails {
 	policy: Name;
 }
+/**
+ * POLICY_ATTRIBUTE_MISSING as any other audience sees it: the generic message and public details only.
+ */
+export interface PolicyAttributeMissingPublicError {
+	kind: 'semantic_error';
+	code: 'POLICY_ATTRIBUTE_MISSING';
+	severity: 'notice';
+	category: 'security';
+	audience: 'other';
+	message: string;
+	locale: Locale;
+	details: PolicyAttributeMissingPublicDetails;
+}
+/**
+ * Details of POLICY_ATTRIBUTE_MISSING for any other audience: its builder fields are left out.
+ */
+export type PolicyAttributeMissingPublicDetails = Record<string, never>;
+/**
+ * POLICY_INVALID as a builder sees it.
+ */
+export interface PolicyInvalidError {
+	kind: 'semantic_error';
+	code: 'POLICY_INVALID';
+	severity: 'error';
+	category: 'model';
+	audience: 'builder';
+	message: string;
+	locale: Locale;
+	details: PolicyInvalidDetails;
+}
+/**
+ * Details of POLICY_INVALID, as a builder sees them.
+ */
+export interface PolicyInvalidDetails {
+	file: Path;
+	problems: PolicyProblems;
+	problems_omitted: Count;
+}
+export interface PolicyProblem {
+	/**
+	 * JSON Pointer (RFC 6901) into the policy file.
+	 */
+	pointer: string;
+	line: Count;
+	rule:
+		| 'syntax'
+		| 'schema'
+		| 'duplicate_name'
+		| 'reference'
+		| 'predicate'
+		| 'registration'
+		| 'inference'
+		| 'propagation'
+		| 'masked_metric'
+		| 'limits';
+}
+/**
+ * POLICY_INVALID as any other audience sees it: the generic message and public details only.
+ */
+export interface PolicyInvalidPublicError {
+	kind: 'semantic_error';
+	code: 'POLICY_INVALID';
+	severity: 'error';
+	category: 'model';
+	audience: 'other';
+	message: string;
+	locale: Locale;
+	details: PolicyInvalidPublicDetails;
+}
+/**
+ * Details of POLICY_INVALID for any other audience: its builder fields are left out.
+ */
+export interface PolicyInvalidPublicDetails {
+	file: Path;
+}
+/**
+ * POLICY_MAPPING_MISSING as a builder sees it.
+ */
+export interface PolicyMappingMissingError {
+	kind: 'semantic_error';
+	code: 'POLICY_MAPPING_MISSING';
+	severity: 'notice';
+	category: 'security';
+	audience: 'builder';
+	message: string;
+	locale: Locale;
+	details: PolicyMappingMissingDetails;
+}
+/**
+ * Details of POLICY_MAPPING_MISSING, as a builder sees them.
+ */
+export interface PolicyMappingMissingDetails {
+	policy: Name;
+}
+/**
+ * POLICY_MAPPING_MISSING as any other audience sees it: the generic message and public details only.
+ */
+export interface PolicyMappingMissingPublicError {
+	kind: 'semantic_error';
+	code: 'POLICY_MAPPING_MISSING';
+	severity: 'notice';
+	category: 'security';
+	audience: 'other';
+	message: string;
+	locale: Locale;
+	details: PolicyMappingMissingPublicDetails;
+}
+/**
+ * Details of POLICY_MAPPING_MISSING for any other audience: its builder fields are left out.
+ */
+export type PolicyMappingMissingPublicDetails = Record<string, never>;
 /**
  * POLICY_NOT_SUPPORTED_ON_ENGINE as a builder sees it.
  */

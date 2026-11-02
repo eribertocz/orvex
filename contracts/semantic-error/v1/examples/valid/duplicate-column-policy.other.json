@@ -1,0 +1,10 @@
+{
+  "kind": "semantic_error",
+  "code": "DUPLICATE_COLUMN_POLICY",
+  "severity": "error",
+  "category": "model",
+  "audience": "other",
+  "message": "Dos políticas de columna protegen el mismo miembro; solo se permite una.",
+  "locale": "es",
+  "details": {}
+}

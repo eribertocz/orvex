@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "POLICY_ATTRIBUTE_MISSING",
+  "severity": "notice",
+  "category": "security",
+  "audience": "other",
+  "message": "You have no access assigned for this query. Request authorization.",
+  "locale": "en",
+  "details": {
+    "policy": "zone_rows"
+  }
+}

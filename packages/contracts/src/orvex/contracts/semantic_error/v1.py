@@ -96,6 +96,7 @@ class SemanticErrorCode(
             "CROSS_ENGINE_QUERY",
             "DEPRECATED_METRIC",
             "DIVISION_POLICY_VIOLATION",
+            "DUPLICATE_COLUMN_POLICY",
             "ENGINE_VERSION_UNTESTED",
             "EVIDENCE_VIOLATED",
             "FANOUT_NOT_ISOLATABLE",
@@ -118,6 +119,8 @@ class SemanticErrorCode(
             "PAGE_CURSOR_INVALID",
             "PARAMETER_INVALID",
             "POLICY_ATTRIBUTE_MISSING",
+            "POLICY_INVALID",
+            "POLICY_MAPPING_MISSING",
             "POLICY_NOT_SUPPORTED_ON_ENGINE",
             "QUERY_BUDGET_EXCEEDED",
             "QUERY_INVALID",
@@ -138,6 +141,7 @@ class SemanticErrorCode(
         "CROSS_ENGINE_QUERY",
         "DEPRECATED_METRIC",
         "DIVISION_POLICY_VIOLATION",
+        "DUPLICATE_COLUMN_POLICY",
         "ENGINE_VERSION_UNTESTED",
         "EVIDENCE_VIOLATED",
         "FANOUT_NOT_ISOLATABLE",
@@ -160,6 +164,8 @@ class SemanticErrorCode(
         "PAGE_CURSOR_INVALID",
         "PARAMETER_INVALID",
         "POLICY_ATTRIBUTE_MISSING",
+        "POLICY_INVALID",
+        "POLICY_MAPPING_MISSING",
         "POLICY_NOT_SUPPORTED_ON_ENGINE",
         "QUERY_BUDGET_EXCEEDED",
         "QUERY_INVALID",
@@ -1458,35 +1464,6 @@ class ParameterInvalidError(BaseModel):
     details: ParameterInvalidDetails
 
 
-class PolicyAttributeMissingDetails(BaseModel):
-    """
-    Details of POLICY_ATTRIBUTE_MISSING, as a builder sees them.
-    """
-
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    policy: Name
-
-
-class PolicyAttributeMissingError(BaseModel):
-    """
-    POLICY_ATTRIBUTE_MISSING: every detail is public, so both audiences see them all.
-    """
-
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    kind: Literal["semantic_error"]
-    code: Literal["POLICY_ATTRIBUTE_MISSING"]
-    severity: Literal["notice"]
-    category: Literal["security"]
-    audience: Audience
-    message: Annotated[str, Field(max_length=2000, min_length=1)]
-    locale: Locale
-    details: PolicyAttributeMissingDetails
-
-
 class PolicyNotSupportedOnEngineDetails(BaseModel):
     """
     Details of POLICY_NOT_SUPPORTED_ON_ENGINE, as a builder sees them.
@@ -1881,6 +1858,264 @@ class FilterIntersectionEmptyPublicError(BaseModel):
     details: FilterIntersectionEmptyPublicDetails
 
 
+class PolicyAttributeMissingDetails(BaseModel):
+    """
+    Details of POLICY_ATTRIBUTE_MISSING, as a builder sees them.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    policy: Name
+
+
+class PolicyAttributeMissingPublicDetails(BaseModel):
+    """
+    Details of POLICY_ATTRIBUTE_MISSING for any other audience: its builder fields are left out.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+
+class PolicyAttributeMissingError(BaseModel):
+    """
+    POLICY_ATTRIBUTE_MISSING as a builder sees it.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["POLICY_ATTRIBUTE_MISSING"]
+    severity: Literal["notice"]
+    category: Literal["security"]
+    audience: Literal["builder"]
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: PolicyAttributeMissingDetails
+
+
+class PolicyAttributeMissingPublicError(BaseModel):
+    """
+    POLICY_ATTRIBUTE_MISSING as any other audience sees it: the generic message and public details only.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["POLICY_ATTRIBUTE_MISSING"]
+    severity: Literal["notice"]
+    category: Literal["security"]
+    audience: Literal["other"]
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: PolicyAttributeMissingPublicDetails
+
+
+class PolicyMappingMissingDetails(BaseModel):
+    """
+    Details of POLICY_MAPPING_MISSING, as a builder sees them.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    policy: Name
+
+
+class PolicyMappingMissingPublicDetails(BaseModel):
+    """
+    Details of POLICY_MAPPING_MISSING for any other audience: its builder fields are left out.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+
+class PolicyMappingMissingError(BaseModel):
+    """
+    POLICY_MAPPING_MISSING as a builder sees it.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["POLICY_MAPPING_MISSING"]
+    severity: Literal["notice"]
+    category: Literal["security"]
+    audience: Literal["builder"]
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: PolicyMappingMissingDetails
+
+
+class PolicyMappingMissingPublicError(BaseModel):
+    """
+    POLICY_MAPPING_MISSING as any other audience sees it: the generic message and public details only.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["POLICY_MAPPING_MISSING"]
+    severity: Literal["notice"]
+    category: Literal["security"]
+    audience: Literal["other"]
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: PolicyMappingMissingPublicDetails
+
+
+class PolicyProblem(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    pointer: Annotated[str, Field(max_length=1024, pattern="^(/([^/~\\u0000-\\u001f]|~[01])*)*$")]
+    """
+    JSON Pointer (RFC 6901) into the policy file.
+    """
+    line: Count
+    rule: Literal[
+        "syntax",
+        "schema",
+        "duplicate_name",
+        "reference",
+        "predicate",
+        "registration",
+        "inference",
+        "propagation",
+        "masked_metric",
+        "limits",
+    ]
+
+
+class PolicyProblems(RootModel[list[PolicyProblem]]):
+    root: Annotated[list[PolicyProblem], Field(max_length=50, min_length=1)]
+
+
+class PolicyInvalidDetails(BaseModel):
+    """
+    Details of POLICY_INVALID, as a builder sees them.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    file: Path
+    problems: PolicyProblems
+    problems_omitted: Count
+
+
+class PolicyInvalidPublicDetails(BaseModel):
+    """
+    Details of POLICY_INVALID for any other audience: its builder fields are left out.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    file: Path
+
+
+class PolicyInvalidError(BaseModel):
+    """
+    POLICY_INVALID as a builder sees it.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["POLICY_INVALID"]
+    severity: Literal["error"]
+    category: Literal["model"]
+    audience: Literal["builder"]
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: PolicyInvalidDetails
+
+
+class PolicyInvalidPublicError(BaseModel):
+    """
+    POLICY_INVALID as any other audience sees it: the generic message and public details only.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["POLICY_INVALID"]
+    severity: Literal["error"]
+    category: Literal["model"]
+    audience: Literal["other"]
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: PolicyInvalidPublicDetails
+
+
+class DuplicateColumnPolicyDetails(BaseModel):
+    """
+    Details of DUPLICATE_COLUMN_POLICY, as a builder sees them.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    member: Name
+
+
+class DuplicateColumnPolicyPublicDetails(BaseModel):
+    """
+    Details of DUPLICATE_COLUMN_POLICY for any other audience: its builder fields are left out.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+
+class DuplicateColumnPolicyError(BaseModel):
+    """
+    DUPLICATE_COLUMN_POLICY as a builder sees it.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["DUPLICATE_COLUMN_POLICY"]
+    severity: Literal["error"]
+    category: Literal["model"]
+    audience: Literal["builder"]
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: DuplicateColumnPolicyDetails
+
+
+class DuplicateColumnPolicyPublicError(BaseModel):
+    """
+    DUPLICATE_COLUMN_POLICY as any other audience sees it: the generic message and public details only.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["DUPLICATE_COLUMN_POLICY"]
+    severity: Literal["error"]
+    category: Literal["model"]
+    audience: Literal["other"]
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: DuplicateColumnPolicyPublicDetails
+
+
 class PageCursorInvalidError(BaseModel):
     """
     PAGE_CURSOR_INVALID: every detail is public, so both audiences see them all.
@@ -1949,6 +2184,8 @@ class SemanticError(
         | CrossEngineQueryPublicError
         | DeprecatedMetricError
         | DivisionPolicyViolationError
+        | DuplicateColumnPolicyError
+        | DuplicateColumnPolicyPublicError
         | EngineVersionUntestedError
         | EngineVersionUntestedPublicError
         | EvidenceViolatedError
@@ -1983,6 +2220,11 @@ class SemanticError(
         | PageCursorInvalidError
         | ParameterInvalidError
         | PolicyAttributeMissingError
+        | PolicyAttributeMissingPublicError
+        | PolicyInvalidError
+        | PolicyInvalidPublicError
+        | PolicyMappingMissingError
+        | PolicyMappingMissingPublicError
         | PolicyNotSupportedOnEngineError
         | PolicyNotSupportedOnEnginePublicError
         | QueryBudgetExceededError
@@ -2010,6 +2252,8 @@ class SemanticError(
         | CrossEngineQueryPublicError
         | DeprecatedMetricError
         | DivisionPolicyViolationError
+        | DuplicateColumnPolicyError
+        | DuplicateColumnPolicyPublicError
         | EngineVersionUntestedError
         | EngineVersionUntestedPublicError
         | EvidenceViolatedError
@@ -2044,6 +2288,11 @@ class SemanticError(
         | PageCursorInvalidError
         | ParameterInvalidError
         | PolicyAttributeMissingError
+        | PolicyAttributeMissingPublicError
+        | PolicyInvalidError
+        | PolicyInvalidPublicError
+        | PolicyMappingMissingError
+        | PolicyMappingMissingPublicError
         | PolicyNotSupportedOnEngineError
         | PolicyNotSupportedOnEnginePublicError
         | QueryBudgetExceededError

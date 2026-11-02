@@ -1,0 +1,1 @@
+'closure' is a required property

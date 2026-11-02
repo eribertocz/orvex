@@ -84,8 +84,8 @@ column_policies:
 
 - `$user_id` and other attributes are bound parameters from the security context, never string-concatenated.
 - Mapping tables (for example `security.user_zone`) live in the managed DuckLake and are maintained by the Builder or by a transformation model; a policy reading a table elsewhere is rejected (ADR-0027 §6).
-- A dataset with a row policy and a caller with no mapping ⇒ zero rows.
-- **Missing attribute.** If a predicate references an attribute the security context lacks (for example `$zone_id` for a user without it), the policy evaluates to *no rows* (fail closed, never an error that reveals the predicate and never all rows). The result carries a visible notice with code `POLICY_ATTRIBUTE_MISSING` naming the policy, not the data, so the user knows to ask an administrator, and an audit event is recorded.
+- A dataset with a row policy and a caller with no mapping ⇒ zero rows, with the generic notice `POLICY_MAPPING_MISSING`. As for a missing attribute, it never names the policy, table or values to an ordinary user (Owner decision of 2026-11-02, #123).
+- **Missing attribute.** If a predicate references an attribute the security context lacks (for example `$zone_id` for a user without it), the policy evaluates to *no rows* (fail closed, never an error that reveals the predicate and never all rows). The result carries a visible notice with code `POLICY_ATTRIBUTE_MISSING`. Ordinary users get a generic sentence ("You have no access assigned for this query. Request authorization.") that names no policy, table or value. Only authorized staff see the policy in the detailed diagnosis. An audit event is recorded (Owner decision of 2026-11-02, #304).
 - Only the policies in `security.yaml` exist; groups referenced there are the same groups used for pages.
 - **Masking rules** (`masked` applies to dimensions and fields only; metrics are `visible` or `hidden`):
   - a masked member is returned as text (`VARCHAR`) containing the mask, whatever its source type; the result schema says so;

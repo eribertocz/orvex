@@ -31,6 +31,10 @@
     "generic": "La métrica {metric} divide entre cero y su regla lo rechaza.",
     "builder": "La métrica {metric} divide entre cero y su regla lo rechaza."
   },
+  "DUPLICATE_COLUMN_POLICY": {
+    "generic": "Dos políticas de columna protegen el mismo miembro; solo se permite una.",
+    "builder": "Dos políticas de columna protegen {member}; solo se permite una."
+  },
   "ENGINE_VERSION_UNTESTED": {
     "generic": "La versión del motor {engine} no está probada.",
     "builder": "La versión {found} del motor {engine} no está probada; las probadas son {tested}."
@@ -116,8 +120,16 @@
     "builder": "El valor del parámetro {parameter} no es válido; se espera {expected}."
   },
   "POLICY_ATTRIBUTE_MISSING": {
-    "generic": "La política {policy} no tiene un dato que necesita de su perfil; no se muestran filas. Consulte a un administrador.",
-    "builder": "La política {policy} no tiene un dato que necesita de su perfil; no se muestran filas. Consulte a un administrador."
+    "generic": "No tienes acceso asignado para esta consulta. Solicita autorización.",
+    "builder": "A la política {policy} le falta un atributo que necesita del perfil de quien consulta; no se muestran filas."
+  },
+  "POLICY_INVALID": {
+    "generic": "Las políticas de seguridad de {file} no son válidas.",
+    "builder": "Las políticas de seguridad de {file} no son válidas: {problems} problemas, {problems_omitted} más sin mostrar."
+  },
+  "POLICY_MAPPING_MISSING": {
+    "generic": "No tienes acceso asignado para esta consulta. Solicita autorización.",
+    "builder": "Quien consulta no tiene asignación, o registro, para la política {policy}; no se muestran filas."
   },
   "POLICY_NOT_SUPPORTED_ON_ENGINE": {
     "generic": "El conjunto {dataset} no se puede usar: una política no se puede aplicar con seguridad.",

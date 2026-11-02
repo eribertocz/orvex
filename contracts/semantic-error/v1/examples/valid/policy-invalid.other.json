@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "POLICY_INVALID",
+  "severity": "error",
+  "category": "model",
+  "audience": "other",
+  "message": "Las políticas de seguridad de security.yaml no son válidas.",
+  "locale": "es",
+  "details": {
+    "file": "security.yaml"
+  }
+}
