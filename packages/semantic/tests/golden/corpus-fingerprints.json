@@ -1,0 +1,74 @@
+{
+  "CASE-001": {
+    "model_fingerprint": "sha256:3fe6a1ef4ba6a87e5bbc57b555a3ece0b68d242503c848297de6c19691221a85",
+    "semantic_fingerprint": "sha256:c676a7b3ad81ad1310c9e7b59ab557b638d62ab6b0b626ef50346e7d4b80d53e"
+  },
+  "CASE-002": {
+    "model_fingerprint": "sha256:ab031432bbf0bf99169d8d80dff888739013abbe26564793cbffac1d29401080",
+    "semantic_fingerprint": "sha256:c4868c88377f5b4365740de854d788a5c2ac42b7f067a7a1312b07d163000927"
+  },
+  "CASE-003": {
+    "model_fingerprint": "sha256:6ebcb0a7b808d47e323d9ccabaa7a44e92d36fbd10bd576f9121ac1b177c07ed",
+    "semantic_fingerprint": "sha256:4a474c70dacf5142f243a2182461908619079ebe6a602dc079b75a869f652d24"
+  },
+  "CASE-004": {
+    "model_fingerprint": "sha256:70e7877e63dd44923a00fa6e6815ff72c330c86d73b8ac00a70554645c167315",
+    "semantic_fingerprint": "sha256:56b7cf368f55c74914bfcec65c98aabcbd42642bfef6b4bd49c6240599461c1d"
+  },
+  "CASE-005": {
+    "model_fingerprint": "sha256:e07bd87f5d5f604eafda9c106b981dcadea7c61495bd944dca6e036277c63879",
+    "semantic_fingerprint": "sha256:e5b40602669050ca97e6abde8d6779e0af5283d5fd7a23719e29dd8cc5b1871a"
+  },
+  "CASE-007": {
+    "model_fingerprint": "sha256:8be7638169a5a72bdde1b376ea832af19e671e4117723c1299a2c93045c0ac0c",
+    "semantic_fingerprint": "sha256:d2b3e9cb4c77f80127945a0cbcd35d2dc8ca089710ceb02bbb781a080c92e751"
+  },
+  "CASE-008": {
+    "model_fingerprint": "sha256:c0babd2586333ac0f029964e841ee3450f1ff6919039602ba03f54b6b86ed4b1",
+    "semantic_fingerprint": "sha256:dc1c6656a44556a792229e7beaba5017b70f78b276038042751b950824d693f0"
+  },
+  "CASE-010": {
+    "model_fingerprint": "sha256:f55053fccf7cb4b03fe5276b17d9f8f7afca56b17cba878294ebe5a7e6055125",
+    "semantic_fingerprint": "sha256:7792786b6cfed77dc5dea5463220936df3e336389868687eada62f683ffd9183"
+  },
+  "CASE-011": {
+    "model_fingerprint": "sha256:a0a3597e5cfd690460c38338144fc15aba4d6581cb5b55a1f02f5a24fb4cda87",
+    "semantic_fingerprint": "sha256:5f7acc9b59c7d347f992e5f097a7d58fcee8feedb0ad5d12363dcaa674c2abde"
+  },
+  "CASE-012": {
+    "model_fingerprint": "sha256:b3187247cb6a715780b1bdf452e37aad7b27b30e3862a36a751139ee32d11ccb",
+    "semantic_fingerprint": "sha256:27b69808a86640384f0668f10c9a72c133c775fcb156d32a7222ec485908b8a4"
+  },
+  "CASE-013": {
+    "model_fingerprint": "sha256:3da1c4e3534ab34f7dc6d7844cdee4d00b7be83b899c70c2e59be9c01094b224",
+    "semantic_fingerprint": "sha256:f4998c0e818b80fc68faaec87d602bbe97b1da382bf3105bc08e962f4ed7154e"
+  },
+  "CASE-014": {
+    "model_fingerprint": "sha256:39843ba6b8e9de343c7025cea82320564c5e24a8b157e8c5289ea2ef70446629",
+    "semantic_fingerprint": "sha256:692b77a7766998828e5b73fae3ffcbd301ab9a8d27e42faab683e1a4b5f4719b"
+  },
+  "CASE-015": {
+    "model_fingerprint": "sha256:a9d0ad1664b6b179965ebbf4295406d4b6e56ea82394969ad331542081cd6b70",
+    "semantic_fingerprint": "sha256:92532aa896806923ca9b2d2b9b5a5b5e147526df0413bba22de979fff0fda68d"
+  },
+  "CASE-016": {
+    "model_fingerprint": "sha256:3f362e519dbb0e0f4a3540db490147bf71fcdf0afad65050d26410fddec143a1",
+    "semantic_fingerprint": "sha256:cfe38ec6d87cf5f64f9e749bdc2cb21dd818de72ad5b905d6d3cd02366d42e73"
+  },
+  "CASE-017": {
+    "model_fingerprint": "sha256:830ec77e335852bce547f2528ada21ac9349bed23e2ec5a88883e4bb6845179c",
+    "semantic_fingerprint": "sha256:68762d41d7e0d154b7147fc33c7627337c437b1657d8dc42c857d0182cf5ec20"
+  },
+  "CASE-018": {
+    "model_fingerprint": "sha256:1b54140f441dea4d4c9cd0d40ea039e4e63485d9c42d22422bdd7efe09c1ff40",
+    "semantic_fingerprint": "sha256:55f703e719ea854ff4bd42583802d54558004d71738ae8b46b82d59527b85fe3"
+  },
+  "CASE-019": {
+    "model_fingerprint": "sha256:1566fa90e2fc4f0d2f53cae790ec9e6688f93f077e8515f080c600a88c443849",
+    "semantic_fingerprint": "sha256:1e9d3d32306d76416f7adc2fe4d30204a013cab891eab8d5ebba31a0c20b8172"
+  },
+  "CASE-020": {
+    "model_fingerprint": "sha256:72675d30a0d7712ad8dda95f01f46e8bbeeeb3f20c0f0d0a8191ee8ef0048e86",
+    "semantic_fingerprint": "sha256:b7415c0dbf0af6541f93b6e0a37bcf45936224754b7d4610093c0e441c257770"
+  }
+}

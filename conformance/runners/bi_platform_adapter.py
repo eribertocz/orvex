@@ -25,6 +25,24 @@ ERROR_CODES = {
     "INCOMPATIBLE_UNITS": "INCOMPATIBLE_UNITS",
 }
 
+# Declarations the product requires (#280 §3) that bi-platform does not state, written
+# explicitly here and nowhere else (Owner decision of 2026-11-01, #291). The imported corpus files
+# stay unchanged; nothing is a default. (model name, metric name) -> payload members.
+EXPLICIT_DECLARATIONS: dict[tuple[str, str], dict[str, Any]] = {
+    # COUNT(DISTINCT ...): bi-platform asks to recompute the distinct count on every axis
+    # ("distinct_recompute"), which is a holistic aggregate.
+    ("case-008", "active_customers"): {"aggregate_class": "holistic"},
+    # actual_revenue / target_revenue: a ratio recomputed from its two metrics. No target is
+    # zero in the case's data, so a zero denominator is refused; the rounding is the case's own
+    # CAST to DECIMAL(18, 2), which rounds half away from zero.
+    ("case-010", "attainment"): {
+        "additivity": "recomputable",
+        "components": {"numerator": "actual_revenue", "denominator": "target_revenue"},
+        "zero_denominator": "reject",
+        "rounding": {"scale": 2, "mode": "half_away_from_zero"},
+    },
+}
+
 # bi-platform manifest outcome -> what the case expects.
 OUTCOMES = {"result": "result", "compile_error": "error"}
 
@@ -338,8 +356,14 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
     for metrics in metric_lists:
         for metric in metrics:
             metric_data = _own(metric)
+            explicit = EXPLICIT_DECLARATIONS.get(
+                (str(translated.get("name")), str(metric.get("name")))
+            )
+            if metric_data is None and explicit is not None:
+                metric_data = {}
             if metric_data is not None:
                 members = _translate_metric(metric, metric_data, time_dimensions, bridge_datasets)
+                members.update(explicit or {})
                 if "over_metrics" in members:
                     # An expression over metrics is no Ossie expression (spec L424): it moves,
                     # text unchanged, under the product's dialect token, which the declared
