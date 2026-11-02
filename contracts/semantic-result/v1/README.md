@@ -155,7 +155,8 @@ Its fixtures, one per rule, are beside its tests (`packages/semantic/tests/resul
 ## The Arrow form
 
 The same result as an Arrow table:
-- each column has its `store/v1` Arrow type and keeps the `duckdb_type` field metadata key, which holds its `encoding`; a masked column is `utf8` and not nullable;
+- each column has its `store/v1` Arrow type and keeps the `duckdb_type` field metadata key, which holds its `encoding`;
+- a masked column is `utf8` and not nullable; every other field is nullable, because a state cell is Arrow null even in a column whose descriptor says `nullable: false` (the descriptor's `nullable` is about `NULL` values and travels in `semantic.nullable`);
 - the field metadata carries the descriptor under neutral keys, `semantic.<member>` (`semantic.member`, `semantic.role`, `semantic.logical`, `semantic.unit`, …): strings as they are, anything else as RFC 8785 text;
 - a state cell and a real `NULL` are both Arrow null; the schema metadata key `semantic.cell_states` holds the RFC 8785 bytes of the envelope's `cell_states`, and `semantic.others_row` the index of the "Others" row, when there is one. `cell_states` tells a state from a `NULL`.
 

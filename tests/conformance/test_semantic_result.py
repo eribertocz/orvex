@@ -19,6 +19,7 @@ import duckdb
 import pyarrow as pa
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from orvex.semantic import SemanticError
 from orvex.semantic.result import CellState, SemanticResult, read_result
 from orvex.store.json_encoding import arrow_to_json
 
@@ -222,3 +223,16 @@ def test_canonical_bytes_are_equal_across_processes_and_hash_seeds() -> None:
         assert run.returncode == 0, run.stderr[-2000:]
         assert run.stdout.strip() == here
     assert GOLDEN.read_text("ascii").strip() == here
+
+
+def test_an_empty_page_with_a_masked_column_and_a_notice_reveals_no_builder_detail() -> None:
+    data = table({"region": pa.array([], pa.string()), "phone": pa.array([], pa.string())})
+    notice = SemanticError("FILTER_INTERSECTION_EMPTY", {"member": "consumers.region"})
+    result = detail(data, [text("region"), masked("phone")], notices=[notice])
+    document = wire(result)
+    assert document["rows"] == []
+    assert document["row_count"] == 0
+    assert [n["code"] for n in document["notices"]] == ["FILTER_INTERSECTION_EMPTY"]
+    for form in (result.wire(arrow_to_json).encode(), result.canonical(arrow_to_json)):
+        assert b"consumers.region" not in form
+    assert read_result(json.dumps(document), result.arrow()).cells == ()

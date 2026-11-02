@@ -366,10 +366,11 @@ def test_a_masked_member_discloses_nothing_of_itself() -> None:
 
 
 def test_an_empty_filter_intersection_gives_zero_rows_and_its_notice() -> None:
-    data = table({"region": pa.array([], pa.string())})
+    data = table({"region": pa.array([], pa.string()), "phone": pa.array([], pa.string())})
+    columns = [text("region"), masked("phone")]  # an empty page with a masked column too
     notice = SemanticError("FILTER_INTERSECTION_EMPTY", {"member": "consumers.region"})
-    builder = detail(data, [text("region")], notices=[notice], audience="builder", locale="en")
-    other = detail(data, [text("region")], notices=[notice], locale="en")
+    builder = detail(data, columns, notices=[notice], audience="builder", locale="en")
+    other = detail(data, columns, notices=[notice], locale="en")
     assert builder.envelope()["row_count"] == 0
     assert builder.envelope()["notices"] == [
         {
@@ -387,6 +388,21 @@ def test_an_empty_filter_intersection_gives_zero_rows_and_its_notice() -> None:
     assert seen["audience"] == "other"
     assert seen["details"] == {}
     assert "consumers.region" not in json.dumps(other.envelope())
+    assert "consumers.region" not in str(other.arrow().schema)
+
+
+def test_only_a_masked_field_is_non_nullable_in_arrow() -> None:
+    """A state is Arrow null even in a column whose values are never NULL, so the Arrow field
+    stays nullable; `semantic.nullable` keeps what the descriptor says."""
+    data = table({"region": pa.array(["north", None]), "units": pa.array([3, None])})
+    columns = [text("region", role="dimension"), integer("units", "BIGINT", 64, True,
+               role="metric", nullable=False)]  # fmt: skip
+    states = [CellState(1, 0, "others"), CellState(1, 1, "undefined_at_total")]
+    schema = aggregate(data, columns, states=states, others_row=1).arrow().schema
+    assert schema.field("units").nullable is True
+    assert schema.field("units").metadata[b"semantic.nullable"] == b"false"
+    phone = detail(table({"phone": pa.array(["***"])}), [masked("phone")]).arrow().schema
+    assert phone.field("phone").nullable is False
 
 
 def test_the_detail_last_page_has_no_cursor_and_a_page_may_carry_one() -> None:

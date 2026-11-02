@@ -60,8 +60,7 @@ describe('ossie-extensions v1 types', () => {
 
 describe('semantic-result v1 types', () => {
 	it('types an unknown cell state as a state, never as a value or null', () => {
-		const future: Cell = { state: 'future_state' };
-		expectTypeOf(future).toEqualTypeOf<Cell>();
+		expectTypeOf<{ state: 'future_state' }>().toExtend<Cell>();
 		expectTypeOf<StateCell>().not.toExtend<string | number | boolean | null>();
 		expectTypeOf<Extract<Cell, object>>().toEqualTypeOf<StateCell>();
 	});

@@ -149,9 +149,10 @@ def arrow_field(column: Mapping[str, object], arrow: pa.DataType) -> pa.Field:
     for key in FIELD_KEYS:
         if key in column:
             metadata[f"semantic.{key}".encode()] = _metadata_text(column[key])
-    return pa.field(
-        str(column["name"]), arrow, nullable=column["nullable"] is True, metadata=metadata
-    )
+    # A state cell is Arrow null even in a column whose values are never NULL, so only a masked
+    # column (every cell its mask) is a non-nullable Arrow field.
+    nullable = column.get("masked") is not True
+    return pa.field(str(column["name"]), arrow, nullable=nullable, metadata=metadata)
 
 
 def _is_true(scalar: pa.Scalar) -> bool:
@@ -170,7 +171,9 @@ def _check_column(
     if spec.mask is not None:
         if declared not in {None, b"VARCHAR"} or not field.type.equals(pa.string()):
             raise InvalidResult("masked_values", f"column {name!r} carries a typed value")
-        if data.null_count or not _is_true(pc.all(pc.equal(data, spec.mask))):
+        # min_count=0: an empty column (a page with no rows) holds nothing but the mask.
+        every = pc.all(pc.equal(data, spec.mask), options=pc.ScalarAggregateOptions(min_count=0))
+        if data.null_count or not _is_true(every):
             raise InvalidResult("masked_values", f"column {name!r} holds more than its mask")
         return
     encoding = str(column["encoding"])
