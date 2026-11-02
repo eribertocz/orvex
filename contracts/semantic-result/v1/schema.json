@@ -75,6 +75,26 @@
       "items": {
         "$ref": "#/$defs/Notice"
       }
+    },
+    "receipt": {
+      "description": "The reference to this result's receipt (`receipt` v1, P2-07): its identity and reproducibility class.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "reproducibility"
+      ],
+      "properties": {
+        "receipt_id": {
+          "$ref": "#/$defs/Fingerprint"
+        },
+        "reproducibility": {
+          "enum": [
+            "exact",
+            "explainable"
+          ]
+        }
+      }
     }
   },
   "allOf": [

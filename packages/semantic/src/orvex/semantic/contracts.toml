@@ -2,5 +2,5 @@
 # produces: { "<contract>" = "vN" }; consumes: { "<contract>" = ["vN", ...] }.
 # The server checks the installed combination before it starts.
 
-produces = { "semantic-error" = "v1", "semantic-query" = "v1", "semantic-result" = "v1" }
+produces = { "receipt" = "v1", "semantic-error" = "v1", "semantic-query" = "v1", "semantic-result" = "v1" }
 consumes = { "store" = ["v1"] }

@@ -134,9 +134,14 @@ def _check_arrow(
                 raise InvalidResult("arrow_disagrees", f"cell {row_index, index}")
 
 
-def read_result(document: str | Mapping[str, object], arrow: pa.Table | None = None) -> ReadResult:
+def read_result(
+    document: str | Mapping[str, object],
+    arrow: pa.Table | None = None,
+    receipt: Mapping[str, Any] | None = None,
+) -> ReadResult:
     """The cells of a `semantic-result` v1 document, or `InvalidResult`. Given its Arrow form,
-    it also checks that both forms state the same cells."""
+    it also checks that both forms state the same cells; given a view of its receipt, that the
+    result's reference names that receipt."""
     parsed = strict_json(document) if isinstance(document, str) else document
     problems = sorted(schema_validator().iter_errors(parsed), key=lambda e: list(e.path))
     if problems:
@@ -161,6 +166,15 @@ def read_result(document: str | Mapping[str, object], arrow: pa.Table | None = N
     _check_cells(rows, columns, by_cell)
     if arrow is not None:
         _check_arrow(arrow, parsed, columns, rows, entries)
+    if receipt is not None:
+        reference = parsed.get("receipt")
+        if (
+            not isinstance(reference, Mapping)
+            or reference.get("receipt_id") != receipt.get("receipt_id")
+            or reference.get("reproducibility") != receipt.get("reproducibility", {}).get("class")
+            or parsed["query_fingerprint"] != receipt.get("query_fingerprint")
+        ):
+            raise InvalidResult("receipt", "the result does not reference this receipt")
     cells = tuple(
         tuple(
             _cell(cell, column, by_cell.get((row_index, column_index)))

@@ -370,6 +370,18 @@ class Notice(BaseModel):
     ]
 
 
+class Receipt(BaseModel):
+    """
+    The reference to this result's receipt (`receipt` v1, P2-07): its identity and reproducibility class.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    receipt_id: Fingerprint
+    reproducibility: Literal["exact", "explainable"]
+
+
 class SemanticResult(BaseModel):
     """
     Every answer of the semantic engine: typed, exact, self-describing columns, rows, cell states and paging (README).
@@ -390,3 +402,7 @@ class SemanticResult(BaseModel):
     page: Page
     others_row: Count | None = None
     notices: Annotated[list[Notice], Field(max_length=64)]
+    receipt: Receipt | None = None
+    """
+    The reference to this result's receipt (`receipt` v1, P2-07): its identity and reproducibility class.
+    """
