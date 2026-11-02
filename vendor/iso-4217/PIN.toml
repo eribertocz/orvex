@@ -1,0 +1,19 @@
+# ISO 4217 currency codes, vendored for P2-04d (#290). The maintenance agency (SIX Group) publishes
+# the list without stated reuse terms; this copy is the datasets/currency-codes package, whose
+# selection and formatting are dedicated to the public domain (ODC-PDDL-1.0; see
+# datapackage.json). Currency codes are facts of the standard.
+#
+# The product reads `packages/semantic/src/orvex/semantic/compiler/registries/iso4217.csv`, derived from
+# `codes-all.csv`: every alphabetic code with no withdrawal date, except XXX (no currency) and XTS
+# (testing), which are not currencies. packages/semantic/tests/test_units.py checks the
+# hashes and the derivation.
+
+repository = "https://github.com/datasets/currency-codes"
+commit = "31cfa1380316ecc8a213fd6e17ec46cea49a3991"
+upstream_source = "https://www.six-group.com/en/products-services/financial-information/market-reference-data/data-standards.html"
+license = "ODC-PDDL-1.0"
+excluded = ["XTS", "XXX"]
+
+[sha256]
+"codes-all.csv" = "c4b6829a966f0564e77dc6c2d100d268cce61b30f7637bf3d5ec626b0393407f"
+"datapackage.json" = "4d375be4a155aeaa9fe080d8d84d231046b541bdb5667679d5ee5c5347d6886f"

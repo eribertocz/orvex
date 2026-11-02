@@ -19,3 +19,4 @@ namespaces = true
 [tool.setuptools.package-data]
 "orvex.semantic" = ["py.typed", "contracts.toml"]
 "orvex.semantic.ossie" = ["ossie-extensions-v1.json", "revisions/*/*"]
+"orvex.semantic.compiler" = ["registries/*"]

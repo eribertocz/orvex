@@ -233,3 +233,33 @@ def test_the_catalog_adapter_maps_every_corpus_type_and_refuses_an_unknown_one()
     }
     with pytest.raises(ValueError, match="float32"):
         adapter.translate_catalog({"t": {"a": "float32"}})
+
+
+def test_case_017_combined_revenue_is_incompatible_units() -> None:
+    """P2-04d (#290): the case's requested `revenue_usd + revenue_bob`, declared as the derived
+    metric its README describes, is refused before execution, with no conversion."""
+    path = ROOT / CORPUS / "models" / "CASE-017.yaml"
+    translated, _ = adapter.translate(raw(path), VENDORS[0])
+    text = "revenue_usd + revenue_bob"
+    payload = {
+        "version": 1,
+        "element": "metric",
+        "over_metrics": {"expression": text, "align": {"grain": ["record"], "time": "record"}},
+    }
+    translated["metrics"].append(
+        {
+            "name": "combined",
+            "expression": {"dialects": [{"dialect": VENDORS[0], "expression": text}]},
+            "custom_extensions": [{"vendor_name": VENDORS[0], "data": json.dumps(payload)}],
+        }
+    )
+    for form, content in (
+        ("json", json.dumps(translated).encode()),
+        ("yaml", yaml.safe_dump(translated, sort_keys=False).encode()),
+    ):
+        loaded = read(content, f"semantic/CASE-017.ossie.{form}", VENDORS)
+        parsed = parse_model(loaded, VENDORS)
+        with pytest.raises(SemanticError) as caught:
+            type_model(loaded, parsed, catalog(path))
+        assert caught.value.code == "INCOMPATIBLE_UNITS"
+        assert list(cast(list[str], caught.value.details["units"])) == ["USD", "BOB"]

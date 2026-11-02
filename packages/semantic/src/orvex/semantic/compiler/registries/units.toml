@@ -1,0 +1,72 @@
+# The product's registry of ratio-scale units (P2-04d, #290; #280 §2), written for this project
+# under Apache-2.0. Codes follow the case-sensitive syntax of UCUM (https://ucum.org) so that a
+# declared unit reads as UCUM writes it; the UCUM tables themselves are not copied. Each factor
+# is an exact rational number from the SI definitions (BIPM, The International System of Units,
+# 9th edition) or from the unit's own definition.
+#
+# A unit is `value` times its `unit` (an expression over earlier entries). `metric = true`
+# admits the prefixes below. Units on an interval or logarithmic scale (degrees Celsius, decibels)
+# and units whose factor is not rational (degrees of arc) are not ratio-scale, so they are not
+# here. The registry only grows; changing a factor is a new registry version.
+
+version = 1
+
+# Base units: each is its own dimension.
+base = ["m", "g", "s", "A", "K", "mol", "cd"]
+
+[prefixes]
+Y = "1e24"
+Z = "1e21"
+E = "1e18"
+P = "1e15"
+T = "1e12"
+G = "1e9"
+M = "1e6"
+k = "1e3"
+h = "1e2"
+da = "1e1"
+d = "1e-1"
+c = "1e-2"
+m = "1e-3"
+u = "1e-6"
+n = "1e-9"
+p = "1e-12"
+f = "1e-15"
+a = "1e-18"
+z = "1e-21"
+y = "1e-24"
+
+[units]
+# Dimensionless.
+"%" = { value = "1e-2", unit = "1" }
+"[ppth]" = { value = "1e-3", unit = "1" }
+"[ppm]" = { value = "1e-6", unit = "1" }
+"[ppb]" = { value = "1e-9", unit = "1" }
+# Time.
+min = { value = "60", unit = "s" }
+h = { value = "60", unit = "min" }
+d = { value = "24", unit = "h" }
+wk = { value = "7", unit = "d" }
+a_j = { value = "365.25", unit = "d" }
+mo_j = { value = "1", unit = "a_j/12" }
+# Area, volume and mass.
+ar = { value = "100", unit = "m2", metric = true }
+L = { value = "1", unit = "dm3", metric = true }
+l = { value = "1", unit = "dm3", metric = true }
+t = { value = "1e3", unit = "kg", metric = true }
+# Mechanics.
+Hz = { value = "1", unit = "s-1", metric = true }
+N = { value = "1", unit = "kg.m/s2", metric = true }
+Pa = { value = "1", unit = "N/m2", metric = true }
+bar = { value = "1e5", unit = "Pa", metric = true }
+J = { value = "1", unit = "N.m", metric = true }
+W = { value = "1", unit = "J/s", metric = true }
+# Electricity.
+C = { value = "1", unit = "A.s", metric = true }
+V = { value = "1", unit = "J/C", metric = true }
+Ohm = { value = "1", unit = "V/A", metric = true }
+S = { value = "1", unit = "Ohm-1", metric = true }
+F = { value = "1", unit = "C/V", metric = true }
+Wb = { value = "1", unit = "V.s", metric = true }
+T = { value = "1", unit = "Wb/m2", metric = true }
+H = { value = "1", unit = "Wb/A", metric = true }

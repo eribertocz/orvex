@@ -694,3 +694,182 @@ def test_a_calculated_expression_buckets_in_its_fields_own_zone() -> None:
         (label, tree), *_ = typed.members[f("day")].payload
         assert label == "calculated"
         assert tree.type.bucket_zone == "Asia/Tokyo"
+
+
+# --- P2-04d (#290): units and currencies -------------------------------------------------------
+
+
+def measured(*metrics: Model, model: Model | None = None) -> Model:
+    """The base model with fields that declare units and currencies."""
+    return base(
+        *metrics,
+        fields=[
+            field("amount_usd", "amount", semantic_type="amount", currency="USD"),
+            field("amount_bob", "amount", semantic_type="amount", currency="BOB"),
+            field("rate", "unit_price", semantic_type="quantity", unit="BOB/USD"),
+            field("energy", "unit_price", semantic_type="quantity", unit="kW.h"),
+            field("power", "unit_price", semantic_type="quantity", unit="kW"),
+            field("hours", "quantity", semantic_type="quantity", unit="h"),
+            field("distance", "unit_price", semantic_type="quantity", unit="km"),
+            field("metres", "unit_price", semantic_type="quantity", unit="m"),
+        ],
+        model=model,
+    )
+
+
+def unit_of(document: Model, member: MemberId) -> list[str | None]:
+    found = []
+    for typed in typed_both(document):
+        unit = typed.members[member].type.unit
+        found.append(None if unit is None else unit.text)
+    return found
+
+
+def incompatible(document: Model) -> list[list[str]]:
+    found = []
+    for error in failure_both(document):
+        assert error.code == "INCOMPATIBLE_UNITS"
+        found.append(list(cast(list[str], error.details["units"])))
+    return found
+
+
+def test_case_017_dollars_plus_bolivianos_is_incompatible() -> None:
+    document = measured(
+        metric("revenue_usd", "SUM(sales.amount_usd)"),
+        metric("revenue_bob", "SUM(sales.amount_bob)"),
+        derived_metric("combined", "revenue_usd + revenue_bob"),
+    )
+    assert incompatible(document) == [["USD", "BOB"], ["USD", "BOB"]]
+    document = measured(metric("x", "SUM(sales.amount_usd + sales.amount_bob)"))
+    assert incompatible(document) == [["USD", "BOB"], ["USD", "BOB"]]
+
+
+def derived_metric(name: str, text: str) -> Model:
+    payload = {
+        "version": 1,
+        "element": "metric",
+        "over_metrics": {"expression": text, "align": {"grain": ["month"], "time": "month"}},
+    }
+    return {
+        "name": name,
+        "expression": {"dialects": [{"dialect": CURRENT, "expression": text}]},
+        "custom_extensions": [{"vendor_name": CURRENT, "data": json.dumps(payload)}],
+    }
+
+
+def test_dollars_times_a_rate_in_bolivianos_per_dollar_is_bolivianos() -> None:
+    document = measured(
+        metric("converted", "SUM(sales.amount_usd * sales.rate)"),
+        metric("declared", "SUM(sales.amount_usd * sales.rate)", currency="BOB"),
+    )
+    assert unit_of(document, m("converted")) == ["BOB", "BOB"]
+    assert unit_of(document, m("declared")) == ["BOB", "BOB"]
+    wrong = measured(metric("x", "SUM(sales.amount_usd * sales.rate)", currency="USD"))
+    assert incompatible(wrong) == [["USD", "BOB"], ["USD", "BOB"]]
+
+
+def test_an_unknown_unit_or_currency_is_an_extension_error() -> None:
+    pointer = "/datasets/0/fields/14/custom_extensions/0/data"
+    for payload in ({"unit": "xyz"}, {"unit": "kh"}, {"currency": "ZZZ"}, {"currency": "XXX"}):
+        kind = "amount" if "currency" in payload else "quantity"
+        document = base(fields=[field("x", "amount", semantic_type=kind, **payload)])
+        for error in failure_both(document):
+            assert problems(error) == [("extension", pointer)]
+    document = base(metric("x", "SUM(sales.amount)", unit="kg", currency="USD"))
+    for error in failure_both(document):
+        assert problems(error) == [("extension", "/metrics/0/custom_extensions/0/data")]
+
+
+def test_kw_times_h_is_kw_h_and_nothing_is_converted() -> None:
+    document = measured(metric("x", "SUM(sales.power * sales.hours) + SUM(sales.energy)"))
+    assert unit_of(document, m("x")) == ["kW.h", "kW.h"]
+    assert incompatible(measured(metric("x", "SUM(sales.distance + sales.metres)"))) == [
+        ["km", "m"],
+        ["km", "m"],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("expression", "units"),
+    [
+        ("SUM(sales.amount_usd + sales.amount)", ["USD", "undeclared"]),  # undeclared never adds
+        ("SUM(sales.amount_usd) + COUNT(sales.sale_id)", ["USD", "1"]),
+        ("COUNT(sales.sale_id) FILTER (WHERE sales.amount_usd > sales.amount_bob)", ["USD", "BOB"]),
+        (
+            "SUM(CASE WHEN sales.flag THEN sales.amount_usd ELSE sales.amount_bob END)",
+            ["USD", "BOB"],
+        ),
+        ("SUM(COALESCE(sales.amount_usd, sales.amount_bob))", ["USD", "BOB"]),
+        ("SUM(GREATEST(sales.energy, sales.power))", ["kW.h", "kW"]),
+        ("MAX(SQRT(sales.energy))", ["kW.h", "1"]),
+        ("MAX(LN(sales.energy))", ["kW.h", "1"]),
+    ],
+)
+def test_mixed_units_are_incompatible(expression: str, units: list[str]) -> None:
+    assert incompatible(measured(metric("x", expression))) == [units, units]
+
+
+@pytest.mark.parametrize(
+    ("expression", "unit"),
+    [
+        ("SUM(sales.amount_usd) + 1", "USD"),  # a bare literal takes its partner's unit
+        ("SUM(sales.amount_usd * 2)", "USD"),
+        ("COUNT(sales.amount_usd)", "1"),
+        ("AVG(sales.energy)", "kW.h"),
+        ("MIN(sales.energy)", "kW.h"),
+        ("MAX(sales.energy)", "kW.h"),
+        ("MEDIAN(sales.energy)", "kW.h"),
+        ("VARIANCE(sales.amount_usd)", "USD2"),
+        ("SUM(sales.amount_usd) / SUM(sales.hours)", "USD/h"),
+        ("SUM(sales.power * sales.hours) / SUM(sales.energy)", "1"),
+        ("SUM(sales.amount)", None),
+        ("SUM(sales.amount_usd * sales.amount)", None),  # undeclared stays undeclared
+    ],
+)
+def test_aggregates_and_products_carry_units(expression: str, unit: str | None) -> None:
+    assert unit_of(measured(metric("x", expression)), m("x")) == [unit, unit]
+
+
+def test_a_count_is_an_integer_with_unit_one_and_never_null() -> None:
+    for typed in typed_both(measured(metric("x", "COUNT(sales.amount_usd)"))):
+        x = typed.members[m("x")].type
+        assert (x.logical.datatype, x.nullable) == ("Integer", False)
+        assert x.unit is not None
+        assert x.unit.dimensions == ()
+
+
+_SPELLINGS = [
+    ["kW.h", "h.kW", "W.h.10*3"],
+    ["kW"],
+    ["L", "dm3", "l"],
+    ["m3"],
+    ["USD"],
+    ["BOB", "USD.BOB/USD"],
+    ["km", "m.10*3"],
+    ["m"],
+]
+
+
+@settings(max_examples=60, deadline=None)
+@given(st.integers(0, 7), st.integers(0, 7), st.data())
+def test_addition_succeeds_iff_normalized_units_are_equal(
+    a: int, b: int, data: st.DataObject
+) -> None:
+    left = data.draw(st.sampled_from(_SPELLINGS[a]))
+    right = data.draw(st.sampled_from(_SPELLINGS[b]))
+    document = base(
+        metric("x", "SUM(sales.left_value + sales.right_value)"),
+        fields=[
+            field("left_value", "unit_price", semantic_type="quantity", unit=left),
+            field("right_value", "unit_price", semantic_type="quantity", unit=right),
+        ],
+    )
+    loaded = read(content(document, "json"), "semantic/shop.ossie.json", VENDORS)
+    parsed = parse_model(loaded, VENDORS)
+    if a == b:
+        typed = type_model(loaded, parsed, CATALOG)
+        assert typed.members[m("x")].type.unit is not None
+    else:
+        with pytest.raises(SemanticError) as caught:
+            type_model(loaded, parsed, CATALOG)
+        assert caught.value.code == "INCOMPATIBLE_UNITS"
