@@ -677,36 +677,8 @@
         },
         "encoding": {
           "description": "The `store/v1` transport type, which fixes the Arrow type and the `ResultJson` encoding (README mapping table).",
-          "anyOf": [
-            {
-              "enum": [
-                "TINYINT",
-                "SMALLINT",
-                "INTEGER",
-                "BIGINT",
-                "HUGEINT",
-                "UTINYINT",
-                "USMALLINT",
-                "UINTEGER",
-                "UBIGINT",
-                "UHUGEINT",
-                "VARCHAR",
-                "BOOLEAN",
-                "FLOAT",
-                "DOUBLE",
-                "DATE",
-                "TIMESTAMP",
-                "TIMESTAMP WITH TIME ZONE",
-                "UUID",
-                "BLOB",
-                "INTERVAL"
-              ]
-            },
-            {
-              "type": "string",
-              "pattern": "^DECIMAL\\(([1-9]|[12][0-9]|3[0-8]),([0-9]|[12][0-9]|3[0-8])\\)$"
-            }
-          ]
+          "type": "string",
+          "pattern": "^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|UHUGEINT|VARCHAR|BOOLEAN|FLOAT|DOUBLE|DATE|TIMESTAMP|TIMESTAMP WITH TIME ZONE|UUID|BLOB|INTERVAL|DECIMAL\\(([1-9]|[12][0-9]|3[0-8]),([0-9]|[12][0-9]|3[0-8])\\))$"
         },
         "semantic_type": {
           "enum": [

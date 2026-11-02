@@ -239,16 +239,6 @@ class DecimalLogical(BaseModel):
     scale: Annotated[int, Field(ge=0, le=38)]
 
 
-class Encoding(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(pattern="^DECIMAL\\(([1-9]|[12][0-9]|3[0-8]),([0-9]|[12][0-9]|3[0-8])\\)$"),
-    ]
-    """
-    The `store/v1` transport type, which fixes the Arrow type and the `ResultJson` encoding (README mapping table).
-    """
-
-
 class Column(BaseModel):
     """
     A column: what it is and how its values are encoded.
@@ -264,31 +254,12 @@ class Column(BaseModel):
     apply: Annotated[list[Name] | None, Field(max_length=32, min_length=1)] = None
     bucket: Bucket | None = None
     logical: Logical | None = None
-    encoding: (
-        Literal[
-            "TINYINT",
-            "SMALLINT",
-            "INTEGER",
-            "BIGINT",
-            "HUGEINT",
-            "UTINYINT",
-            "USMALLINT",
-            "UINTEGER",
-            "UBIGINT",
-            "UHUGEINT",
-            "VARCHAR",
-            "BOOLEAN",
-            "FLOAT",
-            "DOUBLE",
-            "DATE",
-            "TIMESTAMP",
-            "TIMESTAMP WITH TIME ZONE",
-            "UUID",
-            "BLOB",
-            "INTERVAL",
-        ]
-        | Encoding
-    )
+    encoding: Annotated[
+        str,
+        Field(
+            pattern="^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|UHUGEINT|VARCHAR|BOOLEAN|FLOAT|DOUBLE|DATE|TIMESTAMP|TIMESTAMP WITH TIME ZONE|UUID|BLOB|INTERVAL|DECIMAL\\(([1-9]|[12][0-9]|3[0-8]),([0-9]|[12][0-9]|3[0-8])\\))$"
+        ),
+    ]
     """
     The `store/v1` transport type, which fixes the Arrow type and the `ResultJson` encoding (README mapping table).
     """

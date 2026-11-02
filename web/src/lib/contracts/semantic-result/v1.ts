@@ -90,30 +90,7 @@ export interface Column {
 	/**
 	 * The `store/v1` transport type, which fixes the Arrow type and the `ResultJson` encoding (README mapping table).
 	 */
-	encoding:
-		| (
-				| 'TINYINT'
-				| 'SMALLINT'
-				| 'INTEGER'
-				| 'BIGINT'
-				| 'HUGEINT'
-				| 'UTINYINT'
-				| 'USMALLINT'
-				| 'UINTEGER'
-				| 'UBIGINT'
-				| 'UHUGEINT'
-				| 'VARCHAR'
-				| 'BOOLEAN'
-				| 'FLOAT'
-				| 'DOUBLE'
-				| 'DATE'
-				| 'TIMESTAMP'
-				| 'TIMESTAMP WITH TIME ZONE'
-				| 'UUID'
-				| 'BLOB'
-				| 'INTERVAL'
-		  )
-		| string;
+	encoding: string;
 	semantic_type?:
 		| 'identifier'
 		| 'category'
