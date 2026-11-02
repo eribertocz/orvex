@@ -53,9 +53,9 @@ def placeholders(template: str) -> set[str]:
     return {field for _, field, _, _ in string.Formatter().parse(template) if field is not None}
 
 
-def test_the_catalog_has_37_codes_and_every_file_lists_them_all() -> None:
+def test_the_catalog_has_38_codes_and_every_file_lists_them_all() -> None:
     enumerated = set(DEFS["SemanticErrorCode"]["enum"])
-    assert len(enumerated) == 37
+    assert len(enumerated) == 38
     assert set(CODES) == enumerated
     assert {variant["properties"]["code"]["const"] for variant in variants()} == enumerated
     for locale, catalog in MESSAGES.items():
@@ -105,12 +105,14 @@ def test_only_the_budget_estimate_is_optional() -> None:
     }
 
 
-def test_severity_is_error_except_the_warning_and_the_notice() -> None:
+def test_severity_is_error_except_the_warning_and_the_notices() -> None:
     assert {code for code, e in CODES.items() if e["severity"] != "error"} == {
         "DEPRECATED_METRIC",
+        "FILTER_INTERSECTION_EMPTY",
         "POLICY_ATTRIBUTE_MISSING",
     }
     assert CODES["DEPRECATED_METRIC"]["severity"] == "warning"
+    assert CODES["FILTER_INTERSECTION_EMPTY"]["severity"] == "notice"
     assert CODES["POLICY_ATTRIBUTE_MISSING"]["severity"] == "notice"
 
 

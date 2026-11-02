@@ -1,0 +1,90 @@
+{
+  "cell_states": [
+    {
+      "column": 0,
+      "row": 2,
+      "state": "others"
+    },
+    {
+      "column": 2,
+      "row": 2,
+      "state": "undefined_at_total"
+    }
+  ],
+  "columns": [
+    {
+      "encoding": "VARCHAR",
+      "exactness": "exact",
+      "logical": {
+        "family": "String"
+      },
+      "member": {
+        "dataset": "sales",
+        "name": "region"
+      },
+      "name": "region",
+      "nullable": true,
+      "role": "dimension"
+    },
+    {
+      "encoding": "DECIMAL(18,2)",
+      "exactness": "exact",
+      "logical": {
+        "family": "Decimal",
+        "precision": 18,
+        "scale": 2
+      },
+      "member": {
+        "name": "revenue"
+      },
+      "name": "revenue",
+      "nullable": true,
+      "role": "metric"
+    },
+    {
+      "encoding": "DOUBLE",
+      "exactness": "approximate",
+      "logical": {
+        "family": "Float"
+      },
+      "member": {
+        "name": "growth"
+      },
+      "name": "growth",
+      "nullable": true,
+      "role": "metric"
+    }
+  ],
+  "kind": "semantic_result",
+  "mode": "aggregate",
+  "model_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "notices": [],
+  "others_row": 2,
+  "page": {
+    "truncated": false
+  },
+  "query_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "row_count": 3,
+  "version": 1,
+  "rows": [
+    [
+      "north",
+      "1250.00",
+      0.5
+    ],
+    [
+      "south",
+      "990.00",
+      -0.25
+    ],
+    [
+      {
+        "state": "others"
+      },
+      "310.00",
+      {
+        "state": "undefined_at_total"
+      }
+    ]
+  ]
+}

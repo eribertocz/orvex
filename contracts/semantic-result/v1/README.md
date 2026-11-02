@@ -145,7 +145,20 @@ The reference reader (`orvex.semantic`, P2-06b) and the producer (`build_result`
 - column names are unique;
 - `row_count` equals the rows;
 - a `Decimal` descriptor's precision and scale equal its encoding's, with the scale at most the precision;
+- the role follows the mode: `dimension` or `metric` in `aggregate`, `field` in `detail`;
+- a masked column appears only in `detail` mode (a masked member cannot be grouped, `MEMBER_MASKED`);
+- a column that is not masked states its `logical` type and its `exactness`, and a `Float` is `approximate`;
 - every cell-state rule above.
+
+Its fixtures, one per rule, are beside its tests (`packages/semantic/tests/result_fixtures`): the schema accepts each, and only the reader refuses it.
+
+## The Arrow form
+
+The same result as an Arrow table:
+- each column has its `store/v1` Arrow type and keeps the `duckdb_type` field metadata key, which holds its `encoding`;
+- a masked column is `utf8` and not nullable; every other field is nullable, because a state cell is Arrow null even in a column whose descriptor says `nullable: false` (the descriptor's `nullable` is about `NULL` values and travels in `semantic.nullable`);
+- the field metadata carries the descriptor under neutral keys, `semantic.<member>` (`semantic.member`, `semantic.role`, `semantic.logical`, `semantic.unit`, …): strings as they are, anything else as RFC 8785 text;
+- a state cell and a real `NULL` are both Arrow null; the schema metadata key `semantic.cell_states` holds the RFC 8785 bytes of the envelope's `cell_states`, and `semantic.others_row` the index of the "Others" row, when there is one. `cell_states` tells a state from a `NULL`.
 
 ## Page cursors (detail mode)
 
@@ -178,6 +191,8 @@ Either way, its bytes reveal no sort-key value, fingerprint, snapshot or page si
 - On live engines (after v1.0.0), rows may move between pages, and each page's receipt carries its read instant (ADR-0027 §5, P2-07).
 
 A cursor holds nothing the page did not show: its sort keys are visible members. A masked member cannot be sorted (`MEMBER_MASKED`), and a hidden one cannot be referenced.
+
+**The issue and verify contract** (`orvex.semantic.result.cursors`). A cursor form implements `issue(binding, state)` and `open(cursor, binding)`, which gives back the state of a genuine cursor issued under exactly that binding, and nothing otherwise. `verify_cursor(form, cursor, binding, snapshot)` holds the refusal rules for every form: the binding is computed anew for each request with the caller's current security context; `snapshot` says whether the cursor's data version is available, expired, or one the route never serves (another data version). A conformance suite (`packages/semantic/tests/test_page_cursors.py`) runs unchanged against a sealed and a server-side test form; the form that ships (P2-12) joins it.
 
 ## Canonical form
 

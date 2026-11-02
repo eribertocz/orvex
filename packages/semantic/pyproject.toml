@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.14"
-dependencies = ["orvex-contracts==0.2.0", "jsonschema==4.26.0", "pyyaml==6.0.3", "tzdata==2026.5"]
+dependencies = ["orvex-contracts==0.2.0", "jsonschema==4.26.0", "pyarrow==26.0.0", "pyyaml==6.0.3", "tzdata==2026.5"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -21,3 +21,4 @@ namespaces = true
 "orvex.semantic.ossie" = ["ossie-extensions-v1.json", "revisions/*/*"]
 "orvex.semantic.compiler" = ["registries/*"]
 "orvex.semantic.query" = ["semantic-query-v1.json"]
+"orvex.semantic.result" = ["semantic-result-v1.json"]

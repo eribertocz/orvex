@@ -47,6 +47,10 @@
     "generic": "Unos filtros dependen unos de otros en círculo.",
     "builder": "Los filtros dependen unos de otros en círculo: {filters}."
   },
+  "FILTER_INTERSECTION_EMPTY": {
+    "generic": "Los filtros se excluyen entre sí, así que ninguna fila coincide.",
+    "builder": "Los filtros sobre {member} se excluyen entre sí, así que ninguna fila coincide."
+  },
   "ILLEGAL_GRAIN_TRANSITION": {
     "generic": "La métrica {metric} no se puede calcular con este nivel de detalle.",
     "builder": "La métrica {metric} no se puede llevar al nivel {grain}."

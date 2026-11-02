@@ -100,6 +100,7 @@ class SemanticErrorCode(
             "EVIDENCE_VIOLATED",
             "FANOUT_NOT_ISOLATABLE",
             "FILTER_CYCLE",
+            "FILTER_INTERSECTION_EMPTY",
             "ILLEGAL_GRAIN_TRANSITION",
             "ILLEGAL_TEMPORAL_REAGGREGATION",
             "INCOMPATIBLE_UNITS",
@@ -141,6 +142,7 @@ class SemanticErrorCode(
         "EVIDENCE_VIOLATED",
         "FANOUT_NOT_ISOLATABLE",
         "FILTER_CYCLE",
+        "FILTER_INTERSECTION_EMPTY",
         "ILLEGAL_GRAIN_TRANSITION",
         "ILLEGAL_TEMPORAL_REAGGREGATION",
         "INCOMPATIBLE_UNITS",
@@ -1822,6 +1824,63 @@ class WindowUndefinedAtTotalError(BaseModel):
     details: WindowUndefinedAtTotalDetails
 
 
+class FilterIntersectionEmptyDetails(BaseModel):
+    """
+    Details of FILTER_INTERSECTION_EMPTY, as a builder sees them.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    member: Name
+
+
+class FilterIntersectionEmptyPublicDetails(BaseModel):
+    """
+    Details of FILTER_INTERSECTION_EMPTY for any other audience: its builder fields are left out.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+
+
+class FilterIntersectionEmptyError(BaseModel):
+    """
+    FILTER_INTERSECTION_EMPTY as a builder sees it.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["FILTER_INTERSECTION_EMPTY"]
+    severity: Literal["notice"]
+    category: Literal["query"]
+    audience: Literal["builder"]
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: FilterIntersectionEmptyDetails
+
+
+class FilterIntersectionEmptyPublicError(BaseModel):
+    """
+    FILTER_INTERSECTION_EMPTY as any other audience sees it: the generic message and public details only.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["FILTER_INTERSECTION_EMPTY"]
+    severity: Literal["notice"]
+    category: Literal["query"]
+    audience: Literal["other"]
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: FilterIntersectionEmptyPublicDetails
+
+
 class PageCursorInvalidError(BaseModel):
     """
     PAGE_CURSOR_INVALID: every detail is public, so both audiences see them all.
@@ -1898,6 +1957,8 @@ class SemanticError(
         | FanoutNotIsolatablePublicError
         | FilterCycleError
         | FilterCyclePublicError
+        | FilterIntersectionEmptyError
+        | FilterIntersectionEmptyPublicError
         | IllegalGrainTransitionError
         | IllegalGrainTransitionPublicError
         | IllegalTemporalReaggregationError
@@ -1957,6 +2018,8 @@ class SemanticError(
         | FanoutNotIsolatablePublicError
         | FilterCycleError
         | FilterCyclePublicError
+        | FilterIntersectionEmptyError
+        | FilterIntersectionEmptyPublicError
         | IllegalGrainTransitionError
         | IllegalGrainTransitionPublicError
         | IllegalTemporalReaggregationError
