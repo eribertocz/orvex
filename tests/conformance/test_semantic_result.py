@@ -48,9 +48,12 @@ def wire(result: SemanticResult) -> dict[str, Any]:
 
 
 def arrow_of(sql: str) -> pa.Table:
-    relation = duckdb.sql(sql)
-    assert relation is not None
-    return relation.to_arrow_table()
+    """`sql`'s result on a private connection: the module-wide default one may be busy with
+    another test's unfinished result."""
+    with duckdb.connect() as connection:
+        relation = connection.sql(sql)
+        assert relation is not None
+        return relation.to_arrow_table()
 
 
 def exact_table() -> pa.Table:
@@ -213,7 +216,9 @@ def test_canonical_bytes_are_equal_across_processes_and_hash_seeds() -> None:
             capture_output=True,
             text=True,
             env=environment,
-            check=True,
+            cwd=ROOT,
+            check=False,
         )
+        assert run.returncode == 0, run.stderr[-2000:]
         assert run.stdout.strip() == here
     assert GOLDEN.read_text("ascii").strip() == here
