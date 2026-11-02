@@ -14,7 +14,7 @@ from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies import PolicyModel, read_policies
 
-from tests.support.policies import CATALOG, GROUPS, MANAGED_TABLES, MODEL, VENDORS
+from tests.support.policies import CATALOG, GROUPS, MANAGED_TABLES, MODEL, VENDORS, extension
 
 ROOT = Path(__file__).resolve().parents[3]
 EXAMPLES = ROOT / "contracts/catalog/v1/examples"
@@ -38,6 +38,9 @@ def described() -> Document:
             node["description"] = "The zone the customer belongs to."
         if node["name"] == "phone":
             node["description"] = "phone-canary-description"
+            node["custom_extensions"] = [
+                extension({"element": "field", "semantic_type": "category"})
+            ]
     return document
 
 
@@ -79,6 +82,9 @@ def catalog(
 def names(found: Document, dataset: str) -> list[str]:
     entry = next(d for d in found["datasets"] if d["name"] == dataset)
     return [f["name"] for f in entry["fields"]] + [m["name"] for m in entry["metrics"]]
+
+
+UNIT_CANARY = "[ppth]"
 
 
 def field_of(found: Document, dataset: str, name: str) -> Document:
@@ -142,7 +148,10 @@ def test_a_masked_field_shows_only_that_it_is_masked_text() -> None:
     customers = next(d for d in found["datasets"] if d["name"] == "customers")
     phone = next(f for f in customers["fields"] if f["name"] == "phone")
     assert phone == {"name": "phone", "masked": True, "encoding": "VARCHAR"}
+    for canary in ("phone-canary-description", "category", "String"):
+        assert canary not in json.dumps(phone), canary
     assert "phone-canary-description" not in json.dumps(found)
+    assert '"category"' not in json.dumps(found)
     tail = next(f for f in customers["fields"] if f["name"] == "phone_tail")
     assert tail == {"name": "phone_tail", "masked": True, "encoding": "VARCHAR"}  # inherited
 
@@ -362,3 +371,145 @@ def test_a_malformed_context_is_refused(change: Document) -> None:
 def test_a_differently_quoted_spelling_of_a_hidden_member_stays_hidden() -> None:
     found = catalog(column_policies=[{"member": 'customers."NATIONAL_ID"', "default": "hidden"}])
     assert "national_id" not in names(found, "customers")
+
+
+# --- the Reviewer's first pass: each finding covered for its class ----------------------------
+
+CORPUS = ROOT / "conformance/semantic-corpus/bi-platform/models"
+
+
+def test_a_hidden_grain_dimension_is_never_named() -> None:
+    document = described()
+    customers = next(d for d in document["datasets"] if d["name"] == "customers")
+    customers["custom_extensions"] = [
+        extension({"element": "dataset", "grain": {"dimensions": ["customer_id", "national_id"]}})
+    ]
+    viewer = catalog(document)
+    assert "national_id" not in json.dumps(viewer).lower()
+    entry = next(d for d in viewer["datasets"] if d["name"] == "customers")
+    assert "grain" not in entry
+    collections = catalog(document, groups=frozenset({"collections"}))
+    entry = next(d for d in collections["datasets"] if d["name"] == "customers")
+    assert entry["grain"] == ["customer_id", "national_id"]
+
+
+@pytest.mark.parametrize("named", ["identified", "running", "phone_tail", "customers.phone_tail"])
+def test_a_description_naming_an_inherited_protected_member_is_omitted(named: str) -> None:
+    document = described()
+    customers = next(d for d in document["datasets"] if d["name"] == "customers")
+    zone = next(f for f in customers["fields"] if f["name"] == "zone_id")
+    zone["description"] = f"Use with {named} when needed."
+    viewer = catalog(document)
+    assert "description" not in field_of(viewer, "customers", "zone_id")
+    assert f"Use with {named}" not in json.dumps(viewer)
+    assert field_of(catalog(document, builder=True), "customers", "zone_id")["description_flagged"]
+
+
+NOT_YET = {"CASE-006", "CASE-009", "CASE-021"}  # compile after P2-13, P2-17 and P2-20 (#283)
+
+
+def corpus_case(case: str) -> tuple[CompiledModel, Any]:
+    from orvex.semantic.compiler.catalog import SourceColumn
+
+    from conformance.runners import bi_platform_adapter as adapter
+
+    path = CORPUS / f"{case}.yaml"
+    translated, _ = adapter.translate(yaml.safe_load(path.read_text("utf-8")), VENDORS[0])
+    written = yaml.safe_load(path.with_name(f"{case}.catalog.yaml").read_text("utf-8"))
+    source_catalog = {
+        source: {column: SourceColumn(*shape) for column, shape in columns.items()}
+        for source, columns in adapter.translate_catalog(written).items()
+    }
+    loaded = read(json.dumps(translated).encode(), f"semantic/{case}.ossie.json", VENDORS)
+    return compile_model(loaded, source_catalog, VENDORS), source_catalog
+
+
+@pytest.mark.parametrize(
+    "case", sorted(f"CASE-{n:03d}" for n in range(1, 22) if f"CASE-{n:03d}" not in NOT_YET)
+)
+def test_export_over_every_compiling_corpus_model(case: str) -> None:
+    compiled, source_catalog = corpus_case(case)
+    entry = compiled.ossie.registry_entry
+    lossless = export_model(compiled, role="builder", target_entry=entry, mode="with_extensions")
+    again = compile_model(
+        read(lossless.content, compiled.ossie.path, VENDORS), source_catalog, VENDORS
+    )
+    assert again.model_fingerprint == compiled.model_fingerprint
+    standard = export_model(compiled, role="builder", target_entry=entry, mode="standard_only")
+    assert len(standard.losses) == len(compiled.ossie.product_extensions)
+    assert read(standard.content, compiled.ossie.path, VENDORS).product_extensions == ()
+
+
+def test_a_model_without_policies_lists_everything() -> None:
+    compiled = compiled_from(described())
+    policies = read_policies("version: 1\n", compiled, groups=GROUPS, managed_tables=MANAGED_TABLES)
+    found = catalog_for(compiled, policies, groups=(), builder=False)
+    listed = {
+        (d["name"], m["name"]) for d in found["datasets"] for m in [*d["fields"], *d["metrics"]]
+    }
+    expected = {
+        (d["name"], node["name"])
+        for d in described()["datasets"]
+        for node in [*d["fields"], *d.get("metrics", [])]
+    }
+    assert listed == expected
+    assert len(found["metrics"]) == len(described()["metrics"])
+    assert len(found["relationships"]) == len(described()["relationships"])
+
+
+def visible_when() -> list[Document]:
+    return [
+        {
+            "member": "customers.segment",
+            "default": "visible",
+            "mask": "*",
+            "visible_when": "zone_id = $z",
+        }
+    ]
+
+
+def test_a_cell_policy_dataset_is_listed_by_name_only() -> None:
+    # A cell policy needs a visible or masked default, so its member is always seen and the
+    # dataset is listed by name only; the absent case is covered with a hierarchy policy above.
+    hidden_all = [
+        {"member": f"customers.{n}", "default": "hidden"}
+        for n in ("customer_id", "zone_id", "national_id", "phone", "phone_tail")
+    ]
+    for policies in (visible_when(), [*visible_when(), *hidden_all]):
+        found = catalog(column_policies=policies)
+        entry = next(d for d in found["datasets"] if d["name"] == "customers")
+        assert entry == {"name": "customers", "available": False, "reason": "not_available_yet"}
+        assert "zone_id = $z" not in json.dumps(found)
+
+
+def test_an_author_and_a_viewer_with_the_same_groups_see_the_same_catalog() -> None:
+    from orvex.semantic.catalog import catalog_for_context
+
+    compiled = compiled_from(described())
+    policies = policies_for(compiled)
+    for groups in ([], ["analysts"], ["collections"]):
+        author = catalog_for_context(
+            compiled, policies, context_document(role="author", groups=groups)
+        )
+        viewer = catalog_for_context(
+            compiled, policies, context_document(role="viewer", groups=groups)
+        )
+        assert author == viewer
+
+
+def test_a_masked_numeric_field_reveals_neither_its_unit_nor_its_type() -> None:
+    document = described()
+    profiles = next(d for d in document["datasets"] if d["name"] == "profiles")
+    score = next(f for f in profiles["fields"] if f["name"] == "score")
+    score["custom_extensions"] = [extension({"element": "field", "unit": UNIT_CANARY})]
+    masked = [{"member": "profiles.score", "default": "masked", "mask": "*"}]
+    found = catalog(document, column_policies=masked)
+    assert field_of(found, "profiles", "score") == {
+        "name": "score",
+        "masked": True,
+        "encoding": "VARCHAR",
+    }
+    assert UNIT_CANARY not in json.dumps(found)
+    assert '"Integer"' not in json.dumps(field_of(found, "profiles", "score"))
+    shown = catalog(document, column_policies=[])
+    assert field_of(shown, "profiles", "score")["unit"] == UNIT_CANARY

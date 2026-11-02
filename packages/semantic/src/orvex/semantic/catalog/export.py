@@ -68,28 +68,26 @@ def _plain(value: object) -> Any:  # noqa: ANN401 - a JSON document
     return value
 
 
+def _order(pointer: str) -> list[int | str]:
+    return [int(part) if part.isdigit() else part for part in pointer.split("/")]
+
+
 def _remove(document: dict[str, Any], pointers: Sequence[str]) -> None:
-    """Remove the list items at `pointers` (`/…/custom_extensions/<n>`), last first."""
-    for pointer in sorted(
-        pointers, key=lambda p: [int(x) if x.isdigit() else x for x in p.split("/")], reverse=True
-    ):
+    """Remove the list items at `pointers` (`/…/custom_extensions/<n>`), last first. A
+    `custom_extensions` list this export empties is removed; one empty in the source stays."""
+    emptied: list[tuple[Any, str]] = []
+    for pointer in sorted(pointers, key=_order, reverse=True):
         *path, index = pointer.lstrip("/").split("/")
-        node: Any = document
-        for part in path:
-            node = node[int(part)] if isinstance(node, list) else node[part]
-        del node[int(index)]
-    _drop_empty(document)
-
-
-def _drop_empty(node: Any) -> None:  # noqa: ANN401
-    if isinstance(node, dict):
-        if node.get("custom_extensions") == []:
-            del node["custom_extensions"]
-        for value in node.values():
-            _drop_empty(value)
-    elif isinstance(node, list):
-        for value in node:
-            _drop_empty(value)
+        owner: Any = document
+        for part in path[:-1]:
+            owner = owner[int(part)] if isinstance(owner, list) else owner[part]
+        entries = owner[path[-1]]
+        del entries[int(index)]
+        if not entries:
+            emptied.append((owner, path[-1]))
+    for owner, key in emptied:
+        if owner.get(key) == []:
+            del owner[key]
 
 
 def export_model(compiled: CompiledModel, *, role: str, target_entry: str, mode: Mode) -> Export:

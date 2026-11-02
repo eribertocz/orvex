@@ -33,6 +33,8 @@ A **masked field** is only `{name, masked: true, encoding: "VARCHAR"}`.
   - a dataset with no visible member;
   - a relationship with a hidden end, or with a hidden or masked key.
 
+  A relationship carries no `role` today, because the model payload declares none.
+
   `model_fingerprint` identifies the model and is the same for every caller; it says nothing about which members are hidden.
 - **Masked shows nothing of itself.** No type, unit, semantic type, exactness, nullity or description.
 - **Unavailable datasets** (Owner decision of 2026-11-02). A dataset that a policy not yet executable (hierarchy, `visible_when`, a minimum group size) makes unusable is listed as `{name, available: false, reason: "not_available_yet"}`, with no members. It is listed only when its existence is authorized, that is, when the caller would see at least one of its members. Otherwise it is absent. A model metric that reads an unavailable dataset is absent.
@@ -40,8 +42,9 @@ A **masked field** is only `{name, masked: true, encoding: "VARCHAR"}`.
   - The compiler flags it when it names a protected member, by its name alone or as `dataset.member`, as a whole word in any case.
   - A flagged description is omitted for every caller without builder permission.
   - Builders see it with `description_flagged: true` until the modeler fixes it.
+  - The check is lexical: a paraphrase that names no protected member is not caught. The modeler owns the text.
 - **Roles never widen visibility.** Visibility follows the caller's groups alone. An administrator or editor sees what their groups allow, and builder permission only shows flagged descriptions (#238).
-- **The caller's context** is a `security-context` v1 document built for this request (P2-09). A malformed one is refused, never read as a caller with other permissions.
+- **The caller's context** is a `security-context` v1 document built for this request (P2-09). A malformed one is refused, never read as a caller with other permissions. A catalog built for one context is never served under another: a cached catalog is reused only when `may_reuse` confirms the caller's current permission fingerprint, and the server composition (P2-27) applies that check.
 
 ## Ossie export (ADR-0030 §5)
 - **`with_extensions`:** the model document's own bytes, lossless.

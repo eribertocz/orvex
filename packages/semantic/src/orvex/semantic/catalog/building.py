@@ -64,11 +64,13 @@ def _logical(logical: LogicalType) -> dict[str, object]:
     return found
 
 
-def protected_names(policies: PolicyModel) -> list[str]:
-    """The names of every member a column policy protects, as `dataset.member` and alone."""
+def protected_names(compiled: CompiledModel, policies: PolicyModel) -> list[str]:
+    """The names, alone and as `dataset.member`, of every member that is not visible to some
+    caller: protected by its own policy or by inheritance. With no groups a caller has the
+    strictest view, since groups only widen it."""
     names: set[str] = set()
-    for member, rule in policies.column_policies.items():
-        if rule.default != "visible" or rule.conditional:
+    for member in compiled.members:
+        if policies.protection(member, ()) != "visible":
             names.add(member.name.lower())
             if member.dataset:
                 names.add(f"{member.dataset.lower()}.{member.name.lower()}")
@@ -111,7 +113,7 @@ def catalog_for(
         e.pointer.rsplit("/custom_extensions/", 1)[0]: e.payload
         for e in compiled.ossie.product_extensions
     }
-    protected = protected_names(policies)
+    protected = protected_names(compiled, policies)
 
     def level(member: MemberId) -> str:
         return policies.protection(member, groups)
@@ -177,8 +179,15 @@ def catalog_for(
             "available": True,
         }
         grain = payloads.get(f"/datasets/{at}", {}).get("grain")
-        if isinstance(grain, Mapping) and _items(grain, "dimensions"):
-            entry["grain"] = [str(d) for d in _items(grain, "dimensions")]
+        dimensions = (
+            [str(d) for d in _items(grain, "dimensions")] if isinstance(grain, Mapping) else []
+        )
+        # The grain is listed whole or not at all: a partial grain would misstate it, and a
+        # hidden dimension must never be named.
+        if dimensions and all(
+            level(MemberId("field", name, sql.normalize(d))) == "visible" for d in dimensions
+        ):
+            entry["grain"] = dimensions
         entry["fields"] = fields
         entry["metrics"] = metrics
         datasets.append(entry)
