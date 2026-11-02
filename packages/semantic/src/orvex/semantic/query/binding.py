@@ -129,8 +129,12 @@ def _pointer(path: Sequence[object]) -> str:
     return "".join("/" + str(part).replace("~", "~0").replace("/", "~1") for part in path)
 
 
+def _pointer_order(pointer: str) -> tuple[tuple[int, int | str], ...]:
+    return tuple((0, int(p)) if p.isdigit() else (1, p) for p in pointer.split("/")[1:])
+
+
 def _invalid(problems: list[tuple[str, str]]) -> SemanticError:
-    ordered = sorted(set(problems))
+    ordered = sorted(set(problems), key=lambda found: (_pointer_order(found[0]), found[1]))
     shown = ordered[:MAX_PROBLEMS]
     return SemanticError(
         "QUERY_INVALID",
@@ -164,15 +168,23 @@ _NAME_SLOTS = frozenset({"role", "context", "calendar", "segment", "hierarchy", 
 
 
 def _text_bounds(value: object, path: tuple[object, ...]) -> Iterator[tuple[str, str]]:
-    """What the schema's shapes cannot say: values that exist, identifiers by Ossie's rule."""
+    """What the schema's shapes cannot say: values that exist, identifiers by Ossie's rule, and
+    no lone surrogate anywhere (I-JSON)."""
+    if isinstance(value, str):
+        if _surrogate(value):
+            yield _pointer(path), "schema"
+        return
     if isinstance(value, dict):
         kind = value.get("type")
         if set(value) == {"type", "value"} and isinstance(kind, str):
-            if not _exists(kind, value["value"]):
+            raw = value["value"]
+            if not _exists(kind, raw) or (isinstance(raw, str) and _surrogate(raw)):
                 yield _pointer((*path, "value")), "schema"
             return
         for key, item in value.items():
             here = (*path, key)
+            if _surrogate(key):
+                yield _pointer(here), "schema"
             if key in _MEMBER_SLOTS | _NAME_SLOTS and isinstance(item, str):
                 if not _identifiers_valid(item, key in _NAME_SLOTS):
                     yield _pointer(here), "schema"
@@ -189,17 +201,35 @@ def _text_bounds(value: object, path: tuple[object, ...]) -> Iterator[tuple[str,
             yield from _text_bounds(item, (*path, at))
 
 
+def _surrogate(text: str) -> bool:
+    return any(0xD800 <= ord(c) <= 0xDFFF for c in text)
+
+
+_TIMESTAMP = re.compile(
+    r"(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})T(?P<time>[0-9]{2}:[0-9]{2}:[0-9]{2})"
+    r"(?:\.(?P<fraction>[0-9]{1,9}))?(?P<offset>Z|[+-][0-9]{2}:[0-9]{2})?"
+)
+
+
 def _exists(kind: str, value: object) -> bool:
+    """A date or timestamp that exists, an hour below 24, an offset within ±14:00, an instant
+    that has a UTC form."""
     text = str(value)
     try:
         if kind == "date":
             date.fromisoformat(text)
         elif kind in ("timestamp", "local_timestamp"):
-            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-            offset = parsed.utcoffset()
-            if offset is not None and abs(offset) > _MAX_OFFSET:
+            matched = _TIMESTAMP.fullmatch(text)
+            if matched is None or matched.group("time").startswith("24"):
                 return False
-    except ValueError:
+            moment = datetime.fromisoformat(f"{matched.group('date')}T{matched.group('time')}")
+            offset = matched.group("offset")
+            if offset is not None and offset != "Z":
+                aware = datetime.fromisoformat(f"{moment.isoformat()}{offset}")
+                if abs(aware.utcoffset() or timedelta()) > _MAX_OFFSET:
+                    return False
+                aware.astimezone(UTC)
+    except ValueError, OverflowError:
         return False
     return True
 
@@ -245,10 +275,12 @@ class _Model:
             sql.normalize(str(r["name"])) for r in _items(document, "relationships")
         }
         self.datasets: dict[str, Json] = {}
+        self.dataset_names: dict[str, str] = {}
         self.keys: dict[str, list[str]] = {}
         for at, dataset in enumerate(_items(document, "datasets")):
             name = sql.normalize(str(dataset["name"]))
             self.datasets[name] = payloads.get(f"/datasets/{at}", {})
+            self.dataset_names[name] = str(dataset["name"])
             key = dataset.get("primary_key")
             self.keys[name] = [sql.normalize(str(k)) for k in key] if isinstance(key, tuple) else []
         self.calendars = {sql.normalize(str(c["name"])) for c in _items(model, "calendars")}
@@ -268,8 +300,11 @@ class _Model:
 
     def resolve(self, reference: str) -> MemberId | None:
         """A member as the expression language names it: `metric`, `dataset.field` or
-        `dataset.metric`."""
-        parts = [sql.normalize(part) for part in _split(reference) or []]
+        `dataset.metric`; None for anything else."""
+        written = _split(reference)
+        if written is None:
+            return None
+        parts = [sql.normalize(part) for part in written]
         if len(parts) == 1:
             found = MemberId("metric", None, parts[0])
             return found if found in self.members else None
@@ -314,9 +349,9 @@ def _references(query: Json) -> Iterator[_Reference]:
         yield _Reference(f"/group_by/{at}/member", entry["member"], slot)
     for at, entry in enumerate(query.get("fields", ())):
         yield _Reference(f"/fields/{at}/member", entry["member"], "row")
-    yield from _filter_references(query.get("filters", ()), "/filters")
-    for at, context in enumerate(query.get("contexts", ())):
-        yield from _filter_references(context["filters"], f"/contexts/{at}/filters")
+    for pointer, entry in _all_filters(query):
+        temporal = entry["predicate"]["op"] == "relative_date"
+        yield _Reference(f"{pointer}/member", entry["member"], "temporal" if temporal else "row")
     for at, entry in enumerate(query.get("metric_filters", ())):
         here = f"/metric_filters/{at}"
         yield _Reference(f"{here}/metric", entry["metric"], "metric")
@@ -336,25 +371,14 @@ def _references(query: Json) -> Iterator[_Reference]:
             yield _Reference(f"/context_modifiers/{at}/members/{number}", member, "row")
 
 
-def _filter_references(filters: Sequence[Json], at: str) -> Iterator[_Reference]:
-    for number, entry in enumerate(filters):
-        temporal = entry["predicate"]["op"] == "relative_date"
-        slot = "temporal" if temporal else "row"
-        yield _Reference(f"{at}/{number}/member", entry["member"], slot)
-
-
 def _roles(query: Json) -> Iterator[tuple[str, str]]:
     for key in ("group_by", "fields"):
         for at, entry in enumerate(query.get(key, ())):
             if "role" in entry:
                 yield f"/{key}/{at}/role", entry["role"]
-    filters = [("/filters", query.get("filters", ()))] + [
-        (f"/contexts/{at}/filters", c["filters"]) for at, c in enumerate(query.get("contexts", ()))
-    ]
-    for base, entries in filters:
-        for at, entry in enumerate(entries):
-            if "role" in entry:
-                yield f"{base}/{at}/role", entry["role"]
+    for pointer, entry in _all_filters(query):
+        if "role" in entry:
+            yield f"{pointer}/role", entry["role"]
 
 
 def _all_filters(query: Json) -> Iterator[tuple[str, Json]]:
@@ -377,12 +401,13 @@ def bind_query(
     names = _Model(model)
     resolved = _resolve_names(document, names)
     _check_kinds(document, names, resolved)
+    windows = _relative_windows(document, names, resolved, instant)
     parameters = _parameters(document, names)
     _check_as_known_at(document, names, resolved)
-    _check_metric_filters(document)
-    _check_limits(document, limits)
-    binder = _Canonical(names, resolved, instant)
+    binder = _Canonical(names, resolved, windows)
     canonical = binder.query(document, parameters)
+    _check_metric_filters(document, binder)
+    _check_limits(document, limits)
     return BoundQuery(
         canonical=cast(Mapping[str, Any], _frozen(canonical)),
         fingerprint=fingerprint("semantic_query", 1, canonical),
@@ -408,6 +433,28 @@ def _resolve_names(document: Json, names: _Model) -> dict[str, MemberId]:
     return resolved
 
 
+# A value's type must be one the member's type admits (#283: exact values, no implicit cast).
+_VALUE_TYPES: Mapping[str, frozenset[str]] = {
+    "String": frozenset({"text"}),
+    "Integer": frozenset({"integer", "decimal"}),
+    "Decimal": frozenset({"integer", "decimal"}),
+    "Float": frozenset({"integer", "decimal"}),
+    "Boolean": frozenset({"boolean"}),
+    "Date": frozenset({"date"}),
+    "DateTime": frozenset({"local_timestamp"}),
+    "DateTimeTz": frozenset({"timestamp"}),
+}
+
+
+def _filter_values(predicate: Json, at: str) -> Iterator[tuple[str, Json]]:
+    for key in ("values", "nodes"):
+        for number, value in enumerate(predicate.get(key, ())):
+            yield f"{at}/{key}/{number}", value
+    for key in ("gte", "gt", "lte", "lt"):
+        if key in predicate:
+            yield f"{at}/{key}", predicate[key]
+
+
 def _check_kinds(document: Json, names: _Model, resolved: Mapping[str, MemberId]) -> None:
     problems: list[tuple[str, str]] = []
     for reference in _references(document):
@@ -418,7 +465,10 @@ def _check_kinds(document: Json, names: _Model, resolved: Mapping[str, MemberId]
             or (reference.slot == "temporal" and names.datatype(member) not in TEMPORAL)
         ):
             problems.append((reference.pointer, "kind"))
-    contexts = {sql.normalize(c["name"]) for c in document.get("contexts", ())}
+    contexts = [sql.normalize(c["name"]) for c in document.get("contexts", ())]
+    for at, name in enumerate(contexts):
+        if name in contexts[:at]:
+            problems.append((f"/contexts/{at}/name", "kind"))  # two contexts, one name
     for at, entry in enumerate(document.get("metrics", ())):
         if "context" in entry and sql.normalize(entry["context"]) not in contexts:
             problems.append((f"/metrics/{at}/context", "kind"))
@@ -435,6 +485,12 @@ def _check_kinds(document: Json, names: _Model, resolved: Mapping[str, MemberId]
             problems.append((f"/group_by/{at}/bucket/unit", "kind"))
     for pointer, entry in _all_filters(document):
         predicate = entry["predicate"]
+        member = resolved[f"{pointer}/member"]
+        if member.kind == "field":
+            admitted = _VALUE_TYPES.get(str(names.datatype(member)))
+            for value_at, value in _filter_values(predicate, f"{pointer}/predicate"):
+                if admitted is not None and value["type"] not in admitted:
+                    problems.append((value_at, "kind"))
         if predicate["op"] == "in_segment" and (
             sql.normalize(predicate["segment"]) not in names.segments
         ):
@@ -444,7 +500,6 @@ def _check_kinds(document: Json, names: _Model, resolved: Mapping[str, MemberId]
         ):
             problems.append((f"{pointer}/predicate/hierarchy", "kind"))
         if predicate["op"] == "relative_date":
-            member = resolved[f"{pointer}/member"]
             if predicate["unit"] in _SUB_DAY and names.datatype(member) == "Date":
                 problems.append((f"{pointer}/predicate/unit", "kind"))
             elif names.datatype(member) in TEMPORAL and names.zone(member) is None:
@@ -462,44 +517,52 @@ _PARAMETER_TYPES = {
 
 
 def _parameters(document: Json, names: _Model) -> list[list[object]]:
-    """Every model parameter with its value: the query's, else the declared default."""
-    given = {sql.normalize(e["name"]): e["value"] for e in document.get("parameters", ())}
+    """Every model parameter with its value: the query's, else the declared default. A name given
+    twice with two values is refused."""
+    given: dict[str, str] = {}
+    for entry in document.get("parameters", ()):
+        name = sql.normalize(entry["name"])
+        declared = names.parameters[name]
+        kind = str(declared["type"])
+        value = entry["value"]
+        text = str(value["value"])
+        if value["type"] not in _PARAMETER_TYPES[kind] or not _parameter_ok(kind, text, names):
+            raise _parameter_invalid(declared)
+        canonical = _canonical_text(kind, text)
+        if given.get(name, canonical) != canonical:
+            raise _parameter_invalid(declared)
+        given[name] = canonical
     bound: list[list[object]] = []
     for name, declared in sorted(names.parameters.items()):
         kind = str(declared["type"])
-        if name in given:
-            value = given[name]
-            text = str(value["value"])
-            if value["type"] not in _PARAMETER_TYPES[kind] or not _parameter_ok(kind, text, names):
-                raise SemanticError(
-                    "PARAMETER_INVALID", {"parameter": str(declared["name"]), "expected": kind}
-                )
-        else:
-            text = str(declared["default"])
+        text = given.get(name, _canonical_text(kind, str(declared["default"])))
         allowed = declared.get("allowed")
-        if isinstance(allowed, tuple) and _canonical_text(kind, text) not in {
+        if isinstance(allowed, tuple) and text not in {
             _canonical_text(kind, str(a)) for a in allowed
         }:
-            raise SemanticError(
-                "PARAMETER_INVALID", {"parameter": str(declared["name"]), "expected": kind}
-            )
-        bound.append([name, kind, _canonical_text(kind, text)])
+            raise _parameter_invalid(declared)
+        bound.append([name, kind, text])
     return bound
 
 
+def _parameter_invalid(declared: Json) -> SemanticError:
+    return SemanticError(
+        "PARAMETER_INVALID", {"parameter": str(declared["name"]), "expected": str(declared["type"])}
+    )
+
+
 def _parameter_ok(kind: str, text: str, names: _Model) -> bool:
-    if kind in ("member", "metric"):
-        member = names.resolve(text)
-        return member is not None and (member.kind == "metric") == (kind == "metric")
-    return True
+    if kind == "number":
+        return re.fullmatch(r"-?(0|[1-9][0-9]*)(\.[0-9]+)?", text) is not None
+    if kind == "date":
+        return _exists("date", text)
+    member = names.resolve(text)
+    return member is not None and (member.kind == "metric") == (kind == "metric")
 
 
 def _canonical_text(kind: str, text: str) -> str:
-    if kind == "number":
-        try:
-            return _decimal(text)
-        except ArithmeticError:
-            return text
+    if kind == "number" and re.fullmatch(r"-?(0|[1-9][0-9]*)(\.[0-9]+)?", text):
+        return _number(text)
     if kind in ("member", "metric"):
         parts = _split(text)
         return ".".join(sql.normalize(p) for p in parts) if parts else text
@@ -512,18 +575,22 @@ def _check_as_known_at(document: Json, names: _Model, resolved: Mapping[str, Mem
     datasets = sorted({d for member in resolved.values() for d in names.datasets_of(member)})
     for dataset in datasets:
         if "history" not in names.datasets.get(dataset, {}):
-            raise SemanticError("AS_KNOWN_AT_UNSUPPORTED", {"dataset": dataset})
+            shown = names.dataset_names.get(dataset, dataset)
+            raise SemanticError("AS_KNOWN_AT_UNSUPPORTED", {"dataset": shown})
 
 
-def _check_metric_filters(document: Json) -> None:
-    """A metric filter is evaluated in the context of every other filter: two on one dimension
-    and scope each depend on the other (#238 rule 3)."""
-    seen: dict[tuple[str, str], str] = {}
-    for entry in document.get("metric_filters", ()):
-        key = (entry["scope"], sql.normalize(entry["dimension"]))
-        if key in seen:
-            raise SemanticError("FILTER_CYCLE", {"filters": [seen[key], entry["metric"]]})
-        seen[key] = entry["metric"]
+def _check_metric_filters(document: Json, binder: _Canonical) -> None:
+    """A metric filter is evaluated in the context of every other filter: two different ones
+    on one dimension (the resolved member) and scope each depend on the other (#238 rule 3).
+    Identical ones are one filter. The error names the metrics as the caller wrote them."""
+    seen: dict[str, tuple[str, str]] = {}
+    for at, entry in enumerate(document.get("metric_filters", ())):
+        bound = binder.metric_filter(at, entry)
+        key = json.dumps([bound[0], bound[2]])
+        written = json.dumps(bound, sort_keys=True)
+        if key in seen and seen[key][1] != written:
+            raise SemanticError("FILTER_CYCLE", {"filters": [seen[key][0], entry["metric"]]})
+        seen.setdefault(key, (entry["metric"], written))
 
 
 def _check_limits(document: Json, limits: Limits) -> None:
@@ -535,35 +602,57 @@ def _check_limits(document: Json, limits: Limits) -> None:
         )
 
 
-# --- the canonical form -------------------------------------------------------------------------
+# --- exact values -------------------------------------------------------------------------------
 
 
-def _decimal(text: str) -> str:
-    value = Decimal(text)
-    if value == 0:
-        return "0"
-    normalized = format(value.normalize(), "f")
-    return normalized
+def _number(text: str) -> str:
+    """The exact text of a number with no superfluous zeros: `1.50` → `1.5`, `-0.0` → `0`.
+    Text arithmetic only, so no digit is ever rounded."""
+    negative = text.startswith("-")
+    whole, _, fraction = text.lstrip("-").partition(".")
+    whole = whole.lstrip("0") or "0"
+    fraction = fraction.rstrip("0")
+    digits = whole + (f".{fraction}" if fraction else "")
+    return "0" if digits == "0" else ("-" if negative else "") + digits
 
 
 def _utc(text: str) -> str:
-    parsed = datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(UTC)
-    return parsed.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    """An instant in UTC, its fraction kept to the nanosecond, without trailing zeros."""
+    matched = _TIMESTAMP.fullmatch(text)
+    assert matched is not None  # checked by the text bounds
+    offset = matched.group("offset")
+    moment = datetime.fromisoformat(
+        f"{matched.group('date')}T{matched.group('time')}"
+        + ("+00:00" if offset in (None, "Z") else offset)
+    ).astimezone(UTC)
+    fraction = (matched.group("fraction") or "").rstrip("0")
+    return moment.strftime("%Y-%m-%dT%H:%M:%S") + (f".{fraction}" if fraction else "") + "Z"
+
+
+def _local(text: str) -> str:
+    matched = _TIMESTAMP.fullmatch(text)
+    assert matched is not None
+    fraction = (matched.group("fraction") or "").rstrip("0")
+    return f"{matched.group('date')}T{matched.group('time')}" + (f".{fraction}" if fraction else "")
 
 
 def _value(value: Json) -> list[object]:
+    """A value in canonical form: integers and decimals are one exact `number` (the member's
+    type applies the scale); timestamps in UTC; local timestamps as written."""
     kind, raw = value["type"], value["value"]
     if kind in ("integer", "decimal"):
-        return [kind, _decimal(str(raw))]
+        return ["number", _number(str(raw))]
     if kind == "timestamp":
         return [kind, _utc(str(raw))]
+    if kind == "local_timestamp":
+        return [kind, _local(str(raw))]
     return [kind, raw]
 
 
 def _value_order(value: list[object]) -> tuple[object, ...]:
     kind, raw = value
-    if kind in ("integer", "decimal"):
-        return (0, Decimal(str(raw)), str(kind))
+    if kind == "number":
+        return (0, Decimal(str(raw)), "")
     if kind == "boolean":
         return (1, bool(raw), "")
     return (2, str(kind), str(raw))
@@ -577,6 +666,9 @@ def _values(values: Sequence[Json]) -> list[list[object]]:
     return sorted(unique.values(), key=_value_order)
 
 
+# --- relative dates (Owner decision of 2026-11-01, #283) -----------------------------------------
+
+
 @cache
 def _zone(name: str) -> tzinfo:
     """A zone of the pinned `tzdata` package, never the host's database."""
@@ -588,7 +680,7 @@ def _zone(name: str) -> tzinfo:
 
 
 def _period_start(moment: datetime, unit: str) -> datetime:
-    """The start of the period holding `moment` (a naive local time)."""
+    """The start of the period holding `moment`, in its own wall time."""
     if unit == "minute":
         return moment.replace(second=0, microsecond=0)
     if unit == "hour":
@@ -605,38 +697,133 @@ def _period_start(moment: datetime, unit: str) -> datetime:
     return day.replace(month=1, day=1)
 
 
+_MONTHS = {"month": 1, "quarter": 3, "year": 12}
+_STEPS = {
+    "minute": timedelta(minutes=1),
+    "hour": timedelta(hours=1),
+    "day": timedelta(days=1),
+    "week": timedelta(weeks=1),
+}
+
+
 def _shift(start: datetime, unit: str, periods: int) -> datetime:
-    if unit in ("minute", "hour", "day", "week"):
-        step = {"minute": timedelta(minutes=1), "hour": timedelta(hours=1)}.get(
-            unit, timedelta(days=1 if unit == "day" else 7)
-        )
-        return start + step * periods
-    months = {"month": 1, "quarter": 3, "year": 12}[unit] * periods
-    index = start.year * 12 + start.month - 1 + months
+    if unit in _STEPS:
+        return start + _STEPS[unit] * periods
+    index = start.year * 12 + start.month - 1 + _MONTHS[unit] * periods
     return start.replace(year=index // 12, month=index % 12 + 1)
+
+
+def _days_in(year: int, month: int) -> int:
+    following = date(year + month // 12, month % 12 + 1, 1)
+    return (following - timedelta(days=1)).day
+
+
+def _cut(last: datetime, current: datetime, now: datetime, unit: str) -> datetime:
+    """The point of the last period at the same calendar position as `now` in the current one:
+    the same month within the quarter or year, the same day (at most the month's last), the
+    same time of day."""
+    if unit in _STEPS:
+        return last + (now - current)
+    month_index = last.month - 1 + (now.month - current.month)
+    year, month = last.year + month_index // 12, month_index % 12 + 1
+    day = min(now.day, _days_in(year, month))
+    return now.replace(year=year, month=month, day=day)
 
 
 def relative_range(
     instant: datetime, zone: str, unit: str, offset: int, count: int, to_date: bool
 ) -> tuple[datetime, datetime]:
-    """The closed-open local range of a relative date (Owner decision of 2026-11-01, #283):
-    `count` whole periods ending at period `offset`, the current one being 0; `to_date` cuts the
-    last period at the instant's elapsed point. Naive local wall times."""
-    local = instant.astimezone(_zone(zone)).replace(tzinfo=None)
-    current = _period_start(local, unit)
+    """The closed-open range of a relative date: `count` whole periods ending at period
+    `offset`, the current one being 0; `to_date` cuts the last period at the instant's calendar
+    position. Calendar units step in wall time; minutes and hours step in elapsed time, so a
+    daylight-saving change never stretches or empties an hour. Returns aware datetimes in the
+    zone."""
+    local_zone = _zone(zone)
+    now = instant.astimezone(local_zone)
+    if unit in _SUB_DAY:
+        current = _period_start(now, unit).astimezone(UTC)
+        utc_now = instant.astimezone(UTC)
+        last = current + _STEPS[unit] * offset
+        start = last - _STEPS[unit] * (count - 1)
+        end = last + _STEPS[unit]
+        if to_date:
+            end = min(end, last + (utc_now - current))
+        return start.astimezone(local_zone), end.astimezone(local_zone)
+    wall = now.replace(tzinfo=None)
+    current = _period_start(wall, unit)
     last = _shift(current, unit, offset)
     start = _shift(last, unit, 1 - count)
     end = _shift(last, unit, 1)
     if to_date:
-        end = min(end, last + (local - current))
-    return start, end
+        end = min(end, _cut(last, current, wall, unit))
+    return start.replace(tzinfo=local_zone), end.replace(tzinfo=local_zone)
+
+
+def _relative_windows(
+    document: Json, names: _Model, resolved: Mapping[str, MemberId], instant: datetime
+) -> dict[str, dict[str, object]]:
+    """Each relative date resolved to its absolute range, or `QUERY_INVALID` `schema` when the
+    range falls outside the calendar's years."""
+    windows: dict[str, dict[str, object]] = {}
+    problems: list[tuple[str, str]] = []
+    for pointer, entry in _all_filters(document):
+        predicate = entry["predicate"]
+        if predicate["op"] != "relative_date":
+            continue
+        member = resolved[f"{pointer}/member"]
+        zone = names.zone(member)
+        assert zone is not None  # checked with the kinds
+        try:
+            windows[pointer] = _window(predicate, str(names.datatype(member)), zone, instant)
+        except ValueError, OverflowError:
+            problems.append((f"{pointer}/predicate", "schema"))
+    if problems:
+        raise _invalid(problems)
+    return windows
+
+
+def _window(predicate: Json, datatype: str, zone: str, instant: datetime) -> dict[str, object]:
+    to_date = bool(predicate.get("to_date", False))
+    start, end = relative_range(
+        instant, zone, predicate["unit"], int(predicate["offset"]), int(predicate["count"]), to_date
+    )
+    if datatype == "Date":
+        # Whole days: a cut inside a day keeps that day.
+        cut_day = end.date() if end.time() == datetime.min.time() else end.date() + timedelta(1)
+        low, high = ["date", start.date().isoformat()], ["date", cut_day.isoformat()]
+    elif datatype == "DateTime":
+        low = ["local_timestamp", _local(start.replace(tzinfo=None).isoformat())]
+        high = ["local_timestamp", _local(end.replace(tzinfo=None).isoformat())]
+    else:
+        low = ["timestamp", _utc(start.astimezone(UTC).isoformat().replace("+00:00", "Z"))]
+        high = ["timestamp", _utc(end.astimezone(UTC).isoformat().replace("+00:00", "Z"))]
+    original = {
+        "unit": predicate["unit"],
+        "offset": _number(predicate["offset"]),
+        "count": predicate["count"],
+        "to_date": to_date,
+    }
+    return {"op": "range", "gte": low, "lt": high, "relative_date": original, "zone": zone}
+
+
+# --- the canonical form -------------------------------------------------------------------------
+
+
+def _unique_sorted(items: Sequence[object]) -> list[object]:
+    unique = {json.dumps(item, sort_keys=True): item for item in items}
+    return [unique[key] for key in sorted(unique)]
 
 
 class _Canonical:
-    def __init__(self, names: _Model, resolved: Mapping[str, MemberId], instant: datetime) -> None:
+    def __init__(
+        self,
+        names: _Model,
+        resolved: Mapping[str, MemberId],
+        windows: Mapping[str, dict[str, object]],
+    ) -> None:
         self.names = names
         self.resolved = resolved
-        self.instant = instant
+        self.windows = windows
 
     def member(self, pointer: str) -> list[str]:
         member = self.resolved[pointer]
@@ -645,25 +832,23 @@ class _Canonical:
     def query(self, document: Json, parameters: list[list[object]]) -> dict[str, object]:
         mode = document["mode"]
         found: dict[str, object] = {"kind": "semantic_query", "version": 1, "mode": mode}
-        filters = self.filters(document.get("filters", ()), "/filters")
-        found["filters"] = filters
+        found["filters"] = self.filters(document.get("filters", ()), "/filters")
         found["parameters"] = parameters
         found["as_known_at"] = _utc(document["as_known_at"]) if "as_known_at" in document else None
-        found["context_modifiers"] = sorted(
-            (
+        found["context_modifiers"] = _unique_sorted(
+            [
                 [
                     entry["op"],
                     SCOPES.index(entry["scope"]),
-                    sorted(
-                        {
-                            json.dumps(self.member(f"/context_modifiers/{at}/members/{n}"))
+                    _unique_sorted(
+                        [
+                            self.member(f"/context_modifiers/{at}/members/{n}")
                             for n in range(len(entry["members"]))
-                        }
+                        ]
                     ),
                 ]
                 for at, entry in enumerate(document.get("context_modifiers", ()))
-            ),
-            key=json.dumps,
+            ]
         )
         found["order"] = [
             [self.member(f"/order/{at}/by"), e.get("direction", "asc"), e.get("nulls", "last")]
@@ -676,7 +861,7 @@ class _Canonical:
         return found
 
     def aggregate(self, document: Json) -> dict[str, object]:
-        found: dict[str, object] = {
+        return {
             "metrics": [
                 [
                     self.member(f"/metrics/{at}/metric"),
@@ -700,28 +885,25 @@ class _Canonical:
                 ]
                 for at, e in enumerate(document.get("group_by", ()))
             ],
-            "metric_filters": sorted(
-                (
+            "metric_filters": _unique_sorted(
+                [
                     self.metric_filter(at, e)
                     for at, e in enumerate(document.get("metric_filters", ()))
-                ),
-                key=json.dumps,
+                ]
             ),
-            "contexts": sorted(
-                (
+            "contexts": _unique_sorted(
+                [
                     [
                         sql.normalize(c["name"]),
                         self.filters(c["filters"], f"/contexts/{at}/filters"),
                     ]
                     for at, c in enumerate(document.get("contexts", ()))
-                ),
-                key=json.dumps,
+                ]
             ),
             "coverage": document.get("coverage"),
             "limit": document.get("limit"),
             "top_n": self.top_n(document.get("top_n")),
         }
-        return found
 
     def metric_filter(self, at: int, entry: Json) -> list[object]:
         here = f"/metric_filters/{at}"
@@ -737,7 +919,7 @@ class _Canonical:
             SCOPES.index(entry["scope"]),
             self.member(f"{here}/metric"),
             self.member(f"{here}/dimension"),
-            sorted(grain, key=json.dumps),
+            _unique_sorted(grain),
             bound,
         ]
 
@@ -748,7 +930,7 @@ class _Canonical:
         return {
             "by": self.member("/top_n/by"),
             "n": top["n"],
-            "per": sorted(per, key=json.dumps),
+            "per": _unique_sorted(per),
             "others": top["others"],
             "ties": "member_value_ascending",
         }
@@ -759,15 +941,13 @@ class _Canonical:
             for at, e in enumerate(document["fields"])
         ]
         # The engine appends each read dataset's declared key as the final tie-breaker.
-        ordered = {
-            json.dumps(self.member(f"/order/{at}/by")) for at in range(len(document["order"]))
-        }
+        ordered = [self.member(f"/order/{at}/by") for at in range(len(document["order"]))]
         tie_breaker: list[list[str]] = []
-        for field_entry in fields_:
-            dataset = cast(list[str], field_entry[0])[1]
-            for key in self.names.keys.get(dataset, []):
+        for at in range(len(document["fields"])):
+            dataset = self.resolved[f"/fields/{at}/member"].dataset or ""
+            for key in self.names.keys[dataset]:
                 candidate = ["field", dataset, key]
-                if json.dumps(candidate) not in ordered and candidate not in tie_breaker:
+                if candidate not in ordered and candidate not in tie_breaker:
                     tie_breaker.append(candidate)
         page = document["page"]
         return {
@@ -776,21 +956,29 @@ class _Canonical:
             "page": {"size": page["size"], "after": page.get("after")},
         }
 
-    def filters(self, filters: Sequence[Json], base: str) -> list[object]:
+    def filters(self, filters: Sequence[Json], base: str) -> list[dict[str, Any]]:
+        """Sorted by scope, then member, then predicate (#283 §2); duplicates merged."""
         bound = [self.filter(entry, f"{base}/{at}") for at, entry in enumerate(filters)]
         unique = {json.dumps(entry, sort_keys=True): entry for entry in bound}
-        return sorted(unique.values(), key=lambda e: json.dumps(e, sort_keys=True))
+        return sorted(
+            unique.values(),
+            key=lambda e: (
+                e["scope"],
+                json.dumps(e["member"]),
+                json.dumps(e["role"]),
+                json.dumps(e["predicate"], sort_keys=True),
+            ),
+        )
 
-    def filter(self, entry: Json, pointer: str) -> dict[str, object]:
-        member = self.resolved[f"{pointer}/member"]
+    def filter(self, entry: Json, pointer: str) -> dict[str, Any]:
         return {
             "scope": SCOPES.index(entry["scope"]),
             "member": self.member(f"{pointer}/member"),
             "role": sql.normalize(entry["role"]) if "role" in entry else None,
-            "predicate": self.predicate(entry["predicate"], member),
+            "predicate": self.predicate(entry["predicate"], pointer),
         }
 
-    def predicate(self, predicate: Json, member: MemberId) -> dict[str, object]:
+    def predicate(self, predicate: Json, pointer: str) -> dict[str, object]:
         op = predicate["op"]
         if op == "in":
             include = bool(predicate.get("include_null", False))
@@ -803,7 +991,7 @@ class _Canonical:
             bounds = [b for b in ("gte", "gt", "lte", "lt") if b in predicate]
             return {"op": op} | {bound: _value(predicate[bound]) for bound in bounds}
         if op == "relative_date":
-            return self.relative(predicate, member)
+            return self.windows[pointer]
         if op == "in_segment":
             return {"op": op, "segment": sql.normalize(predicate["segment"])}
         if op == "descendants_of":
@@ -813,37 +1001,6 @@ class _Canonical:
                 "nodes": _values(predicate["nodes"]),
             }
         return {"op": op}
-
-    def relative(self, predicate: Json, member: MemberId) -> dict[str, object]:
-        zone = self.names.zone(member)
-        assert zone is not None  # checked with the kinds
-        datatype = self.names.datatype(member)
-        original = {
-            "unit": predicate["unit"],
-            "offset": _decimal(predicate["offset"]),
-            "count": predicate["count"],
-            "to_date": predicate.get("to_date", False),
-        }
-        start, end = relative_range(
-            self.instant,
-            zone,
-            predicate["unit"],
-            int(predicate["offset"]),
-            int(predicate["count"]),
-            bool(original["to_date"]),
-        )
-        if datatype == "Date":
-            # Whole days: a cut inside a day keeps that day.
-            last = end.date() if end.time() == datetime.min.time() else end.date() + timedelta(1)
-            low, high = ["date", start.date().isoformat()], ["date", last.isoformat()]
-        elif datatype == "DateTime":
-            low = ["local_timestamp", start.isoformat(timespec="microseconds")]
-            high = ["local_timestamp", end.isoformat(timespec="microseconds")]
-        else:
-            local = _zone(zone)
-            low = ["timestamp", _utc(start.replace(tzinfo=local).isoformat())]
-            high = ["timestamp", _utc(end.replace(tzinfo=local).isoformat())]
-        return {"op": "range", "gte": low, "lt": high, "relative_date": original, "zone": zone}
 
 
 def _frozen(value: object) -> object:

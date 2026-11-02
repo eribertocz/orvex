@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tomllib
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -249,7 +250,7 @@ def test_parameters_are_checked_against_their_declaration() -> None:
 
 def test_as_known_at_needs_history_on_every_dataset_read() -> None:
     error = failure(query(as_known_at="2026-10-01T00:00:00Z"))
-    assert (error.code, dict(error.details)) == ("AS_KNOWN_AT_UNSUPPORTED", {"dataset": "SALES"})
+    assert (error.code, dict(error.details)) == ("AS_KNOWN_AT_UNSUPPORTED", {"dataset": "sales"})
 
 
 def test_two_metric_filters_on_one_dimension_and_scope_are_a_cycle() -> None:
@@ -405,7 +406,8 @@ def test_relative_ranges(
     unit: str, offset: int, count: int, to_date: bool, expected: tuple[str, str]
 ) -> None:
     start, end = relative_range(INSTANT, "America/La_Paz", unit, offset, count, to_date)
-    assert (start.isoformat(), end.isoformat()) == expected
+    naive = (start.replace(tzinfo=None).isoformat(), end.replace(tzinfo=None).isoformat())
+    assert naive == expected
 
 
 def test_a_relative_date_binds_to_an_absolute_range_beside_the_original() -> None:
@@ -413,8 +415,8 @@ def test_a_relative_date_binds_to_an_absolute_range_beside_the_original() -> Non
     bound = bind(query(filters=[visual("sales.sold_at", predicate)]))
     resolved = bound.canonical["filters"][0]["predicate"]
     assert resolved["op"] == "range"
-    assert resolved["gte"] == ("timestamp", "2026-10-01T04:00:00.000000Z")
-    assert resolved["lt"] == ("timestamp", "2026-11-01T04:00:00.000000Z")
+    assert resolved["gte"] == ("timestamp", "2026-10-01T04:00:00Z")
+    assert resolved["lt"] == ("timestamp", "2026-11-01T04:00:00Z")
     assert resolved["relative_date"]["unit"] == "month"
     on_dates = bind(query(filters=[visual("sales.sold_on", predicate)]))
     assert on_dates.canonical["filters"][0]["predicate"]["lt"] == ("date", "2026-11-01")
@@ -625,3 +627,259 @@ def test_the_binder_reads_the_contracts_own_schema() -> None:
     packaged = ROOT / "packages/semantic/src/orvex/semantic/query/semantic-query-v1.json"
     contract = ROOT / "contracts/semantic-query/v1/schema.json"
     assert packaged.read_bytes() == contract.read_bytes()
+
+
+# --- the Reviewer's first pass: each finding covered for its class ------------------------------
+
+
+def number_filter(value: Model) -> Model:
+    return query(filters=[visual("sales.amount", {"op": "in", "values": [value]})])
+
+
+def test_exact_values_are_never_rounded() -> None:
+    big = "1234567890123456789012345678901234567890"
+    bound = bind(number_filter({"type": "integer", "value": big}))
+    assert bound.canonical["filters"][0]["predicate"]["values"] == (("number", big),)
+    one = bind(number_filter({"type": "decimal", "value": "1.0000000000000000000000000000001"}))
+    two = bind(number_filter({"type": "decimal", "value": "1.0000000000000000000000000000002"}))
+    assert one.fingerprint != two.fingerprint
+    # The member's type applies the scale: integer 1 and decimal 1.0 are one value.
+    assert (
+        bind(number_filter({"type": "integer", "value": "1"})).fingerprint
+        == bind(number_filter({"type": "decimal", "value": "1.000"})).fingerprint
+    )
+
+    def at(value: str) -> BoundQuery:
+        return bind(
+            query(
+                filters=[
+                    visual(
+                        "sales.sold_at",
+                        {"op": "range", "lt": {"type": "timestamp", "value": value}},
+                    )
+                ]
+            )
+        )
+
+    assert (
+        at("2026-01-01T00:00:00.123456789Z").fingerprint
+        != at("2026-01-01T00:00:00.123456Z").fingerprint
+    )
+    assert at("2026-01-01T00:00:00.120Z").fingerprint == at("2026-01-01T00:00:00.12Z").fingerprint
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        {"op": "relative_date", "unit": "month", "offset": "-100000", "count": "1"},
+        {"op": "relative_date", "unit": "minute", "offset": "0", "count": "999999999999999999"},
+        {
+            "op": "relative_date",
+            "unit": "minute",
+            "offset": "-99999999999999999999999",
+            "count": "1",
+        },
+        {"op": "relative_date", "unit": "day", "offset": "-999999999", "count": "1"},
+    ],
+)
+def test_a_relative_date_outside_the_calendar_is_refused(predicate: Model) -> None:
+    error = failure(query(filters=[visual("sales.sold_at", predicate)]))
+    assert problems(error) == [("schema", "/filters/0/predicate")]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"type": "timestamp", "value": "0001-01-01T00:00:00+05:00"},
+        {"type": "timestamp", "value": "9999-12-31T23:00:00-05:00"},
+        {"type": "timestamp", "value": "2026-01-01T24:00:00Z"},
+    ],
+)
+def test_an_instant_without_a_utc_form_is_refused(value: Model) -> None:
+    error = failure(query(filters=[visual("sales.sold_at", {"op": "range", "lt": value})]))
+    assert problems(error) == [("schema", "/filters/0/predicate/lt/value")]
+
+
+def test_a_lone_surrogate_is_refused() -> None:
+    error = failure(
+        query(filters=[visual("sales.region", {"op": "in", "values": [text("\ud800")]})])
+    )
+    assert {rule for rule, _ in problems(error)} == {"schema"}
+
+
+@pytest.mark.parametrize("value", ["a.b.c", "", "sales.region.", 'x"y', "revenue"])
+def test_a_member_parameter_must_name_a_member(value: str) -> None:
+    declared = [{"name": "dimension", "type": "member", "default": "sales.region"}]
+    error = failure(
+        query(parameters=[{"name": "dimension", "value": text(value)}]),
+        compiled(model(parameters=declared)),
+    )
+    assert error.code == "PARAMETER_INVALID"
+
+
+def test_duplicate_parameters_need_one_value() -> None:
+    declared = [{"name": "n", "type": "number", "default": "5"}]
+    target = compiled(model(parameters=declared))
+    five = {"name": "n", "value": {"type": "integer", "value": "5"}}
+    ten = {"name": "n", "value": {"type": "integer", "value": "10"}}
+    assert failure(query(parameters=[five, ten]), target).code == "PARAMETER_INVALID"
+    assert (
+        bind(query(parameters=[five, five]), target).fingerprint
+        == bind(query(parameters=[five]), target).fingerprint
+    )
+
+
+@pytest.mark.parametrize(
+    ("instant", "unit", "offset", "expected"),
+    [
+        # New York, fall back: 06:30Z is 01:30 EST, the second 1 a.m.
+        ("2026-11-01T06:30:00Z", "hour", 0, ("2026-11-01T06:00:00", "2026-11-01T07:00:00")),
+        ("2026-11-01T06:30:00Z", "hour", -1, ("2026-11-01T05:00:00", "2026-11-01T06:00:00")),
+        # Spring forward: 07:30Z is 03:30 EDT, right after the missing hour.
+        ("2026-03-08T07:30:00Z", "hour", -1, ("2026-03-08T06:00:00", "2026-03-08T07:00:00")),
+    ],
+)
+def test_hours_step_in_elapsed_time_across_daylight_saving(
+    instant: str, unit: str, offset: int, expected: tuple[str, str]
+) -> None:
+    moment = datetime.fromisoformat(instant)
+    start, end = relative_range(moment, "America/New_York", unit, offset, 1, False)
+    as_utc = (
+        start.astimezone(UTC).replace(tzinfo=None).isoformat(),
+        end.astimezone(UTC).replace(tzinfo=None).isoformat(),
+    )
+    assert as_utc == expected
+
+
+@pytest.mark.parametrize(
+    ("instant", "unit", "expected_end"),
+    [
+        ("2024-03-01T12:00:00+00:00", "year", "2023-03-01T12:00:00"),
+        ("2025-03-01T12:00:00+00:00", "year", "2024-03-01T12:00:00"),
+        ("2024-02-29T12:00:00+00:00", "year", "2023-02-28T12:00:00"),
+        ("2026-05-31T12:00:00+00:00", "quarter", "2026-02-28T12:00:00"),
+        ("2026-03-31T12:00:00+00:00", "month", "2026-02-28T12:00:00"),
+    ],
+)
+def test_to_date_cuts_at_the_same_calendar_position(
+    instant: str, unit: str, expected_end: str
+) -> None:
+    _, end = relative_range(datetime.fromisoformat(instant), "UTC", unit, -1, 1, True)
+    assert end.replace(tzinfo=None).isoformat() == expected_end
+
+
+def test_a_metric_filter_cycle_is_found_whatever_the_spelling() -> None:
+    def metric_filter(metric: str, dimension: str) -> Model:
+        return {
+            "scope": "visual",
+            "metric": metric,
+            "dimension": dimension,
+            "condition": {"op": "top", "n": "3"},
+        }
+
+    error = failure(
+        query(
+            metric_filters=[
+                metric_filter("revenue", "sales.region"),
+                metric_filter("buyers", '"SALES".REGION'),
+            ]
+        )
+    )
+    assert error.code == "FILTER_CYCLE"
+    same = metric_filter("revenue", "sales.region")
+    assert (
+        bind(query(metric_filters=[same, same])).fingerprint
+        == bind(query(metric_filters=[same])).fingerprint
+    )
+
+
+def test_sets_are_deduplicated_wherever_they_appear() -> None:
+    modifier = {"op": "remove", "scope": "page", "members": ["sales.region", "SALES.REGION"]}
+    once = {"op": "remove", "scope": "page", "members": ["sales.region"]}
+    assert (
+        bind(query(context_modifiers=[modifier, once])).fingerprint
+        == bind(query(context_modifiers=[once])).fingerprint
+    )
+    per = {"by": "revenue", "n": "3", "others": False, "per": ["sales.region", "sales.REGION"]}
+    assert (
+        bind(query(top_n=per)).fingerprint
+        == bind(query(top_n={**per, "per": ["sales.region"]})).fingerprint
+    )
+    contexts = [{"name": "a", "filters": [visual("sales.region", {"op": "is_null"})]}] * 2
+    renamed = [contexts[0], {**contexts[0], "name": "A"}]
+    assert problems(failure(query(contexts=renamed))) == [("kind", "/contexts/1/name")]
+
+
+def test_a_value_must_fit_its_members_type() -> None:
+    document = query(
+        filters=[
+            visual("sales.region", {"op": "range", "gte": {"type": "date", "value": "2026-01-01"}})
+        ]
+    )
+    assert problems(failure(document)) == [("kind", "/filters/0/predicate/gte")]
+
+
+def test_filters_are_ordered_by_scope_then_member() -> None:
+    filters = bind(rich()).canonical["filters"]
+    keys = [(f["scope"], f["member"]) for f in filters]
+    assert keys == sorted(keys)
+
+
+_EDGE_TEXT = st.one_of(
+    st.from_regex(r"-?[0-9]{1,30}", fullmatch=True),
+    st.from_regex(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", fullmatch=True),
+    st.from_regex(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})?",
+        fullmatch=True,
+    ),
+    st.text(max_size=6),
+    st.sampled_from(["sales.region", "revenue", "a.b.c", '"x"', "sales.sold_at"]),
+)
+
+
+def _leaves(value: object, path: tuple[object, ...] = ()) -> Iterator[tuple[object, ...]]:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from _leaves(item, (*path, key))
+    elif isinstance(value, list):
+        for at, item in enumerate(value):
+            yield from _leaves(item, (*path, at))
+    elif isinstance(value, str):
+        yield path
+
+
+def fuzz_base() -> Model:
+    document = rich()
+    document["filters"] += [
+        visual(
+            "sales.sold_at",
+            {"op": "relative_date", "unit": "month", "offset": "-1", "count": "2", "to_date": True},
+        ),
+        visual("sales.sold_on", {"op": "range", "gte": {"type": "date", "value": "2026-01-01"}}),
+        visual(
+            "sales.sold_at",
+            {"op": "range", "lt": {"type": "timestamp", "value": "2026-01-01T00:00:00Z"}},
+        ),
+    ]
+    document["top_n"] = {"by": "revenue", "n": "3", "others": True}
+    document["as_known_at"] = "2026-01-01T00:00:00Z"
+    return document
+
+
+_PATHS = list(_leaves(fuzz_base()))
+
+
+@settings(max_examples=400, deadline=None)
+@given(st.lists(st.tuples(st.sampled_from(_PATHS), _EDGE_TEXT), min_size=1, max_size=4))
+def test_any_valid_shape_with_edge_values_gives_a_bound_query_or_a_semantic_error(
+    edits: list[tuple[tuple[object, ...], str]],
+) -> None:
+    """Schema-aware: the query keeps its shape, and leaf texts take edge values."""
+    document = fuzz_base()
+    for path, value in edits:
+        node: Any = document
+        for key in path[:-1]:
+            node = node[key]
+        node[path[-1]] = value
+    with contextlib.suppress(SemanticError):
+        bind(json.dumps(document))
