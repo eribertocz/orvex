@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from decimal import Decimal
 from types import MappingProxyType
 
@@ -105,6 +105,7 @@ class CompiledModel:
     typed: TypedModel
     semantic_fingerprint: str
     model_fingerprint: str
+    ossie: OssieModel = field(repr=False, compare=False)  # the read document, for later stages
 
     def require(self, member: MemberId) -> CompiledMember:
         """The compiled member; `UNSUPPORTED_OPERATION` when it was not compiled and
@@ -643,6 +644,7 @@ def compile_model(
         typed=typed,
         semantic_fingerprint=semantic,
         model_fingerprint=whole,
+        ossie=model,
     )
 
 
