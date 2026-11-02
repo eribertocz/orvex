@@ -1,6 +1,6 @@
 # `semantic-query` contract v1
 
-**Producer:** callers of the semantic engine: `server` (HTTP, P2-27), `web`, `mcp`, and tests. **Consumer:** `semantic`, whose binder (`bind_query`, P2-05b) turns a query into one canonical, typed form or a `semantic-error` (#283).
+**Defined by** `semantic` (`contracts.toml`), whose binder (`bind_query`, P2-05b) turns a query into one canonical, typed form or a `semantic-error` (#283). **Written by** the engine's callers: `server` (HTTP, P2-27), `web`, `mcp` and tests.
 
 One closed, exact format for every question asked of the engine (`docs/architecture/semantic-engine.md` §4, "Query binding"). It carries the rules of #238 (filter scopes, metric filters, `NULL` handling) and represents S1, S2, S3, S10 and S12 from the start (ADR-0029 decision 4). It does not depend on the Ossie revision: an Ossie query interface, if adopted, is a front-end that translates into this format (#283 agent decision 4).
 
@@ -35,8 +35,8 @@ Every object is closed: an unknown member is invalid. The only JSON number is `v
 - **`top_n`** (S10): the first `n` members by the metric `by`, within each combination of `per` when given.
   - Ties are broken by the member's own value, ascending, so the result never depends on scan order.
   - `others: true` adds one "Others" row. Its value is recomputed over the remaining members, never summed from their values.
-- **`coverage`** (S3): `aligned` keeps only the members every fact covers; `full` keeps them all.
-- **`order`**: `by` is a metric or a grouped member. `direction` defaults to `asc` and `nulls` to `last`.
+- **`coverage`** (S3): the explicit choice, `aligned` or `full`, for comparing a partial period with a complete one (`semantic-engine.md` §8 S3, `COVERAGE_POLICY_REQUIRED`). Its exact semantics are bound in P2-05b and P2-11.
+- **`order`**: `by` names the metric or member to sort by. `direction` defaults to `asc` and `nulls` to `last`.
 - **`limit`**: at most this many rows.
 
 ### Detail mode (`semantic-engine.md` §9)
@@ -48,7 +48,7 @@ Every object is closed: an unknown member is invalid. The only JSON number is `v
 - **`filters`** (below).
 - **`parameters`** (S10): a value for each named model parameter.
 - **`as_known_at`** (S12): read the data as it was known at that instant. A dataset without `history` refuses it when bound.
-- **`context_modifiers`** (#238 rule 3.3): the visual's declared exceptions to the filter context. `op` is `remove` (the members' filters of that scope do not apply) or `keep` (only they apply). They are recorded in the receipt.
+- **`context_modifiers`** (#238 rule 3.3): the visual's declared exceptions to the filter context. `op` is `remove` or `keep`, applied to the named members' filters of that scope; binding and planning fix their exact effect (P2-05b onward). They are recorded in the receipt.
 
 ## Filters
 
@@ -66,7 +66,7 @@ A filter is `{scope, member, role?, predicate}`.
 | `not_in` | `values`, `exclude_null?` | The member equals none of `values`. `NULL`s are **kept** unless `exclude_null: true` (#238 rule 6); the engine never emits a bare SQL `NOT IN` |
 | `range` | `gte?` or `gt?`, `lte?` or `lt?` | At least one bound, and at most one on each side |
 | `is_null`, `is_not_null` | — | |
-| `relative_date` | `unit`, `offset`, `count`, `to_date?` | `count` whole periods of `unit`, placed `offset` periods from the current one; binding fixes the exact window (P2-05b). `to_date: true` cuts the last period at the query instant. Resolved when bound, against the query instant supplied by the caller and never the host clock, in the member's zone, else the model's `default_time_zone`; without either it is refused |
+| `relative_date` | `unit`, `offset`, `count`, `to_date?` | `count` periods of `unit`, placed `offset` periods from the current one: whole periods unless `to_date: true`. Binding fixes the exact window and the sign convention of `offset` (P2-05b). Resolved when bound, against the query instant supplied by the caller and never the host clock, in the member's zone, else the model's `default_time_zone`; without either it is refused |
 | `in_segment` | `segment` | The member is in the model's segment (S10) |
 | `descendants_of` | `hierarchy`, `nodes` | A parent-child node selects all its descendants through the declared closure. Selecting a parent of a level hierarchy is an `in` on the parent level, which also includes children added later |
 
@@ -101,6 +101,14 @@ A value is `{type, value}`. Every `value` except a boolean's is text:
 - **A name** (a role, context, calendar, segment, hierarchy, calculation item or parameter) is one identifier.
 - **Identifiers** follow Ossie's rule (`expression_language.md` L86–L88). A regular identifier is a letter or `_` followed by letters, digits or `_`, compared case-insensitively. A double-quoted one holds any text, with `""` for a quote, compared exactly.
 - An identifier holds at most 128 characters. The schema bounds the text, and the binder checks each identifier.
+
+## Text bounds
+
+The schema checks shapes only. Binding also refuses, under rule `schema`:
+- a date or timestamp that does not exist (`2026-13-45`, an hour of 25, an offset beyond ±14:00);
+- a text that only a lenient pattern engine accepts, such as one ending in a line break.
+
+It checks every identifier with Ossie's own rule, of which the schema's character class is only a bound. An identifier outside that class, such as one with a non-Latin letter beyond the Basic Multilingual Plane, is written quoted.
 
 ## Counts
 

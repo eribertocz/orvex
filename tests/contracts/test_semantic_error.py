@@ -31,6 +31,7 @@ NEW_CODES = (
     "AS_KNOWN_AT_UNSUPPORTED",
     "PARAMETER_INVALID",
     "REAGGREGATION_NOT_ALLOWED",
+    "QUERY_INVALID",
 )
 # The kinds of value a detail may hold. None of them is a data value, a secret or SQL.
 DETAIL_TYPES = {

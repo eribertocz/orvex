@@ -9,7 +9,7 @@ class Member(RootModel[str]):
     root: Annotated[
         str,
         Field(
-            max_length=300,
+            max_length=520,
             min_length=1,
             pattern='^(?:[A-Za-z_À-\uffff][A-Za-z0-9_À-\uffff]*|"(?:[^"]|"")+")(\\.(?:[A-Za-z_À-\uffff][A-Za-z0-9_À-\uffff]*|"(?:[^"]|"")+"))?$',
         ),
@@ -23,7 +23,7 @@ class Name(RootModel[str]):
     root: Annotated[
         str,
         Field(
-            max_length=150,
+            max_length=260,
             min_length=1,
             pattern='^(?:[A-Za-z_À-\uffff][A-Za-z0-9_À-\uffff]*|"(?:[^"]|"")+")$',
         ),
@@ -291,7 +291,7 @@ class SemanticQuery(BaseModel):
     top_n: TopN | None = None
     coverage: Literal["aligned", "full"] | None = None
     """
-    S3: `aligned` keeps only the members every fact covers; `full` keeps all.
+    S3: the explicit choice for comparing a partial period with a complete one (`COVERAGE_POLICY_REQUIRED`); bound in P2-05b and P2-11.
     """
     limit: Count | None = None
     fields: Annotated[list[FieldModel] | None, Field(max_length=256, min_length=1)] = None

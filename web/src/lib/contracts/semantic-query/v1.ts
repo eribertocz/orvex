@@ -197,7 +197,7 @@ export interface SemanticQuery {
 		  ];
 	top_n?: TopN;
 	/**
-	 * S3: `aligned` keeps only the members every fact covers; `full` keeps all.
+	 * S3: the explicit choice for comparing a partial period with a complete one (`COVERAGE_POLICY_REQUIRED`); bound in P2-05b and P2-11.
 	 */
 	coverage?: 'aligned' | 'full';
 	limit?: Count;

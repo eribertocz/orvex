@@ -13,8 +13,8 @@
         "rule": "schema"
       },
       {
-        "pointer": "/metrics/0/metric",
-        "rule": "kind"
+        "pointer": "/limit",
+        "rule": "schema"
       }
     ],
     "problems_omitted": "0"

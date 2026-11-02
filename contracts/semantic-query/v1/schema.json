@@ -59,7 +59,7 @@
       "$ref": "#/$defs/TopN"
     },
     "coverage": {
-      "description": "S3: `aligned` keeps only the members every fact covers; `full` keeps all.",
+      "description": "S3: the explicit choice for comparing a partial period with a complete one (`COVERAGE_POLICY_REQUIRED`); bound in P2-05b and P2-11.",
       "enum": [
         "aligned",
         "full"
@@ -160,14 +160,14 @@
       "description": "A member reference of the product's expression language: `dataset.field`, `metric` (a model metric) or `dataset.metric` (a dataset metric). Each identifier is regular or double-quoted, at most 128 characters, compared case-insensitively unless quoted (Ossie `expression_language.md` L86-L88; the length is checked at binding).",
       "type": "string",
       "minLength": 1,
-      "maxLength": 300,
+      "maxLength": 520,
       "pattern": "^(?:[A-Za-z_À-￿][A-Za-z0-9_À-￿]*|\"(?:[^\"]|\"\")+\")(\\.(?:[A-Za-z_À-￿][A-Za-z0-9_À-￿]*|\"(?:[^\"]|\"\")+\"))?$"
     },
     "Name": {
       "description": "A name declared in the model: a relationship (role), context, calendar, segment, hierarchy, calculation item or parameter.",
       "type": "string",
       "minLength": 1,
-      "maxLength": 150,
+      "maxLength": 260,
       "pattern": "^(?:[A-Za-z_À-￿][A-Za-z0-9_À-￿]*|\"(?:[^\"]|\"\")+\")$"
     },
     "Scope": {
