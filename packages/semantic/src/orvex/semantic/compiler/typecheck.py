@@ -1590,9 +1590,13 @@ def type_model(model: OssieModel, parsed: ParsedModel, catalog: SourceCatalog) -
     state.problems.raise_if_any()
 
     # The first mismatch in document order: members, then model expressions.
-    def position(member: MemberId) -> tuple[int, str]:
+    def position(member: MemberId) -> tuple[int, tuple[tuple[int, int | str], ...]]:
+        # Line, then the pointer by segment: `/metrics/2` before `/metrics/10` in JSON too.
         pointer = parsed.members[member].pointer
-        return model.line(pointer), pointer
+        segments = tuple(
+            (0, int(part)) if part.isdigit() else (1, part) for part in pointer.split("/")[1:]
+        )
+        return model.line(pointer), segments
 
     ordered = sorted(state.mismatches, key=position)
     found = [state.mismatches[m] for m in ordered] + state.expression_mismatches

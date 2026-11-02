@@ -1,0 +1,74 @@
+{
+  "CASE-001": {
+    "model_fingerprint": "sha256:592af540f94447521656a315e3d91b2baa2ef9f310fc172034653d02f7c55480",
+    "semantic_fingerprint": "sha256:eb1573b8e4d30ac3d9ee0d9a060e04e484f417eb01ca324fa75a8ae4de0a56d2"
+  },
+  "CASE-002": {
+    "model_fingerprint": "sha256:b7818d3c4ce32c862d78816c9f3046b634a85cf4f5e52c00ffb05b1d5bd18319",
+    "semantic_fingerprint": "sha256:e3e621c0866749129d37a0f81be5571e5a9886f0d5f91f03db9b4d8a63df9d7d"
+  },
+  "CASE-003": {
+    "model_fingerprint": "sha256:ea28eaa3161095987644c8eda2c8a78813d9f04935b3d2ba902898aa2a3ac3d1",
+    "semantic_fingerprint": "sha256:4ab0ae1272dd57d2e8b98d25c1885331b409c45389c2113956ae6407393c89b3"
+  },
+  "CASE-004": {
+    "model_fingerprint": "sha256:2e6c2a89e5d7b13ea4bcb52eee53ff2d16b6aea4e6b8cc5e724b08059be78fc4",
+    "semantic_fingerprint": "sha256:03f503d37ea8e093353e732e26b82d18d66f563c5b92682b6aa3e4b97c0a26f3"
+  },
+  "CASE-005": {
+    "model_fingerprint": "sha256:b2ffb8803107f4cf6ea0b785596a93e89628ea7e2a0568533fe4cd4c12329945",
+    "semantic_fingerprint": "sha256:58a2b3e388be5c823e94c5ba156f5a6b40b9fa29c5349701368a7de37e8caed1"
+  },
+  "CASE-007": {
+    "model_fingerprint": "sha256:1110983382378aeaea3bfdb5ef9f664785599b2caca4b837f133dd4804a8f531",
+    "semantic_fingerprint": "sha256:881c43e59960360c2f5f8c5fadc9e751ef718d07cd34ce08417fd3c4f1461f86"
+  },
+  "CASE-008": {
+    "model_fingerprint": "sha256:0498722a7e18978d63ea58ea97fe03348d73eb78f4c999caed57ac0babf3a474",
+    "semantic_fingerprint": "sha256:eca2596d66f2d7b622d9683ed17a91c09c596fa436d92f7bdc8ae104bdcd165a"
+  },
+  "CASE-010": {
+    "model_fingerprint": "sha256:788573e2aa2e6b50db11465eb08986699a214d03a54ad6c59522ec6e43000ee5",
+    "semantic_fingerprint": "sha256:e319d60b8b6e892de15dce7a9d4c0bf70bf52f8de6f9ca3943ac940ce3a24cdb"
+  },
+  "CASE-011": {
+    "model_fingerprint": "sha256:4a6dad997dc640e11340923f31736326fa6ba9e92d101daff2401752e16b399c",
+    "semantic_fingerprint": "sha256:d6d5e4a21988fd56a46a98e85b2c4af3a72b056f5ea6951d950e754fbbfc17b9"
+  },
+  "CASE-012": {
+    "model_fingerprint": "sha256:f749abfb4cb13025440b0d650999d388dee76fd0402f84d150a5c92cfb88b2e0",
+    "semantic_fingerprint": "sha256:65e68e256b28b8bec40c1f6149ce748c0d4b1f047f7ab5d1441190cbc7f56b2e"
+  },
+  "CASE-013": {
+    "model_fingerprint": "sha256:ed0755026ad50d287e825452b6ffa3ec67c726e70ca21dfb80824ddd0d5288a9",
+    "semantic_fingerprint": "sha256:6fbea5e061de6f59eac555f53a7208e0270097b4b39bb6ea7fe75c12b77dd064"
+  },
+  "CASE-014": {
+    "model_fingerprint": "sha256:ab06a86c809f438900581b8443dea23220d7e6e8e895f5eb7ad3ca199775b856",
+    "semantic_fingerprint": "sha256:1fb8ec5ed45738ee70a4d5810f06d023ad13728af99486ddef25e1b5ced5143b"
+  },
+  "CASE-015": {
+    "model_fingerprint": "sha256:e137cc1ecdd86ed4d691d9673a42bd0aa292e0cd30360a01320f2bae10952fc0",
+    "semantic_fingerprint": "sha256:53ca20b40fcdf35c94df015682a048aa8f31591e289df3fb9e4aabf57e76267e"
+  },
+  "CASE-016": {
+    "model_fingerprint": "sha256:a7544e949c7b77dd791deea8514c1389557e8bad277d05ffc2bdc8db65bc006e",
+    "semantic_fingerprint": "sha256:f83db0e749ded25cc791957ff06579f897e9da7b47597d0d918d18f73aa98ef3"
+  },
+  "CASE-017": {
+    "model_fingerprint": "sha256:781892802b221dde8578fab2cc30f466b3a695b0d5bb861dc1437429b2970ea1",
+    "semantic_fingerprint": "sha256:f6f15282b3b24f6129d79fab4094e18dd66fae3950908a38eb6e5ac2e992a283"
+  },
+  "CASE-018": {
+    "model_fingerprint": "sha256:84a08b891a1d85af463ae29b3ce97ece502afbff5265c9d75bafb022714b749d",
+    "semantic_fingerprint": "sha256:81348cce669c6484f54019f1898b2d9c6fa3a03afdf888fa2829fc23c518197d"
+  },
+  "CASE-019": {
+    "model_fingerprint": "sha256:a8a86b7df89dcf92c2b4904a4699973381ab0d0bdad969d79ecdcfcf8a8db827",
+    "semantic_fingerprint": "sha256:a4f41055d1545e3dd1b305287ca794cf89878dba1e254ccc65d0df1d9a441b61"
+  },
+  "CASE-020": {
+    "model_fingerprint": "sha256:23db6c22978499bea4e2103b346837da4e50e2e5e8bbb723afa645f060fe8d24",
+    "semantic_fingerprint": "sha256:e5a8999697cd8bb0e5ccf05e5cfed3c522e867899e98bf3d64ec555eee849a11"
+  }
+}
