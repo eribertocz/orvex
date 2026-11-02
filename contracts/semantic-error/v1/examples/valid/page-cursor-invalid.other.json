@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "PAGE_CURSOR_INVALID",
+  "severity": "error",
+  "category": "query",
+  "audience": "other",
+  "message": "La página solicitada ya no es válida; vuelve a pedir la primera página.",
+  "locale": "es",
+  "details": {
+    "reason": "invalid"
+  }
+}

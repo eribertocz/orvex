@@ -1,0 +1,1 @@
+'scale' is a required property

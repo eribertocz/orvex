@@ -1,0 +1,161 @@
+{
+  "kind": "semantic_result",
+  "version": 1,
+  "mode": "detail",
+  "query_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "model_fingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "columns": [
+    {
+      "name": "phone",
+      "member": {
+        "dataset": "CONSUMERS",
+        "name": "PHONE"
+      },
+      "role": "field",
+      "encoding": "BIGINT",
+      "nullable": false,
+      "masked": true,
+      "mask": "***"
+    },
+    {
+      "name": "code",
+      "member": {
+        "dataset": "CONSUMERS",
+        "name": "CODE"
+      },
+      "role": "field",
+      "logical": {
+        "family": "String"
+      },
+      "encoding": "VARCHAR",
+      "exactness": "exact",
+      "nullable": true
+    },
+    {
+      "name": "big",
+      "member": {
+        "dataset": "CONSUMERS",
+        "name": "BIG"
+      },
+      "role": "field",
+      "logical": {
+        "family": "Integer",
+        "width": 128,
+        "signed": true
+      },
+      "encoding": "HUGEINT",
+      "exactness": "exact",
+      "nullable": false
+    },
+    {
+      "name": "meter_reading",
+      "member": {
+        "dataset": "CONSUMERS",
+        "name": "METER_READING"
+      },
+      "role": "field",
+      "logical": {
+        "family": "Integer",
+        "width": 64,
+        "signed": false
+      },
+      "encoding": "UBIGINT",
+      "unit": "kW.h",
+      "semantic_type": "quantity",
+      "exactness": "exact",
+      "nullable": false
+    },
+    {
+      "name": "huge",
+      "member": {
+        "dataset": "CONSUMERS",
+        "name": "HUGE"
+      },
+      "role": "field",
+      "logical": {
+        "family": "Integer",
+        "width": 128,
+        "signed": false
+      },
+      "encoding": "UHUGEINT",
+      "exactness": "exact",
+      "nullable": false
+    },
+    {
+      "name": "score",
+      "member": {
+        "dataset": "CONSUMERS",
+        "name": "SCORE"
+      },
+      "role": "field",
+      "logical": {
+        "family": "Float"
+      },
+      "encoding": "DOUBLE",
+      "exactness": "approximate",
+      "nullable": true
+    },
+    {
+      "name": "balance",
+      "member": {
+        "dataset": "CONSUMERS",
+        "name": "BALANCE"
+      },
+      "role": "field",
+      "logical": {
+        "family": "Decimal",
+        "precision": 38,
+        "scale": 10
+      },
+      "encoding": "DECIMAL(38,10)",
+      "currency": "BOB",
+      "semantic_type": "amount",
+      "exactness": "exact",
+      "nullable": true
+    },
+    {
+      "name": "read_at",
+      "member": {
+        "dataset": "CONSUMERS",
+        "name": "READ_AT"
+      },
+      "role": "field",
+      "logical": {
+        "family": "DateTime",
+        "zone": "America/La_Paz"
+      },
+      "encoding": "TIMESTAMP",
+      "exactness": "exact",
+      "nullable": true
+    }
+  ],
+  "rows": [
+    [
+      "***",
+      "***",
+      "-170141183460469231731687303715884105728",
+      "18446744073709551615",
+      "340282366920938463463374607431768211455",
+      "NaN",
+      "12345678901234567890.0123456789",
+      "2026-01-15T08:30:00.000000"
+    ],
+    [
+      "***",
+      "",
+      "1",
+      "0",
+      "0",
+      -0.0,
+      null,
+      null
+    ]
+  ],
+  "row_count": 2,
+  "cell_states": [],
+  "page": {
+    "size": 2,
+    "next": "q8Vb1-_xZ0aTn3K"
+  },
+  "notices": []
+}

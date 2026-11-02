@@ -1,0 +1,137 @@
+{
+  "kind": "semantic_result",
+  "version": 1,
+  "mode": "aggregate",
+  "query_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "model_fingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "columns": [
+    {
+      "name": "region",
+      "member": {
+        "dataset": "SALES",
+        "name": "REGION"
+      },
+      "role": "dimension",
+      "logical": {
+        "family": "String"
+      },
+      "encoding": "VARCHAR",
+      "semantic_type": "category",
+      "exactness": "exact",
+      "nullable": true
+    },
+    {
+      "name": "month",
+      "member": {
+        "dataset": "SALES",
+        "name": "SOLD_AT"
+      },
+      "role": "dimension",
+      "bucket": {
+        "unit": "month"
+      },
+      "logical": {
+        "family": "DateTimeTz",
+        "zone": "America/La_Paz"
+      },
+      "encoding": "TIMESTAMP WITH TIME ZONE",
+      "exactness": "exact",
+      "nullable": false
+    },
+    {
+      "name": "revenue",
+      "member": {
+        "name": "REVENUE"
+      },
+      "role": "metric",
+      "logical": {
+        "family": "Decimal",
+        "precision": 38,
+        "scale": 2
+      },
+      "encoding": "DECIMAL(38,2)",
+      "currency": "USD",
+      "exactness": "exact",
+      "nullable": true
+    },
+    {
+      "name": "running_revenue",
+      "member": {
+        "name": "RUNNING_REVENUE"
+      },
+      "role": "metric",
+      "logical": {
+        "family": "Decimal",
+        "precision": 38,
+        "scale": 2
+      },
+      "encoding": "DECIMAL(38,2)",
+      "currency": "USD",
+      "exactness": "exact",
+      "nullable": true
+    }
+  ],
+  "rows": [
+    [
+      "North",
+      "2026-01-01T04:00:00.000000Z",
+      "1200.50",
+      "1200.50"
+    ],
+    [
+      "South",
+      "2026-01-01T04:00:00.000000Z",
+      null,
+      "1200.50"
+    ],
+    [
+      {
+        "state": "others"
+      },
+      {
+        "state": "others"
+      },
+      "300.00",
+      {
+        "state": "undefined_at_total"
+      }
+    ]
+  ],
+  "row_count": 3,
+  "cell_states": [
+    {
+      "row": 2,
+      "column": 0,
+      "state": "others"
+    },
+    {
+      "row": 2,
+      "column": 1,
+      "state": "others"
+    },
+    {
+      "row": 2,
+      "column": 3,
+      "state": "undefined_at_total"
+    }
+  ],
+  "page": {
+    "limit": 100,
+    "truncated": false
+  },
+  "others_row": 2,
+  "notices": [
+    {
+      "kind": "semantic_error",
+      "code": "DEPRECATED_METRIC",
+      "severity": "error",
+      "category": "model",
+      "audience": "other",
+      "message": "La métrica revenue está en desuso.",
+      "locale": "es",
+      "details": {
+        "metric": "revenue"
+      }
+    }
+  ]
+}

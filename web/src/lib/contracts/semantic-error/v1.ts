@@ -44,6 +44,7 @@ export type SemanticError =
 	| NoRelationshipPathError
 	| OssieInvalidError
 	| OssieInvalidPublicError
+	| PageCursorInvalidError
 	| ParameterInvalidError
 	| PolicyAttributeMissingError
 	| PolicyNotSupportedOnEngineError
@@ -929,6 +930,25 @@ export interface OssieInvalidPublicError {
  */
 export interface OssieInvalidPublicDetails {
 	file: Path;
+}
+/**
+ * PAGE_CURSOR_INVALID: every detail is public, so both audiences see them all.
+ */
+export interface PageCursorInvalidError {
+	kind: 'semantic_error';
+	code: 'PAGE_CURSOR_INVALID';
+	severity: 'error';
+	category: 'query';
+	audience: Audience;
+	message: string;
+	locale: Locale;
+	details: PageCursorInvalidDetails;
+}
+/**
+ * Details of PAGE_CURSOR_INVALID: `expired` when the cursor's snapshot is no longer available, `invalid` for every other refusal, which says nothing about which binding failed.
+ */
+export interface PageCursorInvalidDetails {
+	reason: 'expired' | 'invalid';
 }
 /**
  * PARAMETER_INVALID: every detail is public, so both audiences see them all.

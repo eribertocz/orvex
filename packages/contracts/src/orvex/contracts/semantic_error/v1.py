@@ -114,6 +114,7 @@ class SemanticErrorCode(
             "MISSING_EXTENSION_DECLARATION",
             "NO_RELATIONSHIP_PATH",
             "OSSIE_INVALID",
+            "PAGE_CURSOR_INVALID",
             "PARAMETER_INVALID",
             "POLICY_ATTRIBUTE_MISSING",
             "POLICY_NOT_SUPPORTED_ON_ENGINE",
@@ -154,6 +155,7 @@ class SemanticErrorCode(
         "MISSING_EXTENSION_DECLARATION",
         "NO_RELATIONSHIP_PATH",
         "OSSIE_INVALID",
+        "PAGE_CURSOR_INVALID",
         "PARAMETER_INVALID",
         "POLICY_ATTRIBUTE_MISSING",
         "POLICY_NOT_SUPPORTED_ON_ENGINE",
@@ -1413,6 +1415,17 @@ class OssieInvalidPublicError(BaseModel):
     details: OssieInvalidPublicDetails
 
 
+class PageCursorInvalidDetails(BaseModel):
+    """
+    Details of PAGE_CURSOR_INVALID: `expired` when the cursor's snapshot is no longer available, `invalid` for every other refusal, which says nothing about which binding failed.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    reason: Literal["expired", "invalid"]
+
+
 class ParameterInvalidDetails(BaseModel):
     """
     Details of PARAMETER_INVALID, as a builder sees them.
@@ -1809,6 +1822,24 @@ class WindowUndefinedAtTotalError(BaseModel):
     details: WindowUndefinedAtTotalDetails
 
 
+class PageCursorInvalidError(BaseModel):
+    """
+    PAGE_CURSOR_INVALID: every detail is public, so both audiences see them all.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["PAGE_CURSOR_INVALID"]
+    severity: Literal["error"]
+    category: Literal["query"]
+    audience: Audience
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: PageCursorInvalidDetails
+
+
 class QueryInvalidError(BaseModel):
     """
     QUERY_INVALID as a builder sees it.
@@ -1888,6 +1919,7 @@ class SemanticError(
         | NoRelationshipPathError
         | OssieInvalidError
         | OssieInvalidPublicError
+        | PageCursorInvalidError
         | ParameterInvalidError
         | PolicyAttributeMissingError
         | PolicyNotSupportedOnEngineError
@@ -1946,6 +1978,7 @@ class SemanticError(
         | NoRelationshipPathError
         | OssieInvalidError
         | OssieInvalidPublicError
+        | PageCursorInvalidError
         | ParameterInvalidError
         | PolicyAttributeMissingError
         | PolicyNotSupportedOnEngineError

@@ -103,6 +103,10 @@
     "generic": "El modelo {file} no es válido.",
     "builder": "El modelo {file} no es válido: {problems} problemas, {problems_omitted} más sin mostrar."
   },
+  "PAGE_CURSOR_INVALID": {
+    "generic": "La página solicitada ya no es válida; vuelve a pedir la primera página.",
+    "builder": "La página solicitada ya no es válida ({reason}); vuelve a pedir la primera página."
+  },
   "PARAMETER_INVALID": {
     "generic": "El valor del parámetro {parameter} no es válido; se espera {expected}.",
     "builder": "El valor del parámetro {parameter} no es válido; se espera {expected}."
