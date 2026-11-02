@@ -94,12 +94,27 @@ def load(text: str | bytes) -> tuple[object, dict[str, int]]:
     except UnicodeDecodeError:
         raise StrictYamlError(1, "the file is not UTF-8") from None
     try:
+        for token in yaml.scan(decoded, Loader=yaml.SafeLoader):
+            if isinstance(token, yaml.TagToken | yaml.AnchorToken | yaml.AliasToken):
+                raise StrictYamlError(
+                    token.start_mark.line + 1, "anchors, aliases and tags are refused"
+                )
+        depth = 0
         for event in yaml.parse(decoded, Loader=yaml.SafeLoader):
             if isinstance(event, yaml.AliasEvent) or getattr(event, "anchor", None) is not None:
                 raise StrictYamlError(event.start_mark.line + 1, "anchors and aliases are refused")
             if _explicit_tag(event):
                 raise StrictYamlError(event.start_mark.line + 1, "tags are refused")
+            if isinstance(event, yaml.CollectionStartEvent):
+                depth += 1
+                if depth > MAX_DEPTH:
+                    mark = event.start_mark
+                    raise StrictYamlError(mark.line + 1 if mark else 1, "nested too deeply")
+            elif isinstance(event, yaml.CollectionEndEvent):
+                depth -= 1
         documents = list(yaml.compose_all(decoded, Loader=yaml.SafeLoader))
+    except RecursionError:
+        raise StrictYamlError(1, "nested too deeply") from None
     except yaml.YAMLError as error:
         mark = getattr(error, "problem_mark", None)
         raise StrictYamlError(mark.line + 1 if mark else 1, "not valid YAML") from None

@@ -190,7 +190,12 @@ class _Parser:
     def negation(self) -> Node:
         if self.peek() == ("keyword", "NOT") and self.peek(1) != ("keyword", "EXISTS"):
             self.at += 1
-            return Not(self.negation())
+            self.depth += 1
+            if self.depth > MAX_DEPTH:
+                raise PredicateError("nested too deeply")
+            node = Not(self.negation())
+            self.depth -= 1
+            return node
         return self.primary()
 
     def primary(self) -> Node:
@@ -228,8 +233,10 @@ class _Parser:
                 self.take("punct", ")")
                 return InAttribute(left, attribute, negated)
             self.take("keyword", "SELECT")
-            column = self.column()
+            qualifier, column = self.column()
             table, conditions = self.subquery_rest()
+            if qualifier is not None and qualifier != table.split(".")[1].lower():
+                raise PredicateError("a subquery reads one table")
             return InSelect(left, table, column, conditions, negated)
         kind, op = self.peek()
         if kind != "op" or op not in COMPARISONS:
@@ -245,6 +252,8 @@ class _Parser:
         schema = self.take("word")
         self.take("punct", ".")
         table = f"{schema}.{self.take('word')}"
+        if _normalize(table.split(".")[1]) == self.dataset:
+            raise PredicateError("a mapping table named like the dataset is ambiguous")
         conditions: list[Condition] = []
         if self.keyword("WHERE"):
             conditions.append(self.condition(table))
@@ -253,13 +262,14 @@ class _Parser:
         self.take("punct", ")")
         return table, tuple(conditions)
 
-    def column(self) -> str:
-        """A column of the subquery's table: bare, or qualified by that table's name."""
+    def column(self) -> tuple[str | None, str]:
+        """A column of the subquery's table, bare or qualified: the qualifier is checked
+        against the table once it is known."""
         first = self.take("word")
         if self.peek() == ("punct", "."):
             self.at += 1
-            return self.take("word").lower()
-        return first.lower()
+            return first.lower(), self.take("word").lower()
+        return None, first.lower()
 
     def condition(self, table: str) -> Condition:
         left = self.side(table)

@@ -126,6 +126,11 @@ def test_the_contracts_valid_examples_read(path: Path) -> None:
         "version: 1\n---\nversion: 1\n",
         "version: [1\n",
         "- 1\n" + "  " * 40 + "- 2\n",
+        "a: " + "[" * 5000 + "]" * 5000 + "\n",
+        "version: ! 1\n",
+        "version: 1\nlimits: ! {policy_values: 1}\n",
+        "version: 1\nrow_policies: ! []\n",
+        "base: &b {version: 1}\n<<: *b\n",
     ],
 )
 def test_yaml_that_is_not_strict_is_refused(source: str) -> None:
@@ -172,6 +177,10 @@ def test_each_allowed_shape_parses(predicate: str) -> None:
         "zone_id IN (SELECT zone_id FROM security.user_zone WHERE user_id > $u)",  # non-equality
         "segment = '$user_id'",  # an attribute inside a string
         "zone_id + 1 = 2",  # arithmetic
+        "zone_id IN (SELECT payments.zone_id FROM security.user_zone WHERE user_id = $u)",
+        "zone_id IN (SELECT external.zone_id FROM security.user_zone)",
+        "NOT " * 900 + "zone_id = 1",  # deeper than the bound
+        "(" * 40 + "zone_id = 1" + ")" * 40,
     ],
 )
 def test_each_refused_shape_gives_a_predicate_problem(predicate: str) -> None:
@@ -352,14 +361,34 @@ def test_named_roles_restrict_role_paths_only() -> None:
     assert [path for path, _ in found["PAYMENTS"]] == [("CUSTOMER_ZONE", "BILLING")]
 
 
-def test_a_self_relationship_with_a_cycle_ends() -> None:
+def test_a_self_relationship_is_reported_once_and_never_looped() -> None:
     staff = {
         "name": "staff",
         "dataset": "employees",
         "kind": "predicate",
-        "predicate": "employee_id = $employee",
+        "predicate": "employee_id = $e",
     }
-    assert reached(model(policies(row_policies=[staff])), "staff") == {}
+    assert reached(model(policies(row_policies=[staff])), "staff") == {
+        "EMPLOYEES": [(("MANAGER",), "many_to_one")]
+    }
+
+
+def test_a_one_to_one_is_not_walked_straight_back() -> None:
+    profiles = {"name": "pp", "dataset": "profiles", "kind": "predicate", "predicate": "score > 1"}
+    found = reached(model(policies(row_policies=[profiles])), "pp")
+    assert ("PROFILE", "PROFILE") not in [path for path, _ in found.get("PROFILES", [])]
+
+
+@pytest.mark.parametrize("roles", [["manager"], ["customer_zone"], ["profile"]])
+def test_roles_name_only_role_paths_of_the_policy(roles: list[str]) -> None:
+    zones = {
+        "name": "z",
+        "dataset": "zones",
+        "kind": "predicate",
+        "predicate": "zone_id = $z",
+        "roles": roles,
+    }
+    assert rules(policies(row_policies=[zones])) == {"reference"}
 
 
 # --- non-executable policies fail closed ------------------------------------------------------
@@ -430,3 +459,95 @@ def test_the_policy_model_is_immutable() -> None:
     with pytest.raises(TypeError):
         found.column_policies[M("CUSTOMERS", "SEGMENT")] = None  # type: ignore[index]
     assert json.dumps(sorted(found.unusable)) == "[]"
+
+
+# --- the Reviewer's first pass: each finding covered for its class ----------------------------
+
+
+def with_model_payload(**payload: Any) -> PolicyModel:  # noqa: ANN401
+    import copy
+    import json as json_module
+
+    from orvex.semantic.compiler.compiled import compile_model
+    from orvex.semantic.ossie.reader import read
+
+    from tests.support.policies import CATALOG, MODEL, VENDORS, extension
+
+    document = copy.deepcopy(MODEL)
+    document["custom_extensions"] = [
+        extension({"element": "model", "default_time_zone": "America/La_Paz", **payload})
+    ]
+    compiled = compile_model(
+        read(json_module.dumps(document).encode(), "semantic/bank.ossie.json", VENDORS),
+        CATALOG,
+        VENDORS,
+    )
+    return read_policies(text(policies()), compiled, groups=GROUPS, managed_tables=MANAGED_TABLES)
+
+
+@pytest.mark.parametrize(
+    "segment",
+    [
+        {"dimension": "customers.national_id", "metric": "revenue", "condition": "revenue > 1"},
+        {"dimension": "customers.segment", "metric": "identified", "condition": "identified > 1"},
+        {
+            "dimension": "customers.segment",
+            "metric": "revenue",
+            "condition": "customers.national_id IS NOT NULL",
+        },
+    ],
+)
+def test_a_segment_over_a_protected_member_is_refused(segment: dict[str, Any]) -> None:
+    with pytest.raises(SemanticError) as caught:
+        with_model_payload(segments=[{"name": "s", "mode": "static", **segment}])
+    assert caught.value.code == "POLICY_INVALID"
+    problems: list[dict[str, str]] = list(caught.value.details["problems"])  # type: ignore[call-overload]
+    assert {p["rule"] for p in problems} == {"inference"}
+
+
+def test_a_member_parameter_naming_a_protected_member_is_refused() -> None:
+    with pytest.raises(SemanticError) as caught:
+        with_model_payload(
+            parameters=[{"name": "pick", "type": "member", "default": "customers.national_id"}]
+        )
+    assert caught.value.code == "POLICY_INVALID"
+    with_model_payload(
+        parameters=[{"name": "pick", "type": "member", "default": "customers.segment"}]
+    )
+
+
+def test_visible_when_never_weakens_a_hidden_member() -> None:
+    cell = {
+        "member": "customers.segment",
+        "default": "hidden",
+        "mask": "*",
+        "visible_when": "zone_id = $z",
+    }
+    assert rules(policies(column_policies=[cell])) == {"schema"}
+
+
+def test_a_metric_whose_context_targets_a_protected_member_inherits_it() -> None:
+    import copy
+    import json as json_module
+
+    from orvex.semantic.compiler.compiled import compile_model
+    from orvex.semantic.ossie.reader import read
+
+    from tests.support.policies import CATALOG, MODEL, VENDORS, extension
+
+    document = copy.deepcopy(MODEL)
+    step = {"element": "metric", "context": [{"operation": "remove", "targets": ["national_id"]}]}
+    document["metrics"].append(
+        {
+            "name": "scoped",
+            "expression": {"sql": "SUM(payments.amount)"},
+            "custom_extensions": [extension(step)],
+        }
+    )
+    compiled = compile_model(
+        read(json_module.dumps(document).encode(), "semantic/bank.ossie.json", VENDORS),
+        CATALOG,
+        VENDORS,
+    )
+    found = read_policies(text(policies()), compiled, groups=GROUPS, managed_tables=MANAGED_TABLES)
+    assert found.protection(METRIC("SCOPED")) == "hidden"

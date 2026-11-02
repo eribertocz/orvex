@@ -207,7 +207,7 @@ def _check_predicate(
 ) -> grammar.Node | None:
     try:
         node = grammar.parse(text, dataset)
-    except grammar.PredicateError:
+    except grammar.PredicateError, RecursionError:
         problems.add(pointer, "predicate")
         return None
     if not all(names.field(dataset, field) for field in grammar.fields(node)):
@@ -295,6 +295,17 @@ def _sources(names: _Names) -> dict[MemberId, frozenset[MemberId]]:
     for member_id, parsed in names.members.items():
         direct[member_id] |= set(parsed.depends_on) | set(parsed.lineage)
         payload = names.payloads.get(parsed.pointer, {})
+        for step in _items(payload, "context"):
+            for reference in _items(step, "targets"):
+                parts = _split(str(reference))
+                if len(parts) == 1:
+                    direct[member_id] |= {
+                        m for m in names.all_members if m.kind == "field" and m.name == parts[0]
+                    }
+                else:
+                    target = names.member(str(reference))
+                    if target is not None:
+                        direct[member_id].add(target)
         window = payload.get("window") if isinstance(payload, Mapping) else None
         if isinstance(window, Mapping):
             # A bare name is a dimension the query groups by: every field of that name may be
@@ -351,8 +362,8 @@ def _reaches(names: _Names, dataset: str, roles: frozenset[str]) -> tuple[tuple[
     while stack:
         current, path, visited = stack.pop()
         for target, name, cardinality in edges.get(current, ()):
-            if target in visited:
-                continue  # a cycle: reported once, never looped
+            if path and name == path[-1]:
+                continue  # the same relationship walked back (one-to-one): not a new path
             if roles and name in role_names and name not in roles:
                 continue
             route = (*path, name)
@@ -360,8 +371,34 @@ def _reaches(names: _Names, dataset: str, roles: frozenset[str]) -> tuple[tuple[
             found.append(Reach(target, route, via))
             if len(found) > MAX_PATHS:
                 return (), False
-            stack.append((target, route, visited | {target}))
+            if target not in visited:  # a cycle is reported once, never looped
+                stack.append((target, route, visited | {target}))
     return tuple(sorted(found, key=lambda r: (r.dataset, r.path))), True
+
+
+def _role_paths(names: _Names, dataset: str) -> set[str]:
+    """The role relationships (two or more between one pair of datasets) on a path that a row
+    policy on `dataset` propagates along: the only names its `roles` may hold."""
+    found, _ = _reaches(names, dataset, frozenset())
+    pairs: dict[frozenset[str], int] = {}
+    for r in names.relationships:
+        pairs[frozenset((r["from"], r["to"]))] = pairs.get(frozenset((r["from"], r["to"])), 0) + 1
+    role_names = {
+        r["name"] for r in names.relationships if pairs[frozenset((r["from"], r["to"]))] > 1
+    }
+    return {name for reach in found for name in reach.path if name in role_names}
+
+
+def _expression_members(text: object, names: _Names) -> list[MemberId | None]:
+    """The members an expression of the product's language reads; an expression that does not
+    parse reads nothing here (the compiler has already refused it)."""
+    if not isinstance(text, str):
+        return []
+    try:
+        tree = sql.parse(text)
+    except sql.SqlSyntaxError, sql.SqlUnsupported:
+        return []
+    return [names.member(".".join(ref.parts)) for ref in sql.references(tree)]
 
 
 def _ordered(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -419,7 +456,7 @@ def read_policies(
         if not set(policy.get("exempt_groups", [])) <= known_groups:
             problems.add(f"{here}/exempt_groups", "reference")
         roles = frozenset(_split(role)[0] for role in policy.get("roles", []))
-        if not roles <= relationship_names:
+        if roles and not (roles <= relationship_names and roles <= _role_paths(names, dataset)):
             problems.add(f"{here}/roles", "reference")
         node: grammar.Node | None = None
         attributes: set[str] = set()
@@ -530,14 +567,25 @@ def read_policies(
             unusable.setdefault(dataset, "min_group_size")
     sources = _sources(names)
     protected = {m for m, rule in columns.items() if rule.default != "visible" or rule.conditional}
+
+    def exposes(members: Iterable[MemberId | None]) -> bool:
+        return any(
+            m is not None and (m in protected or bool(sources.get(m, frozenset()) & protected))
+            for m in members
+        )
+
+    # Model elements a query applies by name, as filters or members, never expose a protected
+    # member: segments (their dimension, metric and condition) and member or metric parameters.
     for segment in _items(names.model_payload, "segments"):
         read = [names.member(str(segment["dimension"])), names.member(str(segment["metric"]))]
-        exposed = any(
-            m is not None and (m in protected or sources.get(m, frozenset()) & protected)
-            for m in read
-        )
-        if exposed:
+        read += _expression_members(segment.get("condition"), names)
+        if exposes(read):
             problems.add("", "inference")
+    for parameter in _items(names.model_payload, "parameters"):
+        if parameter.get("type") in {"member", "metric"}:
+            named = [str(parameter["default"]), *(str(v) for v in _items(parameter, "allowed"))]
+            if exposes(names.member(value) for value in named):
+                problems.add("", "inference")
     reaches: dict[str, tuple[Reach, ...]] = {}
     for at, rule in enumerate(rows):
         found, bounded = _reaches(names, rule.dataset, rule.roles)

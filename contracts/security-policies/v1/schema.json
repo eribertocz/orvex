@@ -279,7 +279,15 @@
           "then": {
             "required": [
               "mask"
-            ]
+            ],
+            "properties": {
+              "default": {
+                "enum": [
+                  "visible",
+                  "masked"
+                ]
+              }
+            }
           }
         },
         {

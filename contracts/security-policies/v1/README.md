@@ -52,6 +52,8 @@ It may combine them with:
 
 It refuses everything else:
 - function calls and arithmetic;
+- a selected column qualified by another table, and a mapping table named like the policy's dataset (its qualifier would be ambiguous);
+- nesting deeper than 32 levels;
 - concatenation (`||`), comments and semicolons;
 - a second table;
 - a non-equality inside a subquery;
@@ -64,7 +66,7 @@ Mapping, registration and closure tables live in the managed lake. A subquery on
 - `member`: a field, a dataset metric or a model metric.
 - `default`: `visible`, `masked` (with `mask`, 1–64 characters) or `hidden`.
 - `visible_to_groups`: the groups that see it visible.
-- `visible_when` (#238 rule 9): a row predicate. Where it is false the value is masked, so it requires `mask`. It is representable now and executed in P3. Until then, its member is listed as masked and its dataset is unusable.
+- `visible_when` (#238 rule 9): a row predicate. Where it is false the value is masked, so it requires `mask`, and its `default` is `visible` or `masked`: a hidden member stays hidden. It is representable now and executed in P3. Until then, its member is listed as masked and its dataset is unusable.
 - A metric is `visible` or `hidden`, never masked (`security.md` §3.3; rule `masked_metric`).
 - Exactly one column policy per member (`DUPLICATE_COLUMN_POLICY`).
 
@@ -85,16 +87,19 @@ Mapping, registration and closure tables live in the managed lake. A subquery on
 ## What the policy model computes
 - **Inherited protection, against inference.** A member gets the strictest protection of every protected member it reads, by any path:
   - its expression and lineage (P2-04b);
+  - a metric's context steps (`keep`, `remove` targets);
   - a window's partition and order (a bare dimension name counts every field of that name);
   - and, for relationship keys, the paired column of the related dataset.
 
-  A hidden source makes it hidden. A masked source makes a metric hidden and a field masked. A model segment over a protected member is refused (`POLICY_INVALID`, rule `inference`).
+  A hidden source makes it hidden. A masked source makes a metric hidden and a field masked. A model segment whose dimension, metric or condition reads a protected member, and a `member` or `metric` parameter whose default or allowed values name one, are refused (`POLICY_INVALID`, rule `inference`).
 - **Propagation** (#238 rule 1). For each row policy, every dataset it reaches, by every simple path:
   - many-to-one relationships from the "one" side to the "many" side, in chains of any length;
   - one-to-one relationships in both directions;
   - each role path, unless the policy names its roles;
   - bridges, as `bridge_allocation`;
-  - cycles, reported once and never looped.
+  - cycles, a self-relationship included: reported once and never looped (the relationship walked straight back, as in a one-to-one, is not a new path).
+
+  `roles` may name only role relationships (two or more between one pair of datasets) on this policy's paths: any other name is refused (`reference`), so a typo never silently drops a path.
 
   Declared and verified cardinality count alike. A policy on a fact reaches no dimension. Over 256 paths for one policy is refused (rule `propagation`).
 - **Non-executable policies fail closed.** These datasets are unusable until their execution lands:
