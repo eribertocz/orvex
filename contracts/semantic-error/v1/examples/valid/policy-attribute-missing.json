@@ -4,7 +4,7 @@
   "severity": "notice",
   "category": "security",
   "audience": "builder",
-  "message": "The policy zone_rows lacks an attribute it needs from your profile; no rows are shown. Ask an administrator.",
+  "message": "The policy zone_rows lacks an attribute it needs from the caller's profile; no rows are shown.",
   "locale": "en",
   "details": {
     "policy": "zone_rows"

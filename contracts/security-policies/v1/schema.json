@@ -1,0 +1,370 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.invalid/security-policies/v1/schema.json",
+  "title": "SecurityPolicies",
+  "description": "The project's `security.yaml`: row policies, column policies, aggregate thresholds and limits (README). YAML read strictly, as JSON.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "row_policies": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "$ref": "#/$defs/RowPolicy"
+      }
+    },
+    "column_policies": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/ColumnPolicy"
+      }
+    },
+    "aggregate_thresholds": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "$ref": "#/$defs/AggregateThreshold"
+      }
+    },
+    "limits": {
+      "$ref": "#/$defs/Limits"
+    }
+  },
+  "$defs": {
+    "PolicyName": {
+      "description": "A policy's name: unique in the file.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+    },
+    "Reference": {
+      "description": "A model element as the expression language names it: `dataset`, `dataset.field`, `dataset.metric` or `metric`; identifiers regular or double-quoted.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 520,
+      "pattern": "^(?:[A-Za-z_][A-Za-z0-9_]*|\"(?:[^\"]|\"\")+\")(\\.(?:[A-Za-z_][A-Za-z0-9_]*|\"(?:[^\"]|\"\")+\"))?$"
+    },
+    "Table": {
+      "description": "A managed-lake table, `schema.table` (ADR-0027 §6: mapping tables live in the managed lake).",
+      "type": "string",
+      "maxLength": 300,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*\\.[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "Column": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "Attribute": {
+      "description": "A security-context attribute, without its `$`.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,62}$"
+    },
+    "Group": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "Groups": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/Group"
+      }
+    },
+    "Predicate": {
+      "description": "A row predicate in the closed grammar of the README: fields of the policy's dataset, `$attribute` parameters, literals, AND/OR/NOT, and IN, NOT IN, EXISTS and NOT EXISTS over one managed-lake table with equality conditions.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "Registration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "table",
+        "key"
+      ],
+      "properties": {
+        "table": {
+          "$ref": "#/$defs/Table"
+        },
+        "key": {
+          "$ref": "#/$defs/Column"
+        },
+        "attribute": {
+          "$ref": "#/$defs/Attribute"
+        }
+      },
+      "description": "The managed-lake table that lists the callers registered for a deny-list policy (ADR-0027 §6): `key` holds the value of `attribute` (default `user_id`). It adds no value to the policy's value set."
+    },
+    "Closure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "table",
+        "ancestor",
+        "descendant"
+      ],
+      "properties": {
+        "table": {
+          "$ref": "#/$defs/Table"
+        },
+        "ancestor": {
+          "$ref": "#/$defs/Column"
+        },
+        "descendant": {
+          "$ref": "#/$defs/Column"
+        }
+      },
+      "description": "A closure table in the managed lake: every (ancestor, descendant) pair, each node with itself included (#238 rule 8)."
+    },
+    "RowPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "dataset",
+        "kind"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/PolicyName"
+        },
+        "dataset": {
+          "$ref": "#/$defs/Reference"
+        },
+        "kind": {
+          "enum": [
+            "predicate",
+            "hierarchy"
+          ]
+        },
+        "predicate": {
+          "$ref": "#/$defs/Predicate"
+        },
+        "registration": {
+          "$ref": "#/$defs/Registration"
+        },
+        "closure": {
+          "$ref": "#/$defs/Closure"
+        },
+        "node": {
+          "$ref": "#/$defs/Attribute"
+        },
+        "field": {
+          "$ref": "#/$defs/Column"
+        },
+        "exempt_groups": {
+          "$ref": "#/$defs/Groups"
+        },
+        "orphans": {
+          "enum": [
+            "hidden",
+            "visible"
+          ]
+        },
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/Reference"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "predicate"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "predicate"
+            ],
+            "properties": {
+              "closure": false,
+              "node": false,
+              "field": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "hierarchy"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "closure",
+              "node",
+              "field"
+            ],
+            "properties": {
+              "predicate": false,
+              "registration": false
+            }
+          }
+        }
+      ]
+    },
+    "ColumnPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "member",
+        "default"
+      ],
+      "properties": {
+        "member": {
+          "$ref": "#/$defs/Reference"
+        },
+        "default": {
+          "enum": [
+            "visible",
+            "masked",
+            "hidden"
+          ]
+        },
+        "visible_to_groups": {
+          "$ref": "#/$defs/Groups"
+        },
+        "mask": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "visible_when": {
+          "$ref": "#/$defs/Predicate"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "default": {
+                "const": "masked"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "mask"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "visible_when"
+            ]
+          },
+          "then": {
+            "required": [
+              "mask"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "default": {
+                "enum": [
+                  "visible",
+                  "hidden"
+                ]
+              }
+            }
+          },
+          "then": {
+            "if": {
+              "not": {
+                "required": [
+                  "visible_when"
+                ]
+              }
+            },
+            "then": {
+              "properties": {
+                "mask": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "AggregateThreshold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity",
+        "min_group_size"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/Reference"
+        },
+        "metric": {
+          "$ref": "#/$defs/Reference"
+        },
+        "entity": {
+          "$ref": "#/$defs/Reference"
+        },
+        "min_group_size": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1000000
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "dataset"
+          ],
+          "properties": {
+            "metric": false
+          }
+        },
+        {
+          "required": [
+            "metric"
+          ],
+          "properties": {
+            "dataset": false
+          }
+        }
+      ],
+      "description": "Cells over fewer than `min_group_size` distinct `entity` values are suppressed (#238 rule 10); representable now, executed later."
+    },
+    "Limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "policy_values": {
+          "description": "The cap on values bound for another engine (ADR-0027 §6).",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        }
+      }
+    }
+  }
+}

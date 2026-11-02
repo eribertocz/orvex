@@ -1,0 +1,20 @@
+{
+  "kind": "semantic_error",
+  "code": "POLICY_INVALID",
+  "severity": "error",
+  "category": "model",
+  "audience": "builder",
+  "message": "The security policies in security.yaml are not valid: 1 problems, 0 more not shown.",
+  "locale": "en",
+  "details": {
+    "file": "security.yaml",
+    "problems": [
+      {
+        "pointer": "/row_policies/0/predicate",
+        "line": "5",
+        "rule": "predicate"
+      }
+    ],
+    "problems_omitted": "0"
+  }
+}

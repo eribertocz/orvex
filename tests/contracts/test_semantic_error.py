@@ -35,7 +35,8 @@ NEW_CODES = (
 )
 # The kinds of value a detail may hold. None of them is a data value, a secret or SQL.
 DETAIL_TYPES = {
-    "Name", "Names", "Names2", "Path", "Version", "Versions", "Count", "Problems", "QueryProblems"
+    "Name", "Names", "Names2", "Path", "Version", "Versions", "Count", "Problems", "QueryProblems",
+    "PolicyProblems",
 }  # fmt: skip
 FORBIDDEN_FIELD_NAMES = re.compile(r"value|sample|row|sql|secret|password|token|predicate|mask")
 
@@ -53,9 +54,9 @@ def placeholders(template: str) -> set[str]:
     return {field for _, field, _, _ in string.Formatter().parse(template) if field is not None}
 
 
-def test_the_catalog_has_38_codes_and_every_file_lists_them_all() -> None:
+def test_the_catalog_has_41_codes_and_every_file_lists_them_all() -> None:
     enumerated = set(DEFS["SemanticErrorCode"]["enum"])
-    assert len(enumerated) == 38
+    assert len(enumerated) == 41
     assert set(CODES) == enumerated
     assert {variant["properties"]["code"]["const"] for variant in variants()} == enumerated
     for locale, catalog in MESSAGES.items():
@@ -110,10 +111,12 @@ def test_severity_is_error_except_the_warning_and_the_notices() -> None:
         "DEPRECATED_METRIC",
         "FILTER_INTERSECTION_EMPTY",
         "POLICY_ATTRIBUTE_MISSING",
+        "POLICY_MAPPING_MISSING",
     }
     assert CODES["DEPRECATED_METRIC"]["severity"] == "warning"
     assert CODES["FILTER_INTERSECTION_EMPTY"]["severity"] == "notice"
     assert CODES["POLICY_ATTRIBUTE_MISSING"]["severity"] == "notice"
+    assert CODES["POLICY_MAPPING_MISSING"]["severity"] == "notice"
 
 
 @pytest.mark.parametrize("locale", ["es", "en"])
@@ -152,15 +155,18 @@ def test_no_detail_can_carry_a_data_value(code: str) -> None:
 
 
 def test_masked_members_and_missing_policy_attributes_have_nothing_to_reveal() -> None:
-    # Their builder message may show only what the generic one shows: a policy hides the rest.
-    # A missing attribute names the policy only, never the attribute (it would reveal the
-    # predicate; security.md §3.3).
-    assert set(CODES["POLICY_ATTRIBUTE_MISSING"]["details"]) == {"policy"}
-    for code in ("MEMBER_MASKED", "POLICY_ATTRIBUTE_MISSING"):
-        assert set(CODES[code]["details"].values()) == {"public"}, code
+    # A masked member's builder message shows only what the generic one shows.
+    for locale in MESSAGES:
+        templates = MESSAGES[locale]["MEMBER_MASKED"]
+        assert placeholders(templates["builder"]) == placeholders(templates["generic"])
+    assert set(CODES["MEMBER_MASKED"]["details"].values()) == {"public"}
+    # A missing attribute or mapping never names the attribute, the mapping table or a value
+    # (security.md §3.3), and since the Owner decision of 2026-11-02 (#304, #123) names the
+    # policy only to a builder: everyone else gets one generic sentence.
+    for code in ("POLICY_ATTRIBUTE_MISSING", "POLICY_MAPPING_MISSING"):
+        assert CODES[code]["details"] == {"policy": "builder"}, code
         for locale in MESSAGES:
-            templates = MESSAGES[locale][code]
-            assert placeholders(templates["builder"]) == placeholders(templates["generic"])
+            assert placeholders(MESSAGES[locale][code]["generic"]) == set(), (code, locale)
 
 
 def test_a_name_never_holds_a_control_character() -> None:
@@ -203,3 +209,17 @@ def test_each_new_code_has_an_invalid_example_with_a_missing_detail(code: str) -
     assert payload["code"] == code
     assert set(payload["details"]) < set(CODES[code]["details"])
     assert not Draft202012Validator(SCHEMA).is_valid(payload)
+
+
+@pytest.mark.parametrize("code", ["POLICY_ATTRIBUTE_MISSING", "POLICY_MAPPING_MISSING"])
+def test_a_no_rows_notice_names_no_policy_outside_the_builder_view(code: str) -> None:
+    """Owner decision of 2026-11-02 (#304, #123): a generic sentence for everyone else, the
+    policy only in the builder view; the result still has zero rows."""
+    from orvex.semantic import SemanticError
+
+    notice = SemanticError(code, {"policy": "zone_rows_c4n4ry"})
+    for locale in ("es", "en"):
+        other = notice.to_json(locale, "other")
+        assert "zone_rows_c4n4ry" not in other
+        assert '"details":{}' in other
+        assert "zone_rows_c4n4ry" in notice.to_json(locale, "builder")

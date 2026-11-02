@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "DUPLICATE_COLUMN_POLICY",
+  "severity": "error",
+  "category": "model",
+  "audience": "builder",
+  "message": "Two column policies protect consumers.phone; exactly one is allowed.",
+  "locale": "en",
+  "details": {
+    "member": "consumers.phone"
+  }
+}

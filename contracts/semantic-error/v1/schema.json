@@ -41,6 +41,12 @@
       "$ref": "#/$defs/DivisionPolicyViolationError"
     },
     {
+      "$ref": "#/$defs/DuplicateColumnPolicyError"
+    },
+    {
+      "$ref": "#/$defs/DuplicateColumnPolicyPublicError"
+    },
+    {
       "$ref": "#/$defs/EngineVersionUntestedError"
     },
     {
@@ -141,6 +147,21 @@
     },
     {
       "$ref": "#/$defs/PolicyAttributeMissingError"
+    },
+    {
+      "$ref": "#/$defs/PolicyAttributeMissingPublicError"
+    },
+    {
+      "$ref": "#/$defs/PolicyInvalidError"
+    },
+    {
+      "$ref": "#/$defs/PolicyInvalidPublicError"
+    },
+    {
+      "$ref": "#/$defs/PolicyMappingMissingError"
+    },
+    {
+      "$ref": "#/$defs/PolicyMappingMissingPublicError"
     },
     {
       "$ref": "#/$defs/PolicyNotSupportedOnEngineError"
@@ -284,6 +305,7 @@
         "CROSS_ENGINE_QUERY",
         "DEPRECATED_METRIC",
         "DIVISION_POLICY_VIOLATION",
+        "DUPLICATE_COLUMN_POLICY",
         "ENGINE_VERSION_UNTESTED",
         "EVIDENCE_VIOLATED",
         "FANOUT_NOT_ISOLATABLE",
@@ -306,6 +328,8 @@
         "PAGE_CURSOR_INVALID",
         "PARAMETER_INVALID",
         "POLICY_ATTRIBUTE_MISSING",
+        "POLICY_INVALID",
+        "POLICY_MAPPING_MISSING",
         "POLICY_NOT_SUPPORTED_ON_ENGINE",
         "QUERY_BUDGET_EXCEEDED",
         "QUERY_INVALID",
@@ -2872,62 +2896,6 @@
         }
       }
     },
-    "PolicyAttributeMissingDetails": {
-      "description": "Details of POLICY_ATTRIBUTE_MISSING, as a builder sees them.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "policy"
-      ],
-      "properties": {
-        "policy": {
-          "$ref": "#/$defs/Name"
-        }
-      }
-    },
-    "PolicyAttributeMissingError": {
-      "description": "POLICY_ATTRIBUTE_MISSING: every detail is public, so both audiences see them all.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "kind",
-        "code",
-        "severity",
-        "category",
-        "audience",
-        "message",
-        "locale",
-        "details"
-      ],
-      "properties": {
-        "kind": {
-          "const": "semantic_error"
-        },
-        "code": {
-          "const": "POLICY_ATTRIBUTE_MISSING"
-        },
-        "severity": {
-          "const": "notice"
-        },
-        "category": {
-          "const": "security"
-        },
-        "audience": {
-          "$ref": "#/$defs/Audience"
-        },
-        "message": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 2000
-        },
-        "locale": {
-          "$ref": "#/$defs/Locale"
-        },
-        "details": {
-          "$ref": "#/$defs/PolicyAttributeMissingDetails"
-        }
-      }
-    },
     "PolicyNotSupportedOnEngineDetails": {
       "description": "Details of POLICY_NOT_SUPPORTED_ON_ENGINE, as a builder sees them.",
       "type": "object",
@@ -3783,6 +3751,486 @@
         },
         "details": {
           "$ref": "#/$defs/FilterIntersectionEmptyPublicDetails"
+        }
+      }
+    },
+    "PolicyAttributeMissingDetails": {
+      "description": "Details of POLICY_ATTRIBUTE_MISSING, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy"
+      ],
+      "properties": {
+        "policy": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "PolicyAttributeMissingPublicDetails": {
+      "description": "Details of POLICY_ATTRIBUTE_MISSING for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "PolicyAttributeMissingError": {
+      "description": "POLICY_ATTRIBUTE_MISSING as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "POLICY_ATTRIBUTE_MISSING"
+        },
+        "severity": {
+          "const": "notice"
+        },
+        "category": {
+          "const": "security"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/PolicyAttributeMissingDetails"
+        }
+      }
+    },
+    "PolicyAttributeMissingPublicError": {
+      "description": "POLICY_ATTRIBUTE_MISSING as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "POLICY_ATTRIBUTE_MISSING"
+        },
+        "severity": {
+          "const": "notice"
+        },
+        "category": {
+          "const": "security"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/PolicyAttributeMissingPublicDetails"
+        }
+      }
+    },
+    "PolicyMappingMissingDetails": {
+      "description": "Details of POLICY_MAPPING_MISSING, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy"
+      ],
+      "properties": {
+        "policy": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "PolicyMappingMissingPublicDetails": {
+      "description": "Details of POLICY_MAPPING_MISSING for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "PolicyMappingMissingError": {
+      "description": "POLICY_MAPPING_MISSING as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "POLICY_MAPPING_MISSING"
+        },
+        "severity": {
+          "const": "notice"
+        },
+        "category": {
+          "const": "security"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/PolicyMappingMissingDetails"
+        }
+      }
+    },
+    "PolicyMappingMissingPublicError": {
+      "description": "POLICY_MAPPING_MISSING as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "POLICY_MAPPING_MISSING"
+        },
+        "severity": {
+          "const": "notice"
+        },
+        "category": {
+          "const": "security"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/PolicyMappingMissingPublicDetails"
+        }
+      }
+    },
+    "PolicyProblem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pointer",
+        "line",
+        "rule"
+      ],
+      "properties": {
+        "pointer": {
+          "description": "JSON Pointer (RFC 6901) into the policy file.",
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^(/([^/~\\u0000-\\u001f]|~[01])*)*$"
+        },
+        "line": {
+          "$ref": "#/$defs/Count"
+        },
+        "rule": {
+          "enum": [
+            "syntax",
+            "schema",
+            "duplicate_name",
+            "reference",
+            "predicate",
+            "registration",
+            "inference",
+            "propagation",
+            "masked_metric",
+            "limits"
+          ]
+        }
+      }
+    },
+    "PolicyProblems": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/PolicyProblem"
+      }
+    },
+    "PolicyInvalidDetails": {
+      "description": "Details of POLICY_INVALID, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "problems",
+        "problems_omitted"
+      ],
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/Path"
+        },
+        "problems": {
+          "$ref": "#/$defs/PolicyProblems"
+        },
+        "problems_omitted": {
+          "$ref": "#/$defs/Count"
+        }
+      }
+    },
+    "PolicyInvalidPublicDetails": {
+      "description": "Details of POLICY_INVALID for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file"
+      ],
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/Path"
+        }
+      }
+    },
+    "PolicyInvalidError": {
+      "description": "POLICY_INVALID as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "POLICY_INVALID"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/PolicyInvalidDetails"
+        }
+      }
+    },
+    "PolicyInvalidPublicError": {
+      "description": "POLICY_INVALID as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "POLICY_INVALID"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/PolicyInvalidPublicDetails"
+        }
+      }
+    },
+    "DuplicateColumnPolicyDetails": {
+      "description": "Details of DUPLICATE_COLUMN_POLICY, as a builder sees them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "member"
+      ],
+      "properties": {
+        "member": {
+          "$ref": "#/$defs/Name"
+        }
+      }
+    },
+    "DuplicateColumnPolicyPublicDetails": {
+      "description": "Details of DUPLICATE_COLUMN_POLICY for any other audience: its builder fields are left out.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "DuplicateColumnPolicyError": {
+      "description": "DUPLICATE_COLUMN_POLICY as a builder sees it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "DUPLICATE_COLUMN_POLICY"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "const": "builder"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/DuplicateColumnPolicyDetails"
+        }
+      }
+    },
+    "DuplicateColumnPolicyPublicError": {
+      "description": "DUPLICATE_COLUMN_POLICY as any other audience sees it: the generic message and public details only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "DUPLICATE_COLUMN_POLICY"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "model"
+        },
+        "audience": {
+          "const": "other"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/DuplicateColumnPolicyPublicDetails"
         }
       }
     }

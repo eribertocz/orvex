@@ -67,6 +67,14 @@
     },
     "optional": []
   },
+  "DUPLICATE_COLUMN_POLICY": {
+    "severity": "error",
+    "category": "model",
+    "details": {
+      "member": "builder"
+    },
+    "optional": []
+  },
   "ENGINE_VERSION_UNTESTED": {
     "severity": "error",
     "category": "engine",
@@ -258,7 +266,25 @@
     "severity": "notice",
     "category": "security",
     "details": {
-      "policy": "public"
+      "policy": "builder"
+    },
+    "optional": []
+  },
+  "POLICY_INVALID": {
+    "severity": "error",
+    "category": "model",
+    "details": {
+      "file": "public",
+      "problems": "builder",
+      "problems_omitted": "builder"
+    },
+    "optional": []
+  },
+  "POLICY_MAPPING_MISSING": {
+    "severity": "notice",
+    "category": "security",
+    "details": {
+      "policy": "builder"
     },
     "optional": []
   },

@@ -31,6 +31,10 @@
     "generic": "The metric {metric} divides by zero, which its rule rejects.",
     "builder": "The metric {metric} divides by zero, which its rule rejects."
   },
+  "DUPLICATE_COLUMN_POLICY": {
+    "generic": "Two column policies protect the same member; exactly one is allowed.",
+    "builder": "Two column policies protect {member}; exactly one is allowed."
+  },
   "ENGINE_VERSION_UNTESTED": {
     "generic": "The version of the engine {engine} is not tested.",
     "builder": "Version {found} of the engine {engine} is not tested; the tested ones are {tested}."
@@ -116,8 +120,16 @@
     "builder": "The value of the parameter {parameter} is not valid; {expected} is expected."
   },
   "POLICY_ATTRIBUTE_MISSING": {
-    "generic": "The policy {policy} lacks an attribute it needs from your profile; no rows are shown. Ask an administrator.",
-    "builder": "The policy {policy} lacks an attribute it needs from your profile; no rows are shown. Ask an administrator."
+    "generic": "You have no access assigned for this query. Request authorization.",
+    "builder": "The policy {policy} lacks an attribute it needs from the caller's profile; no rows are shown."
+  },
+  "POLICY_INVALID": {
+    "generic": "The security policies in {file} are not valid.",
+    "builder": "The security policies in {file} are not valid: {problems} problems, {problems_omitted} more not shown."
+  },
+  "POLICY_MAPPING_MISSING": {
+    "generic": "You have no access assigned for this query. Request authorization.",
+    "builder": "The caller has no mapping, or no registration, for the policy {policy}; no rows are shown."
   },
   "POLICY_NOT_SUPPORTED_ON_ENGINE": {
     "generic": "The dataset {dataset} cannot be used: a policy cannot be applied safely.",

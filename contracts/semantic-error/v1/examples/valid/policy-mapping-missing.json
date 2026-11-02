@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "POLICY_MAPPING_MISSING",
+  "severity": "notice",
+  "category": "security",
+  "audience": "builder",
+  "message": "The caller has no mapping, or no registration, for the policy zone_rows; no rows are shown.",
+  "locale": "en",
+  "details": {
+    "policy": "zone_rows"
+  }
+}
