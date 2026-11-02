@@ -1,0 +1,62 @@
+{
+  "kind": "semantic_query",
+  "version": 1,
+  "mode": "detail",
+  "fields": [
+    {
+      "member": "sales.sale_id"
+    },
+    {
+      "member": "customers.name",
+      "role": "billing_customer"
+    },
+    {
+      "member": "sales.amount"
+    }
+  ],
+  "order": [
+    {
+      "by": "sales.sold_at",
+      "direction": "desc",
+      "nulls": "first"
+    }
+  ],
+  "page": {
+    "size": "50",
+    "after": "eyJwIjoxfQ"
+  },
+  "filters": [
+    {
+      "scope": "drill",
+      "member": "customers.region",
+      "predicate": {
+        "op": "in",
+        "values": [
+          {
+            "type": "text",
+            "value": "North"
+          }
+        ]
+      }
+    }
+  ],
+  "parameters": [
+    {
+      "name": "threshold",
+      "value": {
+        "type": "integer",
+        "value": "3"
+      }
+    }
+  ],
+  "as_known_at": "2026-10-31T12:00:00.250+02:00",
+  "context_modifiers": [
+    {
+      "op": "keep",
+      "scope": "board",
+      "members": [
+        "customers.region"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "kind": "semantic_query",
+  "version": 1,
+  "mode": "aggregate",
+  "metrics": [
+    {
+      "metric": "revenue"
+    }
+  ],
+  "as_known_at": "2026-10-31T23:59:59"
+}

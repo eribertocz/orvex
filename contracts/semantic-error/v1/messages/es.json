@@ -119,6 +119,10 @@
     "generic": "La consulta supera el límite {budget} ({limit}); agregue un filtro o un nivel más general.",
     "builder": "La consulta supera el límite {budget}: se estima {estimate} y el límite es {limit}. Agregue un filtro o un nivel más general."
   },
+  "QUERY_INVALID": {
+    "generic": "La consulta no es válida.",
+    "builder": "La consulta no es válida: {problems} problemas, {problems_omitted} más sin mostrar."
+  },
   "REAGGREGATION_NOT_ALLOWED": {
     "generic": "La métrica {metric} ({class}) no se puede volver a agregar desde resultados ya agregados.",
     "builder": "La métrica {metric} ({class}) no se puede volver a agregar desde resultados ya agregados."

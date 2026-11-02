@@ -1,0 +1,21 @@
+{
+  "kind": "semantic_query",
+  "version": 1,
+  "mode": "aggregate",
+  "metrics": [
+    {
+      "metric": "\"Net Revenue\""
+    }
+  ],
+  "group_by": [
+    {
+      "member": "\"Sales\".\"Región\""
+    }
+  ],
+  "order": [
+    {
+      "by": "\"Net Revenue\"",
+      "direction": "asc"
+    }
+  ]
+}

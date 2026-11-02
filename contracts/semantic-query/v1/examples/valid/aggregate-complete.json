@@ -1,0 +1,273 @@
+{
+  "kind": "semantic_query",
+  "version": 1,
+  "mode": "aggregate",
+  "metrics": [
+    {
+      "metric": "revenue"
+    },
+    {
+      "metric": "revenue",
+      "context": "last_year",
+      "apply": [
+        "year_to_date"
+      ]
+    },
+    {
+      "metric": "sales.order_count"
+    }
+  ],
+  "group_by": [
+    {
+      "member": "customers.region",
+      "role": "billing_customer"
+    },
+    {
+      "member": "sales.sold_at",
+      "bucket": {
+        "unit": "month",
+        "calendar": "fiscal"
+      }
+    }
+  ],
+  "filters": [
+    {
+      "scope": "board",
+      "member": "customers.region",
+      "predicate": {
+        "op": "in",
+        "values": [
+          {
+            "type": "text",
+            "value": "North"
+          },
+          {
+            "type": "text",
+            "value": "South"
+          }
+        ],
+        "include_null": true
+      }
+    },
+    {
+      "scope": "page",
+      "member": "customers.segment",
+      "predicate": {
+        "op": "not_in",
+        "values": [
+          {
+            "type": "text",
+            "value": "Internal"
+          }
+        ],
+        "exclude_null": false
+      }
+    },
+    {
+      "scope": "visual",
+      "member": "sales.amount",
+      "predicate": {
+        "op": "range",
+        "gte": {
+          "type": "decimal",
+          "value": "10.50"
+        },
+        "lt": {
+          "type": "decimal",
+          "value": "1000"
+        }
+      }
+    },
+    {
+      "scope": "visual",
+      "member": "sales.quantity",
+      "predicate": {
+        "op": "range",
+        "gt": {
+          "type": "integer",
+          "value": "0"
+        }
+      }
+    },
+    {
+      "scope": "cross_filter",
+      "member": "customers.email",
+      "predicate": {
+        "op": "is_not_null"
+      }
+    },
+    {
+      "scope": "cross_filter",
+      "member": "sales.discount_code",
+      "predicate": {
+        "op": "is_null"
+      }
+    },
+    {
+      "scope": "page",
+      "member": "sales.sold_on",
+      "predicate": {
+        "op": "relative_date",
+        "unit": "month",
+        "offset": "-1",
+        "count": "3",
+        "to_date": false
+      }
+    },
+    {
+      "scope": "drill",
+      "member": "customers.customer_id",
+      "predicate": {
+        "op": "in_segment",
+        "segment": "high_value"
+      }
+    },
+    {
+      "scope": "board",
+      "member": "org.unit",
+      "predicate": {
+        "op": "descendants_of",
+        "hierarchy": "org_chart",
+        "nodes": [
+          {
+            "type": "text",
+            "value": "EMEA"
+          }
+        ]
+      }
+    },
+    {
+      "scope": "visual",
+      "member": "sales.is_return",
+      "predicate": {
+        "op": "in",
+        "values": [
+          {
+            "type": "boolean",
+            "value": false
+          }
+        ]
+      }
+    },
+    {
+      "scope": "visual",
+      "member": "sales.sold_on",
+      "predicate": {
+        "op": "range",
+        "gte": {
+          "type": "date",
+          "value": "2026-01-01"
+        },
+        "lte": {
+          "type": "date",
+          "value": "2026-12-31"
+        }
+      }
+    },
+    {
+      "scope": "visual",
+      "member": "sales.sold_at",
+      "predicate": {
+        "op": "range",
+        "lt": {
+          "type": "timestamp",
+          "value": "2026-07-01T00:00:00-04:00"
+        }
+      }
+    },
+    {
+      "scope": "visual",
+      "member": "sales.shift_start",
+      "predicate": {
+        "op": "range",
+        "gte": {
+          "type": "local_timestamp",
+          "value": "2026-01-01T08:00:00"
+        }
+      }
+    }
+  ],
+  "metric_filters": [
+    {
+      "scope": "visual",
+      "metric": "revenue",
+      "dimension": "customers.customer_id",
+      "condition": {
+        "op": "gt",
+        "value": {
+          "type": "decimal",
+          "value": "1000"
+        }
+      }
+    },
+    {
+      "scope": "page",
+      "metric": "revenue",
+      "dimension": "products.product_id",
+      "grain": [
+        "products.product_id",
+        "customers.region"
+      ],
+      "condition": {
+        "op": "top",
+        "n": "10"
+      }
+    }
+  ],
+  "contexts": [
+    {
+      "name": "last_year",
+      "filters": [
+        {
+          "scope": "visual",
+          "member": "sales.sold_on",
+          "predicate": {
+            "op": "relative_date",
+            "unit": "year",
+            "offset": "-1",
+            "count": "1"
+          }
+        }
+      ]
+    }
+  ],
+  "top_n": {
+    "by": "revenue",
+    "n": "5",
+    "per": [
+      "customers.region"
+    ],
+    "others": true
+  },
+  "coverage": "aligned",
+  "order": [
+    {
+      "by": "revenue",
+      "direction": "desc",
+      "nulls": "last"
+    },
+    {
+      "by": "customers.region"
+    }
+  ],
+  "limit": "100",
+  "parameters": [
+    {
+      "name": "target_margin",
+      "value": {
+        "type": "decimal",
+        "value": "0.25"
+      }
+    }
+  ],
+  "as_known_at": "2026-10-31T23:59:59Z",
+  "context_modifiers": [
+    {
+      "op": "remove",
+      "scope": "page",
+      "members": [
+        "customers.segment"
+      ]
+    }
+  ]
+}
