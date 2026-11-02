@@ -10,11 +10,11 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = ["jsonschema==4.26.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"orvex.access" = ["py.typed", "contracts.toml"]
+"orvex.access" = ["py.typed", "contracts.toml", "security-context-v1.json"]

@@ -3,4 +3,4 @@
 # The server checks the installed combination before it starts.
 
 produces = { "receipt" = "v1", "security-policies" = "v1", "semantic-error" = "v1", "semantic-query" = "v1", "semantic-result" = "v1" }
-consumes = { "store" = ["v1"] }
+consumes = { "security-context" = ["v1"], "store" = ["v1"] }

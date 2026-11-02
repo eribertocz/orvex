@@ -279,6 +279,15 @@ class PolicyModel:
         """The protected members `member` reads, for the compile report."""
         return tuple(sorted(s for s in self._sources.get(member, ()) if s in self.column_policies))
 
+    def missing_attributes(self, policy: str, attributes: Collection[str]) -> frozenset[str]:
+        """The attributes a row policy needs that a caller's context lacks. A missing attribute
+        is absent from the context, never null or empty (`security-context` v1), and makes
+        the policy give zero rows with `POLICY_ATTRIBUTE_MISSING`."""
+        rule = next((r for r in self.row_policies if r.name == policy), None)
+        if rule is None:
+            raise KeyError(policy)
+        return frozenset(rule.attributes - set(attributes))
+
     def check_usable(self, datasets: Iterable[str]) -> None:
         """`UNSUPPORTED_OPERATION` when a dataset needs a policy that cannot run yet: never
         served without it."""

@@ -1,0 +1,29 @@
+{
+  "kind": "security_context",
+  "version": 1,
+  "user": "u-7",
+  "project": "p1",
+  "role": "builder",
+  "groups": [
+    "auditors",
+    "collections"
+  ],
+  "attributes": {
+    "zones": {
+      "type": "list",
+      "values": [
+        "10",
+        "9"
+      ]
+    },
+    "active": {
+      "type": "boolean",
+      "value": true
+    },
+    "level": {
+      "type": "integer",
+      "value": "3"
+    }
+  },
+  "permission_fingerprint": "sha256:324b2920cb231b985b79e9475f322531f65e3991712a489c5cd684c81c1fc60b"
+}
