@@ -68,6 +68,13 @@ export interface SemanticResult {
 	 * @maxItems 64
 	 */
 	notices: Notice[];
+	/**
+	 * The reference to this result's receipt (`receipt` v1, P2-07): its identity and reproducibility class.
+	 */
+	receipt?: {
+		receipt_id: Fingerprint;
+		reproducibility: 'exact' | 'explainable';
+	};
 }
 /**
  * A column: what it is and how its values are encoded.

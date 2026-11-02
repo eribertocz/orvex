@@ -1,0 +1,135 @@
+{
+  "kind": "receipt",
+  "version": 1,
+  "view": "builder",
+  "receipt_id": "sha256:6e3fd5923bf172398bbd94b7ee069d89171a7982996fc0cd686e13626573ec1c",
+  "seal": {
+    "key_id": "seal-1",
+    "mac": "b46634bdc60b78b4a204227317abde8461abfedd98674fe518af35b24be27fe3"
+  },
+  "query_fingerprint": "sha256:81d7694031815fe7270f638a2d067279c0f8497dc1eccb478dd4a2eb225f6a8d",
+  "question": {
+    "mode": "aggregate",
+    "metrics": [
+      {
+        "metric": "revenue"
+      },
+      {
+        "metric": "secret_count"
+      }
+    ],
+    "group_by": [
+      {
+        "member": "customers.region"
+      }
+    ],
+    "order": [
+      {
+        "by": "revenue",
+        "direction": "desc"
+      }
+    ],
+    "filters": [
+      {
+        "member": "customers.region",
+        "scope": "page",
+        "predicate": {
+          "op": "in",
+          "values": [
+            {
+              "type": "text",
+              "value": "zone-c4n4ry"
+            }
+          ]
+        }
+      },
+      {
+        "member": "customers.national_id",
+        "scope": "visual",
+        "predicate": {
+          "op": "is_not_null"
+        }
+      }
+    ]
+  },
+  "security": {
+    "restricted": true,
+    "policies": [
+      {
+        "applied": "restricted",
+        "kind": "row",
+        "name": "own_zone_only"
+      },
+      {
+        "applied": "restricted",
+        "kind": "column",
+        "name": "national_id_hidden"
+      }
+    ]
+  },
+  "freshness": [
+    {
+      "as_of": "2026-11-02T11:00:00.000000Z",
+      "dataset": "payments"
+    }
+  ],
+  "reproducibility": {
+    "class": "exact",
+    "replay": "not_checked"
+  },
+  "cache": "miss",
+  "model": {
+    "model_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "reader": "ossie-c721ffc",
+    "experimental": false
+  },
+  "plan": {
+    "obligations": [
+      {
+        "obligation": "grain_preserved",
+        "rule": "C1"
+      }
+    ]
+  },
+  "evidence": [
+    {
+      "dataset": "customers",
+      "kind": "unique_key",
+      "status": "verified",
+      "verified_by_run": "run-7"
+    }
+  ],
+  "data": [
+    {
+      "for": "dataset",
+      "name": "payments",
+      "route": "managed",
+      "snapshot": {
+        "id": 41
+      },
+      "retained": true
+    },
+    {
+      "for": "policy",
+      "name": "own_zone_only",
+      "route": "managed",
+      "snapshot": {
+        "id": 40
+      },
+      "retained": true
+    }
+  ],
+  "execution": {
+    "engine": "duckdb",
+    "engine_version": "2.0.0",
+    "adapter": "duckdb",
+    "adapter_version": "1",
+    "started_at": "2026-11-02T12:00:00.000000Z",
+    "duration_ms": 12
+  },
+  "execution_fingerprint": "sha256:b2b8fea5152b43baabe64f71adf86e68566b7081130c73b433fefcb2b09ba135",
+  "result": {
+    "key_id": "result-1",
+    "mac": "88ad37178faba2b643ec60a7ed2eed195560e595bd90d3eeae05966952fdd901"
+  }
+}

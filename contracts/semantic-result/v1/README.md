@@ -27,6 +27,7 @@ Every member below is required unless marked optional. Every object is closed, a
 | `page` | `detail`: `{size, next?}`, where `next` is absent on the last page. `aggregate`: `{limit?, truncated}`, never a cursor |
 | `others_row` | optional, `aggregate` only: the index of the recomputed "Others" row (S10 `top_n` with `others: true`) |
 | `notices` | at most 64 `semantic-error/v1` messages of severity `warning` or `notice`, in the caller's audience view, so a notice never discloses more than an error would |
+| `receipt` | optional: `{receipt_id, reproducibility}`, the reference to this result's receipt (`receipt` v1, P2-07). The canonical form never includes it, because the receipt's result MAC covers the canonical form |
 
 **What the fingerprints mean.**
 - They identify what was asked, and under which model semantics. They are not data provenance: two results with equal fingerprints may hold different data.
@@ -206,7 +207,7 @@ This keeps it exact. The same table, descriptors and states give the same canoni
 ## Compatibility
 
 - **Compatible:**
-  - a new optional descriptor or envelope member, such as the receipt reference (P2-07);
+  - a new optional descriptor or envelope member, such as the receipt reference (P2-07, now present);
   - a new cell state (readers treat it as *unavailable*);
   - a new notice code.
 - **Incompatible:**

@@ -1,0 +1,56 @@
+{
+  "kind": "receipt",
+  "version": 1,
+  "view": "summary",
+  "receipt_id": "sha256:6e3fd5923bf172398bbd94b7ee069d89171a7982996fc0cd686e13626573ec1c",
+  "seal": {
+    "key_id": "seal-1",
+    "mac": "b46634bdc60b78b4a204227317abde8461abfedd98674fe518af35b24be27fe3"
+  },
+  "query_fingerprint": "sha256:81d7694031815fe7270f638a2d067279c0f8497dc1eccb478dd4a2eb225f6a8d",
+  "question": {
+    "mode": "aggregate",
+    "metrics": [
+      {
+        "metric": "revenue"
+      }
+    ],
+    "group_by": [
+      {
+        "member": "customers.region"
+      }
+    ],
+    "order": [
+      {
+        "by": "revenue",
+        "direction": "desc"
+      }
+    ],
+    "filters": [
+      {
+        "member": "customers.region",
+        "scope": "page",
+        "withheld": true,
+        "predicate": {
+          "op": "is_null"
+        }
+      }
+    ],
+    "withheld": true
+  },
+  "security": {
+    "restricted": true,
+    "policies": []
+  },
+  "freshness": [
+    {
+      "as_of": "2026-11-02T11:00:00.000000Z",
+      "dataset": "payments"
+    }
+  ],
+  "reproducibility": {
+    "class": "exact",
+    "replay": "not_checked"
+  },
+  "cache": "miss"
+}

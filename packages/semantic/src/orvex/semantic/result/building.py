@@ -269,6 +269,20 @@ class SemanticResult:
             rows.append(row)
         return rows
 
+    def with_receipt(self, receipt_id: str, reproducibility: str) -> SemanticResult:
+        """The same result with the reference to its receipt (P2-07). The canonical form, which
+        the receipt's result MAC covers, never includes the reference."""
+        if reproducibility not in {"exact", "explainable"}:
+            raise InvalidResult("receipt", f"reproducibility {reproducibility!r}")
+        envelope = {
+            **self.envelope(),
+            "receipt": {"receipt_id": receipt_id, "reproducibility": reproducibility},
+        }
+        problems = list(schema_validator().iter_errors({**envelope, "rows": []}))
+        if problems:
+            raise InvalidResult("receipt", problems[0].message)
+        return SemanticResult(canonicalize(envelope), self._table, self._states)
+
     def wire(self, value_encoder: ValueEncoder) -> str:
         """The JSON form: the envelope with `rows`, exactly in the `ResultJson` encoding."""
         document = self.envelope()
@@ -279,6 +293,7 @@ class SemanticResult:
         """The canonical form (RFC 8785) of the JSON form, with every number cell as its text:
         integers in decimal, floats as their shortest round-trip text (keeping `-0.0`)."""
         document = self.envelope()
+        document.pop("receipt", None)
         document["rows"] = [
             [canonical_cell(cell) for cell in row] for row in self.encode_rows(value_encoder)
         ]

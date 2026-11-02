@@ -14,7 +14,14 @@ Every result returned by the semantic engine carries a receipt (`contracts/recei
 | `data` | DuckLake snapshot id(s) read (managed lake, existing DuckLake, and the managed-lake tables read by row policies and their registration checks), or live source and read instant |
 | `freshness` | Last successful run per upstream model and declared freshness; for Direct Query, the commit time of the snapshot read (existing DuckLake) or the read instant (live engine, after v1.0.0) (ADR-0027 §5) |
 | `execution` | Cache hit or miss, pre-aggregation used, duration |
-| `reproducibility` | `exact` (all snapshots retained) or `explainable` (snapshot expired or live read) |
+| `reproducibility` | `exact` (every input needed to replay is pinned and retained) or `explainable` (with its reasons), and the replay state: `not_checked`, `verified` or `failed` |
+| `result` | An HMAC of the result's canonical form under an instance key, so a replay is checked without storing values |
+
+The server keeps this record; only **views** of it leave the server (`contracts/receipt/v1`, Owner decision of 2026-11-02, #303):
+- **`summary`** goes to every caller. It holds the question, restricted to what the caller may know; the policies the caller may know of; freshness; reproducibility; and cache.
+- **`builder`** adds the model, plan, evidence, data versions and execution. Every item still passes the viewer's own visibility.
+
+No view holds SQL, predicates, parameters or protected values. Each view is built by allow-list. `receipt_id` identifies the record, and a seal (an HMAC under an instance key) authenticates it.
 
 In the UI, every number offers **"Where does this come from?"**, which renders the receipt in business language, with SQL available as a secondary detail.
 
