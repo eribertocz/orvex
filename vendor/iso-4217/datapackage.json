@@ -1,0 +1,95 @@
+{
+  "name": "currency-codes",
+  "title": "ISO 4217 Currency Codes",
+  "description": "ISO 4217 currency codes: current currencies (Table A.1) and historic denominations (Table A.3), published by SIX Group, the ISO 4217 maintenance agency.",
+  "licenses": [
+    {
+      "name": "ODC-PDDL-1.0",
+      "path": "https://opendatacommons.org/licenses/pddl/1.0/",
+      "title": "Open Data Commons Public Domain Dedication and License v1.0. Applies only to the maintainers' own selection and formatting of the data. No licence was found for the underlying ISO 4217 lists; their reuse terms are unclear."
+    }
+  ],
+  "keywords": [
+    "iso",
+    "iso-4217",
+    "currency",
+    "codes"
+  ],
+  "homepage": "https://www.six-group.com/en/products-services/financial-information/market-reference-data/data-standards.html",
+  "sources": [
+    {
+      "name": "SIX Group",
+      "title": "SIX Group (ISO 4217 maintenance agency)",
+      "path": "https://www.six-group.com/en/products-services/financial-information/market-reference-data/data-standards.html",
+      "email": "office@currency-iso.org"
+    }
+  ],
+  "contributors": [
+    {
+      "title": "Rufus Pollock",
+      "email": "rufus.pollock@okfn.org",
+      "role": "maintainer"
+    },
+    {
+      "title": "Kristofer D. Kusano",
+      "email": "kdkusano@gmail.com"
+    }
+  ],
+  "resources": [
+    {
+      "path": "data/codes-all.csv",
+      "format": "csv",
+      "name": "codes-all",
+      "description": "Consolidated list of ISO 4217 current and historic currency codes, one row per country–currency pair.",
+      "mediatype": "text/csv",
+      "schema": {
+        "fields": [
+          {
+            "name": "Entity",
+            "type": "string",
+            "description": "Country or other entity that uses the currency; also includes 'ZZ..' rows for funds and metals and some international bodies"
+          },
+          {
+            "name": "Currency",
+            "type": "string",
+            "description": "Name of the currency"
+          },
+          {
+            "name": "AlphabeticCode",
+            "title": "Alphabetic Code",
+            "type": "string",
+            "description": "3-letter alphabetic code for the currency; empty where the source says 'No universal currency'",
+            "constraints": {
+              "pattern": "^[A-Z]{3}$"
+            }
+          },
+          {
+            "name": "NumericCode",
+            "title": "Numeric Code",
+            "type": "string",
+            "description": "3-digit numeric code, zero-padded, e.g. '008' (read as text); empty where the source gives none",
+            "constraints": {
+              "pattern": "^[0-9]{3}$"
+            }
+          },
+          {
+            "name": "MinorUnit",
+            "title": "Minor Unit",
+            "type": "string",
+            "description": "Number of digits after the decimal separator; '-' where the source says N.A.; empty for withdrawn currencies and for entities with no currency"
+          },
+          {
+            "name": "WithdrawalDate",
+            "title": "Withdrawal Date",
+            "type": "string",
+            "description": "Date the currency was withdrawn: YYYY-MM or a range (e.g. '1990-07 to 1990-09'); empty for current currencies"
+          }
+        ]
+      }
+    }
+  ],
+  "collection": "reference-data",
+  "has_solutions": [
+    "global-country-region-reference-data"
+  ]
+}

@@ -61,7 +61,11 @@ from orvex.semantic.compiler.catalog import (
     logical_of,
 )
 from orvex.semantic.compiler.parsing import MemberId, ParsedMember, ParsedModel, Problems
+from orvex.semantic.compiler.units import ONE, Unit, UnitError, versions
+from orvex.semantic.compiler.units import currency as currency_unit
+from orvex.semantic.compiler.units import parse as parse_unit
 from orvex.semantic.compiler.zones import TZDATA_VERSION, is_zone
+from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.ossie.model import OssieModel
 
@@ -103,6 +107,7 @@ class NodeType:
     constant: bool  # literals only: no column, aggregate or metric below
     bucket_zone: str | None = None  # the zone a calendar operation on an instant applies
     buckets_instant: bool = False  # a calendar operation on a DateTimeTz value
+    unit: Unit | None = None  # None: undeclared (P2-04d)
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +131,8 @@ class TypedModel:
     members: Mapping[MemberId, TypedMember]
     expressions: tuple[tuple[str, TypedNode], ...]  # model payload expressions, by pointer
     tzdata: str
+    units: str  # the units registry's version
+    currencies: str  # the ISO 4217 snapshot's identity
 
 
 class _Extra(TypedDict, total=False):
@@ -1059,6 +1066,142 @@ class _Scalars:
         return typed, {"semantic": semantic, "overflow": overflow}
 
 
+# --- units and currencies (P2-04d) --------------------------------------------------------------
+
+UNDECLARED = "undeclared"
+_SAME_UNIT_FUNCTIONS = frozenset(
+    {"MOD", "GREATEST", "LEAST", "COALESCE", "IFNULL", "NVL", "NULLIF"}
+)
+_KEEP_UNIT_FUNCTIONS = frozenset(
+    {"ABS", "ROUND", "FLOOR", "CEIL", "CEILING", "TRUNC", "TRUNCATE", "ZEROIFNULL", "NULLIFZERO"}
+)
+_DIMENSIONLESS_FUNCTIONS = frozenset(
+    """
+    EXP LN LOG LOG10 SIN COS TAN ASIN ACOS ATAN ATAN2 RADIANS DEGREES
+    """.split()  # noqa: SIM905 - a word list reads better than one string per line
+)
+_COUNTS = frozenset({"COUNT", "APPROX_COUNT_DISTINCT"})
+_SQUARING = frozenset({"VARIANCE", "VAR_POP", "VAR_SAMP"})
+
+
+class _Mismatch(Exception):
+    """Two units that cannot meet: `INCOMPATIBLE_UNITS`."""
+
+    def __init__(self, left: Unit | None, right: Unit | None) -> None:
+        super().__init__("INCOMPATIBLE_UNITS")
+        self.units = [_shown(left), _shown(right)]
+
+
+def _shown(unit: Unit | None) -> str:
+    return unit.text if unit is not None else UNDECLARED
+
+
+def _same(children: Sequence[TypedNode]) -> Unit | None:
+    """`+`, `-`, comparisons and alternatives: every operand but a bare literal has the same
+    unit, dimension and factor, and an undeclared unit never meets a declared one."""
+    kept = [child.type.unit for child in children if not child.type.constant]
+    if not kept:
+        return None
+    for other in kept[1:]:
+        if other != kept[0]:
+            raise _Mismatch(kept[0], other)
+    return kept[0]
+
+
+def _product(left: TypedNode, right: TypedNode, divide: bool) -> Unit | None:
+    """`*` and `/` combine units; a bare literal is dimensionless; undeclared stays undeclared."""
+    a = ONE if left.type.constant else left.type.unit
+    b = ONE if right.type.constant else right.type.unit
+    if left.type.constant and right.type.constant:
+        return None
+    if a is None or b is None:
+        return None
+    return a / b if divide else a * b
+
+
+def _dimensionless(children: Sequence[TypedNode]) -> Unit | None:
+    units = [child.type.unit for child in children if not child.type.constant]
+    for unit in units:
+        if unit is not None and unit.dimensions:
+            raise _Mismatch(unit, ONE)
+    return ONE if units and all(unit is not None for unit in units) else None
+
+
+def _unit_of(node: sql.Node, own: NodeType, children: tuple[TypedNode, ...]) -> Unit | None:
+    if isinstance(node, sql.Ref):
+        return own.unit
+    if isinstance(node, sql.Unary):
+        return children[0].type.unit
+    if isinstance(node, sql.Binary):
+        if node.op in ("+", "-", "%"):
+            return _same(children)
+        if node.op in ("*", "/"):
+            return _product(children[0], children[1], node.op == "/")
+        if node.op in ("=", "<>", "<", ">", "<=", ">="):
+            _same(children)
+        return None
+    if isinstance(node, sql.Between | sql.InList | sql.IsDistinct):
+        _same(children)
+        return None
+    if isinstance(node, sql.Case):
+        results = len(node.whens) + (1 if node.otherwise is not None else 0)
+        if node.operand is not None:
+            _same(children[: len(children) - results])
+        return _same(children[len(children) - results :])
+    if isinstance(node, sql.Cast):
+        return children[0].type.unit if own.logical.datatype in NUMERIC else None
+    if isinstance(node, sql.Call):
+        return _call_unit(node, children)
+    return None
+
+
+def _call_unit(node: sql.Call, children: tuple[TypedNode, ...]) -> Unit | None:
+    name = node.name
+    if name in sql.AGGREGATES:
+        values = children[:-1] if node.filter is not None else children
+        if name in _COUNTS:
+            return ONE
+        unit = values[0].type.unit if values else None
+        if name in _SQUARING:
+            return unit.power(2) if unit is not None else None
+        return unit
+    if name in _KEEP_UNIT_FUNCTIONS:
+        return children[0].type.unit
+    if name in _SAME_UNIT_FUNCTIONS:
+        return _same(children)
+    if name in ("IF", "IFF", "NVL2"):
+        return _same(children[1:])
+    if name == "SIGN":
+        return ONE if children[0].type.unit is not None else None
+    if name == "SQRT":
+        unit = children[0].type.unit
+        if unit is None:
+            return None
+        root = unit.root()
+        if root is None:
+            raise _Mismatch(unit, ONE)
+        return root
+    if name == "POWER":
+        base, exponent = children
+        if isinstance(exponent.node, sql.Number) and exponent.node.text.isdigit():
+            return base.type.unit.power(int(exponent.node.text)) if base.type.unit else None
+        return _dimensionless(children)
+    if name in _DIMENSIONLESS_FUNCTIONS:
+        return _dimensionless(children)
+    return None
+
+
+def _units(tree: TypedNode) -> TypedNode:
+    """The tree with each node's unit, bottom up (#280 §2 units and aggregates). A unit beyond
+    the registry's bounds (`POWER(x, 999)`) is a `type` error."""
+    children = tuple(_units(child) for child in tree.children)
+    try:
+        unit = _unit_of(tree.node, tree.type, children)
+    except UnitError:
+        raise _Bad() from None
+    return TypedNode(tree.node, replace(tree.type, unit=unit), children)
+
+
 # --- the model ---------------------------------------------------------------------------------
 
 
@@ -1091,6 +1234,8 @@ class _Model:
         self.problems = Problems(model)
         self.typed: dict[MemberId, TypedMember] = {}
         self.failed: set[MemberId] = set()
+        self.mismatches: dict[MemberId, list[str]] = {}
+        self.expression_mismatches: list[list[str]] = []
         self.sources = {
             sql.normalize(str(d["name"])): str(d.get("source", d["name"]))
             for d in _items(model.document, "datasets")
@@ -1123,15 +1268,21 @@ class _Model:
             else:
                 typed = self._metric(member, payload)
             at = data_at
-            extra = self._payload_trees(member, payload, zone)
+            extra = tuple(
+                (label, _units(tree)) for label, tree in self._payload_trees(member, payload, zone)
+            )
             at = text_at
-            typed = self._declarations(member, typed, payload, data_at, zone)
+            typed = self._declarations(member, typed, payload, data_at, zone, extra)
         except _Bad as bad:
             self.failed.add(member.id)
             self.problems.add(bad.pointer or at, bad.rule)
             return
         except _Skip:
             self.failed.add(member.id)
+            return
+        except _Mismatch as mismatch:
+            self.failed.add(member.id)
+            self.mismatches[member.id] = mismatch.units
             return
         tree, root = typed
         self.typed[member.id] = TypedMember(member.id, root, tree, extra)
@@ -1288,10 +1439,16 @@ class _Model:
         payload: Json,
         data_at: str,
         zone: str | None,
+        extra: tuple[tuple[str, TypedNode], ...],
     ) -> tuple[TypedNode | None, NodeType]:
         """A declared `datatype` and `numeric` equal the inferred type; the declared zone,
-        nullability and semantic type are the member's own (#280 §2)."""
+        nullability and semantic type are the member's own (#280 §2). So are the declared unit
+        or currency, which must equal any unit the expression itself computes."""
         tree, root = typed
+        if tree is not None:
+            tree = _units(tree)
+            root = replace(root, unit=tree.type.unit)
+        root = replace(root, unit=self._declared_unit(root.unit, payload, data_at, extra))
         node = _node_at(self.model.document, member.pointer)
         logical = root.logical
         declared = node.get("datatype")
@@ -1316,6 +1473,33 @@ class _Model:
             semantic_type=str(semantic) if semantic is not None else root.semantic_type,
         )
         return tree, root
+
+    @staticmethod
+    def _declared_unit(
+        inferred: Unit | None, payload: Json, data_at: str, extra: tuple[tuple[str, TypedNode], ...]
+    ) -> Unit | None:
+        """The declared `unit` (UCUM, the registry) or `currency` (the ISO 4217 snapshot): an
+        unknown one is `extension`; one that differs from what the expression or its
+        `calculated` and `over_metrics` expressions compute is `INCOMPATIBLE_UNITS`."""
+        unit, code = payload.get("unit"), payload.get("currency")
+        if unit is not None and code is not None:
+            raise _Bad("extension", data_at)  # one measure, one unit
+        try:
+            if unit is not None:
+                declared = parse_unit(str(unit))
+            elif code is not None:
+                declared = currency_unit(str(code))
+            else:
+                declared = None
+        except UnitError:
+            raise _Bad("extension", data_at) from None
+        computed = [inferred] + [
+            tree.type.unit for label, tree in extra if not label.startswith("components")
+        ]
+        for found in computed:
+            if declared is not None and found is not None and found != declared:
+                raise _Mismatch(declared, found)
+        return declared if declared is not None else inferred
 
     @staticmethod
     def _numeric(logical: LogicalType, numeric: Json, data_at: str) -> LogicalType:
@@ -1374,9 +1558,12 @@ class _Model:
         context = self._context(empty, MappingProxyType({}), None)
         for label, text, boolean in texts:
             try:
-                tree = _Checker(context).check(sql.parse(str(text)))
+                tree = _units(_Checker(context).check(sql.parse(str(text))))
                 if boolean:
                     _need(tree, BOOLEAN)
+            except _Mismatch as mismatch:
+                self.expression_mismatches.append(mismatch.units)
+                continue
             except _Bad as bad:
                 self.problems.add(bad.pointer or data_at, bad.rule)
                 continue
@@ -1401,4 +1588,17 @@ def type_model(model: OssieModel, parsed: ParsedModel, catalog: SourceCatalog) -
             continue
     expressions = state.model_expressions()
     state.problems.raise_if_any()
-    return TypedModel(parsed, MappingProxyType(dict(state.typed)), expressions, TZDATA_VERSION)
+
+    # The first mismatch in document order: members, then model expressions.
+    def position(member: MemberId) -> tuple[int, str]:
+        pointer = parsed.members[member].pointer
+        return model.line(pointer), pointer
+
+    ordered = sorted(state.mismatches, key=position)
+    found = [state.mismatches[m] for m in ordered] + state.expression_mismatches
+    if found:
+        raise SemanticError("INCOMPATIBLE_UNITS", {"units": found[0]})
+    units, currencies = versions()
+    return TypedModel(
+        parsed, MappingProxyType(dict(state.typed)), expressions, TZDATA_VERSION, units, currencies
+    )
