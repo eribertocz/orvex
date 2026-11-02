@@ -344,7 +344,7 @@ class Page(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    size: Annotated[int | None, Field(ge=1, le=1000000)] = None
+    size: Annotated[int | None, Field(ge=1, le=9007199254740991)] = None
     next: Cursor | None = None
     limit: Annotated[int | None, Field(ge=1, le=9007199254740991)] = None
     truncated: bool | None = None
@@ -358,7 +358,7 @@ class DetailPage(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    size: Annotated[int, Field(ge=1, le=1000000)]
+    size: Annotated[int, Field(ge=1, le=9007199254740991)]
     next: Cursor | None = None
 
 

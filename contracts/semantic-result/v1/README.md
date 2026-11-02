@@ -26,7 +26,7 @@ Every member below is required unless marked optional. Every object is closed, a
 | `cell_states` | `{row, column, state}` entries: the cells with no ordinary value (below) |
 | `page` | `detail`: `{size, next?}`, where `next` is absent on the last page. `aggregate`: `{limit?, truncated}`, never a cursor |
 | `others_row` | optional, `aggregate` only: the index of the recomputed "Others" row (S10 `top_n` with `others: true`) |
-| `notices` | `semantic-error/v1` messages of severity `warning` or `notice`, in the caller's audience view, so a notice never discloses more than an error would |
+| `notices` | at most 64 `semantic-error/v1` messages of severity `warning` or `notice`, in the caller's audience view, so a notice never discloses more than an error would |
 
 **What the fingerprints mean.**
 - They identify what was asked, and under which model semantics. They are not data provenance: two results with equal fingerprints may hold different data.
@@ -144,7 +144,7 @@ The reference reader (`orvex.semantic`, P2-06b) and the producer (`build_result`
 - every cell of a masked column is the mask, never `null`;
 - column names are unique;
 - `row_count` equals the rows;
-- a `Decimal` descriptor's precision and scale equal its encoding's;
+- a `Decimal` descriptor's precision and scale equal its encoding's, with the scale at most the precision;
 - every cell-state rule above.
 
 ## Page cursors (detail mode)
@@ -170,7 +170,7 @@ Either way, its bytes reveal no sort-key value, fingerprint, snapshot or page si
 
 **Refusals:**
 - A cursor that is malformed, forged, altered, unknown to the server, presented by another caller, or presented with another query, model, page size, permissions or data version is refused with `PAGE_CURSOR_INVALID`, `reason: invalid`. Nothing says which binding failed.
-- When the cursor's snapshot is no longer available, it is refused with `reason: expired`, and the client restarts from the first page.
+- When the cursor's snapshot is no longer available, it is refused with `reason: expired`, and the client restarts from the first page. `expired` is given only when every other check passes; otherwise the reason is `invalid`, so another caller never learns that a cursor is genuine.
 
 **Data changes:**
 - On a snapshot route, every page of one cursor reads the same snapshot, so rows are never repeated or skipped.
@@ -193,8 +193,7 @@ This keeps it exact. The same table, descriptors and states give the same canoni
 - **Compatible:**
   - a new optional descriptor or envelope member, such as the receipt reference (P2-07);
   - a new cell state (readers treat it as *unavailable*);
-  - a new notice code;
-  - a new `logical` ↔ `encoding` pair for a type `store/v1` gains.
+  - a new notice code.
 - **Incompatible:**
   - changing a value encoding, the masking rule, the cursor bindings or the unknown-state rule;
   - making an optional member required;
