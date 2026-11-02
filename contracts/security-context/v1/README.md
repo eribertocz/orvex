@@ -56,6 +56,9 @@ The byte form is unambiguous and language-neutral:
 - A cached result or a page cursor is reused only after the caller's context has been built anew for the request, from current state.
 - Reuse happens only when that fresh fingerprint equals the stored one (`may_reuse`). P2-06's `verify_cursor` receives a binding built from the fresh fingerprint (`current_fingerprint`), and P2-12's cache uses the same rule.
 - A fingerprint carried by a request, a cursor or a cache entry is never trusted on its own.
+- A document's `permission_fingerprint` cannot be recomputed from the document alone, because the policy fingerprint and the mapping snapshots are not in it. It is trusted only as it comes from the provider for the current request, and never to bind a cursor or a receipt after a round trip outside the server.
+
+Every `pattern` matches the whole value: `$` never matches before a final newline.
 
 ## Compatibility
 - **Compatible:** a new optional member; a new attribute type that existing readers refuse (fail closed) until they know it.

@@ -32,7 +32,8 @@ from importlib.resources import files
 from types import MappingProxyType
 from typing import Any, Literal, Protocol
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
+from jsonschema.validators import extend
 
 SCHEMA_FILE = "security-context-v1.json"
 DOMAIN = b"security-context/v1\n"
@@ -44,15 +45,61 @@ class InvalidContext(ValueError):
     """A context that breaks `security-context` v1: the caller gets no access."""
 
 
+def _full_match(pattern: str) -> str:
+    """`pattern` with every unescaped `$` outside a character class replaced by `\\Z`, so it
+    never matches before a final newline as Python's `re.search` would let it."""
+    out: list[str] = []
+    in_class = False
+    index = 0
+    while index < len(pattern):
+        char = pattern[index]
+        if char == "\\":
+            out.append(pattern[index : index + 2])
+            index += 2
+            continue
+        if in_class:
+            in_class = char != "]"
+        elif char == "[":
+            in_class = True
+        elif char == "$":
+            out.append(r"\Z")
+            index += 1
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+@cache
+def _compiled(pattern: str) -> re.Pattern[str]:
+    return re.compile(_full_match(pattern))
+
+
+def _pattern(
+    validator: object, pattern: str, instance: object, schema: object
+) -> Iterable[ValidationError]:
+    if isinstance(instance, str) and not _compiled(pattern).search(instance):
+        yield ValidationError("does not match its pattern")
+
+
+_FullMatch = extend(Draft202012Validator, {"pattern": _pattern})  # type: ignore[no-untyped-call]
+
+
 @cache
 def _validator() -> Draft202012Validator:
     schema = json.loads(files("orvex.access").joinpath(SCHEMA_FILE).read_bytes())
-    return Draft202012Validator(schema)
+    _FullMatch.check_schema(schema)
+    validator: Draft202012Validator = _FullMatch(schema)
+    return validator
 
 
 def normalize_list(values: Iterable[str]) -> list[str]:
-    """NFC, then without duplicates, sorted by code point: the only normalization there is."""
-    return sorted({unicodedata.normalize("NFC", value) for value in values})
+    """NFC, then without duplicates, sorted by code point: the only normalization there is.
+    Anything but text is refused, never converted (`1` and `"1"` are not one group)."""
+    found = list(values)
+    if not all(isinstance(value, str) for value in found):
+        raise InvalidContext("a group or a list attribute holds text only")
+    return sorted({unicodedata.normalize("NFC", value) for value in found})
 
 
 def _encode(value: object) -> bytes:

@@ -28,6 +28,7 @@ from typing import Any, Protocol
 
 from jsonschema import Draft202012Validator
 from orvex.semantic.canonical import canonicalize, fingerprint
+from orvex.semantic.ossie.extensions import full_match_validator
 
 SCHEMA_FILE = "receipt-v1.json"
 FINGERPRINT = re.compile(r"sha256:[0-9a-f]{64}")
@@ -52,7 +53,7 @@ class InvalidReceipt(ValueError):
 @cache
 def schema_validator() -> Draft202012Validator:
     schema = json.loads(files("orvex.semantic.receipt").joinpath(SCHEMA_FILE).read_bytes())
-    return Draft202012Validator(schema)
+    return full_match_validator(schema)
 
 
 def _require(condition: bool, reason: str, message: str) -> None:

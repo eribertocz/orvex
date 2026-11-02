@@ -63,6 +63,15 @@ def _pattern(
 _FullMatchValidator = extend(Draft202012Validator, {"pattern": _pattern})  # type: ignore[no-untyped-call]
 
 
+def full_match_validator(schema: Mapping[str, Any]) -> Draft202012Validator:
+    """A Draft 2020-12 validator whose `pattern` matches the whole string: `$` never matches
+    before a final newline, as Python's `re.search` would let it. Every contract schema in
+    the engine is read with it."""
+    _FullMatchValidator.check_schema(schema)
+    result: Draft202012Validator = _FullMatchValidator(schema)
+    return result
+
+
 def schema_bytes() -> bytes:
     return files("orvex.semantic.ossie").joinpath(SCHEMA_FILE).read_bytes()
 

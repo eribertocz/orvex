@@ -46,7 +46,7 @@ def _attribute(value: object) -> dict[str, Any]:
     if isinstance(value, str):
         return {"type": "text", "value": value}
     if isinstance(value, list | tuple | set | frozenset):
-        return {"type": "list", "values": normalize_list(str(item) for item in value)}
+        return {"type": "list", "values": normalize_list(value)}
     raise InvalidContext(f"a {type(value).__name__} is not an attribute value")
 
 

@@ -47,6 +47,10 @@
       "type": "object",
       "additionalProperties": false,
       "maxProperties": 64,
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{0,62}$"
+      },
       "patternProperties": {
         "^[a-z][a-z0-9_]{0,62}$": {
           "$ref": "#/$defs/Attribute"

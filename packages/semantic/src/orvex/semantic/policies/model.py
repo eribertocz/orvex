@@ -34,6 +34,7 @@ from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
+from orvex.semantic.ossie.extensions import full_match_validator
 from orvex.semantic.policies import predicate as grammar
 from orvex.semantic.policies.strict_yaml import StrictYamlError, load
 
@@ -48,7 +49,7 @@ _RANK: dict[str, int] = {"visible": 0, "masked": 1, "hidden": 2}
 @cache
 def _validator() -> Draft202012Validator:
     schema = json.loads(files("orvex.semantic.policies").joinpath(SCHEMA_FILE).read_bytes())
-    return Draft202012Validator(schema)
+    return full_match_validator(schema)
 
 
 def _split(reference: str) -> list[str]:

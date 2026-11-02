@@ -92,6 +92,11 @@ def test_invalid_examples_are_refused(path: Path) -> None:
             "zones", {"type": "list", "values": [str(i) for i in range(1001)]}
         ),
         lambda d: d["attributes"].__setitem__("zones", {"type": "list", "values": ["b", "a"]}),
+        lambda d: d.__setitem__("user", "u-7\n"),
+        lambda d: d.__setitem__("project", "p1\n"),
+        lambda d: d["attributes"].__setitem__("zone_id", {"type": "integer", "value": "7\n"}),
+        lambda d: d["attributes"].__setitem__("zone_id\n", {"type": "text", "value": "7"}),
+        lambda d: d.__setitem__("permission_fingerprint", d["permission_fingerprint"] + "\n"),
     ],
 )
 def test_contexts_outside_the_contract_are_refused(change: Any) -> None:  # noqa: ANN401
@@ -258,3 +263,13 @@ def test_a_context_is_immutable() -> None:
     document = found.document()
     copy.deepcopy(document)["groups"].append("x")
     assert found.groups == ("collections",)
+
+
+def test_list_items_are_text_never_converted() -> None:
+    found = provider()
+    found.add("u-7", "p1", Member("viewer", ["1"], {"zones": [1, "1"]}))
+    with pytest.raises(InvalidContext):
+        found.context_for(Request("u-7", "p1"))
+    found.add("u-7", "p1", Member("viewer", [1]))  # type: ignore[list-item]
+    with pytest.raises(InvalidContext):
+        found.context_for(Request("u-7", "p1"))
