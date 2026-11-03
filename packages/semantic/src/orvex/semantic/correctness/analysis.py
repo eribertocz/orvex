@@ -5,9 +5,11 @@ query has exactly one correct answer. It is pure and deterministic: it reads no 
 no SQL. It returns a `CorrectnessReport`, or raises a `SemanticError` with a stable code.
 
 **Policies come first** (P2-08), and are never bypassed:
-- a member the caller may not see is refused as `MEMBER_NOT_FOUND`. `bind_query(hidden=...)`
-  gives that refusal the caller's own text, so it cannot be told from a member that does not
-  exist; here it is checked again, for a query bound without it;
+- a member the caller may not see is refused as `MEMBER_NOT_FOUND` by `bind_query(hidden=...)`,
+  with the caller's own text, before any other check, so it cannot be told from a member that
+  does not exist. A query that reaches `analyze` still naming one was bound for another
+  caller: that is an internal error (`UnfilteredQuery`), never a user-facing answer, since any
+  answer would say more than a missing member does;
 - a masked member used to group, filter or sort is refused as `MEMBER_MASKED`. A metric that
   reads a masked member is already hidden (P2-08), so a distinct count over one is not found;
 - a dataset that a policy not yet executable makes unusable, or that a row policy reaches, is
@@ -49,6 +51,12 @@ from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.policies import PolicyModel, read_caller
 from orvex.semantic.query.binding import BoundQuery
+
+
+class UnfilteredQuery(ValueError):
+    """A bound query naming a member its caller may not see: it was not bound with this
+    caller's `hidden`. An internal error, never shown to the caller."""
+
 
 RULES: tuple[tuple[str, int], ...] = (("C1", 1),)  # implemented, in the order they run
 IMPLEMENTED = frozenset(rule for rule, _ in RULES)
@@ -125,6 +133,9 @@ _DERIVED_ADDITIVE = frozenset({"SUM", "COUNT"})
 
 
 def _refuse_pending(shapes: set[str]) -> None:
+    unknown = shapes - set(SHAPES)
+    if unknown:  # a shape no table row names is never answered
+        raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "metric_extension"})
     for shape, needs in SHAPES.items():
         if shape in shapes and needs.rule not in IMPLEMENTED:
             raise SemanticError("UNSUPPORTED_OPERATION", {"operation": shape})
@@ -157,13 +168,15 @@ class _Query:
         self.grouped: list[_Row] = []
         for entry in canonical.get("filters", ()):
             self._filter(entry, "filter")
+        sorted_rows: list[MemberId] = []
         for member, _, _ in canonical.get("order", ()):
             found = _member(member)
             if found.kind == "metric":
                 self.metrics.append(found)
             else:
-                self.rows.append(_Row(found, None, None, "sort"))
+                sorted_rows.append(found)
         if self.mode != "aggregate":
+            self.rows += [_Row(m, None, None, "sort") for m in sorted_rows]
             self.shapes.add("detail_rows")
             return
         self.shapes.add("aggregate")
@@ -177,6 +190,8 @@ class _Query:
                 self.shapes.add("calendar_bucket")
             self.rows.append(row)
             self.grouped.append(row)
+        roles = {row.member: row.role for row in self.grouped}  # a sort follows its group's path
+        self.rows += [_Row(m, roles.get(m), None, "sort") for m in sorted_rows]
         for _, filters in canonical.get("contexts", ()):
             self.shapes.add("filter_context")
             for entry in filters:
@@ -241,14 +256,14 @@ class _Analysis:
         member = MemberId("field", dataset, key)
         if member in self.compiled.members:
             return self.label(member)
-        return f"{self.dataset(dataset)}.{key}"
+        return f"{self.dataset(dataset)}.{self.graph.written.get((dataset, key), key)}"
 
     # policies, first
 
     def check_policies(self) -> None:
         for member in self.bound.members:
             if self.policies.protection(member, self.groups) == "hidden":
-                raise SemanticError("MEMBER_NOT_FOUND", {"member": self.label(member)})
+                raise UnfilteredQuery("the query was not bound with this caller's visibility")
         for row in self.query.rows:  # a detail page's own fields may be masked (P2-24)
             if self.policies.protection(row.member, self.groups) == "masked":
                 raise SemanticError(

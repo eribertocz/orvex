@@ -56,11 +56,16 @@ class Graph:
         self.names: dict[str, str] = {}  # normalized -> as written
         self.payloads: dict[str, Mapping[str, Any]] = {}
         self.keys: dict[str, tuple[str, ...]] = {}
+        self.written: dict[tuple[str, str], str] = {}  # (dataset, column) -> as written
         for at, dataset in enumerate(_items(document, "datasets")):
             name = sql.normalize(str(dataset["name"]))
             self.names[name] = str(dataset["name"])
             self.payloads[name] = payloads.get(f"/datasets/{at}", {})
             self.keys[name] = tuple(sql.normalize(str(k)) for k in _items(dataset, "primary_key"))
+            declared = self.payloads[name].get("grain")
+            dimensions = _items(declared, "dimensions") if isinstance(declared, Mapping) else []
+            for column in [*_items(dataset, "primary_key"), *dimensions]:
+                self.written.setdefault((name, sql.normalize(str(column))), str(column))
         self.relationship_names: dict[str, str] = {}
         self.links: dict[str, list[Step]] = {name: [] for name in self.names}
         for at, relationship in enumerate(_items(document, "relationships")):

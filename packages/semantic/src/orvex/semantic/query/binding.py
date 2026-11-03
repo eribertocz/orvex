@@ -398,11 +398,11 @@ def bind_query(
     *,
     instant: datetime,
     limits: Limits,
-    hidden: Callable[[MemberId], bool] | None = None,
+    hidden: Callable[[MemberId], bool],
 ) -> BoundQuery:
-    """`hidden` tells which members the caller may not see (P2-11, #310): each is refused as
-    `MEMBER_NOT_FOUND` with the caller's own text, exactly like a member that does not exist,
-    before any other check can say more about it."""
+    """`hidden` tells which members the caller may not see (P2-11, #310), and is required: each
+    is refused as `MEMBER_NOT_FOUND` with the caller's own text, exactly like a member that
+    does not exist, before any other check can say more about it."""
     if instant.tzinfo is None or instant.utcoffset() is None:
         raise ValueError("the query instant must be timezone-aware")
     document = _decode(query)
@@ -425,12 +425,12 @@ def bind_query(
 
 
 def _resolve_names(
-    document: Json, names: _Model, hidden: Callable[[MemberId], bool] | None
+    document: Json, names: _Model, hidden: Callable[[MemberId], bool]
 ) -> dict[str, MemberId]:
     resolved: dict[str, MemberId] = {}
     for reference in _references(document):
         member = names.resolve(reference.text)
-        if member is None or (hidden is not None and hidden(member)):
+        if member is None or hidden(member):
             raise SemanticError("MEMBER_NOT_FOUND", {"member": reference.text})
         names.compiled.require(member)  # a member the model did not compile is refused
         resolved[reference.pointer] = member

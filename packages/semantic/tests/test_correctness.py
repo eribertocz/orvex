@@ -102,7 +102,7 @@ def query(*metrics: str, group_by: Iterable[Any] = (), **more: Any) -> Document:
 def bound(
     document: Document,
     compiled: CompiledModel = BANK,
-    hidden: Callable[[MemberId], bool] | None = None,
+    hidden: Callable[[MemberId], bool] = lambda member: False,
 ) -> BoundQuery:
     return bind_query(
         compiled,
@@ -120,12 +120,13 @@ def run(
     groups: Iterable[str] = (),
     role: str = "viewer",
 ) -> CorrectnessReport:
-    return analyze(
-        bound(document, compiled),
-        compiled,
-        policy if policy is not None else policies(compiled),
-        context(groups, role),
-    )
+    policy = policy if policy is not None else policies(compiled)
+    groups = sorted(set(groups))
+
+    def hidden(member: MemberId) -> bool:
+        return policy.protection(member, groups) == "hidden"
+
+    return analyze(bound(document, compiled, hidden), compiled, policy, context(groups, role))
 
 
 def refusal(*arguments: Any, **options: Any) -> tuple[str, dict[str, object]]:  # noqa: ANN401
@@ -374,6 +375,27 @@ def test_sorting_by_a_member_that_is_not_grouped_is_an_illegal_transition() -> N
     assert run(grouped).obligations
 
 
+def test_a_sort_follows_the_path_of_its_group() -> None:
+    document = query(
+        "revenue",
+        group_by=[{"member": "customers.segment", "role": "shipping"}],
+        order=[{"by": "customers.segment"}],
+    )
+    report = run(document)
+    assert {p["slot"]: p["relationships"] for p in report.facts["paths"]} == {
+        "group_by": ("shipping",),
+        "sort": ("shipping",),
+    }
+
+
+def test_a_shape_no_table_row_names_is_refused() -> None:
+    from orvex.semantic.correctness.analysis import _refuse_pending
+
+    with pytest.raises(SemanticError) as caught:
+        _refuse_pending({"aggregate", "a_shape_from_the_future"})
+    assert dict(caught.value.details) == {"operation": "metric_extension"}
+
+
 def test_a_filter_follows_the_same_paths() -> None:
     def where(member: str, role: str | None = None) -> Document:
         entry: Document = {"member": member, "scope": "board", "predicate": {"op": "is_not_null"}}
@@ -467,9 +489,10 @@ def without_national_id() -> CompiledModel:
     return compiled_from(document)
 
 
-def test_a_hidden_member_is_refused_like_one_that_does_not_exist() -> None:
+@pytest.mark.parametrize("spelling", ["customers.national_id", "CUSTOMERS.NATIONAL_ID"])
+def test_a_hidden_member_is_refused_like_one_that_does_not_exist(spelling: str) -> None:
     policy = policies(column_policies=[HIDDEN])
-    document = query("revenue", group_by=[{"member": "customers.national_id", "role": "billing"}])
+    document = query("revenue", group_by=[{"member": spelling, "role": "billing"}])
 
     def hidden(member: MemberId) -> bool:
         return policy.protection(member, ()) == "hidden"
@@ -479,14 +502,21 @@ def test_a_hidden_member_is_refused_like_one_that_does_not_exist() -> None:
     with pytest.raises(SemanticError) as missing:
         bound(document, without_national_id())
     assert seen.value.code == missing.value.code == "MEMBER_NOT_FOUND"
+    assert seen.value.details == {"member": spelling}
     for audience in ("builder", "other"):
         assert seen.value.to_json(audience=audience) == missing.value.to_json(audience=audience)
-    # Bound without `hidden`, the engine still refuses it, before anything else.
-    assert refusal(document, policy=policy) == (
-        "MEMBER_NOT_FOUND",
-        {"member": "customers.national_id"},
-    )
     assert run(document, policy=policy, groups=["collections"]).obligations
+
+
+def test_a_query_bound_for_another_caller_never_gets_an_answer() -> None:
+    from orvex.semantic.correctness.analysis import UnfilteredQuery
+
+    policy = policies(column_policies=[HIDDEN])
+    document = query("revenue", group_by=[{"member": "CUSTOMERS.NATIONAL_ID", "role": "billing"}])
+    with pytest.raises(UnfilteredQuery) as caught:  # bound with nothing hidden, for a viewer
+        analyze(bound(document), BANK, policy, context())
+    assert not isinstance(caught.value, SemanticError)
+    assert "national" not in str(caught.value).lower()
 
 
 @pytest.mark.parametrize(
