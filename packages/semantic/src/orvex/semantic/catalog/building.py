@@ -31,6 +31,7 @@ from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.ossie import sql
 from orvex.semantic.ossie.extensions import full_match_validator
 from orvex.semantic.policies import PolicyModel
+from orvex.semantic.policies.caller import InvalidContext, read_caller
 
 SCHEMA_FILE = "catalog-v1.json"
 
@@ -250,16 +251,9 @@ def catalog_for(
 def catalog_for_context(
     compiled: CompiledModel, policies: PolicyModel, context: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """The catalog of the caller a `security-context` v1 document describes. The document must
-    be the one built for this request (`current_fingerprint`, P2-09); a malformed one is
-    refused, never read as a caller with fewer or more permissions."""
-    from orvex.contracts.security_context.v1 import SecurityContext
-
+    """The catalog of the caller a `security-context` v1 document describes (`read_caller`)."""
     try:
-        parsed = SecurityContext.model_validate(dict(context))
-    except ValueError as error:
-        raise InvalidCatalog("not a security-context v1 document") from error
-    groups = [str(getattr(group, "root", group)) for group in parsed.groups]
-    if groups != sorted(set(groups)):
-        raise InvalidCatalog("the context's groups are not normalized")
-    return catalog_for(compiled, policies, groups=groups, builder=parsed.role == "builder")
+        caller = read_caller(context)
+    except InvalidContext as error:
+        raise InvalidCatalog(str(error)) from error
+    return catalog_for(compiled, policies, groups=caller.groups, builder=caller.builder)

@@ -21,7 +21,8 @@ The server keeps the **record**. This contract defines what leaves the server: a
 **Being a builder does not grant unrestricted access.** Every item of the builder view also passes the viewer's own visibility:
 - a member the viewer cannot see is left out, filters included;
 - a policy the viewer may not know of is not listed, nor the data version read for it;
-- an exemption (`applied: exempt`) is shown only to a viewer who may know that policy.
+- an exemption (`applied: exempt`) is shown only to a viewer who may know that policy;
+- a plan obligation is shown, as its `rule`, `obligation` and `evidence`, only when the record declares every member and dataset it names and the viewer sees each one (P2-11). Its evidence is shown only when it names a dataset. An obligation that declares nothing it names is withheld. The names themselves are kept in the record and never reach a view.
 
 **Views are built by allow-list.** Each item is chosen from the record and checked against the viewer, one by one. A view is never a full record with fields hidden afterwards. A field added to the record reaches no view unless the allow-list names it.
 

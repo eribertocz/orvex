@@ -134,9 +134,15 @@ class EvidenceUse:
 
 @dataclass(frozen=True, slots=True)
 class Obligation:
+    """`members` and `datasets` are every member and dataset the obligation names (P2-11,
+    #310 §3). A view shows it only when they are declared and the viewer sees each one; its
+    evidence only when the viewer sees every dataset. They never reach a view themselves."""
+
     rule: str
     obligation: str
     evidence: str | None = None
+    members: tuple[str, ...] | None = None
+    datasets: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -581,11 +587,7 @@ class ReceiptRecord:
                 for k in ("model_fingerprint", "reader", "experimental", "commit")
                 if k in record["model"]
             },
-            plan={
-                k: record["plan"][k]
-                for k in ("plan_fingerprint", "obligations")
-                if k in record["plan"]
-            },
+            plan=_plan(record["plan"], viewer),
             evidence=[e for e in record["evidence"] if datasets(e["dataset"])],
             data=data,
             execution=execution,
@@ -593,6 +595,32 @@ class ReceiptRecord:
             result=record["result"],
         )
         return view
+
+
+OBLIGATION_FIELDS = ("rule", "obligation")  # what a view shows of an obligation; evidence aside
+
+
+def _plan(plan: Mapping[str, Any], viewer: object) -> dict[str, Any]:
+    """The plan as `viewer` may know it: each obligation rebuilt from `OBLIGATION_FIELDS`, and
+    left out when it does not declare what it names or names anything the viewer cannot see."""
+    shown: dict[str, Any] = {}
+    if "plan_fingerprint" in plan:
+        shown["plan_fingerprint"] = plan["plan_fingerprint"]
+    obligations = []
+    for obligation in plan["obligations"]:
+        members, datasets = obligation.get("members"), obligation.get("datasets")
+        if members is None or datasets is None:
+            continue
+        if not all(_asks(viewer, "sees_member", m) for m in members):
+            continue
+        if not all(_asks(viewer, "sees_dataset", d) for d in datasets):
+            continue
+        entry = {k: obligation[k] for k in OBLIGATION_FIELDS}
+        if "evidence" in obligation and datasets:
+            entry["evidence"] = obligation["evidence"]
+        obligations.append(entry)
+    shown["obligations"] = obligations
+    return shown
 
 
 def build_receipt(
