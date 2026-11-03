@@ -1,7 +1,7 @@
 """Binding: from a `semantic-query` v1 text to one canonical, typed `BoundQuery` (P2-05b, #283).
 
-`bind_query(model, query, *, instant, limits)` returns a `BoundQuery` or raises
-`SemanticError`. `instant` is the timezone-aware query instant supplied by `server`; the host
+`bind_query(model, query, *, instant, limits, hidden)` returns a `BoundQuery` or raises
+`SemanticError`. `hidden` tells which members the caller may not see (P2-11). `instant` is the timezone-aware query instant supplied by `server`; the host
 clock is never read. `limits` holds the project's caps.
 
 **Steps, in order.** A failing step stops binding and reports all its problems, or the first in
