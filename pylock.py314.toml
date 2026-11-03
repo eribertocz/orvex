@@ -454,14 +454,14 @@ sha256 = "eef62cdcf3bfe73e0863743511ba042dfaba04ba3d5ecdcb896a196c693ad528"
 
 [[packages]]
 name = "mypy"
-version = "2.4.0"
+version = "2.4.1"
 
 [[packages.wheels]]
-name = "mypy-2.4.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
-url = "https://files.pythonhosted.org/packages/bc/1c/26e16977e25ef2494a74f8ffc872a76ec2c3aa43c3156057cbdf88f352c5/mypy-2.4.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+name = "mypy-2.4.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/16/10/4192a5cea09ebbc41c534f57bd0d8f0fb42a8e810632cda6e37f072c59fd/mypy-2.4.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
 
 [packages.wheels.hashes]
-sha256 = "20e9a5cd875837520c43db98dea0b6d0c2197833d95c30127d8f570fb9b1f00b"
+sha256 = "beb254fec368c4e7f7f82a5f310c6470b893ec88a90b66426da971c6826b0453"
 
 [[packages]]
 name = "mypy-extensions"
