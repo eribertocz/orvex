@@ -1,0 +1,317 @@
+{
+  "kind": "catalog",
+  "version": 1,
+  "model_fingerprint": "sha256:b1608afa8fe6fb1c65b802cd582b1f53a28429df1016f9b74a9c3e8da373ccf9",
+  "catalog_fingerprint": "sha256:4403ee19887a14800bf86416e91c1a076385b2231e58a26c7e5d3efb50e05db9",
+  "datasets": [
+    {
+      "name": "zones",
+      "available": true,
+      "fields": [
+        {
+          "name": "zone_id",
+          "logical": {
+            "family": "Integer",
+            "width": 64,
+            "signed": true
+          },
+          "exactness": "exact",
+          "nullable": false
+        },
+        {
+          "name": "label",
+          "logical": {
+            "family": "String"
+          },
+          "exactness": "exact",
+          "nullable": true
+        }
+      ],
+      "metrics": []
+    },
+    {
+      "name": "customers",
+      "description": "Every customer we bill.",
+      "available": true,
+      "fields": [
+        {
+          "name": "customer_id",
+          "logical": {
+            "family": "Integer",
+            "width": 64,
+            "signed": true
+          },
+          "exactness": "exact",
+          "nullable": false
+        },
+        {
+          "name": "zone_id",
+          "description": "The zone the customer belongs to.",
+          "logical": {
+            "family": "Integer",
+            "width": 64,
+            "signed": true
+          },
+          "exactness": "exact",
+          "nullable": true
+        },
+        {
+          "name": "phone",
+          "masked": true,
+          "encoding": "VARCHAR"
+        },
+        {
+          "name": "segment",
+          "logical": {
+            "family": "String"
+          },
+          "exactness": "exact",
+          "nullable": true
+        },
+        {
+          "name": "phone_tail",
+          "masked": true,
+          "encoding": "VARCHAR"
+        }
+      ],
+      "metrics": []
+    },
+    {
+      "name": "profiles",
+      "available": true,
+      "fields": [
+        {
+          "name": "customer_id",
+          "logical": {
+            "family": "Integer",
+            "width": 64,
+            "signed": true
+          },
+          "exactness": "exact",
+          "nullable": false
+        },
+        {
+          "name": "score",
+          "logical": {
+            "family": "Integer",
+            "width": 32,
+            "signed": true
+          },
+          "exactness": "exact",
+          "nullable": true
+        }
+      ],
+      "metrics": []
+    },
+    {
+      "name": "payments",
+      "available": true,
+      "fields": [
+        {
+          "name": "payment_id",
+          "logical": {
+            "family": "Integer",
+            "width": 64,
+            "signed": true
+          },
+          "exactness": "exact",
+          "nullable": false
+        },
+        {
+          "name": "customer_id",
+          "logical": {
+            "family": "Integer",
+            "width": 64,
+            "signed": true
+          },
+          "exactness": "exact",
+          "nullable": true
+        },
+        {
+          "name": "shipping_id",
+          "logical": {
+            "family": "Integer",
+            "width": 64,
+            "signed": true
+          },
+          "exactness": "exact",
+          "nullable": true
+        },
+        {
+          "name": "amount",
+          "logical": {
+            "family": "Decimal",
+            "precision": 18,
+            "scale": 2
+          },
+          "exactness": "exact",
+          "nullable": true
+        },
+        {
+          "name": "paid_on",
+          "logical": {
+            "family": "Date"
+          },
+          "exactness": "exact",
+          "nullable": true
+        }
+      ],
+      "metrics": []
+    },
+    {
+      "name": "employees",
+      "available": true,
+      "fields": [
+        {
+          "name": "employee_id",
+          "logical": {
+            "family": "Integer",
+            "width": 64,
+            "signed": true
+          },
+          "exactness": "exact",
+          "nullable": false
+        },
+        {
+          "name": "manager_id",
+          "logical": {
+            "family": "Integer",
+            "width": 64,
+            "signed": true
+          },
+          "exactness": "exact",
+          "nullable": true
+        }
+      ],
+      "metrics": []
+    },
+    {
+      "name": "campaigns",
+      "available": true,
+      "fields": [
+        {
+          "name": "campaign_id",
+          "logical": {
+            "family": "Integer",
+            "width": 64,
+            "signed": true
+          },
+          "exactness": "exact",
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "logical": {
+            "family": "String"
+          },
+          "exactness": "exact",
+          "nullable": true
+        }
+      ],
+      "metrics": []
+    },
+    {
+      "name": "allocations",
+      "available": true,
+      "fields": [
+        {
+          "name": "allocation_id",
+          "logical": {
+            "family": "Integer",
+            "width": 64,
+            "signed": true
+          },
+          "exactness": "exact",
+          "nullable": false
+        },
+        {
+          "name": "payment_id",
+          "logical": {
+            "family": "Integer",
+            "width": 64,
+            "signed": true
+          },
+          "exactness": "exact",
+          "nullable": true
+        },
+        {
+          "name": "campaign_id",
+          "logical": {
+            "family": "Integer",
+            "width": 64,
+            "signed": true
+          },
+          "exactness": "exact",
+          "nullable": true
+        },
+        {
+          "name": "weight",
+          "logical": {
+            "family": "Decimal",
+            "precision": 9,
+            "scale": 4
+          },
+          "exactness": "exact",
+          "nullable": true
+        }
+      ],
+      "metrics": []
+    }
+  ],
+  "metrics": [
+    {
+      "name": "revenue",
+      "logical": {
+        "family": "Decimal",
+        "precision": 38,
+        "scale": 2
+      },
+      "exactness": "exact",
+      "nullable": true
+    }
+  ],
+  "relationships": [
+    {
+      "name": "customer_zone",
+      "from": "customers",
+      "to": "zones",
+      "cardinality": "many_to_one"
+    },
+    {
+      "name": "billing",
+      "from": "payments",
+      "to": "customers",
+      "cardinality": "many_to_one"
+    },
+    {
+      "name": "shipping",
+      "from": "payments",
+      "to": "customers",
+      "cardinality": "many_to_one"
+    },
+    {
+      "name": "profile",
+      "from": "profiles",
+      "to": "customers",
+      "cardinality": "one_to_one"
+    },
+    {
+      "name": "manager",
+      "from": "employees",
+      "to": "employees",
+      "cardinality": "many_to_one"
+    },
+    {
+      "name": "allocation_payment",
+      "from": "allocations",
+      "to": "payments",
+      "cardinality": "many_to_one"
+    },
+    {
+      "name": "allocation_campaign",
+      "from": "allocations",
+      "to": "campaigns",
+      "cardinality": "many_to_one"
+    }
+  ]
+}

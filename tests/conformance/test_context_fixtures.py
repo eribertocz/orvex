@@ -6,7 +6,10 @@ instead, and the semantic side accepts it unchanged."""
 
 from __future__ import annotations
 
+import json
+
 import yaml
+from orvex.access.context import may_reuse
 from orvex.access.fixtures import FixtureContextProvider, Member, Request
 from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.semantic.receipt import verify_receipt
@@ -92,3 +95,17 @@ def test_p2_08_policies_read_provider_contexts() -> None:
     builder = found.context_for(Request("builder", "p1"))
     hidden = next(iter(policies.column_policies))
     assert policies.protection(hidden, builder.groups) == "hidden"  # no implicit exemption (#238)
+
+
+def test_p2_10_a_catalog_follows_the_current_context_never_a_stale_one() -> None:
+    from orvex.semantic.catalog import catalog_for_context
+
+    found, policies = provider()
+    request = Request("collector", "p1")
+    stored = found.context_for(request)
+    shown = catalog_for_context(bank(), policies, stored.document())
+    assert "national_id" in json.dumps(shown)
+    found.add("collector", "p1", Member("author", ["analysts"], {"user_id": "collector"}))
+    assert not may_reuse(stored.permission_fingerprint, found, request)  # the cache is refused
+    fresh = catalog_for_context(bank(), policies, found.context_for(request).document())
+    assert "national_id" not in json.dumps(fresh)

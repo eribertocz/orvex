@@ -1,0 +1,318 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.invalid/catalog/v1/schema.json",
+  "title": "Catalog",
+  "description": "What one caller may query: the visible datasets, fields, metrics and relationships (README). Hidden members are absent, masked fields show nothing of themselves.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "version",
+    "model_fingerprint",
+    "catalog_fingerprint",
+    "datasets",
+    "metrics",
+    "relationships"
+  ],
+  "properties": {
+    "kind": {
+      "const": "catalog"
+    },
+    "version": {
+      "const": 1
+    },
+    "model_fingerprint": {
+      "$ref": "#/$defs/Fingerprint"
+    },
+    "catalog_fingerprint": {
+      "$ref": "#/$defs/Fingerprint"
+    },
+    "datasets": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {
+        "oneOf": [
+          {
+            "$ref": "#/$defs/Dataset"
+          },
+          {
+            "$ref": "#/$defs/UnavailableDataset"
+          }
+        ]
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/Member"
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/Relationship"
+      }
+    }
+  },
+  "$defs": {
+    "Fingerprint": {
+      "description": "`sha256:` and 64 lowercase hex digits.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "Zone": {
+      "type": "string",
+      "pattern": "^(UTC|[A-Z][A-Za-z_]+(/[A-Za-z0-9_+-]+){1,2})$"
+    },
+    "Logical": {
+      "description": "The engine-independent type (P2-04): a family and the parameters the compiler decided. A Decimal whose precision and scale are still undecided (a division without `rounding`) lists none.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family"
+      ],
+      "properties": {
+        "family": {
+          "enum": [
+            "Boolean",
+            "Date",
+            "DateTime",
+            "DateTimeTz",
+            "Decimal",
+            "Float",
+            "Integer",
+            "Opaque",
+            "String",
+            "Time"
+          ]
+        },
+        "precision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 38
+        },
+        "scale": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 38
+        },
+        "width": {
+          "enum": [
+            8,
+            16,
+            32,
+            64,
+            128
+          ]
+        },
+        "signed": {
+          "type": "boolean"
+        },
+        "zone": {
+          "$ref": "#/$defs/Zone"
+        }
+      }
+    },
+    "Name": {
+      "description": "A name as the model writes it.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "Description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "Member": {
+      "description": "A field or metric the caller may use, with what it is.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "logical",
+        "exactness",
+        "nullable"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        },
+        "description_flagged": {
+          "const": true
+        },
+        "logical": {
+          "$ref": "#/$defs/Logical"
+        },
+        "semantic_type": {
+          "enum": [
+            "identifier",
+            "category",
+            "quantity",
+            "amount",
+            "ratio",
+            "geo_region",
+            "latitude",
+            "longitude"
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "pattern": "^[!-~]+$"
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "exactness": {
+          "enum": [
+            "exact",
+            "approximate",
+            "unknown"
+          ]
+        },
+        "nullable": {
+          "type": "boolean"
+        }
+      },
+      "not": {
+        "required": [
+          "unit",
+          "currency"
+        ]
+      }
+    },
+    "MaskedMember": {
+      "description": "A masked field: its mask's text type only, nothing of the member (security §3.3).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "masked",
+        "encoding"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "masked": {
+          "const": true
+        },
+        "encoding": {
+          "const": "VARCHAR"
+        }
+      }
+    },
+    "Field": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Member"
+        },
+        {
+          "$ref": "#/$defs/MaskedMember"
+        }
+      ]
+    },
+    "Dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "available",
+        "fields",
+        "metrics"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "description": {
+          "$ref": "#/$defs/Description"
+        },
+        "description_flagged": {
+          "const": true
+        },
+        "grain": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/Name"
+          }
+        },
+        "available": {
+          "const": true
+        },
+        "fields": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/Field"
+          }
+        },
+        "metrics": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/Member"
+          }
+        }
+      }
+    },
+    "UnavailableDataset": {
+      "description": "A dataset the caller could use, made unavailable by a policy that cannot run yet: its name only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "available",
+        "reason"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "available": {
+          "const": false
+        },
+        "reason": {
+          "const": "not_available_yet"
+        }
+      }
+    },
+    "Relationship": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "from",
+        "to",
+        "cardinality"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/Name"
+        },
+        "from": {
+          "$ref": "#/$defs/Name"
+        },
+        "to": {
+          "$ref": "#/$defs/Name"
+        },
+        "cardinality": {
+          "enum": [
+            "many_to_one",
+            "one_to_one"
+          ]
+        }
+      }
+    }
+  }
+}
