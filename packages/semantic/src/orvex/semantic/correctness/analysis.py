@@ -74,9 +74,13 @@ SHAPES: Mapping[str, Shape] = {
     "aggregate": Shape("C1", "P2-11"),
     "detail_rows": Shape("detail rows", "P2-24"),
     "recomputable": Shape("C2", "P2-13"),
-    "holistic": Shape("C2 distinct", "P2-14"),
-    "semi_additive": Shape("C2 period end", "P2-14"),
-    "non_additive": Shape("C2 distinct", "P2-14"),
+    "holistic": Shape("holistic aggregate", "a later issue"),
+    "approximate": Shape("approximate aggregate", "a later issue"),
+    "semi_additive": Shape("other non-additive axes", "a later issue"),
+    "period_end_ties": Shape("a declared tie-breaking rule", "a later issue"),
+    "period_end_filter": Shape("C6", "P2-20"),
+    "mixed_period_end": Shape("C5", "P2-17"),
+    "non_additive": Shape("C2 non-additive", "a later issue"),
     "multi_fact": Shape("C5", "P2-17"),
     "fanout": Shape("C3", "P2-16"),
     "calendar_bucket": Shape("C6", "P2-19"),
@@ -111,8 +115,6 @@ _DATASET_SHAPES: Mapping[str, str] = {"history": "history"}
 _DECLARATION_SHAPES: Mapping[str, str] = {
     "window": "ordered",
     "allocation": "bridge_allocation",
-    "non_additive_axes": "semi_additive",
-    "period_end": "semi_additive",
     "context": "metric_context",
     "level_of_detail": "level_of_detail",
     "over_metrics": "over_metrics",
@@ -121,6 +123,8 @@ _DECLARATION_SHAPES: Mapping[str, str] = {
 _PLAIN_DECLARATIONS = frozenset(
     {
         "components",  # with `recomputable`: checked as a ratio below (C2)
+        "non_additive_axes",  # with `semi_additive`: checked as a period below (C2)
+        "period_end",
         "version",
         "element",
         "additivity",
@@ -268,6 +272,7 @@ class _Analysis:
             for e in compiled.ossie.product_extensions
         }
         self.query = _Query(bound)
+        self.periods: dict[MemberId, tuple[MemberId, str]] = {}
 
     # names, as the model writes them
 
@@ -365,8 +370,18 @@ class _Analysis:
         """The metric's additivity class and whether it was `declared` or `derived`."""
         compiled = self.compiled.require(member)
         typed = compiled.typed
-        if typed.type.aggregate_class in ("holistic", "sketch"):
-            return "holistic", "derived"
+        if typed.type.aggregate_class == "sketch":
+            return "approximate", "derived"
+        if typed.type.aggregate_class == "holistic":
+            node = typed.tree.node if typed.tree is not None else None
+            distinct = (
+                isinstance(node, sql.Call)
+                and node.name == "COUNT"
+                and node.distinct
+                and len(node.arguments) == 1
+                and node.filter is None
+            )
+            return ("distinct_count" if distinct else "holistic"), "derived"
         declared = self.payloads.get(compiled.parsed.pointer, {}).get("additivity")
         if declared is not None:
             return str(declared), "declared"
@@ -379,6 +394,39 @@ class _Analysis:
         ):
             return "additive", "derived"
         raise SemanticError("MISSING_ADDITIVITY_DECLARATION", {"metric": self.label(member)})
+
+    # C2, semi-additive metrics
+
+    def period(self, metric: MemberId, home: str) -> tuple[MemberId, str]:
+        """The metric's one non-additive time axis and its behavior, when the query can be
+        answered: `period_end` keeps each entity's latest snapshot per period; `forbidden`
+        allows grouping by the axis's own values only. Anything else is refused."""
+        payload = self.payloads.get(self.compiled.require(metric).parsed.pointer, {})
+        declared = payload.get("non_additive_axes", ())
+        axes = (
+            [a for a in declared if isinstance(a, Mapping)] if isinstance(declared, tuple) else []
+        )
+        dimensions = [a for a in axes if "dimension" in a]
+        entities_ok = all(a.get("behavior") == "additive" for a in axes if "entity" in a)
+        behavior = str(dimensions[0].get("behavior")) if len(dimensions) == 1 else ""
+        if not entities_ok or behavior not in ("period_end", "forbidden"):
+            _refuse_pending({"semi_additive"})
+        axis = MemberId("field", home, sql.normalize(str(dimensions[0]["dimension"])))
+        if axis not in self.compiled.members:
+            _refuse_pending({"semi_additive"})
+        groups = [r for r in self.query.grouped if r.member == axis]
+        if not groups or (behavior == "forbidden" and groups[0].bucket is not None):
+            raise SemanticError(
+                "ILLEGAL_TEMPORAL_REAGGREGATION",
+                {"metric": self.label(metric), "axis": self.label(axis)},
+            )
+        if behavior == "period_end":
+            if axis.name not in self.graph.keys.get(home, ()):
+                # Two snapshots of one entity at one instant must be impossible by key.
+                _refuse_pending({"period_end_ties"})
+            if any(r.member == axis for r in self.query.rows if r.slot == "filter"):
+                _refuse_pending({"period_end_filter"})
+        return axis, behavior
 
     # C2, ratios
 
@@ -483,12 +531,21 @@ class _Analysis:
         if len(set().union(*homes.values())) > 1:
             shapes.add("multi_fact")
         classes = {m: self.additivity(m) for m in metrics}
-        answered = {"additive", "recomputable"}
+        answered = {"additive", "recomputable", "distinct_count", "semi_additive"}
         _refuse_pending(shapes | {c for c, _ in classes.values() if c not in answered})
         (home,) = set().union(*homes.values())
+        periods: dict[MemberId, tuple[MemberId, str]] = {}
         for metric, (kind, _) in classes.items():
             if kind == "recomputable":
                 self.components(metric, home)
+            if kind == "semi_additive":
+                periods[metric] = self.period(metric, home)
+        ends = {axis for axis, behavior in periods.values() if behavior == "period_end"}
+        if ends and (
+            len(ends) > 1 or any(periods.get(m, (None, ""))[1] != "period_end" for m in metrics)
+        ):
+            _refuse_pending({"mixed_period_end"})
+        self.periods = periods
         grouped = {r.member for r in query.grouped}
         for row in rows:
             if row.slot == "sort" and row.member not in grouped:
@@ -544,6 +601,23 @@ class _Analysis:
             for m in metrics
             if classes[m][0] == "recomputable"
         ]
+        extra = {"distinct_count": ("distinct", "C2.distinct")}
+        for m in metrics:
+            kind = classes[m][0]
+            if kind in extra or self.periods.get(m, (None, ""))[1] == "period_end":
+                name, prefix = extra.get(kind, ("period_end", "C2.period_end"))
+                obligations.append(
+                    Obligation(
+                        id=f"{prefix}:{self.label(m)}",
+                        rule="C2",
+                        kind=name,
+                        metric=self.label(m),
+                        from_grain=tuple(natural),
+                        to_grain=to_grain,
+                        members=tuple(sorted({self.label(m), *grain_members})),
+                        datasets=tuple(datasets),
+                    )
+                )
         facts = {
             "mode": self.query.mode,
             "grain": [{"member": label, "bucket": bucket} for label, bucket in requested],
@@ -554,6 +628,11 @@ class _Analysis:
                     "grain": natural,
                     "additivity": classes[m][0],
                     "additivity_source": classes[m][1],
+                    "period": (
+                        {"axis": self.label(self.periods[m][0]), "behavior": self.periods[m][1]}
+                        if m in self.periods
+                        else None
+                    ),
                 }
                 for m in sorted(metrics, key=self.label)
             ],

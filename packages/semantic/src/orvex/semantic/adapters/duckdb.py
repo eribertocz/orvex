@@ -200,7 +200,8 @@ class _Writer:
 
     def call(self, node: sql.Call, again: Any, context: str, dataset: str) -> str:  # noqa: ANN401
         name = node.name.upper()
-        if node.order is not None or node.distinct:
+        distinct = node.distinct and name == "COUNT" and context == "metric"
+        if node.order is not None or (node.distinct and not distinct):
             raise _unsupported()
         if name == "DATE_TRUNC" and len(node.arguments) == 2 and node.filter is None:
             # The calendar truncation of a date is a date: DuckDB answers a TIMESTAMP at
@@ -215,7 +216,7 @@ class _Writer:
             if name == "COUNT" and len(arguments) == 1 and isinstance(arguments[0], sql.Star):
                 inner = "*"
             elif len(arguments) == 1:
-                inner = again(arguments[0])
+                inner = ("DISTINCT " if distinct else "") + again(arguments[0])
             else:
                 raise _unsupported()
             where = f" FILTER (WHERE {again(node.filter)})" if node.filter is not None else ""
@@ -296,6 +297,25 @@ class _Writer:
             bucket={"unit": bucket} if bucket else None,
         )
 
+    def fact(self, source: Any) -> str:  # noqa: ANN401
+        """The fact's table, or, for a period-end metric, only each entity's latest row per
+        period (C2): a ranking over the entity and the period, by the axis, newest first. The
+        entity plus the axis is the key, so no two rows tie."""
+        latest = source.latest
+        if latest is None:
+            return quote(source.table)
+        axis = self.field(latest.axis, "s")
+        period = axis
+        if latest.bucket is not None:
+            if latest.bucket not in _BUCKETS:
+                raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "bucket"})
+            period = f"CAST(date_trunc('{latest.bucket}', {axis}) AS DATE)"
+        partition = ", ".join([self.field(e, "s") for e in latest.entity] + [period])
+        return (
+            f"(SELECT * FROM {quote(source.table)} AS {quote('s')} QUALIFY row_number() OVER "
+            f"(PARTITION BY {partition} ORDER BY {axis} DESC) = 1)"
+        )
+
     def statement(self) -> PhysicalQuery:
         plan = self.plan
         select: list[str] = []
@@ -332,7 +352,7 @@ class _Writer:
             ratios.append((k, (aggregate, scales), column))
         text = "SELECT " + ", ".join(select)
         sources = {s.alias: s for s in plan.sources}
-        text += f" FROM {quote(sources['t0'].table)} AS {quote('t0')}"
+        text += f" FROM {self.fact(sources['t0'])} AS {quote('t0')}"
         for join in plan.joins:
             on = " AND ".join(
                 f"{self.field(a, join.left)} = {self.field(b, join.right)}" for a, b in join.pairs
