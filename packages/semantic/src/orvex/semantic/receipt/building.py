@@ -545,7 +545,9 @@ class ReceiptRecord:
             "receipt_id": self.receipt_id,
             "seal": dict(self._seal),
             "query_fingerprint": record["query"]["fingerprint"],
-            "question": question(record["query"]["canonical"], viewer),
+            "question": question(
+                record["query"].get("question", record["query"]["canonical"]), viewer
+            ),
             "security": {"restricted": bool(record["security"]["policies"]), "policies": policies},
             "freshness": [f for f in record["freshness"] if datasets(f["dataset"])],
             "reproducibility": record["reproducibility"],
@@ -639,9 +641,13 @@ def build_receipt(
     obligations: Sequence[Obligation] = (),
     plan_fingerprint: str | None = None,
     freshness: Sequence[FreshnessUse] = (),
+    question_document: Mapping[str, Any] | None = None,
 ) -> ReceiptRecord:
-    """The record of one result, or `InvalidReceipt`. Its reproducibility is derived from the
-    data versions, the reader and the engine, never given."""
+    """The record of one result, or `InvalidReceipt`. `query_canonical` is the bound query
+    whose fingerprint is `query_fingerprint`; `question_document`, when given, is the same
+    question with members by their model labels, which the views restrict and show (P2-12).
+    Its reproducibility is derived from the data versions, the reader and the engine, never
+    given."""
     _check_inputs(
         query_canonical, query_fingerprint, model, permission_fingerprint, policies, data, execution
     )
@@ -653,7 +659,8 @@ def build_receipt(
     for instant in [execution.started_at, *(f.as_of for f in freshness)]:
         _require(bool(INSTANT.fullmatch(instant)), "instant", f"{instant!r} is not a UTC instant")
     document: dict[str, Any] = {
-        "query": {"canonical": dict(query_canonical), "fingerprint": query_fingerprint},
+        "query": {"canonical": dict(query_canonical), "fingerprint": query_fingerprint}
+        | ({"question": dict(question_document)} if question_document is not None else {}),
         "model": _plain(model),
         "plan": {"obligations": _unordered(_plain(list(obligations)))}
         | ({"plan_fingerprint": plan_fingerprint} if plan_fingerprint else {}),
