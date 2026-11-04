@@ -15,9 +15,10 @@ revision (`c721ffc`, Owner policy of 2026-11-01):
     adapter's translation writes it explicitly, so the translated model loads.
   - CASE-009: `over_metrics` (`gross_revenue - refunds`, the contract's own example) needs a
     declared alignment that the corpus does not give.
-  - CASE-006: a ratio of two metrics of one dataset. It has a standard form,
-    `CAST(SUM(orders.amount) / COUNT(orders.order_id) AS DECIMAL(18, 2))`, but the original
-    is kept, never substituted. As a product construct it needs a declared alignment too.
+  - CASE-006: a ratio of two metrics of one dataset. The imported file keeps the original. The
+    adapter's translation declares it as a ratio (`recomputable`, its `components`, rounding half
+    away from zero, empty for a zero denominator; Owner decisions of 2026-11-04, #325) and writes
+    its expression with the metrics' own aggregates, so the translated model loads.
   - CASE-021: `window` (`running_total` of `daily_revenue` by `date`), not declared in the
     corpus.
 - **CASE-013** is one of the conformant models: the official validator only warns when
@@ -51,6 +52,8 @@ VENDORS = (_PRODUCT["ossie_vendor_name"], *_PRODUCT["previous_vendor_names"])
 # Case -> the metric expression that names another metric.
 # Translated by the adapter into an explicit product construct.
 EXPLICIT_EXTENSION = {"CASE-010"}
+# Translated by the adapter into a declared ratio whose expression is standard Ossie SQL.
+DECLARED_RATIO = {"CASE-006"}
 FUTURE = {
     "CASE-006": "/metrics/2/expression/dialects/0/expression",
     "CASE-009": "/metrics/2/expression/dialects/0/expression",
@@ -152,7 +155,7 @@ def test_case_013_loads_as_written_with_its_advisory() -> None:
 def test_translated_models_follow_the_split_except_explicit_extensions(path: Path) -> None:
     translated, _ = adapter.translate(raw(path), VENDORS[0])
     content = json.dumps(translated).encode()
-    if path.stem in FUTURE and path.stem not in EXPLICIT_EXTENSION:
+    if path.stem in FUTURE and path.stem not in EXPLICIT_EXTENSION | DECLARED_RATIO:
         with pytest.raises(SemanticError) as caught:
             read(content, f"semantic/{path.stem}.ossie.json", VENDORS)
         (problem,) = cast(list[dict[str, str]], caught.value.details["problems"])
@@ -176,7 +179,9 @@ def test_every_accepted_corpus_model_parses_with_nothing_excluded(path: Path) ->
     translated, _ = adapter.translate(raw(path), VENDORS[0])
     candidates.append(("json", json.dumps(translated).encode()))
     for form, content in candidates:
-        if path.stem in FUTURE and (form == "yaml" or path.stem not in EXPLICIT_EXTENSION):
+        if path.stem in FUTURE and (
+            form == "yaml" or path.stem not in EXPLICIT_EXTENSION | DECLARED_RATIO
+        ):
             continue
         parsed = parse_model(read(content, f"semantic/{path.stem}.ossie.{form}", VENDORS), VENDORS)
         assert parsed.excluded == {}
@@ -204,7 +209,9 @@ def test_every_accepted_corpus_model_types(path: Path) -> None:
     translated, _ = adapter.translate(raw(path), VENDORS[0])
     candidates.append(("json", json.dumps(translated).encode()))
     for form, content in candidates:
-        if path.stem in FUTURE and (form == "yaml" or path.stem not in EXPLICIT_EXTENSION):
+        if path.stem in FUTURE and (
+            form == "yaml" or path.stem not in EXPLICIT_EXTENSION | DECLARED_RATIO
+        ):
             continue
         loaded = read(content, f"semantic/{path.stem}.ossie.{form}", VENDORS)
         parsed = parse_model(loaded, VENDORS)

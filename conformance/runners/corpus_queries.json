@@ -88,6 +88,12 @@
       "mode": "aggregate",
       "metrics": [
         {
+          "metric": "revenue"
+        },
+        {
+          "metric": "order_count"
+        },
+        {
           "metric": "average_order_value"
         }
       ]

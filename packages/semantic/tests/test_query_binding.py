@@ -33,7 +33,7 @@ VENDORS = (CURRENT, *_PRODUCT["previous_vendor_names"])
 CORPUS = ROOT / "conformance/semantic-corpus/bi-platform/models"
 QUERIES = json.loads((ROOT / "conformance/runners/corpus_queries.json").read_text("utf-8"))
 GOLDEN = Path(__file__).with_name("golden") / "corpus-query-fingerprints.json"
-NOT_YET = {"CASE-006", "CASE-009", "CASE-021"}  # their models compile after P2-13/P2-17/P2-20
+NOT_YET = {"CASE-009", "CASE-021"}  # their models compile after P2-17/P2-20
 INSTANT = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
 LIMITS = Limits(detail_page_size=1000)
 
@@ -488,7 +488,7 @@ def test_queries_of_models_that_do_not_compile_yet_are_valid(case: str) -> None:
 
 
 @pytest.mark.xfail(
-    reason="CASE-006, -009 and -021 compile once P2-13, P2-17 and P2-20 supply their "
+    reason="CASE-009 and -021 compile once P2-17 and P2-20 supply their "
     "declarations (Owner decision of 2026-11-01, #283)",
     strict=True,
 )

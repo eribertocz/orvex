@@ -58,7 +58,7 @@ class UnfilteredQuery(ValueError):
     caller's `hidden`. An internal error, never shown to the caller."""
 
 
-RULES: tuple[tuple[str, int], ...] = (("C1", 1),)  # implemented, in the order they run
+RULES: tuple[tuple[str, int], ...] = (("C1", 1), ("C2", 1))  # implemented, in the order they run
 IMPLEMENTED = frozenset(rule for rule, _ in RULES)
 
 
@@ -74,9 +74,9 @@ SHAPES: Mapping[str, Shape] = {
     "aggregate": Shape("C1", "P2-11"),
     "detail_rows": Shape("detail rows", "P2-24"),
     "recomputable": Shape("C2", "P2-13"),
-    "holistic": Shape("C2", "P2-14"),
-    "semi_additive": Shape("C2", "P2-14"),
-    "non_additive": Shape("C2", "P2-14"),
+    "holistic": Shape("C2 distinct", "P2-14"),
+    "semi_additive": Shape("C2 period end", "P2-14"),
+    "non_additive": Shape("C2 distinct", "P2-14"),
     "multi_fact": Shape("C5", "P2-17"),
     "fanout": Shape("C3", "P2-16"),
     "calendar_bucket": Shape("C6", "P2-19"),
@@ -111,7 +111,6 @@ _DATASET_SHAPES: Mapping[str, str] = {"history": "history"}
 _DECLARATION_SHAPES: Mapping[str, str] = {
     "window": "ordered",
     "allocation": "bridge_allocation",
-    "components": "recomputable",
     "non_additive_axes": "semi_additive",
     "period_end": "semi_additive",
     "context": "metric_context",
@@ -121,6 +120,7 @@ _DECLARATION_SHAPES: Mapping[str, str] = {
 }
 _PLAIN_DECLARATIONS = frozenset(
     {
+        "components",  # with `recomputable`: checked as a ratio below (C2)
         "version",
         "element",
         "additivity",
@@ -147,6 +147,23 @@ def _refuse_pending(shapes: set[str]) -> None:
     for shape, needs in SHAPES.items():
         if shape in shapes and needs.rule not in IMPLEMENTED:
             raise SemanticError("UNSUPPORTED_OPERATION", {"operation": shape})
+
+
+def _refs(node: object) -> list[sql.Ref]:
+    """Every reference in an expression tree."""
+    if isinstance(node, sql.Ref):
+        return [node]
+    found: list[sql.Ref] = []
+    if hasattr(node, "__dataclass_fields__"):
+        for name in node.__dataclass_fields__:
+            value = getattr(node, name)
+            for item in value if isinstance(value, tuple) else (value,):
+                if isinstance(item, tuple):
+                    for inner in item:
+                        found += _refs(inner)
+                else:
+                    found += _refs(item)
+    return found
 
 
 def _member(key: Sequence[str]) -> MemberId:
@@ -363,6 +380,31 @@ class _Analysis:
             return "additive", "derived"
         raise SemanticError("MISSING_ADDITIVITY_DECLARATION", {"metric": self.label(member)})
 
+    # C2, ratios
+
+    def components(self, metric: MemberId, home: str) -> None:
+        """A ratio is answered only when each component is a plain additive aggregate over
+        the fields of its home dataset: never a ratio of ratios, never across facts."""
+        typed = self.compiled.require(metric).typed
+        trees = dict(typed.payload)
+        for part in ("components.numerator", "components.denominator"):
+            tree = trees.get(part)
+            node = tree.node if tree is not None else None
+            if not (
+                isinstance(node, sql.Call)
+                and node.name in _DERIVED_ADDITIVE
+                and not node.distinct
+                and tree is not None
+                and tree.type.aggregate_class == "distributive"
+            ):
+                raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "recomputable"})
+            for ref in _refs(node):
+                owner = ref.parts[0] if len(ref.parts) == 2 else metric.dataset
+                if owner != home or MemberId("field", owner, ref.parts[-1]) not in (
+                    self.compiled.members
+                ):
+                    raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "multi_fact"})
+
     # C1
 
     def path(self, home: str, row: _Row, metric: MemberId) -> Path:
@@ -441,8 +483,12 @@ class _Analysis:
         if len(set().union(*homes.values())) > 1:
             shapes.add("multi_fact")
         classes = {m: self.additivity(m) for m in metrics}
-        _refuse_pending(shapes | {c for c, _ in classes.values() if c != "additive"})
+        answered = {"additive", "recomputable"}
+        _refuse_pending(shapes | {c for c, _ in classes.values() if c not in answered})
         (home,) = set().union(*homes.values())
+        for metric, (kind, _) in classes.items():
+            if kind == "recomputable":
+                self.components(metric, home)
         grouped = {r.member for r in query.grouped}
         for row in rows:
             if row.slot == "sort" and row.member not in grouped:
@@ -483,6 +529,20 @@ class _Analysis:
                 datasets=tuple(datasets),
             )
             for m in metrics
+        ]
+        obligations += [
+            Obligation(
+                id=f"C2.recompute:{self.label(m)}",
+                rule="C2",
+                kind="recompute",
+                metric=self.label(m),
+                from_grain=tuple(natural),
+                to_grain=to_grain,
+                members=tuple(sorted({self.label(m), *grain_members})),
+                datasets=tuple(datasets),
+            )
+            for m in metrics
+            if classes[m][0] == "recomputable"
         ]
         facts = {
             "mode": self.query.mode,

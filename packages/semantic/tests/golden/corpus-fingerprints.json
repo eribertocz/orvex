@@ -19,6 +19,10 @@
     "model_fingerprint": "sha256:b900c5129c22ff504366a0ce878208db31fec292bec0ff721710b30b2569893f",
     "semantic_fingerprint": "sha256:bd324cc0657e29dfc2c9c016b9dc1b895c150d3dc18cfb039abd9e1e65473309"
   },
+  "CASE-006": {
+    "model_fingerprint": "sha256:cf713f262f57b54a26293990103bb7a2ba74bea80c2f68e7b87fa4beeb59cd28",
+    "semantic_fingerprint": "sha256:b5ea34d1a8dc97d46a0bbf50e35ad0d9860ecc4a39b3517de046056b7f5da647"
+  },
   "CASE-007": {
     "model_fingerprint": "sha256:220e3429f64344e9cc4f1cc8d82b6e77818eba5d1c714a272944756f3b0f01d1",
     "semantic_fingerprint": "sha256:e348cacd9637f2094707bf35099a420688ba6435b866b6a2b159d0e195acd5ea"

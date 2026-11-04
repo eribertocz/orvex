@@ -34,7 +34,7 @@ VENDORS = (CURRENT, *_PRODUCT["previous_vendor_names"])
 FORMS = ("yaml", "json")
 CORPUS = ROOT / "conformance/semantic-corpus/bi-platform/models"
 GOLDEN = Path(__file__).with_name("golden") / "corpus-fingerprints.json"
-NOT_YET = {"CASE-006", "CASE-009", "CASE-021"}  # P2-13, P2-17 and P2-20 declare them
+NOT_YET = {"CASE-009", "CASE-021"}  # P2-17 and P2-20 declare them
 
 Model = dict[str, Any]
 
@@ -181,7 +181,7 @@ def test_the_corpus_compiles_to_its_golden_fingerprints() -> None:
     """To refresh after an intended change, write `corpus_fingerprints()` to the golden file and
     review the diff: every changed fingerprint is a changed meaning."""
     golden = json.loads(GOLDEN.read_text("utf-8"))
-    assert len(golden) == 18  # the 17 models P2-03 accepts, and CASE-010 through its translation
+    assert len(golden) == 19  # the 17 models P2-03 accepts, CASE-010 and CASE-006 translated
     assert corpus_fingerprints() == golden
 
 

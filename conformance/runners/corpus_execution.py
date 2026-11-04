@@ -188,7 +188,6 @@ PENDING = {
 # - CASE-017's expected refusal is about a derived metric adding USD to BOB, which the adapter
 #   does not translate yet; its written query asks for the two sums apart (corpus_queries.json).
 NOT_YET: Mapping[str, str] = {
-    "CASE-006": "the model compiles after P2-13 (#283)",
     "CASE-009": "the model compiles after P2-17 (#283)",
     "CASE-021": "the model compiles after P2-20 (#283)",
     "CASE-017": "the combined metric is translated with the units rule (P2-16)",
