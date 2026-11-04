@@ -77,7 +77,8 @@ class Graph:
             left = sql.normalize(str(relationship["from"]))
             right = sql.normalize(str(relationship["to"]))
             self.links[left].append(Step(name, right, True, temporal))
-            self.links[right].append(Step(name, left, one_to_one, temporal))
+            if left != right:  # a self-relationship is walked from the many side only
+                self.links[right].append(Step(name, left, one_to_one, temporal))
 
     def bridge(self, dataset: str) -> bool:
         return "bridge" in self.payloads.get(dataset, {})
@@ -90,10 +91,11 @@ class Graph:
         return self.keys.get(dataset, ())
 
     def paths(self, start: str, end: str) -> list[Path]:
-        """Every path from `start` to `end` that crosses each dataset once, in a fixed order."""
-        if start == end:
-            return [Path(())]
-        found: list[Path] = []
+        """Every path from `start` to `end`, in a fixed order. A path is the sequence of
+        relationships it crosses: it crosses each dataset once, except through a
+        self-relationship, which it crosses at most once, so a cycle is never walked. From a
+        dataset to itself, the empty path comes first."""
+        found: list[Path] = [Path(())] if start == end else []
         pending: list[tuple[str, tuple[Step, ...], frozenset[str]]] = [
             (start, (), frozenset({start}))
         ]
@@ -104,7 +106,8 @@ class Graph:
             if explored > MAX_STEPS:
                 raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "path_search"})
             for step in sorted(self.links.get(at, ()), key=lambda s: (s.relationship, s.to)):
-                if step.to in seen:
+                itself = step.to == at and step.relationship not in {s.relationship for s in steps}
+                if step.to in seen and not itself:
                     continue
                 route = (*steps, step)
                 if step.to == end:
@@ -112,5 +115,6 @@ class Graph:
                     if len(found) > MAX_PATHS:
                         raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "path_search"})
                     continue
-                pending.append((step.to, route, seen | {step.to}))
+                if not itself:
+                    pending.append((step.to, route, seen | {step.to}))
         return sorted(found, key=lambda p: p.relationships)

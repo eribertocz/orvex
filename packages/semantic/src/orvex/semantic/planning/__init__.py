@@ -201,7 +201,7 @@ class _Planner:
         self.aliases: dict[tuple[str, ...], str] = {(): "t0"}
         self.joins: list[Join] = []
         self.paths = {
-            (p["member"], p["slot"]): tuple(self.written[r] for r in p["relationships"])
+            (p["member"], p["slot"], p["role"]): tuple(self.written[r] for r in p["relationships"])
             for p in report.facts["paths"]
         }
 
@@ -214,9 +214,10 @@ class _Planner:
     def label(self, member: MemberId) -> str:
         return self.compiled.require(member).parsed.label
 
-    def alias(self, member: MemberId, slot: str) -> str:
+    def alias(self, member: MemberId, slot: str, role: str | None = None) -> str:
         """The source holding `member`, joining along its path from the fact once."""
-        path = self.paths.get((self.label(member), slot), ())
+        written = self.graph.relationship_names.get(role, role) if role else None
+        path = self.paths.get((self.label(member), slot, written), ())
         at, current = "t0", self.home
         for depth in range(1, len(path) + 1):
             prefix = path[:depth]
@@ -258,13 +259,23 @@ class _Planner:
         members = [m for m, _, _ in group_keys] + metric_keys
         names = self.names(list(dict.fromkeys(members)))
         filters = tuple(
-            Filter(_member(f["member"]), self.alias(_member(f["member"]), "filter"), f["predicate"])
+            Filter(
+                _member(f["member"]),
+                self.alias(_member(f["member"]), "filter", f["role"]),
+                f["predicate"],
+            )
             for f in canonical["filters"]
         )
+        roles_of: dict[MemberId, set[str | None]] = {}
+        for member, role, _ in group_keys:
+            roles_of.setdefault(member, set()).add(role)
         groups: list[Group] = []
-        for member, _, bucket in group_keys:
+        for member, role, bucket in group_keys:
             unit = bucket[0] if bucket else None
-            group = Group(names[member], member, self.alias(member, "group_by"), unit)
+            name = names[member]
+            if len(roles_of[member]) > 1 and role:  # one dimension through two roles
+                name = f"{name}_{self.graph.relationship_names[role]}"
+            group = Group(name, member, self.alias(member, "group_by", role), unit)
             if group not in groups:
                 groups.append(group)
         obligations: dict[str, list[str]] = {}

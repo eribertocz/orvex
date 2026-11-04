@@ -1292,7 +1292,7 @@ export interface QueryProblem {
 	 * JSON Pointer (RFC 6901) into the query.
 	 */
 	pointer: string;
-	rule: 'syntax' | 'schema' | 'kind' | 'zone';
+	rule: 'syntax' | 'schema' | 'kind' | 'zone' | 'role';
 }
 /**
  * QUERY_INVALID as any other audience sees it: the generic message and public details only.

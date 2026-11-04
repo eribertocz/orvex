@@ -1593,7 +1593,7 @@ class QueryProblem(BaseModel):
     """
     JSON Pointer (RFC 6901) into the query.
     """
-    rule: Literal["syntax", "schema", "kind", "zone"]
+    rule: Literal["syntax", "schema", "kind", "zone", "role"]
 
 
 class QueryProblems(RootModel[list[QueryProblem]]):

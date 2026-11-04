@@ -219,8 +219,14 @@ class _Query:
                 self.shapes.add("calendar_bucket")
             self.rows.append(row)
             self.grouped.append(row)
-        roles = {row.member: row.role for row in self.grouped}  # a sort follows its group's path
-        self.rows += [_Row(m, roles.get(m), None, "sort") for m in sorted_rows]
+        # A sort follows its group's path; a member grouped under two roles has no one path.
+        roles: dict[MemberId, set[str | None]] = {}
+        for row in self.grouped:
+            roles.setdefault(row.member, set()).add(row.role)
+        self.rows += [
+            _Row(m, next(iter(roles[m])) if len(roles.get(m, ())) == 1 else None, None, "sort")
+            for m in sorted_rows
+        ]
         for _, filters in canonical.get("contexts", ()):
             self.shapes.add("filter_context")
             for entry in filters:
@@ -486,37 +492,31 @@ class _Analysis:
     # C1
 
     def path(self, home: str, row: _Row, metric: MemberId) -> Path:
+        """C4: the one path from the fact to the member. A role names one relationship, and
+        exactly one many-to-one path may cross it; with no role, exactly one many-to-one path
+        may exist. A member of the fact's own dataset, with no role, is read from the fact."""
         target = row.member.dataset or home
-        paths = self.graph.paths(home, target)
-        if row.role is not None:
-            paths = [p for p in paths if row.role in p.relationships]
-        if not paths:
+        if row.role is None and target == home:
+            return Path(())
+        everything = self.graph.paths(home, target)
+        if not everything:
             raise SemanticError(
                 "ILLEGAL_GRAIN_TRANSITION",
                 {"metric": self.label(metric), "grain": [self.label(row.member)]},
             )
-        safe = [
-            p
-            for p in paths
-            if all(s.safe for s in p.steps) and not any(self.graph.bridge(d) for d in p.datasets)
-        ]
+        safe_everything = [p for p in everything if self.safe(p)]
+        paths = everything
+        if row.role is not None:
+            paths = [p for p in everything if row.role in p.relationships]
+            if not paths and target == home and not any(p.steps for p in safe_everything):
+                self.role_invalid(row)  # the role crosses no relationship at all
+            if not paths and safe_everything:
+                self.ambiguous(home, target, safe_everything, extra=row.role)
+            if not paths:
+                paths = everything  # no many-to-one path at all: fan-out or a bridge, below
+        safe = [p for p in paths if self.safe(p)]
         if len(safe) > 1:
-            names = sorted(
-                {self.graph.relationship_names[r] for p in safe for r in p.relationships}
-            )
-            shared = set.intersection(*({*p.relationships} for p in safe))
-            roles = sorted(
-                {self.graph.relationship_names[r] for p in safe for r in p.relationships}
-                - {self.graph.relationship_names[r] for r in shared}
-            )
-            raise SemanticError(
-                "AMBIGUOUS_RELATIONSHIP_PATH",
-                {
-                    "from": self.dataset(home),
-                    "to": self.dataset(target),
-                    "roles": roles if len(roles) >= 2 else names,
-                },
-            )
+            self.ambiguous(home, target, safe)
         if not safe:
             if any(self.graph.bridge(d) for p in paths for d in p.datasets):
                 return self._pending("bridge_allocation")
@@ -524,6 +524,40 @@ class _Analysis:
         if any(step.temporal for step in safe[0].steps):
             return self._pending("as_of_join")
         return safe[0]
+
+    def safe(self, path: Path) -> bool:
+        return all(s.safe for s in path.steps) and not any(
+            self.graph.bridge(d) for d in path.datasets
+        )
+
+    def ambiguous(
+        self, home: str, target: str, paths: list[Path], extra: str | None = None
+    ) -> None:
+        """`AMBIGUOUS_RELATIONSHIP_PATH`, naming the relationships that tell the paths apart."""
+        names = {self.graph.relationship_names[r] for p in paths for r in p.relationships}
+        shared: set[str] = (
+            set.intersection(*({*p.relationships} for p in paths)) if paths else set()
+        )
+        roles = names - {self.graph.relationship_names[r] for r in shared}
+        if extra is not None:
+            roles.add(self.graph.relationship_names.get(extra, extra))
+        if len(roles) < 2:
+            roles = names | roles
+        raise SemanticError(
+            "AMBIGUOUS_RELATIONSHIP_PATH",
+            {"from": self.dataset(home), "to": self.dataset(target), "roles": sorted(roles)},
+        )
+
+    def role_invalid(self, row: _Row) -> None:
+        """A role on a member the fact reads itself, crossing no relationship (P2-15)."""
+        pointer = next(
+            (p for p, m, role in self.bound.roles if m == row.member and role == row.role),
+            "",
+        )
+        raise SemanticError(
+            "QUERY_INVALID",
+            {"problems": [{"pointer": pointer, "rule": "role"}], "problems_omitted": "0"},
+        )
 
     def _pending(self, shape: str) -> Path:
         _refuse_pending({shape})
@@ -597,12 +631,19 @@ class _Analysis:
         crossed: set[str],
     ) -> CorrectnessReport:
         natural = [self.key_label(home, key) for key in self.graph.grain(home)]
+        written = self.graph.relationship_names
         requested = sorted(
-            {(self.label(r.member), r.bucket) for r in self.query.grouped},
-            key=lambda e: (e[0], e[1] or ""),
+            {
+                (self.label(r.member), written.get(r.role, r.role) if r.role else None, r.bucket)
+                for r in self.query.grouped
+            },
+            key=lambda e: (e[0], e[1] or "", e[2] or ""),
         )
-        to_grain = tuple(f"{label}@{bucket}" if bucket else label for label, bucket in requested)
-        grain_members = sorted({label for label, _ in requested} | set(natural))
+        to_grain = tuple(
+            label + (f"[{role}]" if role else "") + (f"@{bucket}" if bucket else "")
+            for label, role, bucket in requested
+        )
+        grain_members = sorted({label for label, _, _ in requested} | set(natural))
         datasets = sorted(self.dataset(d) for d in crossed)
         obligations = [
             Obligation(
@@ -650,7 +691,10 @@ class _Analysis:
                 )
         facts = {
             "mode": self.query.mode,
-            "grain": [{"member": label, "bucket": bucket} for label, bucket in requested],
+            "grain": [
+                {"member": label, "role": role, "bucket": bucket}
+                for label, role, bucket in requested
+            ],
             "metrics": [
                 {
                     "metric": self.label(m),
@@ -671,6 +715,9 @@ class _Analysis:
                     {
                         "member": self.label(row.member),
                         "slot": row.slot,
+                        "role": self.graph.relationship_names.get(row.role, row.role)
+                        if row.role
+                        else None,
                         "from": self.dataset(home),
                         "relationships": [
                             self.graph.relationship_names[r] for r in path.relationships
@@ -678,7 +725,7 @@ class _Analysis:
                     }
                     for row, path in paths.items()
                 ),
-                key=lambda e: (e["member"], e["slot"], e["relationships"]),
+                key=lambda e: (e["member"], e["slot"], e["role"] or "", e["relationships"]),
             ),
             "datasets": datasets,
             "row_policies": [],
