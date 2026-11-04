@@ -199,11 +199,8 @@ CASES: dict[str, tuple[frozenset[str], tuple[str, str] | None]] = {
     "CASE-004": (frozenset({"C1", "C3", "C5"}), ("UNSUPPORTED_OPERATION", "multi_fact")),
     "CASE-005": (frozenset({"C1"}), None),
     "CASE-006": (frozenset({"C1", "C2"}), None),
-    "CASE-007": (
-        frozenset({"C1", "C2 period end", "C6"}),
-        ("UNSUPPORTED_OPERATION", "semi_additive"),
-    ),
-    "CASE-008": (frozenset({"C1", "C2 distinct"}), ("UNSUPPORTED_OPERATION", "holistic")),
+    "CASE-007": (frozenset({"C1", "C2"}), None),
+    "CASE-008": (frozenset({"C1", "C2"}), None),
     "CASE-009": (frozenset({"C1", "C5"}), ("COMPILER", "multi_fact")),
     "CASE-010": (frozenset({"C1", "C2", "C5"}), ("UNSUPPORTED_OPERATION", "multi_fact")),
     "CASE-011": (frozenset({"C1", "C7"}), ("UNSUPPORTED_OPERATION", "bridge_allocation")),
@@ -215,10 +212,7 @@ CASES: dict[str, tuple[frozenset[str], tuple[str, str] | None]] = {
     "CASE-017": (frozenset({"C1"}), None),
     "CASE-018": (frozenset({"C1"}), None),
     "CASE-019": (frozenset({"C1", "C6"}), ("UNSUPPORTED_OPERATION", "zoned_bucketing")),
-    "CASE-020": (
-        frozenset({"C1", "C2 period end", "C6"}),
-        ("UNSUPPORTED_OPERATION", "semi_additive"),
-    ),
+    "CASE-020": (frozenset({"C1", "C2"}), ("ILLEGAL_TEMPORAL_REAGGREGATION", "")),
     "CASE-021": (frozenset({"C1", "C6"}), ("COMPILER", "ordered")),
 }
 
@@ -226,7 +220,9 @@ CASES: dict[str, tuple[frozenset[str], tuple[str, str] | None]] = {
 def test_the_table_covers_every_corpus_case() -> None:
     assert sorted(CASES) == sorted(QUERIES)
     for case, (rules, outcome) in CASES.items():
-        assert (outcome is None) == (rules <= IMPLEMENTED), case
+        pending = outcome is not None and outcome[0] in ("UNSUPPORTED_OPERATION", "COMPILER")
+        if outcome is None or pending:  # an expected refusal is an answer, not a pending rule
+            assert (outcome is None) == (rules <= IMPLEMENTED), case
         if outcome is not None and outcome[0] in ("UNSUPPORTED_OPERATION", "COMPILER"):
             assert outcome[1] == "row_policy" or SHAPES[outcome[1]].rule in rules, case
 
@@ -285,8 +281,6 @@ def test_an_additive_metric_to_a_coarser_grain_is_accepted(name: str) -> None:
 @pytest.mark.parametrize(
     ("name", "operation"),
     [
-        ("identified", "holistic"),
-        ("tails", "holistic"),
         ("biggest", "non_additive"),
         ("running", "ordered"),
     ],
@@ -297,6 +291,14 @@ def test_a_metric_that_is_not_additive_is_refused_with_its_pending_rule(
     # Its grain transition alone would be legal: payments' own grain, coarser.
     code, details = refusal(query(name))
     assert (code, details) == ("UNSUPPORTED_OPERATION", {"operation": operation})
+
+
+def test_a_distinct_count_is_answered_with_its_obligation() -> None:
+    report = run(query("identified"))
+    assert {o.id for o in report.obligations} == {
+        "C1.aggregate:identified",
+        "C2.distinct:identified",
+    }
 
 
 @pytest.mark.parametrize("name", ["smallest", "doubled"])

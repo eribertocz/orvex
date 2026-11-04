@@ -191,6 +191,9 @@ NOT_YET: Mapping[str, str] = {
     "CASE-009": "the model compiles after P2-17 (#283)",
     "CASE-021": "the model compiles after P2-20 (#283)",
     "CASE-017": "the combined metric is translated with the units rule (P2-16)",
+    # Its expected file holds the overall count beside the per-region ones: a total (P2-23).
+    # Both are answered exactly, and proven in tests/conformance/test_period_end.py.
+    "CASE-008": "the overall count is a total (P2-23)",
 }
 
 
@@ -291,8 +294,12 @@ def run_case(
         return CaseRun("fail", f"answered, but {expected_code} was expected")
     expected = adapter.read_csv(folder / "expected" / "result.csv")
     wanted = [list(row.values()) for row in expected]
-    names = [c["name"] for c in found.result.envelope()["columns"]]
-    if not expected or names != list(expected[0]):
+    columns = found.result.envelope()["columns"]
+    names = [c["name"] for c in columns]
+    # The corpus names a bucketed column after its bucket ("month"); the engine after its member.
+    accepted = [{c["name"], c.get("bucket", {}).get("unit", c["name"])} for c in columns]
+    header = list(expected[0]) if expected else []
+    if len(header) != len(names) or any(h not in a for h, a in zip(header, accepted, strict=True)):
         return CaseRun("fail", f"columns {names}")
     got = rows_of(found)
     dates = [c["encoding"] == "DATE" for c in found.result.envelope()["columns"]]

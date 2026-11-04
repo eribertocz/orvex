@@ -36,6 +36,8 @@ PASSING = {
     "CASE-001",
     "CASE-002",
     "CASE-006",
+    "CASE-007",
+    "CASE-020",
     "CASE-003",
     "CASE-005",
     "CASE-014",

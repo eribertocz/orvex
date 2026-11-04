@@ -39,11 +39,22 @@ class PlanError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class Latest:
+    """Period end (C2): of the fact's rows, keep for each entity and period only the one with
+    the latest value of `axis`. The entity is the key without the axis, so the row is unique."""
+
+    axis: MemberId
+    entity: tuple[MemberId, ...]
+    bucket: str | None  # the period: the axis's own value when None
+
+
+@dataclass(frozen=True, slots=True)
 class Source:
     alias: str  # t0 is the fact
     dataset: str  # normalized
     table: str  # the dataset's `source`, as the model writes it
     route: str
+    latest: Latest | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +137,15 @@ def _key(member: MemberId) -> list[str]:
 def _document(plan: dict[str, Any]) -> dict[str, object]:
     return {
         "report": plan["report_fingerprint"],
-        "sources": [[s.alias, s.dataset, s.table, s.route] for s in plan["sources"]],
+        "sources": [
+            [s.alias, s.dataset, s.table, s.route]
+            + (
+                [[_key(s.latest.axis), [_key(e) for e in s.latest.entity], s.latest.bucket]]
+                if s.latest
+                else []
+            )
+            for s in plan["sources"]
+        ],
         "joins": [
             [j.relationship, j.left, j.right, [[_key(a), _key(b)] for a, b in j.pairs]]
             for j in plan["joins"]
@@ -274,6 +293,24 @@ class _Planner:
         ]
         ordered = {s.name for s in order}
         order += [Sort(g.name, False, False) for g in groups if g.name not in ordered]
+        ends = [
+            m["period"]["axis"]
+            for m in self.report.facts["metrics"]
+            if m.get("period") and m["period"]["behavior"] == "period_end"
+        ]
+        if ends:
+            axis = next(m for m in self.compiled.members if self.label(m) == ends[0])
+            bucket = next((g.bucket for g in groups if g.member == axis), None)
+            # `analyze` accepted the key as exactly the declared entity plus the axis.
+            entity = tuple(
+                MemberId("field", self.home, key)
+                for key in self.graph.keys[self.home]
+                if key != axis.name
+            )
+            fact = self.sources[0]
+            self.sources[0] = Source(
+                fact.alias, fact.dataset, fact.table, fact.route, Latest(axis, entity, bucket)
+            )
         discharged = {o for a in aggregates for o in a.discharges}
         left = {o.id for o in self.report.obligations} - discharged
         if left:
