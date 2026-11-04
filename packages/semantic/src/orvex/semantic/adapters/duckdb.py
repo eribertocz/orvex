@@ -324,6 +324,8 @@ class _Writer:
             text, columns, checks = parts[0]
         else:
             text, columns, checks = self.align(parts)
+        if plan.derived:
+            text, columns, checks = self.derive(text, columns, checks)
         if plan.order:
             text += " ORDER BY " + ", ".join(
                 f"{quote(s.name)} {'DESC' if s.descending else 'ASC'} "
@@ -444,8 +446,68 @@ class _Writer:
             text += f" FULL OUTER JOIN ({parts[i][0]}) AS {names[i]} ON {on or 'TRUE'}"
         return text, columns, checks
 
+    def derive(
+        self, inner: str, columns: list[ColumnSpec], checks: list[tuple[str, str]]
+    ) -> tuple[str, list[ColumnSpec], list[tuple[str, str]]]:
+        """Each metric over metrics, row by row, from the aligned aggregates it names (S7):
+        never aggregated again. `+` and `-` are exact; a ratio is C2's one division. Only the
+        question's columns are kept, in its order, then every check."""
+        by_name = {c.name: c for c in columns}
+        steps = {d.name: d for d in self.plan.derived}
+        dimensions = [c for c in columns if c.role == "dimension"]
+        middle: list[str] = []
+        ratios: list[tuple[int, Any, ColumnSpec]] = []
+        outputs: list[ColumnSpec] = []
+        for name in self.plan.outputs:
+            step = steps.get(name)
+            if step is None:
+                outputs.append(by_name[name])
+                continue
+            column = self.column(step.metric, step.name, "metric", None)
+            outputs.append(column)
+            if step.division is None:
+                tree = dict(self.compiled.require(step.metric).typed.payload)["over_metrics"]
+                written = self.over(tree.node, step)
+                middle.append(f"CAST({written} AS {column.encoding}) AS {quote(name)}")
+                continue
+            k = self.ratios
+            self.ratios += 1
+            numerator, denominator = (quote(n) for n in step.over)
+            middle.append(f"{numerator} AS {quote(f'#n{k}')}")
+            middle.append(f"{denominator} AS {quote(f'#d{k}')}")
+            trees = dict(self.compiled.require(step.metric).typed.payload)
+            scales = (
+                _scale(_logical(trees["components.numerator"].type.logical)),
+                _scale(_logical(trees["components.denominator"].type.logical)),
+            )
+            ratios.append((k, (step, scales), column))
+        text = f"SELECT *{''.join(', ' + m for m in middle)} FROM ({inner}) AS {quote('a')}"
+        final = dimensions + outputs
+        keep = [check for check, _ in checks]
+        if ratios:
+            text, more = self.divide(text, final, ratios, keep)
+            return text, final, checks + more
+        kept = ", ".join(quote(c.name) for c in final) + "".join(", " + quote(k) for k in keep)
+        return f"SELECT {kept} FROM ({text}) AS {quote('b')}", final, checks
+
+    def over(self, node: sql.Node, step: Any) -> str:  # noqa: ANN401
+        """`+` and `-` of the aligned aggregates a metric over metrics names."""
+        if isinstance(node, sql.Binary) and node.op in ("+", "-"):
+            return f"({self.over(node.left, step)} {node.op} {self.over(node.right, step)})"
+        if isinstance(node, sql.Ref):
+            written = ".".join(node.parts)
+            for aggregate in self.plan.aggregates:
+                label = self.compiled.require(aggregate.metric).parsed.label
+                if aggregate.name in step.over and sql.normalize(label) == written:
+                    return quote(aggregate.name)
+        raise _unsupported()
+
     def divide(
-        self, inner: str, columns: list[ColumnSpec], ratios: list[tuple[int, Any, ColumnSpec]]
+        self,
+        inner: str,
+        columns: list[ColumnSpec],
+        ratios: list[tuple[int, Any, ColumnSpec]],
+        keep: list[str] | None = None,
     ) -> tuple[str, list[tuple[str, str]]]:
         """Each ratio as one exact division of its aggregated components (C2): both scaled to
         exact `HUGEINT`s, divided with the remainder, rounded once as declared."""
@@ -486,7 +548,8 @@ class _Writer:
             elif division.zero != "null":
                 raise _unsupported()
         # Every check after every column: the order `execution` reads them in.
-        return f"SELECT {', '.join(outer + flags)} FROM ({middle}) AS {quote('r')}", checks
+        kept = [quote(k) for k in keep or ()]
+        return f"SELECT {', '.join(outer + kept + flags)} FROM ({middle}) AS {quote('r')}", checks
 
 
 def _power(exponent: int) -> str:

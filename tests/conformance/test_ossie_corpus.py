@@ -13,8 +13,9 @@ revision (`c721ffc`, Owner policy of 2026-11-01):
   `over_metrics` or `window`, with the expression under the product's dialect token):
   - CASE-010: `over_metrics`, aligned on the grain bi-platform declares. The conformance
     adapter's translation writes it explicitly, so the translated model loads.
-  - CASE-009: `over_metrics` (`gross_revenue - refunds`, the contract's own example) needs a
-    declared alignment that the corpus does not give.
+  - CASE-009: `over_metrics` (`gross_revenue - refunds`, the contract's own example). The corpus
+    gives no alignment; the adapter declares month x region, from the case's README and expected
+    file (P2-17), so the translated model loads.
   - CASE-006: a ratio of two metrics of one dataset. The imported file keeps the original. The
     adapter's translation declares it as a ratio (`recomputable`, its `components`, rounding half
     away from zero, empty for a zero denominator; Owner decisions of 2026-11-04, #325) and writes
@@ -54,7 +55,7 @@ VENDORS = (_PRODUCT["ossie_vendor_name"], *_PRODUCT["previous_vendor_names"])
 
 # Case -> the metric expression that names another metric.
 # Translated by the adapter into an explicit product construct.
-EXPLICIT_EXTENSION = {"CASE-010"}
+EXPLICIT_EXTENSION = {"CASE-009", "CASE-010"}
 # Translated by the adapter into a declared ratio whose expression is standard Ossie SQL.
 DECLARED_RATIO = {"CASE-006"}
 FUTURE = {
