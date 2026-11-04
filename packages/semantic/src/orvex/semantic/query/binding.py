@@ -1,8 +1,9 @@
 """Binding: from a `semantic-query` v1 text to one canonical, typed `BoundQuery` (P2-05b, #283).
 
-`bind_query(model, query, *, instant, limits)` returns a `BoundQuery` or raises
+`bind_query(model, query, *, instant, limits, hidden)` returns a `BoundQuery` or raises
 `SemanticError`. `instant` is the timezone-aware query instant supplied by `server`; the host
-clock is never read. `limits` holds the project's caps.
+clock is never read. `limits` holds the project's caps. `hidden` tells which members the
+caller may not see (P2-11).
 
 **Steps, in order.** A failing step stops binding and reports all its problems, or the first in
 document order for codes that name one thing.
@@ -35,7 +36,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from decimal import Decimal
@@ -393,13 +394,21 @@ def _all_filters(query: Json) -> Iterator[tuple[str, Json]]:
 
 
 def bind_query(
-    model: CompiledModel, query: str | bytes, *, instant: datetime, limits: Limits
+    model: CompiledModel,
+    query: str | bytes,
+    *,
+    instant: datetime,
+    limits: Limits,
+    hidden: Callable[[MemberId], bool],
 ) -> BoundQuery:
+    """`hidden` tells which members the caller may not see (P2-11, #310), and is required: each
+    is refused as `MEMBER_NOT_FOUND` with the caller's own text, exactly like a member that
+    does not exist, before any other check can say more about it."""
     if instant.tzinfo is None or instant.utcoffset() is None:
         raise ValueError("the query instant must be timezone-aware")
     document = _decode(query)
     names = _Model(model)
-    resolved = _resolve_names(document, names)
+    resolved = _resolve_names(document, names, hidden)
     _check_kinds(document, names, resolved)
     windows = _relative_windows(document, names, resolved, instant)
     parameters = _parameters(document, names)
@@ -416,11 +425,13 @@ def bind_query(
     )
 
 
-def _resolve_names(document: Json, names: _Model) -> dict[str, MemberId]:
+def _resolve_names(
+    document: Json, names: _Model, hidden: Callable[[MemberId], bool]
+) -> dict[str, MemberId]:
     resolved: dict[str, MemberId] = {}
     for reference in _references(document):
         member = names.resolve(reference.text)
-        if member is None:
+        if member is None or hidden(member):
             raise SemanticError("MEMBER_NOT_FOUND", {"member": reference.text})
         names.compiled.require(member)  # a member the model did not compile is refused
         resolved[reference.pointer] = member

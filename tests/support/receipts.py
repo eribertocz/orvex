@@ -113,7 +113,9 @@ def receipt(**change: Any) -> ReceiptRecord:  # noqa: ANN401
             PolicyUse("national_id_hidden", "column", "restricted"),
         ],
         "evidence": [EvidenceUse("customers", "unique_key", "verified", verified_by_run="run-7")],
-        "obligations": [Obligation("C1", "grain_preserved")],
+        "obligations": [
+            Obligation("C1", "grain_preserved", members=("revenue",), datasets=("payments",))
+        ],
         "freshness": [
             FreshnessUse("payments", "2026-11-02T11:00:00.000000Z"),
             FreshnessUse("audit_log", "2026-11-02T10:00:00.000000Z"),

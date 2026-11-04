@@ -135,6 +135,7 @@ def bind(document: Model | str, target: CompiledModel | None = None, **options: 
         text,
         instant=options.get("instant", INSTANT),
         limits=options.get("limits", LIMITS),
+        hidden=lambda member: False,  # no policies: nothing is hidden
     )
 
 
