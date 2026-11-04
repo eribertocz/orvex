@@ -209,7 +209,7 @@ CASES: dict[str, tuple[frozenset[str], tuple[str, str] | None]] = {
     "CASE-014": (frozenset({"C1"}), None),
     "CASE-015": (frozenset({"C1", "policy placement"}), ("UNSUPPORTED_OPERATION", "row_policy")),
     "CASE-016": (frozenset({"C1", "C4"}), ("AMBIGUOUS_RELATIONSHIP_PATH", "")),
-    "CASE-017": (frozenset({"C1"}), None),
+    "CASE-017": (frozenset({"C1"}), ("INCOMPATIBLE_UNITS", "")),  # refused when compiled
     "CASE-018": (frozenset({"C1"}), None),
     "CASE-019": (frozenset({"C1", "C6"}), ("UNSUPPORTED_OPERATION", "zoned_bucketing")),
     "CASE-020": (frozenset({"C1", "C2"}), ("ILLEGAL_TEMPORAL_REAGGREGATION", "")),
@@ -233,6 +233,11 @@ def test_each_corpus_case_is_answered_or_refused_as_the_table_says(case: str) ->
     if outcome is not None and outcome[0] == "COMPILER":
         with pytest.raises(SemanticError):  # the compiler refuses it until its rule lands (#283)
             corpus_model(case)
+        return
+    if outcome is not None and outcome[0] == "INCOMPATIBLE_UNITS":  # USD + BOB (P2-16)
+        with pytest.raises(SemanticError) as caught:
+            corpus_model(case)
+        assert caught.value.code == "INCOMPATIBLE_UNITS"
         return
     compiled = corpus_model(case)
     rows = [TENANT] if case == "CASE-015" else []

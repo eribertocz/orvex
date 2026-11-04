@@ -339,9 +339,11 @@ class _Writer:
     def members(self, fact: str) -> set[str]:
         """The sources of one fact: its own, and every source its joins reach."""
         found = {fact}
-        for join in self.plan.joins:  # each join's left side is already the fact's
+        for join in self.plan.joins:  # in path order: a join's left side is added first
             if join.left in found:
                 found.add(join.right)
+        if any((j.left in found) != (j.right in found) for j in self.plan.joins):
+            raise PlanError("a join reaches a source out of path order")
         return found
 
     def aggregation(self, fact: str) -> tuple[str, list[ColumnSpec], list[tuple[str, str]]]:
