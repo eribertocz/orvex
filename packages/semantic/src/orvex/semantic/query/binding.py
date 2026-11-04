@@ -81,6 +81,9 @@ class BoundQuery:
     fingerprint: str
     instant: datetime
     members: tuple[MemberId, ...]  # every member the query references, sorted
+    # Each role as written: (its JSON Pointer, the member it applies to, the normalized role),
+    # in document order; outside the fingerprint, for errors that point at a role (P2-15).
+    roles: tuple[tuple[str, MemberId, str], ...] = ()
 
 
 # --- step 1: decode and validate ----------------------------------------------------------------
@@ -422,6 +425,10 @@ def bind_query(
         fingerprint=fingerprint("semantic_query", 1, canonical),
         instant=instant,
         members=tuple(sorted(set(resolved.values()))),
+        roles=tuple(
+            (pointer, resolved[pointer.rsplit("/", 1)[0] + "/member"], sql.normalize(role))
+            for pointer, role in _roles(document)
+        ),
     )
 
 

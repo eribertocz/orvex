@@ -3174,7 +3174,8 @@
             "syntax",
             "schema",
             "kind",
-            "zone"
+            "zone",
+            "role"
           ]
         }
       }
