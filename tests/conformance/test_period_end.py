@@ -52,7 +52,15 @@ def snapshots_model(
                 "primary_key": list(key),
                 "fields": [{"name": n, "expression": {"sql": n}} for n in columns],
                 "custom_extensions": [
-                    extension({"element": "dataset", "time_roles": {"snapshot": "day"}})
+                    extension(
+                        {
+                            "element": "dataset",
+                            "time_roles": {"snapshot": "day"},
+                            "entity_keys": [
+                                {"entity": "account", "fields": ["account_id"], "coarser": True}
+                            ],
+                        }
+                    )
                 ],
             }
         ],
@@ -337,3 +345,81 @@ def test_an_approximate_count_stays_refused() -> None:
     with pytest.raises(SemanticError) as caught:
         answer_of(compiled, catalog, rows((1, "2026-01-05", "N", "1.00")), query("approx"))
     assert dict(caught.value.details) == {"operation": "approximate"}
+
+
+@pytest.mark.parametrize(
+    "key", [("account_id", "day", "snapshot_id"), ("account_id", "day", "region")]
+)
+def test_a_key_containing_the_axis_and_more_is_refused(key: tuple[str, ...]) -> None:
+    compiled, catalog = snapshots_model(key=key)
+    data = rows((1, "2026-01-05", "N", "100.00"), (1, "2026-01-20", "N", "200.00"))
+    with pytest.raises(SemanticError) as caught:
+        answer_of(compiled, catalog, data, query("balance", group_by=BY_MONTH))
+    assert dict(caught.value.details) == {"operation": "period_end_ties"}
+
+
+def test_a_distinct_count_declaring_time_axes_is_refused() -> None:
+    declared = {
+        "name": "cust_pe",
+        "expression": {"sql": "COUNT(DISTINCT t.customer)"},
+        "custom_extensions": [
+            extension(
+                {
+                    "element": "metric",
+                    "aggregate_class": "holistic",
+                    "additivity": "semi_additive",
+                    "non_additive_axes": PERIOD_END,
+                    "period_end": {"order_by": ["t.day"]},
+                }
+            )
+        ],
+    }
+    compiled, catalog = snapshots_model(extra_metrics=[declared])
+    with pytest.raises(SemanticError) as caught:
+        answer_of(
+            compiled,
+            catalog,
+            rows((1, "2026-01-05", "N", "1.00")),
+            query("cust_pe", group_by=[{"member": "t.region"}]),
+        )
+    assert dict(caught.value.details) == {"operation": "holistic"}
+
+
+def test_a_bucket_finer_than_a_date_axis_is_refused_by_binding() -> None:
+    compiled, catalog = snapshots_model()
+    hourly = query("balance", group_by=[{"member": "t.day", "bucket": {"unit": "hour"}}])
+    with pytest.raises(SemanticError) as caught:
+        answer_of(compiled, catalog, rows((1, "2026-01-05", "N", "1.00")), hourly)
+    assert caught.value.code == "QUERY_INVALID"  # an hour of a DATE does not exist (P2-05)
+
+
+@settings(max_examples=15, deadline=None)
+@given(
+    st.lists(
+        st.tuples(st.sampled_from("NS"), st.sampled_from(["ana", "bo", "cy", None])),
+        min_size=1,
+        max_size=10,
+    )
+)
+def test_distinct_counts_equal_a_python_reference(pairs: list[tuple[str, str | None]]) -> None:
+    compiled, catalog = snapshots_model()
+    data: Rows = [
+        {
+            "snapshot_id": str(i),
+            "account_id": str(i),
+            "day": "2026-01-01",
+            "region": r,
+            "customer": c,
+            "balance": None,
+        }
+        for i, (r, c) in enumerate(pairs, 1)
+    ]
+    by_region = ce.rows_of(
+        answer_of(compiled, catalog, data, query("customers", group_by=[{"member": "t.region"}]))
+    )
+    overall = ce.rows_of(answer_of(compiled, catalog, data, query("customers")))
+    expected = {r: len({c for rr, c in pairs if rr == r and c}) for r, _ in pairs}
+    assert by_region == [[r, str(n)] for r, n in sorted(expected.items())]
+    total = len({c for _, c in pairs if c})
+    assert overall == [[str(total)]]
+    assert total <= sum(expected.values())

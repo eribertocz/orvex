@@ -301,6 +301,7 @@ class _Planner:
         if ends:
             axis = next(m for m in self.compiled.members if self.label(m) == ends[0])
             bucket = next((g.bucket for g in groups if g.member == axis), None)
+            # `analyze` accepted the key as exactly the declared entity plus the axis.
             entity = tuple(
                 MemberId("field", self.home, key)
                 for key in self.graph.keys[self.home]

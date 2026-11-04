@@ -381,7 +381,13 @@ class _Analysis:
                 and len(node.arguments) == 1
                 and node.filter is None
             )
-            return ("distinct_count" if distinct else "holistic"), "derived"
+            payload = self.payloads.get(compiled.parsed.pointer, {})
+            plain = (
+                payload.get("additivity") == "non_additive"
+                and "non_additive_axes" not in payload
+                and "period_end" not in payload
+            )
+            return ("distinct_count" if distinct and plain else "holistic"), "derived"
         declared = self.payloads.get(compiled.parsed.pointer, {}).get("additivity")
         if declared is not None:
             return str(declared), "declared"
@@ -421,12 +427,36 @@ class _Analysis:
                 {"metric": self.label(metric), "axis": self.label(axis)},
             )
         if behavior == "period_end":
-            if axis.name not in self.graph.keys.get(home, ()):
-                # Two snapshots of one entity at one instant must be impossible by key.
+            # Two snapshots of one entity at one instant must be impossible: the key is exactly
+            # the declared entity plus the axis, and the axis is never NULL.
+            entity = self.entity_fields(axes, home)
+            key = set(self.graph.keys.get(home, ()))
+            nullable = self.compiled.require(axis).typed.type.nullable
+            if entity is None or key != {*entity, axis.name} or axis.name in entity or nullable:
                 _refuse_pending({"period_end_ties"})
             if any(r.member == axis for r in self.query.rows if r.slot == "filter"):
                 _refuse_pending({"period_end_filter"})
         return axis, behavior
+
+    def entity_fields(self, axes: list[Mapping[str, Any]], home: str) -> set[str] | None:
+        """The fields of the entity the metric adds across: from the dataset's `entity_keys`,
+        or the columns of a many-to-one relationship to the dataset of that entity."""
+        names = [str(a["entity"]) for a in axes if "entity" in a]
+        if len(names) != 1:
+            return None
+        payload = self.graph.payloads.get(home, {})
+        for declared in payload.get("entity_keys", ()):
+            if isinstance(declared, Mapping) and declared.get("entity") == names[0]:
+                return {sql.normalize(str(f)) for f in declared.get("fields", ())}
+        relationships = self.compiled.ossie.document.get("relationships", ())
+        for relationship in relationships if isinstance(relationships, tuple) else ():
+            target = sql.normalize(str(relationship["to"]))
+            if (
+                sql.normalize(str(relationship["from"])) == home
+                and self.graph.payloads.get(target, {}).get("entity") == names[0]
+            ):
+                return {sql.normalize(str(c)) for c in relationship["from_columns"]}
+        return None
 
     # C2, ratios
 
