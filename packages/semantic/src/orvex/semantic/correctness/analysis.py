@@ -17,9 +17,9 @@ no SQL. It returns a `CorrectnessReport`, or raises a `SemanticError` with a sta
 
 **Fail closed.** Every query shape needs the rules in `SHAPES`. A shape whose rule is not
 implemented yet is refused as `UNSUPPORTED_OPERATION`, its `operation` naming the shape; it
-never reaches the planner. Only C1 is implemented, so a query is answered only when it reads
-one fact, every metric is additive, and every member it groups, filters or sorts by is reached
-from that fact through relationships that never multiply its rows.
+never reaches the planner. A query is answered only when every metric's class is answered and
+every member it groups, filters or sorts by is reached from each metric's home through
+relationships that never multiply its rows.
 
 **C1, the grain algebra.** A metric is aggregated from the natural grain of its home dataset
 (its declared `grain`, or its primary key) to the requested grain. Each requested member must be
@@ -27,8 +27,16 @@ reached from the home dataset along exactly one path of many-to-one (or one-to-o
 - no path at all: `ILLEGAL_GRAIN_TRANSITION`;
 - more than one such path, with no role to choose: `AMBIGUOUS_RELATIONSHIP_PATH` (C4's
   placeholder until P2-15);
-- only paths with a one-to-many step: `fanout` (C3, P2-16); through a bridge: `bridge_allocation`
-  (C7, P2-18); an as-of relationship: `as_of_join` (C6, P2-20).
+- only paths with a one-to-many step: `fanout`, which has more than one meaning; through a
+  bridge: `bridge_allocation` (C7, P2-18); an as-of relationship: `as_of_join` (C6, P2-20).
+
+**C3, isolation** (P2-16, #331). Metrics of more than one home dataset are answered when each
+metric, on its own, is: every grouped, filtered or sorted member is reached from that metric's
+own home along exactly one many-to-one path. Each home is aggregated apart, to the requested
+grain, and the results are aligned on that grain only, so a fact's rows never meet another
+fact's rows; each metric gives the obligation `C3.isolate:<metric>`. A member one home cannot
+reach that way refuses the whole query, before any read: no fact is answered without a filter
+the question asked for. A metric that itself reads two datasets is still `multi_fact` (C5).
 
 C1 validates the grain; it never authorizes an aggregation by itself. The metric's additivity
 must be `additive`, declared or derived (a plain `SUM` or `COUNT` with no `DISTINCT`); any other
@@ -58,7 +66,11 @@ class UnfilteredQuery(ValueError):
     caller's `hidden`. An internal error, never shown to the caller."""
 
 
-RULES: tuple[tuple[str, int], ...] = (("C1", 1), ("C2", 1))  # implemented, in the order they run
+RULES: tuple[tuple[str, int], ...] = (
+    ("C1", 1),
+    ("C2", 1),
+    ("C3", 1),
+)  # implemented, in the order they run
 IMPLEMENTED = frozenset(rule for rule, _ in RULES)
 
 
@@ -82,7 +94,7 @@ SHAPES: Mapping[str, Shape] = {
     "mixed_period_end": Shape("C5", "P2-17"),
     "non_additive": Shape("C2 non-additive", "a later issue"),
     "multi_fact": Shape("C5", "P2-17"),
-    "fanout": Shape("C3", "P2-16"),
+    "fanout": Shape("one-to-many grouping", "a later issue"),
     "calendar_bucket": Shape("C6", "P2-19"),
     "zoned_bucketing": Shape("C6", "P2-19"),
     "ordered": Shape("C6", "P2-20"),
@@ -491,14 +503,17 @@ class _Analysis:
 
     # C1
 
-    def path(self, home: str, row: _Row, metric: MemberId) -> Path:
+    def path(self, home: str, row: _Row, metric: MemberId, alone: bool = True) -> Path:
         """C4: the one path from the fact to the member. A role names one relationship, and
         exactly one many-to-one path may cross it; with no role, exactly one many-to-one path
-        may exist. A member of the fact's own dataset, with no role, is read from the fact."""
+        may exist. A member of the fact's own dataset, with no role, is read from the fact. With
+        other facts (`alone` false), a member this one cannot reach at all is `multi_fact` (C5)."""
         target = row.member.dataset or home
         if row.role is None and target == home:
             return Path(())
         everything = self.graph.paths(home, target)
+        if not everything and not alone:  # another fact's member: a conformed dimension (C5)
+            return self._pending("multi_fact")
         if not everything:
             raise SemanticError(
                 "ILLEGAL_GRAIN_TRANSITION",
@@ -592,18 +607,18 @@ class _Analysis:
                     },
                 )
             shapes |= self.declaration_shapes(metric)
-        if len(set().union(*homes.values())) > 1:
-            shapes.add("multi_fact")
+        if any(len(found) > 1 for found in homes.values()):
+            shapes.add("multi_fact")  # one metric reading two datasets (C5)
         classes = {m: self.additivity(m) for m in metrics}
         answered = {"additive", "recomputable", "distinct_count", "semi_additive"}
         _refuse_pending(shapes | {c for c, _ in classes.values() if c not in answered})
-        (home,) = set().union(*homes.values())
+        home_of = {m: next(iter(found)) for m, found in homes.items()}
         periods: dict[MemberId, tuple[MemberId, str]] = {}
         for metric, (kind, _) in classes.items():
             if kind == "recomputable":
-                self.components(metric, home)
+                self.components(metric, home_of[metric])
             if kind == "semi_additive":
-                periods[metric] = self.period(metric, home)
+                periods[metric] = self.period(metric, home_of[metric])
         ends = {axis for axis, behavior in periods.values() if behavior == "period_end"}
         if ends and (
             len(ends) > 1 or any(periods.get(m, (None, ""))[1] != "period_end" for m in metrics)
@@ -617,20 +632,30 @@ class _Analysis:
                     "ILLEGAL_GRAIN_TRANSITION",
                     {"metric": self.label(metrics[0]), "grain": [self.label(row.member)]},
                 )
-        paths: dict[_Row, Path] = {row: self.path(home, row, metrics[0]) for row in rows}
-        crossed = {home, *(d for p in paths.values() for d in p.datasets)}
-        self.check_datasets(crossed)
-        return self.report(home, metrics, classes, paths, crossed)
+        # C3: each home on its own, so every member is reached from every fact, or none is read.
+        paths: dict[tuple[str, _Row], Path] = {}
+        crossed: dict[str, set[str]] = {}
+        for home in sorted(set(home_of.values())):
+            first = next(m for m in metrics if home_of[m] == home)
+            for row in rows:
+                paths[home, row] = self.path(
+                    home, row, first, alone=len(set(home_of.values())) == 1
+                )
+            crossed[home] = {
+                home,
+                *(d for (h, _), p in paths.items() if h == home for d in p.datasets),
+            }
+        self.check_datasets(set().union(*crossed.values()))
+        return self.report(home_of, metrics, classes, paths, crossed)
 
     def report(
         self,
-        home: str,
+        home_of: Mapping[MemberId, str],
         metrics: list[MemberId],
         classes: Mapping[MemberId, tuple[str, str]],
-        paths: Mapping[_Row, Path],
-        crossed: set[str],
+        paths: Mapping[tuple[str, _Row], Path],
+        crossed: Mapping[str, set[str]],
     ) -> CorrectnessReport:
-        natural = [self.key_label(home, key) for key in self.graph.grain(home)]
         written = self.graph.relationship_names
         requested = sorted(
             {
@@ -643,32 +668,25 @@ class _Analysis:
             label + (f"[{role}]" if role else "") + (f"@{bucket}" if bucket else "")
             for label, role, bucket in requested
         )
-        grain_members = sorted({label for label, _, _ in requested} | set(natural))
-        datasets = sorted(self.dataset(d) for d in crossed)
-        obligations = [
-            Obligation(
-                id=f"C1.aggregate:{self.label(m)}",
-                rule="C1",
-                kind="aggregate",
-                metric=self.label(m),
-                from_grain=tuple(natural),
+        natural = {h: [self.key_label(h, key) for key in self.graph.grain(h)] for h in crossed}
+        labels = {label for label, _, _ in requested}
+
+        def obligation(metric: MemberId, rule: str, kind: str, prefix: str) -> Obligation:
+            home = home_of[metric]
+            return Obligation(
+                id=f"{prefix}:{self.label(metric)}",
+                rule=rule,
+                kind=kind,
+                metric=self.label(metric),
+                from_grain=tuple(natural[home]),
                 to_grain=to_grain,
-                members=tuple(sorted({self.label(m), *grain_members})),
-                datasets=tuple(datasets),
+                members=tuple(sorted({self.label(metric), *labels, *natural[home]})),
+                datasets=tuple(sorted(self.dataset(d) for d in crossed[home])),
             )
-            for m in metrics
-        ]
+
+        obligations = [obligation(m, "C1", "aggregate", "C1.aggregate") for m in metrics]
         obligations += [
-            Obligation(
-                id=f"C2.recompute:{self.label(m)}",
-                rule="C2",
-                kind="recompute",
-                metric=self.label(m),
-                from_grain=tuple(natural),
-                to_grain=to_grain,
-                members=tuple(sorted({self.label(m), *grain_members})),
-                datasets=tuple(datasets),
-            )
+            obligation(m, "C2", "recompute", "C2.recompute")
             for m in metrics
             if classes[m][0] == "recomputable"
         ]
@@ -677,18 +695,9 @@ class _Analysis:
             kind = classes[m][0]
             if kind in extra or self.periods.get(m, (None, ""))[1] == "period_end":
                 name, prefix = extra.get(kind, ("period_end", "C2.period_end"))
-                obligations.append(
-                    Obligation(
-                        id=f"{prefix}:{self.label(m)}",
-                        rule="C2",
-                        kind=name,
-                        metric=self.label(m),
-                        from_grain=tuple(natural),
-                        to_grain=to_grain,
-                        members=tuple(sorted({self.label(m), *grain_members})),
-                        datasets=tuple(datasets),
-                    )
-                )
+                obligations.append(obligation(m, "C2", name, prefix))
+        if len(crossed) > 1:  # more than one fact: each aggregated apart (C3)
+            obligations += [obligation(m, "C3", "isolate", "C3.isolate") for m in metrics]
         facts = {
             "mode": self.query.mode,
             "grain": [
@@ -698,8 +707,8 @@ class _Analysis:
             "metrics": [
                 {
                     "metric": self.label(m),
-                    "home": self.dataset(home),
-                    "grain": natural,
+                    "home": self.dataset(home_of[m]),
+                    "grain": natural[home_of[m]],
                     "additivity": classes[m][0],
                     "additivity_source": classes[m][1],
                     "period": (
@@ -723,11 +732,17 @@ class _Analysis:
                             self.graph.relationship_names[r] for r in path.relationships
                         ],
                     }
-                    for row, path in paths.items()
+                    for (home, row), path in paths.items()
                 ),
-                key=lambda e: (e["member"], e["slot"], e["role"] or "", e["relationships"]),
+                key=lambda e: (
+                    e["from"],
+                    e["member"],
+                    e["slot"],
+                    e["role"] or "",
+                    e["relationships"],
+                ),
             ),
-            "datasets": datasets,
+            "datasets": sorted({self.dataset(d) for found in crossed.values() for d in found}),
             "row_policies": [],
         }
         unique_paths = []

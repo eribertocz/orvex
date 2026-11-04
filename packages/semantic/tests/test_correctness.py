@@ -146,8 +146,8 @@ def test_the_report_is_deterministic_and_order_does_not_change_its_facts() -> No
     assert one.fingerprint == run(query("revenue", "declared", group_by=[zone, day])).fingerprint
     assert one.facts == two.facts
     assert one.obligations == two.obligations
-    assert one.rules == RULES == (("C1", 1), ("C2", 1))
-    assert {"C1", "C2"} == IMPLEMENTED
+    assert one.rules == RULES == (("C1", 1), ("C2", 1), ("C3", 1))
+    assert {"C1", "C2", "C3"} == IMPLEMENTED
 
 
 SCRIPT = """
@@ -196,7 +196,7 @@ CASES: dict[str, tuple[frozenset[str], tuple[str, str] | None]] = {
     "CASE-001": (frozenset({"C1"}), None),
     "CASE-002": (frozenset({"C1"}), None),
     "CASE-003": (frozenset({"C1"}), None),
-    "CASE-004": (frozenset({"C1", "C3", "C5"}), ("UNSUPPORTED_OPERATION", "multi_fact")),
+    "CASE-004": (frozenset({"C1", "C3"}), None),
     "CASE-005": (frozenset({"C1"}), None),
     "CASE-006": (frozenset({"C1", "C2"}), None),
     "CASE-007": (frozenset({"C1", "C2"}), None),
@@ -308,10 +308,15 @@ def test_a_metric_with_no_declared_or_derivable_additivity_is_refused(name: str)
 
 def test_a_metric_reading_two_datasets_is_multi_fact() -> None:
     assert refusal(query("flagged")) == ("UNSUPPORTED_OPERATION", {"operation": "multi_fact"})
-    assert refusal(query("revenue", "phones")) == (
-        "UNSUPPORTED_OPERATION",
-        {"operation": "multi_fact"},
-    )
+
+
+def test_metrics_of_two_homes_are_each_isolated() -> None:
+    """P2-16 (#331): two facts in one question, each aggregated apart (C3)."""
+    report = run(query("revenue", "phones"))
+    isolated = sorted(o.id for o in report.obligations if o.rule == "C3")
+    assert isolated == ["C3.isolate:phones", "C3.isolate:revenue"]
+    homes = {m["metric"]: m["home"] for m in report.facts["metrics"]}
+    assert len(set(homes.values())) == 2
 
 
 # --- C1, the grain ------------------------------------------------------------------------------

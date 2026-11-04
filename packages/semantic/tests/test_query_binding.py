@@ -34,6 +34,7 @@ CORPUS = ROOT / "conformance/semantic-corpus/bi-platform/models"
 QUERIES = json.loads((ROOT / "conformance/runners/corpus_queries.json").read_text("utf-8"))
 GOLDEN = Path(__file__).with_name("golden") / "corpus-query-fingerprints.json"
 NOT_YET = {"CASE-009", "CASE-021"}  # their models compile after P2-17/P2-20
+REFUSED = {"CASE-017"}  # its model is refused by design: USD + BOB (P2-16)
 INSTANT = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
 LIMITS = Limits(detail_page_size=1000)
 
@@ -468,7 +469,7 @@ def corpus_model(path: Path) -> CompiledModel:
 def corpus_fingerprints() -> dict[str, str]:
     found = {}
     for case, document in sorted(QUERIES["queries"].items()):
-        if case in NOT_YET:
+        if case in NOT_YET | REFUSED:
             continue
         found[case] = bind(document, corpus_model(CORPUS / f"{case}.yaml")).fingerprint
     return found

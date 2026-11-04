@@ -58,6 +58,26 @@ EXPLICIT_EXPRESSIONS: dict[tuple[str, str], str] = {
     ("case-006", "average_order_value"): "SUM(orders.amount) / COUNT(orders.order_id)",
 }
 
+# Metrics a case's README defines that its model does not declare, written here and nowhere
+# else; the imported files stay unchanged. model name -> Ossie metrics, appended as written.
+EXPLICIT_METRICS: dict[str, tuple[dict[str, Any], ...]] = {
+    # CASE-017: `combined = revenue_usd + revenue_bob`, with each metric's own aggregate, since
+    # Ossie forbids naming metrics in an expression (spec L424). Each field keeps its currency.
+    "case-017": (
+        {
+            "name": "combined",
+            "expression": {
+                "dialects": [
+                    {
+                        "dialect": "OSSIE_SQL_2026",
+                        "expression": "SUM(finance.amount_usd) + SUM(finance.amount_bob)",
+                    }
+                ]
+            },
+        },
+    ),
+}
+
 # bi-platform manifest outcome -> what the case expects.
 OUTCOMES = {"result": "result", "compile_error": "error"}
 
@@ -209,6 +229,11 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
     """The model with every bi-platform payload replaced by a product payload under
     `vendor_name`, and the row policies set aside for P2-08."""
     translated: dict[str, Any] = json.loads(json.dumps(model))
+    added = EXPLICIT_METRICS.get(str(translated.get("name")), ())
+    if added:
+        translated["metrics"] = list(translated.get("metrics") or []) + json.loads(
+            json.dumps(added)
+        )
     datasets = [d for d in translated.get("datasets") or [] if isinstance(d, dict)]
     payloads: dict[int, dict[str, Any]] = {}  # id(element) -> product payload
     policies: list[Any] = []

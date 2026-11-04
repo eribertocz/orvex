@@ -102,6 +102,7 @@ class _Writer:
         self.compiled: CompiledModel = plan.compiled
         self.parameters: list[dict[str, str | None]] = []
         self.dataset_alias = {s.alias: s.dataset for s in plan.sources}
+        self.ratios = 0  # each ratio's own columns, numbered across every fact
 
     def bind(self, kind: str, value: str | None) -> str:
         name = f"p{len(self.parameters)}"
@@ -318,10 +319,39 @@ class _Writer:
 
     def statement(self) -> PhysicalQuery:
         plan = self.plan
+        parts = [self.aggregation(fact) for fact in plan.facts]
+        if len(parts) == 1:
+            text, columns, checks = parts[0]
+        else:
+            text, columns, checks = self.align(parts)
+        if plan.order:
+            text += " ORDER BY " + ", ".join(
+                f"{quote(s.name)} {'DESC' if s.descending else 'ASC'} "
+                f"NULLS {'FIRST' if s.nulls_first else 'LAST'}"
+                for s in plan.order
+            )
+        if plan.limit is not None:
+            text += f" LIMIT {int(plan.limit) + 1}"  # one more row says the page is truncated
+        return PhysicalQuery(
+            text, tuple(self.parameters), tuple(columns), plan.fingerprint, checks=tuple(checks)
+        )
+
+    def members(self, fact: str) -> set[str]:
+        """The sources of one fact: its own, and every source its joins reach."""
+        found = {fact}
+        for join in self.plan.joins:  # each join's left side is already the fact's
+            if join.left in found:
+                found.add(join.right)
+        return found
+
+    def aggregation(self, fact: str) -> tuple[str, list[ColumnSpec], list[tuple[str, str]]]:
+        """One fact aggregated on its own to the requested grain, with every filter (C3)."""
+        plan = self.plan
+        own = self.members(fact)
         select: list[str] = []
         grouped: list[str] = []
         columns: list[ColumnSpec] = []
-        for group in plan.groups:
+        for group in (g for g in plan.groups if g.source in own):
             expression = self.field(group.member, group.source)
             if group.bucket is not None:
                 if group.bucket not in _BUCKETS:
@@ -331,14 +361,15 @@ class _Writer:
             grouped.append(expression)
             columns.append(self.column(group.member, group.name, "dimension", group.bucket))
         ratios: list[tuple[int, Any, ColumnSpec]] = []
-        for aggregate in plan.aggregates:
+        for aggregate in (a for a in plan.aggregates if a.source in own):
             column = self.column(aggregate.metric, aggregate.name, "metric", None)
             columns.append(column)
             if aggregate.division is None:
                 expression = self.metric(aggregate.metric, aggregate.source)
                 select.append(f"{expression} AS {quote(aggregate.name)}")
                 continue
-            k = len(ratios)
+            k = self.ratios
+            self.ratios += 1
             trees = dict(self.compiled.require(aggregate.metric).typed.payload)
             dataset = aggregate.metric.dataset or ""
             for part, prefix in (("components.numerator", "#n"), ("components.denominator", "#d")):
@@ -352,8 +383,8 @@ class _Writer:
             ratios.append((k, (aggregate, scales), column))
         text = "SELECT " + ", ".join(select)
         sources = {s.alias: s for s in plan.sources}
-        text += f" FROM {self.fact(sources['t0'])} AS {quote('t0')}"
-        for join in plan.joins:
+        text += f" FROM {self.fact(sources[fact])} AS {quote(fact)}"
+        for join in (j for j in plan.joins if j.left in own):
             on = " AND ".join(
                 f"{self.field(a, join.left)} = {self.field(b, join.right)}" for a, b in join.pairs
             )
@@ -361,6 +392,7 @@ class _Writer:
         conditions = [
             self.predicate(self.field(f.member, f.source), f.predicate, f.member)
             for f in plan.filters
+            if f.source in own
         ]
         if conditions:
             text += " WHERE " + " AND ".join(conditions)
@@ -369,17 +401,46 @@ class _Writer:
         checks: list[tuple[str, str]] = []
         if ratios:
             text, checks = self.divide(text, columns, ratios)
-        if plan.order:
-            text += " ORDER BY " + ", ".join(
-                f"{quote(s.name)} {'DESC' if s.descending else 'ASC'} "
-                f"NULLS {'FIRST' if s.nulls_first else 'LAST'}"
-                for s in plan.order
+        return text, columns, checks
+
+    def align(
+        self, parts: list[tuple[str, list[ColumnSpec], list[tuple[str, str]]]]
+    ) -> tuple[str, list[ColumnSpec], list[tuple[str, str]]]:
+        """The facts' aggregations side by side, matched on the requested grain only: the same
+        group columns in each, `NULL` matching `NULL`. Each aggregation is unique on them, so no
+        row repeats; a group one fact lacks has `NULL` for that fact's metrics."""
+        dimensions = [c for c in parts[0][1] if c.role == "dimension"]
+        for _, columns, _ in parts[1:]:  # the planner gives every fact the same grain
+            if [c.name for c in columns if c.role == "dimension"] != [d.name for d in dimensions]:
+                raise PlanError("facts aggregated to different grains")
+        names = [quote(f"f{i}") for i in range(len(parts))]
+        select = [
+            f"COALESCE({', '.join(f'{f}.{quote(d.name)}' for f in names)}) AS {quote(d.name)}"
+            for d in dimensions
+        ]
+        columns = list(dimensions)
+        metrics = {
+            c.name: (names[i], c)
+            for i, part in enumerate(parts)
+            for c in part[1]
+            if c.role == "metric"
+        }
+        for aggregate in self.plan.aggregates:  # the question's order of metrics
+            at, column = metrics[aggregate.name]
+            select.append(f"{at}.{quote(column.name)}")
+            columns.append(column)
+        checks = [check for part in parts for check in part[2]]
+        at_check = {check: names[i] for i, part in enumerate(parts) for check, _ in part[2]}
+        select += [f"{at_check[check]}.{quote(check)}" for check, _ in checks]
+        text = f"SELECT {', '.join(select)} FROM ({parts[0][0]}) AS {names[0]}"
+        for i in range(1, len(parts)):
+            on = " AND ".join(
+                f"COALESCE({', '.join(f'{f}.{quote(d.name)}' for f in names[:i])})"
+                f" IS NOT DISTINCT FROM {names[i]}.{quote(d.name)}"
+                for d in dimensions
             )
-        if plan.limit is not None:
-            text += f" LIMIT {int(plan.limit) + 1}"  # one more row says the page is truncated
-        return PhysicalQuery(
-            text, tuple(self.parameters), tuple(columns), plan.fingerprint, checks=tuple(checks)
-        )
+            text += f" FULL OUTER JOIN ({parts[i][0]}) AS {names[i]} ON {on or 'TRUE'}"
+        return text, columns, checks
 
     def divide(
         self, inner: str, columns: list[ColumnSpec], ratios: list[tuple[int, Any, ColumnSpec]]
@@ -399,6 +460,7 @@ class _Writer:
         middle = f"SELECT *, {', '.join(scaled)} FROM ({inner}) AS {quote('q')}"
         by_name = {column.name: (k, plan) for k, plan, column in ratios}
         outer: list[str] = []
+        flags: list[str] = []
         checks: list[tuple[str, str]] = []
         for column in columns:
             if column.name not in by_name:
@@ -417,11 +479,12 @@ class _Writer:
             )
             if division.zero == "reject":
                 check = f"#zero{k}"
-                outer.append(f"({b} = 0) AS {quote(check)}")
+                flags.append(f"({b} = 0) AS {quote(check)}")
                 checks.append((check, self.compiled.require(aggregate.metric).parsed.label))
             elif division.zero != "null":
                 raise _unsupported()
-        return f"SELECT {', '.join(outer)} FROM ({middle}) AS {quote('r')}", checks
+        # Every check after every column: the order `execution` reads them in.
+        return f"SELECT {', '.join(outer + flags)} FROM ({middle}) AS {quote('r')}", checks
 
 
 def _power(exponent: int) -> str:
