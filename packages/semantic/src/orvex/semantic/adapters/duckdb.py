@@ -107,27 +107,24 @@ class _Writer:
 
     # members
 
-    def field(self, member: MemberId, alias: str, seen: frozenset[MemberId] = frozenset()) -> str:
-        compiled = self.compiled.require(member)
-        tree = compiled.parsed.tree
-        if tree is None or member in seen:
+    def field(self, member: MemberId, alias: str) -> str:
+        tree = self.compiled.require(member).parsed.tree
+        if tree is None:
             raise _unsupported()
-        return self.node(tree, alias, member.dataset or "", "field", seen | {member})
+        return self.node(tree, alias, member.dataset or "", "field")
 
     def metric(self, member: MemberId, alias: str) -> str:
         tree = self.compiled.require(member).parsed.tree
         if tree is None:
             raise _unsupported()
-        return self.node(tree, alias, member.dataset or "", "metric", frozenset())
+        return self.node(tree, alias, member.dataset or "", "metric")
 
-    def node(
-        self, node: sql.Node, alias: str, dataset: str, context: str, seen: frozenset[MemberId]
-    ) -> str:
+    def node(self, node: sql.Node, alias: str, dataset: str, context: str) -> str:
         def again(child: sql.Node) -> str:
-            return self.node(child, alias, dataset, context, seen)
+            return self.node(child, alias, dataset, context)
 
         if isinstance(node, sql.Ref):
-            return self.ref(node, alias, dataset, context, seen)
+            return self.ref(node, alias, dataset, context)
         if isinstance(node, sql.Number):
             if not re.fullmatch(r"[0-9]+(\.[0-9]+)?", node.text):
                 raise _unsupported()
@@ -224,9 +221,10 @@ class _Writer:
             return f"{name}({', '.join(again(a) for a in node.arguments)})"
         raise _unsupported()
 
-    def ref(
-        self, node: sql.Ref, alias: str, dataset: str, context: str, seen: frozenset[MemberId]
-    ) -> str:
+    def ref(self, node: sql.Ref, alias: str, dataset: str, context: str) -> str:
+        """In a metric, a name is a field (and that field's expression is written); in a
+        field, a name is always a source column of its own dataset (Ossie "Name Resolution"),
+        never another field, even one with the same name."""
         parts = node.parts
         if context == "metric":
             owner, name = (parts[0], parts[1]) if len(parts) == 2 else (dataset, parts[0])
@@ -234,11 +232,9 @@ class _Writer:
             if member not in self.compiled.members or self.dataset_alias.get(alias) != owner:
                 raise _unsupported()  # a metric over another metric or dataset needs its rule
             return self.field(member, alias)
-        column = parts[-1]
-        member = MemberId("field", dataset, column)
-        if member in self.compiled.members and member not in seen:
-            return self.field(member, alias, seen)
-        return f"{quote(alias)}.{quote(column)}"
+        if len(parts) == 2 and parts[0] != dataset:
+            raise _unsupported()
+        return f"{quote(alias)}.{quote(parts[-1])}"
 
     # predicates
 
@@ -249,6 +245,8 @@ class _Writer:
             return f"CAST({self.bind(number_parameter(text), text)} AS {number_parameter(text)})"
         if kind not in _PARAMETER_TYPES:
             raise _unsupported()
+        if kind == "boolean":
+            return self.bind("BOOLEAN", "true" if raw is True or raw == "true" else "false")
         return self.bind(_PARAMETER_TYPES[kind], None if raw is None else str(raw))
 
     def predicate(self, column: str, predicate: Mapping[str, Any], member: MemberId) -> str:

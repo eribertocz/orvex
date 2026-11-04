@@ -68,7 +68,9 @@ class CorrectnessReport:
     bound: Any = field(default=None, compare=False, repr=False)
     compiled: Any = field(default=None, compare=False, repr=False)
     caller_groups: tuple[str, ...] = field(default=(), compare=False, repr=False)
-    issued: object = field(default=None, compare=False, repr=False)
+    # Set only by `make_report`, after construction: a copy (`dataclasses.replace`) or any
+    # other instance has none, so the planner refuses it.
+    issued: object = field(default=None, init=False, compare=False, repr=False)
 
     def document(self) -> dict[str, object]:
         return _document(
@@ -113,7 +115,7 @@ def make_report(
 ) -> CorrectnessReport:
     ordered = tuple(sorted(obligations, key=lambda o: o.id))
     document = _document(model_fingerprint, query_fingerprint, facts, ordered, rules)
-    return CorrectnessReport(
+    report = CorrectnessReport(
         model_fingerprint=model_fingerprint,
         query_fingerprint=query_fingerprint,
         facts=_frozen(facts),
@@ -123,8 +125,9 @@ def make_report(
         bound=bound,
         compiled=compiled,
         caller_groups=caller_groups,
-        issued=ISSUED,
     )
+    object.__setattr__(report, "issued", ISSUED)
+    return report
 
 
 def _frozen(value: object) -> Any:  # noqa: ANN401

@@ -39,7 +39,7 @@ class is refused until its rule lands, and a metric with neither is refused as
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -96,8 +96,16 @@ SHAPES: Mapping[str, Shape] = {
     "coverage": Shape("S7-S14", "#237"),
     "segment_filter": Shape("S7-S14", "#237"),
     "hierarchy_filter": Shape("S7-S14", "#237"),
+    "calculated_field": Shape("S10", "#237"),
+    "history": Shape("C6", "P2-20"),
     "metric_extension": Shape("unknown declaration", "a later issue"),
 }
+# A field or dataset declaration that changes the values read needs its own rule.
+_FIELD_SHAPES: Mapping[str, str] = {
+    "calculated": "calculated_field",
+    "calendar": "calendar_bucket",
+}  # `business_time` over an instant is `zoned_bucketing`, decided from its type above
+_DATASET_SHAPES: Mapping[str, str] = {"history": "history"}
 # A metric declaration that changes how it is computed needs its own rule. Any declaration not
 # listed here or in `_PLAIN_DECLARATIONS` refuses the query (`metric_extension`).
 _DECLARATION_SHAPES: Mapping[str, str] = {
@@ -325,6 +333,17 @@ class _Analysis:
                     pending.append(dependency)
         return shapes
 
+    def field_shapes(self, fields: Iterable[MemberId]) -> set[str]:
+        """The shapes the declarations of these fields and of their datasets need."""
+        shapes: set[str] = set()
+        for member in fields:
+            payload = self.payloads.get(self.compiled.require(member).parsed.pointer, {})
+            shapes |= {_FIELD_SHAPES[k] for k in payload if k in _FIELD_SHAPES}
+            if member.dataset is not None:
+                own = self.graph.payloads.get(member.dataset, {})
+                shapes |= {_DATASET_SHAPES[k] for k in own if k in _DATASET_SHAPES}
+        return shapes
+
     def additivity(self, member: MemberId) -> tuple[str, str]:
         """The metric's additivity class and whether it was `declared` or `derived`."""
         compiled = self.compiled.require(member)
@@ -402,6 +421,10 @@ class _Analysis:
             typed = self.compiled.require(row.member).typed.type
             if typed.buckets_instant or (row.bucket and typed.logical.datatype == "DateTimeTz"):
                 shapes.add("zoned_bucketing")
+        read = {r.member for r in rows} | {
+            f for m in metrics for f in self.compiled.require(m).parsed.lineage
+        }
+        shapes |= self.field_shapes(sorted(read))
         homes: dict[MemberId, set[str]] = {}
         for metric in metrics:
             homes[metric] = self.home(metric, self.compiled.require(metric))

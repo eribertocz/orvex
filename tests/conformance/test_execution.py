@@ -161,7 +161,12 @@ def test_a_nul_character_never_reaches_the_sql() -> None:
     assert "\u0000" not in found.physical.sql
 
 
-def tiny_model(fields: list[tuple[str, str]], metric: str) -> tuple[CompiledModel, dict[str, Any]]:
+def tiny_model(
+    fields: list[tuple[str, str]],
+    metric: str,
+    extra: list[Document] | None = None,
+    columns: list[tuple[str, str]] | None = None,
+) -> tuple[CompiledModel, dict[str, Any]]:
     document = {
         "version": "0.2.0.dev0",
         "name": "tiny",
@@ -170,13 +175,14 @@ def tiny_model(fields: list[tuple[str, str]], metric: str) -> tuple[CompiledMode
                 "name": "t",
                 "source": "t",
                 "primary_key": [fields[0][0]],
-                "fields": [{"name": n, "expression": {"sql": n}} for n, _ in fields],
+                "fields": [{"name": n, "expression": {"sql": n}} for n, _ in fields]
+                + (extra or []),
             }
         ],
         "metrics": [{"name": "total", "expression": {"sql": metric}}],
         "custom_extensions": [extension({"element": "model", "default_time_zone": "UTC"})],
     }
-    catalog = {"t": {sql_name(n): SourceColumn(t) for n, t in fields}}
+    catalog = {"t": {sql_name(n): SourceColumn(t) for n, t in columns or fields}}
     loaded = read(json.dumps(document).encode(), "semantic/tiny.ossie.json", VENDORS)
     return compile_model(loaded, catalog, VENDORS), catalog
 
@@ -194,6 +200,58 @@ def tiny_lake(catalog: dict[str, Any], rows: list[dict[str, str | None]]) -> Ite
         path.write_text("\n".join(lines) + "\n", "utf-8")
         with ce.case_lake([path], catalog) as lake:
             yield lake
+
+
+def test_a_name_in_a_field_is_its_column_never_another_field() -> None:
+    """Ossie "Name Resolution": `list_price: price` reads the column `price`, not the field
+    `price` (which doubles it)."""
+    compiled, catalog = tiny_model(
+        [("id", "BIGINT"), ("g", "VARCHAR")],
+        "SUM(t.list_price)",
+        [
+            {"name": "list_price", "expression": {"sql": "price"}},
+            {"name": "price", "expression": {"sql": "price * 2"}},
+        ],
+        columns=[("id", "BIGINT"), ("g", "VARCHAR"), ("price", "DECIMAL(18,2)")],
+    )
+    rows: list[dict[str, str | None]] = [
+        {"id": "1", "g": "a", "price": "1.50"},
+        {"id": "2", "g": "a", "price": "2.25"},
+    ]
+    query = {
+        "kind": "semantic_query",
+        "version": 1,
+        "mode": "aggregate",
+        "metrics": [{"metric": "total"}],
+        "group_by": [{"member": "t.g"}],
+    }
+    with tiny_lake(catalog, rows) as lake:
+        assert ce.rows_of(ask(query, compiled, lake)) == [["a", "3.75"]]
+
+
+def test_a_boolean_filter_runs() -> None:
+    fields = [("id", "BIGINT"), ("g", "VARCHAR"), ("ok", "BOOLEAN"), ("amount", "DECIMAL(18,2)")]
+    compiled, catalog = tiny_model(fields, "SUM(t.amount)")
+    rows: list[dict[str, str | None]] = [
+        {"id": "1", "g": "a", "ok": "true", "amount": "1.00"},
+        {"id": "2", "g": "a", "ok": "false", "amount": "2.00"},
+    ]
+    query = {
+        "kind": "semantic_query",
+        "version": 1,
+        "mode": "aggregate",
+        "metrics": [{"metric": "total"}],
+        "group_by": [{"member": "t.g"}],
+        "filters": [
+            {
+                "scope": "board",
+                "member": "t.ok",
+                "predicate": {"op": "in", "values": [{"type": "boolean", "value": True}]},
+            }
+        ],
+    }
+    with tiny_lake(catalog, rows) as lake:
+        assert ce.rows_of(ask(query, compiled, lake)) == [["a", "1.00"]]
 
 
 def test_odd_identifiers_are_quoted() -> None:
@@ -425,26 +483,55 @@ def test_hidden_masked_and_unusable_are_refused_before_any_read(
     assert spy.calls == 0
 
 
+SQL_OR_DATA = {
+    "orvex.semantic.execution": {"answer"},
+    "orvex.semantic.planning": {"plan"},
+    "orvex.semantic.adapters.duckdb": {"compile_plan"},
+}
+
+
 def test_every_public_path_to_sql_or_data_needs_the_policies_and_the_caller() -> None:
-    import orvex.semantic.execution as execution
+    import importlib
+    import pkgutil
 
-    entry = inspect.signature(execution.answer)
-    assert {"policies", "context"} <= set(entry.parameters)
-    public = {n for n, v in vars(execution).items() if callable(v) and not n.startswith("_")}
-    assert "execute" not in public  # the read itself is reachable only through `answer`
-    # The other stages produce SQL only from what `analyze` (policies and caller) made.
-    from orvex.semantic.correctness import CorrectnessReport
+    import orvex.semantic
 
-    forged = CorrectnessReport("sha256:" + "0" * 64, "sha256:" + "0" * 64, {}, (), (), "x")
-    with pytest.raises(PlanError):
-        plan(forged)
+    # Every public function of the package that writes SQL or reads data is listed here.
+    found: dict[str, set[str]] = {}
+    for module in pkgutil.walk_packages(orvex.semantic.__path__, "orvex.semantic."):
+        loaded = importlib.import_module(module.name)
+        for name, value in vars(loaded).items():
+            if name.startswith("_") or not inspect.isfunction(value):
+                continue
+            if value.__module__ != module.name:
+                continue
+            source = inspect.getsource(value)
+            if any(t in source for t in ("compile_plan(", ".read(", "_Writer(", "_Planner(")):
+                found.setdefault(module.name, set()).add(name)
+    assert found == SQL_OR_DATA
+    # The one path from a question takes the policies and the caller.
+    assert {"policies", "context"} <= set(inspect.signature(answer).parameters)
+    # The other two accept only what `analyze` (policies and caller) and `plan` made.
     compiled, _, _ = corpus_case("CASE-001")
     with lake_for("CASE-001") as lake:
-        real = ask(REVENUE_BY_REGION, compiled, lake).plan
+        real = ask(REVENUE_BY_REGION, compiled, lake)
     from dataclasses import replace
 
-    with pytest.raises(PlanError):
-        adapter_module.compile_plan(replace(real, issued=None))
+    from orvex.semantic.query.binding import Limits, bind_query
+
+    unseen = bind_query(
+        compiled,
+        json.dumps(REVENUE_BY_REGION),
+        instant=ce.INSTANT,
+        limits=Limits(detail_page_size=1000),
+        hidden=lambda member: False,
+    )
+    for forged_report in (replace(real.report, bound=unseen), replace(real.report)):
+        with pytest.raises(PlanError):
+            plan(forged_report)
+    for forged_plan in (replace(real.plan, filters=(), groups=()), replace(real.plan)):
+        with pytest.raises(PlanError):
+            adapter_module.compile_plan(forged_plan)
 
 
 def test_two_spellings_of_one_member_give_one_answer() -> None:

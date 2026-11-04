@@ -99,7 +99,8 @@ class SemanticPlan:
     limit: int | None
     fingerprint: str
     report: CorrectnessReport = field(compare=False, repr=False)
-    issued: object = field(default=None, compare=False, repr=False)
+    # Set only by `plan`, after construction: a copy (`dataclasses.replace`) has none.
+    issued: object = field(default=None, init=False, compare=False, repr=False)
 
     @property
     def compiled(self) -> CompiledModel:
@@ -254,12 +255,13 @@ class _Planner:
             "order": tuple(order),
             "limit": int(canonical["limit"]) if canonical.get("limit") is not None else None,
         }
-        return SemanticPlan(
+        found = SemanticPlan(
             **parts,
             fingerprint=fingerprint("semantic_plan", PLAN_FORMAT, _document(parts)),
             report=self.report,
-            issued=ISSUED_PLAN,
         )
+        object.__setattr__(found, "issued", ISSUED_PLAN)
+        return found
 
 
 def plan(report: CorrectnessReport) -> SemanticPlan:

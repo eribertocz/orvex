@@ -296,19 +296,20 @@ def run_case(
     if not expected or names != list(expected[0]):
         return CaseRun("fail", f"columns {names}")
     got = rows_of(found)
-    return CaseRun("pass", "") if same(got, wanted) else CaseRun("fail", f"rows {got}")
+    dates = [c["encoding"] == "DATE" for c in found.result.envelope()["columns"]]
+    return CaseRun("pass", "") if same(got, wanted, dates) else CaseRun("fail", f"rows {got}")
 
 
-def same(got: list[list[str | None]], wanted: list[list[str | None]]) -> bool:
-    """Equal as text. The corpus writes a month as `YYYY-MM`; the engine answers the date the
-    month starts on, `YYYY-MM-01`, which is the same value."""
+def same(got: list[list[str | None]], wanted: list[list[str | None]], dates: list[bool]) -> bool:
+    """Equal as text. In a date column, the corpus writes a month as `YYYY-MM`; the engine
+    answers the date the month starts on, `YYYY-MM-01`, which is the same value."""
     if len(got) != len(wanted):
         return False
     for row, expected in zip(got, wanted, strict=True):
         if len(row) != len(expected):
             return False
-        for value, text in zip(row, expected, strict=True):
-            month = text is not None and re.fullmatch(r"[0-9]{4}-[0-9]{2}", text)
+        for value, text, date in zip(row, expected, dates, strict=True):
+            month = date and text is not None and re.fullmatch(r"[0-9]{4}-[0-9]{2}", text)
             if value != text and not (month and value == f"{text}-01"):
                 return False
     return True
