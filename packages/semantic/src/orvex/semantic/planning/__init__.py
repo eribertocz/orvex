@@ -73,11 +73,22 @@ class Filter:
 
 
 @dataclass(frozen=True, slots=True)
+class Division:
+    """A ratio's one division, after both components are aggregated (C2): rounded once to
+    `scale` in `mode`, and `zero` (`null` or `reject`) for a zero denominator, as declared."""
+
+    scale: int
+    mode: str
+    zero: str
+
+
+@dataclass(frozen=True, slots=True)
 class Aggregate:
     name: str
     metric: MemberId
     source: str
     discharges: tuple[str, ...]  # obligation ids
+    division: Division | None = None  # a ratio: its components, then this division
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +134,14 @@ def _document(plan: dict[str, Any]) -> dict[str, object]:
         "filters": [[_key(f.member), f.source, _plain(f.predicate)] for f in plan["filters"]],
         "groups": [[g.name, _key(g.member), g.source, g.bucket] for g in plan["groups"]],
         "aggregates": [
-            [a.name, _key(a.metric), a.source, list(a.discharges)] for a in plan["aggregates"]
+            [
+                a.name,
+                _key(a.metric),
+                a.source,
+                list(a.discharges),
+                [a.division.scale, a.division.mode, a.division.zero] if a.division else None,
+            ]
+            for a in plan["aggregates"]
         ],
         "order": [[s.name, s.descending, s.nulls_first] for s in plan["order"]],
         "limit": plan["limit"],
@@ -230,11 +248,26 @@ class _Planner:
             group = Group(names[member], member, self.alias(member, "group_by"), unit)
             if group not in groups:
                 groups.append(group)
-        obligations = {o.metric: o.id for o in self.report.obligations}
+        obligations: dict[str, list[str]] = {}
+        for obligation in self.report.obligations:
+            obligations.setdefault(obligation.metric, []).append(obligation.id)
+        payloads = {
+            e.pointer.rsplit("/custom_extensions/", 1)[0]: e.payload
+            for e in self.compiled.ossie.product_extensions
+        }
         aggregates = []
         for metric in dict.fromkeys(metric_keys):
             label = self.label(metric)
-            aggregates.append(Aggregate(names[metric], metric, "t0", (obligations[label],)))
+            payload = payloads.get(self.compiled.require(metric).parsed.pointer, {})
+            division = None
+            if payload.get("additivity") == "recomputable":
+                rounding = payload["rounding"]
+                assert isinstance(rounding, Mapping)  # `ossie-extensions` v1, checked on read
+                division = Division(
+                    int(rounding["scale"]), str(rounding["mode"]), str(payload["zero_denominator"])
+                )
+            discharges = tuple(sorted(obligations[label]))
+            aggregates.append(Aggregate(names[metric], metric, "t0", discharges, division))
         order = [
             Sort(names[_member(m)], direction == "desc", nulls == "first")
             for m, direction, nulls in canonical["order"]

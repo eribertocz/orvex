@@ -57,6 +57,9 @@ class PhysicalQuery:
     plan_fingerprint: str
     adapter: str = NAME
     adapter_version: str = VERSION
+    # Extra BOOLEAN columns after `columns`: (column, metric) for a ratio declared
+    # `zero_denominator: reject`; any true row refuses the whole result.
+    checks: tuple[tuple[str, str], ...] = ()
 
 
 def quote(name: str) -> str:
@@ -307,10 +310,26 @@ class _Writer:
             select.append(f"{expression} AS {quote(group.name)}")
             grouped.append(expression)
             columns.append(self.column(group.member, group.name, "dimension", group.bucket))
+        ratios: list[tuple[int, Any, ColumnSpec]] = []
         for aggregate in plan.aggregates:
-            expression = self.metric(aggregate.metric, aggregate.source)
-            select.append(f"{expression} AS {quote(aggregate.name)}")
-            columns.append(self.column(aggregate.metric, aggregate.name, "metric", None))
+            column = self.column(aggregate.metric, aggregate.name, "metric", None)
+            columns.append(column)
+            if aggregate.division is None:
+                expression = self.metric(aggregate.metric, aggregate.source)
+                select.append(f"{expression} AS {quote(aggregate.name)}")
+                continue
+            k = len(ratios)
+            trees = dict(self.compiled.require(aggregate.metric).typed.payload)
+            dataset = aggregate.metric.dataset or ""
+            for part, prefix in (("components.numerator", "#n"), ("components.denominator", "#d")):
+                tree = trees[part]
+                written = self.node(tree.node, aggregate.source, dataset, "metric")
+                select.append(f"{written} AS {quote(f'{prefix}{k}')}")
+            scales = (
+                _scale(_logical(trees["components.numerator"].type.logical)),
+                _scale(_logical(trees["components.denominator"].type.logical)),
+            )
+            ratios.append((k, (aggregate, scales), column))
         text = "SELECT " + ", ".join(select)
         sources = {s.alias: s for s in plan.sources}
         text += f" FROM {quote(sources['t0'].table)} AS {quote('t0')}"
@@ -327,6 +346,9 @@ class _Writer:
             text += " WHERE " + " AND ".join(conditions)
         if grouped:
             text += " GROUP BY " + ", ".join(grouped)
+        checks: list[tuple[str, str]] = []
+        if ratios:
+            text, checks = self.divide(text, columns, ratios)
         if plan.order:
             text += " ORDER BY " + ", ".join(
                 f"{quote(s.name)} {'DESC' if s.descending else 'ASC'} "
@@ -335,7 +357,96 @@ class _Writer:
             )
         if plan.limit is not None:
             text += f" LIMIT {int(plan.limit) + 1}"  # one more row says the page is truncated
-        return PhysicalQuery(text, tuple(self.parameters), tuple(columns), plan.fingerprint)
+        return PhysicalQuery(
+            text, tuple(self.parameters), tuple(columns), plan.fingerprint, checks=tuple(checks)
+        )
+
+    def divide(
+        self, inner: str, columns: list[ColumnSpec], ratios: list[tuple[int, Any, ColumnSpec]]
+    ) -> tuple[str, list[tuple[str, str]]]:
+        """Each ratio as one exact division of its aggregated components (C2): both scaled to
+        exact `HUGEINT`s, divided with the remainder, rounded once as declared."""
+        scaled = []
+        for k, (_, (sn, sd)), column in ratios:
+            scale = int(str(column.logical["scale"])) if column.logical else 0
+            # N/10^sn ÷ D/10^sd at scale s is (N·10^(sd+s)) / (D·10^sn); the common power of
+            # ten is cancelled first, so no intermediate is larger than it must be.
+            common = min(sd + scale, sn)
+            numerator = _unscaled(quote(f"#n{k}"), sn)
+            denominator = _unscaled(quote(f"#d{k}"), sd)
+            scaled.append(f"{numerator} * {_power(sd + scale - common)} AS {quote(f'#a{k}')}")
+            scaled.append(f"{denominator} * {_power(sn - common)} AS {quote(f'#b{k}')}")
+        middle = f"SELECT *, {', '.join(scaled)} FROM ({inner}) AS {quote('q')}"
+        by_name = {column.name: (k, plan) for k, plan, column in ratios}
+        outer: list[str] = []
+        checks: list[tuple[str, str]] = []
+        for column in columns:
+            if column.name not in by_name:
+                outer.append(quote(column.name))
+                continue
+            k, (aggregate, _) = by_name[column.name]
+            division = aggregate.division
+            a, b = quote(f"#a{k}"), quote(f"#b{k}")
+            scale = int(str(column.logical["scale"])) if column.logical else 0
+            value = f"CAST({_rounded(a, b, division.mode)} AS DECIMAL(38,0))"
+            if scale:
+                value = f"{value} * 0.{'0' * (scale - 1)}1"
+            outer.append(
+                f"CASE WHEN {b} = 0 THEN NULL ELSE CAST({value} AS {column.encoding}) END"
+                f" AS {quote(column.name)}"
+            )
+            if division.zero == "reject":
+                check = f"#zero{k}"
+                outer.append(f"({b} = 0) AS {quote(check)}")
+                checks.append((check, self.compiled.require(aggregate.metric).parsed.label))
+            elif division.zero != "null":
+                raise _unsupported()
+        return f"SELECT {', '.join(outer)} FROM ({middle}) AS {quote('r')}", checks
+
+
+def _power(exponent: int) -> str:
+    """10^exponent as an exact `HUGEINT`; past its range, the cast fails, never a float."""
+    return f"CAST('1{'0' * exponent}' AS HUGEINT)"
+
+
+def _unscaled(value: str, scale: int) -> str:
+    """The exact integer behind a `DECIMAL(p, scale)`, as a `HUGEINT`: its integer part and its
+    fraction are scaled apart, so a 38-digit value never overflows a `DECIMAL(38)` on the way."""
+    if scale == 0:
+        return f"CAST({value} AS HUGEINT)"
+    return (
+        f"(CAST(trunc({value}) AS HUGEINT) * {_power(scale)}"
+        f" + CAST(({value} - trunc({value})) * {_power(scale)} AS HUGEINT))"
+    )
+
+
+def _scale(logical: Mapping[str, object]) -> int:
+    if logical.get("family") == "Integer":
+        return 0
+    if logical.get("family") == "Decimal" and isinstance(logical.get("scale"), int):
+        return int(str(logical["scale"]))
+    raise _unsupported()  # only an exact component divides exactly
+
+
+def _rounded(a: str, b: str, mode: str) -> str:
+    """The quotient a / b rounded to an integer in `mode`, from truncating integer division
+    and its remainder; written so that no step can exceed the operands' range."""
+    quotient, rest = f"({a} // {b})", f"({a} % {b})"
+    away = f"(CASE WHEN ({a} < 0) <> ({b} < 0) THEN -1 ELSE 1 END)"
+    half = f"abs({rest}) >= abs({b}) - abs({rest})"
+    above = f"abs({rest}) > abs({b}) - abs({rest})"
+    tie = f"abs({rest}) = abs({b}) - abs({rest})"
+    if mode == "down":
+        step = "0"
+    elif mode == "up":
+        step = f"CASE WHEN {rest} <> 0 THEN {away} ELSE 0 END"
+    elif mode == "half_away_from_zero":
+        step = f"CASE WHEN {half} THEN {away} ELSE 0 END"
+    elif mode == "half_even":
+        step = f"CASE WHEN {above} OR ({tie} AND {quotient} % 2 <> 0) THEN {away} ELSE 0 END"
+    else:
+        raise _unsupported()
+    return f"({quotient} + {step})"
 
 
 def compile_plan(plan: SemanticPlan) -> PhysicalQuery:

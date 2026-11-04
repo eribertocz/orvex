@@ -26,10 +26,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pyarrow as pa
+import pyarrow.compute as pc
 from orvex.semantic.adapters.duckdb import PhysicalQuery, compile_plan
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.correctness import CorrectnessReport, analyze
+from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.planning import PlanError, SemanticPlan, plan
 from orvex.semantic.policies import PolicyModel, read_caller
@@ -167,9 +169,14 @@ def _read(physical: PhysicalQuery, engine: Engine) -> pa.Table:
     reader = engine.read(request)
     table = reader.read_all()  # every batch, or the read's error: never a partial result
     expected = [(c.name, arrow_type(c.encoding)) for c in physical.columns]
+    expected += [(name, pa.bool_()) for name, _ in physical.checks]
     found = [(f.name, f.type) for f in table.schema]
     if found != expected:
         raise PlanError(f"the engine returned {found}, the plan describes {expected}")
+    for name, metric in physical.checks:  # a declared `reject` refuses the whole result
+        if table.filter(pc.fill_null(table.column(name), False)).num_rows:
+            raise SemanticError("DIVISION_POLICY_VIOLATION", {"metric": metric})
+        table = table.drop_columns([name])
     return table
 
 

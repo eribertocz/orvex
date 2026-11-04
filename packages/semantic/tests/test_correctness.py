@@ -146,8 +146,8 @@ def test_the_report_is_deterministic_and_order_does_not_change_its_facts() -> No
     assert one.fingerprint == run(query("revenue", "declared", group_by=[zone, day])).fingerprint
     assert one.facts == two.facts
     assert one.obligations == two.obligations
-    assert one.rules == RULES == (("C1", 1),)
-    assert {"C1"} == IMPLEMENTED
+    assert one.rules == RULES == (("C1", 1), ("C2", 1))
+    assert {"C1", "C2"} == IMPLEMENTED
 
 
 SCRIPT = """
@@ -198,11 +198,14 @@ CASES: dict[str, tuple[frozenset[str], tuple[str, str] | None]] = {
     "CASE-003": (frozenset({"C1"}), None),
     "CASE-004": (frozenset({"C1", "C3", "C5"}), ("UNSUPPORTED_OPERATION", "multi_fact")),
     "CASE-005": (frozenset({"C1"}), None),
-    "CASE-006": (frozenset({"C1", "C2"}), ("COMPILER", "recomputable")),
-    "CASE-007": (frozenset({"C1", "C2", "C6"}), ("UNSUPPORTED_OPERATION", "semi_additive")),
-    "CASE-008": (frozenset({"C1", "C2"}), ("UNSUPPORTED_OPERATION", "holistic")),
+    "CASE-006": (frozenset({"C1", "C2"}), None),
+    "CASE-007": (
+        frozenset({"C1", "C2 period end", "C6"}),
+        ("UNSUPPORTED_OPERATION", "semi_additive"),
+    ),
+    "CASE-008": (frozenset({"C1", "C2 distinct"}), ("UNSUPPORTED_OPERATION", "holistic")),
     "CASE-009": (frozenset({"C1", "C5"}), ("COMPILER", "multi_fact")),
-    "CASE-010": (frozenset({"C1", "C2", "C5"}), ("UNSUPPORTED_OPERATION", "recomputable")),
+    "CASE-010": (frozenset({"C1", "C2", "C5"}), ("UNSUPPORTED_OPERATION", "multi_fact")),
     "CASE-011": (frozenset({"C1", "C7"}), ("UNSUPPORTED_OPERATION", "bridge_allocation")),
     "CASE-012": (frozenset({"C1", "C6"}), ("UNSUPPORTED_OPERATION", "zoned_bucketing")),
     "CASE-013": (frozenset({"C1", "C6"}), ("UNSUPPORTED_OPERATION", "as_of_join")),
@@ -212,7 +215,10 @@ CASES: dict[str, tuple[frozenset[str], tuple[str, str] | None]] = {
     "CASE-017": (frozenset({"C1"}), None),
     "CASE-018": (frozenset({"C1"}), None),
     "CASE-019": (frozenset({"C1", "C6"}), ("UNSUPPORTED_OPERATION", "zoned_bucketing")),
-    "CASE-020": (frozenset({"C1", "C2", "C6"}), ("UNSUPPORTED_OPERATION", "semi_additive")),
+    "CASE-020": (
+        frozenset({"C1", "C2 period end", "C6"}),
+        ("UNSUPPORTED_OPERATION", "semi_additive"),
+    ),
     "CASE-021": (frozenset({"C1", "C6"}), ("COMPILER", "ordered")),
 }
 
@@ -243,7 +249,7 @@ def test_each_corpus_case_is_answered_or_refused_as_the_table_says(case: str) ->
     document = QUERIES[case]
     if outcome is None:
         report = analyze(bound(document, compiled), compiled, policy, context())
-        assert [o.rule for o in report.obligations] == ["C1"] * len(report.obligations)
+        assert {o.rule for o in report.obligations} <= IMPLEMENTED
         return
     with pytest.raises(SemanticError) as caught:
         analyze(bound(document, compiled), compiled, policy, context())

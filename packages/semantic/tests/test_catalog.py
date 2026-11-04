@@ -405,7 +405,7 @@ def test_a_description_naming_an_inherited_protected_member_is_omitted(named: st
     assert field_of(catalog(document, builder=True), "customers", "zone_id")["description_flagged"]
 
 
-NOT_YET = {"CASE-006", "CASE-009", "CASE-021"}  # compile after P2-13, P2-17 and P2-20 (#283)
+NOT_YET = {"CASE-009", "CASE-021"}  # compile after P2-17 and P2-20 (#283)
 
 
 def corpus_case(case: str) -> tuple[CompiledModel, Any]:

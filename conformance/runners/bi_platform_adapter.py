@@ -34,12 +34,28 @@ EXPLICIT_DECLARATIONS: dict[tuple[str, str], dict[str, Any]] = {
     ("case-008", "active_customers"): {"aggregate_class": "holistic"},
     # actual_revenue / target_revenue: a ratio recomputed from its two metrics, a zero denominator
     # refused, rounded as the case's own CAST to DECIMAL(18, 2) rounds (Owner decision).
+    # revenue / order_count, cast to DECIMAL(18, 2): a ratio recomputed from its components,
+    # rounded half away from zero and empty for a zero denominator (Owner decisions of
+    # 2026-11-04, #325). Ossie forbids naming metrics in an expression, so the expression and the
+    # components are written with the metrics' own aggregates (EXPLICIT_EXPRESSIONS).
+    ("case-006", "average_order_value"): {
+        "additivity": "recomputable",
+        "components": {"numerator": "SUM(orders.amount)", "denominator": "COUNT(orders.order_id)"},
+        "zero_denominator": "null",
+        "rounding": {"scale": 2, "mode": "half_away_from_zero"},
+    },
     ("case-010", "attainment"): {
         "additivity": "recomputable",
         "components": {"numerator": "actual_revenue", "denominator": "target_revenue"},
         "zero_denominator": "reject",
         "rounding": {"scale": 2, "mode": "half_away_from_zero"},
     },
+}
+
+# Expressions that name metrics, which Ossie forbids (spec L424), written with the metrics' own
+# aggregates instead; the meaning is the declared ratio above. (model, metric) -> Ossie SQL.
+EXPLICIT_EXPRESSIONS: dict[tuple[str, str], str] = {
+    ("case-006", "average_order_value"): "SUM(orders.amount) / COUNT(orders.order_id)",
 }
 
 # bi-platform manifest outcome -> what the case expects.
@@ -370,6 +386,13 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
                             f"explicit declarations already stated: {sorted(overlap)}"
                         )
                     members.update(explicit)
+                rewritten = EXPLICIT_EXPRESSIONS.get(
+                    (str(translated.get("name")), str(metric.get("name")))
+                )
+                if rewritten is not None:
+                    metric["expression"] = {
+                        "dialects": [{"dialect": "OSSIE_SQL_2026", "expression": rewritten}]
+                    }
                 if "over_metrics" in members:
                     # An expression over metrics is no Ossie expression (spec L424): it moves,
                     # text unchanged, under the product's dialect token, which the declared

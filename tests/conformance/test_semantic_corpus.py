@@ -32,7 +32,16 @@ def codes(root: Path) -> list[str]:
     return sorted({finding.code for finding in run(root, execute=False)[1]})
 
 
-PASSING = {"CASE-001", "CASE-002", "CASE-003", "CASE-005", "CASE-014", "CASE-016", "CASE-018"}
+PASSING = {
+    "CASE-001",
+    "CASE-002",
+    "CASE-006",
+    "CASE-003",
+    "CASE-005",
+    "CASE-014",
+    "CASE-016",
+    "CASE-018",
+}
 
 
 def test_every_case_is_answered_or_not_run_with_its_capability() -> None:
