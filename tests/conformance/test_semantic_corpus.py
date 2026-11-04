@@ -33,6 +33,8 @@ def codes(root: Path) -> list[str]:
 
 
 PASSING = {
+    "CASE-004",
+    "CASE-017",
     "CASE-001",
     "CASE-002",
     "CASE-006",

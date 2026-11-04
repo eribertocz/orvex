@@ -425,7 +425,12 @@ def corpus_case(case: str) -> tuple[CompiledModel, Any]:
 
 
 @pytest.mark.parametrize(
-    "case", sorted(f"CASE-{n:03d}" for n in range(1, 22) if f"CASE-{n:03d}" not in NOT_YET)
+    "case",
+    sorted(
+        f"CASE-{n:03d}"
+        for n in range(1, 22)
+        if f"CASE-{n:03d}" not in NOT_YET | {"CASE-017"}  # refused: USD + BOB (P2-16)
+    ),
 )
 def test_export_over_every_compiling_corpus_model(case: str) -> None:
     compiled, source_catalog = corpus_case(case)

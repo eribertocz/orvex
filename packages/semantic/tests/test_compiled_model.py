@@ -35,6 +35,8 @@ FORMS = ("yaml", "json")
 CORPUS = ROOT / "conformance/semantic-corpus/bi-platform/models"
 GOLDEN = Path(__file__).with_name("golden") / "corpus-fingerprints.json"
 NOT_YET = {"CASE-009", "CASE-021"}  # P2-17 and P2-20 declare them
+# Refused by design: CASE-017 adds USD to BOB in `combined` (P2-16), proven in test_ossie_corpus.
+REFUSED = {"CASE-017"}
 
 Model = dict[str, Any]
 
@@ -163,7 +165,7 @@ def corpus_fingerprints() -> dict[str, dict[str, str]]:
     """Every corpus model P2-04 compiles, through the adapter, as JSON and as YAML."""
     found: dict[str, dict[str, str]] = {}
     for path in sorted(CORPUS.glob("CASE-0??.yaml")):
-        if path.stem in NOT_YET:
+        if path.stem in NOT_YET | REFUSED:
             continue
         translated, _ = adapter.translate(yaml.safe_load(path.read_text("utf-8")), VENDORS[0])
         prints = set()
@@ -181,7 +183,8 @@ def test_the_corpus_compiles_to_its_golden_fingerprints() -> None:
     """To refresh after an intended change, write `corpus_fingerprints()` to the golden file and
     review the diff: every changed fingerprint is a changed meaning."""
     golden = json.loads(GOLDEN.read_text("utf-8"))
-    assert len(golden) == 19  # the 17 models P2-03 accepts, CASE-010 and CASE-006 translated
+    # The 17 models P2-03 accepts, CASE-010 and CASE-006 translated, less CASE-017 (refused).
+    assert len(golden) == 18
     assert corpus_fingerprints() == golden
 
 

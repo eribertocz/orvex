@@ -2,8 +2,12 @@
 accepted is answered, as a logical plan with no SQL.
 
 `plan(report)` turns a `CorrectnessReport` into an immutable, fingerprinted `SemanticPlan`. It
-supports exactly what the correctness engine accepts today: one fact, additive aggregation to
-a coarser grain along many-to-one paths, and filters on members those paths reach.
+supports exactly what the correctness engine accepts today: aggregation to a coarser grain
+along many-to-one paths, and filters on members those paths reach.
+
+- **One aggregation per fact** (C3, P2-16). `facts` names each fact's own source; every join,
+  filter, group and aggregate belongs to the one fact whose joins reach its source. Facts are
+  aggregated apart, each with every filter, and aligned on the requested grain only.
 
 - **Only reports `analyze` made are planned.** Any other report is an internal error, so no
   plan exists that skipped the policies.
@@ -121,6 +125,7 @@ class SemanticPlan:
     limit: int | None
     fingerprint: str
     report: CorrectnessReport = field(compare=False, repr=False)
+    facts: tuple[str, ...] = ("t0",)  # each fact's source, aggregated apart (C3)
     # Set only by `plan`, after construction: a copy (`dataclasses.replace`) has none.
     issued: object = field(default=None, init=False, compare=False, repr=False)
 
@@ -164,7 +169,7 @@ def _document(plan: dict[str, Any]) -> dict[str, object]:
         ],
         "order": [[s.name, s.descending, s.nulls_first] for s in plan["order"]],
         "limit": plan["limit"],
-    }
+    } | ({"facts": list(plan["facts"])} if len(plan["facts"]) > 1 else {})
 
 
 def _plain(value: object) -> object:
@@ -195,13 +200,15 @@ class _Planner:
             sql.normalize(str(d["name"])): str(d.get("source", d["name"]))
             for d in document.get("datasets", ())
         }
-        home = report.facts["metrics"][0]["home"]
-        self.home = next(n for n, w in self.graph.names.items() if w == home)
-        self.sources: list[Source] = [self.source("t0", self.home)]
-        self.aliases: dict[tuple[str, ...], str] = {(): "t0"}
+        dataset = {w: n for n, w in self.graph.names.items()}
+        self.home_of = {m["metric"]: dataset[m["home"]] for m in report.facts["metrics"]}
+        self.sources: list[Source] = []
+        self.aliases: dict[tuple[str, tuple[str, ...]], str] = {}
         self.joins: list[Join] = []
         self.paths = {
-            (p["member"], p["slot"], p["role"]): tuple(self.written[r] for r in p["relationships"])
+            (dataset[p["from"]], p["member"], p["slot"], p["role"]): tuple(
+                self.written[r] for r in p["relationships"]
+            )
             for p in report.facts["paths"]
         }
 
@@ -214,21 +221,29 @@ class _Planner:
     def label(self, member: MemberId) -> str:
         return self.compiled.require(member).parsed.label
 
-    def alias(self, member: MemberId, slot: str, role: str | None = None) -> str:
-        """The source holding `member`, joining along its path from the fact once."""
+    def fact(self, home: str) -> str:
+        """The source of a fact: one per home dataset, never shared with another fact."""
+        if (home, ()) not in self.aliases:
+            alias = f"t{len(self.sources)}"
+            self.sources.append(self.source(alias, home))
+            self.aliases[home, ()] = alias
+        return self.aliases[home, ()]
+
+    def alias(self, home: str, member: MemberId, slot: str, role: str | None = None) -> str:
+        """The source holding `member` for the fact `home`, joining along its path once."""
         written = self.graph.relationship_names.get(role, role) if role else None
-        path = self.paths.get((self.label(member), slot, written), ())
-        at, current = "t0", self.home
+        path = self.paths.get((home, self.label(member), slot, written), ())
+        at, current = self.fact(home), home
         for depth in range(1, len(path) + 1):
             prefix = path[:depth]
             name = prefix[-1]
             step = next(s for s in self.graph.links[current] if s.relationship == name)
-            if prefix not in self.aliases:
+            if (home, prefix) not in self.aliases:
                 alias = f"t{len(self.sources)}"
                 self.sources.append(self.source(alias, step.to))
-                self.aliases[prefix] = alias
+                self.aliases[home, prefix] = alias
                 self.joins.append(self.join(name, current, at, step.to, alias))
-            at, current = self.aliases[prefix], step.to
+            at, current = self.aliases[home, prefix], step.to
         return at
 
     def join(self, name: str, left: str, left_alias: str, right: str, right_alias: str) -> Join:
@@ -258,26 +273,30 @@ class _Planner:
         metric_keys = [_member(m) for m, _, _ in canonical["metrics"]]
         members = [m for m, _, _ in group_keys] + metric_keys
         names = self.names(list(dict.fromkeys(members)))
+        homes = list(dict.fromkeys(self.home_of[self.label(m)] for m in metric_keys))
+        facts = tuple(self.fact(home) for home in homes)
         filters = tuple(
             Filter(
                 _member(f["member"]),
-                self.alias(_member(f["member"]), "filter", f["role"]),
+                self.alias(home, _member(f["member"]), "filter", f["role"]),
                 f["predicate"],
             )
+            for home in homes
             for f in canonical["filters"]
         )
         roles_of: dict[MemberId, set[str | None]] = {}
         for member, role, _ in group_keys:
             roles_of.setdefault(member, set()).add(role)
         groups: list[Group] = []
-        for member, role, bucket in group_keys:
-            unit = bucket[0] if bucket else None
-            name = names[member]
-            if len(roles_of[member]) > 1 and role:  # one dimension through two roles
-                name = f"{name}_{self.graph.relationship_names[role]}"
-            group = Group(name, member, self.alias(member, "group_by", role), unit)
-            if group not in groups:
-                groups.append(group)
+        for home in homes:  # the same grain in every fact, each from its own sources
+            for member, role, bucket in group_keys:
+                unit = bucket[0] if bucket else None
+                name = names[member]
+                if len(roles_of[member]) > 1 and role:  # one dimension through two roles
+                    name = f"{name}_{self.graph.relationship_names[role]}"
+                group = Group(name, member, self.alias(home, member, "group_by", role), unit)
+                if group not in groups:
+                    groups.append(group)
         obligations: dict[str, list[str]] = {}
         for obligation in self.report.obligations:
             obligations.setdefault(obligation.metric, []).append(obligation.id)
@@ -297,13 +316,15 @@ class _Planner:
                     int(rounding["scale"]), str(rounding["mode"]), str(payload["zero_denominator"])
                 )
             discharges = tuple(sorted(obligations[label]))
-            aggregates.append(Aggregate(names[metric], metric, "t0", discharges, division))
+            source = self.fact(self.home_of[label])
+            aggregates.append(Aggregate(names[metric], metric, source, discharges, division))
         order = [
             Sort(names[_member(m)], direction == "desc", nulls == "first")
             for m, direction, nulls in canonical["order"]
         ]
         ordered = {s.name for s in order}
-        order += [Sort(g.name, False, False) for g in groups if g.name not in ordered]
+        output = list(dict.fromkeys(g.name for g in groups))
+        order += [Sort(name, False, False) for name in output if name not in ordered]
         ends = [
             m["period"]["axis"]
             for m in self.report.facts["metrics"]
@@ -311,15 +332,18 @@ class _Planner:
         ]
         if ends:
             axis = next(m for m in self.compiled.members if self.label(m) == ends[0])
-            bucket = next((g.bucket for g in groups if g.member == axis), None)
+            home = axis.dataset or ""
+            alias = self.fact(home)
+            bucket = next(
+                (g.bucket for g in groups if g.member == axis and g.source == alias), None
+            )
             # `analyze` accepted the key as exactly the declared entity plus the axis.
             entity = tuple(
-                MemberId("field", self.home, key)
-                for key in self.graph.keys[self.home]
-                if key != axis.name
+                MemberId("field", home, key) for key in self.graph.keys[home] if key != axis.name
             )
-            fact = self.sources[0]
-            self.sources[0] = Source(
+            at = next(i for i, s in enumerate(self.sources) if s.alias == alias)
+            fact = self.sources[at]
+            self.sources[at] = Source(
                 fact.alias, fact.dataset, fact.table, fact.route, Latest(axis, entity, bucket)
             )
         discharged = {o for a in aggregates for o in a.discharges}
@@ -335,6 +359,7 @@ class _Planner:
             "aggregates": tuple(aggregates),
             "order": tuple(order),
             "limit": int(canonical["limit"]) if canonical.get("limit") is not None else None,
+            "facts": facts,
         }
         found = SemanticPlan(
             **parts,

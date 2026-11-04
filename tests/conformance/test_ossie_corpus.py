@@ -46,6 +46,9 @@ from conformance.runners import bi_platform_adapter as adapter
 from conformance.runners.semantic_corpus import CORPUS, ROOT
 
 MODELS = sorted((ROOT / CORPUS / "models").glob("CASE-0??.yaml"))
+# Translated with a metric its case expects refused (CASE-017's `combined`, P2-16): proven by
+# its own test; the model as imported still types.
+REFUSED_AS_TRANSLATED = frozenset({"CASE-017"})
 _PRODUCT = tomllib.loads((ROOT / "identity.toml").read_text("utf-8"))["product"]
 VENDORS = (_PRODUCT["ossie_vendor_name"], *_PRODUCT["previous_vendor_names"])
 
@@ -177,7 +180,8 @@ def test_every_accepted_corpus_model_parses_with_nothing_excluded(path: Path) ->
     every reference resolves, and no member is left out."""
     candidates = [("yaml", path.read_bytes())]
     translated, _ = adapter.translate(raw(path), VENDORS[0])
-    candidates.append(("json", json.dumps(translated).encode()))
+    if path.stem not in REFUSED_AS_TRANSLATED:
+        candidates.append(("json", json.dumps(translated).encode()))
     for form, content in candidates:
         if path.stem in FUTURE and (
             form == "yaml" or path.stem not in EXPLICIT_EXTENSION | DECLARED_RATIO
@@ -207,7 +211,8 @@ def test_every_accepted_corpus_model_types(path: Path) -> None:
     buckets its instants in America/La_Paz."""
     candidates = [("yaml", path.read_bytes())]
     translated, _ = adapter.translate(raw(path), VENDORS[0])
-    candidates.append(("json", json.dumps(translated).encode()))
+    if path.stem not in REFUSED_AS_TRANSLATED:
+        candidates.append(("json", json.dumps(translated).encode()))
     for form, content in candidates:
         if path.stem in FUTURE and (
             form == "yaml" or path.stem not in EXPLICIT_EXTENSION | DECLARED_RATIO
@@ -243,23 +248,14 @@ def test_the_catalog_adapter_maps_every_corpus_type_and_refuses_an_unknown_one()
 
 
 def test_case_017_combined_revenue_is_incompatible_units() -> None:
-    """P2-04d (#290): the case's requested `revenue_usd + revenue_bob`, declared as the derived
-    metric its README describes, is refused before execution, with no conversion."""
+    """P2-04d (#290), P2-16 (#331): the case's `combined = revenue_usd + revenue_bob`, which the
+    adapter declares with each metric's own aggregate, is refused before execution, with no
+    conversion."""
     path = ROOT / CORPUS / "models" / "CASE-017.yaml"
     translated, _ = adapter.translate(raw(path), VENDORS[0])
-    text = "revenue_usd + revenue_bob"
-    payload = {
-        "version": 1,
-        "element": "metric",
-        "over_metrics": {"expression": text, "align": {"grain": ["record"], "time": "record"}},
-    }
-    translated["metrics"].append(
-        {
-            "name": "combined",
-            "expression": {"dialects": [{"dialect": VENDORS[0], "expression": text}]},
-            "custom_extensions": [{"vendor_name": VENDORS[0], "data": json.dumps(payload)}],
-        }
-    )
+    (combined,) = [m for m in translated["metrics"] if m["name"] == "combined"]
+    text = combined["expression"]["dialects"][0]["expression"]
+    assert text == "SUM(finance.amount_usd) + SUM(finance.amount_bob)"
     for form, content in (
         ("json", json.dumps(translated).encode()),
         ("yaml", yaml.safe_dump(translated, sort_keys=False).encode()),

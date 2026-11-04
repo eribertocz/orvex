@@ -184,13 +184,10 @@ PENDING = {
 
 
 # Cases this runner cannot exercise yet, for a reason outside the engine's own refusals:
-# - their models compile only once their declarations exist (Owner decision of 2026-11-01, #283);
-# - CASE-017's expected refusal is about a derived metric adding USD to BOB, which the adapter
-#   does not translate yet; its written query asks for the two sums apart (corpus_queries.json).
+# - their models compile only once their declarations exist (Owner decision of 2026-11-01, #283).
 NOT_YET: Mapping[str, str] = {
     "CASE-009": "the model compiles after P2-17 (#283)",
     "CASE-021": "the model compiles after P2-20 (#283)",
-    "CASE-017": "the combined metric is translated with the units rule (P2-16)",
     # Its expected file holds the overall count beside the per-region ones: a total (P2-23).
     # Both are answered exactly, and proven in tests/conformance/test_period_end.py.
     "CASE-008": "the overall count is a total (P2-23)",

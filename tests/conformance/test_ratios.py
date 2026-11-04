@@ -72,7 +72,8 @@ def ratio_model(
                         }
                     )
                 ],
-            }
+            },
+            {"name": "amount_total", "expression": {"sql": "SUM(t.amount)"}},
         ],
         "custom_extensions": [extension({"element": "model", "default_time_zone": "UTC"})],
     }
@@ -226,6 +227,15 @@ def test_a_zero_denominator_follows_its_declared_policy() -> None:
         "DIVISION_POLICY_VIOLATION",
         {"metric": "ratio"},
     )
+
+
+def test_a_rejecting_ratio_before_another_metric_is_answered() -> None:
+    """P2-16 (#331): a `reject` ratio's check column comes after every metric, however the
+    question orders its metrics."""
+    compiled, catalog = ratio_model(zero="reject")
+    query = BY_GROUP | {"metrics": [{"metric": "ratio"}, {"metric": "amount_total"}]}
+    data = rows(("a", "10.00", "4.00"))
+    assert ce.rows_of(answer_of(compiled, catalog, data, query)) == [["a", "2.50", "10.00"]]
 
 
 def test_nulls_are_never_zero() -> None:
