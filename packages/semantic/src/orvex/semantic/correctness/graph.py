@@ -92,9 +92,10 @@ class Graph:
 
     def paths(self, start: str, end: str) -> list[Path]:
         """Every path from `start` to `end`, in a fixed order. A path is the sequence of
-        relationships it crosses: it crosses each dataset once, except through a
-        self-relationship, which it crosses at most once, so a cycle is never walked. From a
-        dataset to itself, the empty path comes first."""
+        relationships it crosses, and crosses each dataset once, so a cycle is never walked.
+        A self-relationship is a path of one step from its dataset to itself, never part of a
+        longer path (a longer one is refused, not found). From a dataset to itself, the empty
+        path comes first."""
         found: list[Path] = [Path(())] if start == end else []
         pending: list[tuple[str, tuple[Step, ...], frozenset[str]]] = [
             (start, (), frozenset({start}))

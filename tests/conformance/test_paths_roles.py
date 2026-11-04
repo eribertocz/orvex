@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -183,6 +183,10 @@ def test_two_roles_side_by_side_multiply_nothing() -> None:
         alone = ask(query(), compiled, lake)
     names = [c["name"] for c in found.result.envelope()["columns"]]
     assert names == ["country_billing", "country_shipping", "total"]
+    counted, _ = model(tables, rels, "COUNT(f.id)")
+    with lake_of(catalog, data) as lake:
+        rows_seen = ce.rows_of(ask(side_by_side, counted, lake))
+    assert sum(int(str(r[2])) for r in rows_seen) == 3  # the fact's own row count
     assert ce.rows_of(found) == [["BO", "BO", "5.00"], ["BO", "PE", "10.00"], ["PE", "PE", "1.00"]]
     total = sum(float(str(r[2])) for r in ce.rows_of(found))
     assert f"{total:.2f}" == ce.rows_of(alone)[0][0] == "16.00"  # no row was repeated
@@ -212,8 +216,15 @@ def test_a_role_shared_by_two_paths_still_leaves_them_ambiguous() -> None:
     }
     rels = [("p", "f", "x", "x_id", "id"), ("q", "f", "y", "y_id", "id")]
     rels += [("to_w_from_x", "x", "w", "w_id", "id"), ("to_w_from_y", "y", "w", "w_id", "id")]
+    rels.insert(0, ("m", "f", "m_", "id", "id"))
+    tables["m_"] = ["id"]
     compiled, _ = model(tables, rels, "SUM(f.amount)")
     assert refusal(compiled, query({"member": "w.name"})).code == "AMBIGUOUS_RELATIONSHIP_PATH"
+    # `p` is on one path only and selects it; neither path crosses `m`, which matches none.
+    for role in ("m",):
+        error = refusal(compiled, query({"member": "w.name", "role": role}))
+        assert error.code == "AMBIGUOUS_RELATIONSHIP_PATH"
+        assert len(cast(list[str], error.details["roles"])) >= 2
 
 
 # --- cycles and self-relationships ---------------------------------------------------------
@@ -281,7 +292,7 @@ def test_a_role_never_avoids_a_row_policy() -> None:
         groups=frozenset(),
         managed_tables={},
     )
-    for role in ("billing_customer", "shipping_customer"):
+    for role in ("billing_customer", "shipping_customer"):  # the policy's own dataset
         spy = Spy()
         document = ce.QUERIES["CASE-016"] | {
             "group_by": [{"member": "customer.country", "role": role}]
@@ -364,3 +375,33 @@ def test_a_member_is_accepted_exactly_when_one_many_to_one_path_exists(
     except SemanticError:
         accepted = False
     assert accepted == (expected == 1)
+
+
+def test_a_row_policy_on_an_intermediate_dataset_refuses_through_any_role() -> None:
+    compiled, catalog = model(LONG, LONG_RELATIONSHIPS, "SUM(f.amount)")
+    policy = read_policies(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "row_policies": [
+                    {"name": "own_z", "dataset": "z", "kind": "predicate", "predicate": "w_id = $w"}
+                ],
+            }
+        ),
+        compiled,
+        groups=frozenset(),
+        managed_tables={},
+    )
+    with lake_of(catalog, LONG_DATA) as lake:
+        for role in ("a1", "a2"):  # both reach w through z, where the policy is
+            spy = Spy()
+            with pytest.raises(SemanticError) as caught:
+                ask(
+                    query({"member": "w.name", "role": role}),
+                    compiled,
+                    lake,
+                    policy=policy,
+                    read=spy,
+                )
+            assert dict(caught.value.details) == {"operation": "row_policy"}
+            assert spy.calls == 0
