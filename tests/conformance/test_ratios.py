@@ -179,6 +179,28 @@ def test_negative_midpoints_round_away_from_zero_or_to_even() -> None:
         assert ce.rows_of(found) == [[value]], mode
 
 
+def test_a_38_digit_numerator_is_answered_exactly() -> None:
+    """Every scaled intermediate must fit 128 bits: a 38-digit `DECIMAL(38,2)` sum divided by a
+    count fits, since the common power of ten cancels."""
+    compiled, catalog = ratio_model(denominator="COUNT(*)", scale=2)
+    found = answer_of(
+        compiled, catalog, rows(("a", "111111111111111111111111111111111111.55", None)), OVERALL
+    )
+    assert ce.rows_of(found) == [["111111111111111111111111111111111111.55"]]
+
+
+def test_counts_skip_nulls_and_count_rows() -> None:
+    """CASE-014's rules over the plan and the SQL: `COUNT(x)` skips nulls, `COUNT(*)` counts
+    rows, and their ratio divides those two exact counts."""
+    compiled, catalog = ratio_model(
+        numerator="COUNT(t.amount)", denominator="COUNT(*)", scale=4, mode="half_even"
+    )
+    data = rows(("a", None, "1.00"), ("a", "1.00", "1.00"), ("a", "2.00", "1.00"))
+    found = answer_of(compiled, catalog, data, OVERALL)
+    assert "COUNT(*)" in found.physical.sql
+    assert ce.rows_of(found) == [["0.6667"]]  # 2 / 3
+
+
 def test_an_overflow_fails_with_no_result() -> None:
     compiled, catalog = ratio_model(scale=30, amount="DECIMAL(38,8)")
     data = rows(("a", "999999999999999999999999999999.99999999", "1"))

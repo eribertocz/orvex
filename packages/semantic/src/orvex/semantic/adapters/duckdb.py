@@ -369,10 +369,13 @@ class _Writer:
         scaled = []
         for k, (_, (sn, sd)), column in ratios:
             scale = int(str(column.logical["scale"])) if column.logical else 0
-            numerator = f"CAST({quote(f'#n{k}')} * {_power(sn)} AS HUGEINT)"
-            denominator = f"CAST({quote(f'#d{k}')} * {_power(sd)} AS HUGEINT)"
-            scaled.append(f"{numerator} * {_power(sd + scale)} AS {quote(f'#a{k}')}")
-            scaled.append(f"{denominator} * {_power(sn)} AS {quote(f'#b{k}')}")
+            # N/10^sn ÷ D/10^sd at scale s is (N·10^(sd+s)) / (D·10^sn); the common power of
+            # ten is cancelled first, so no intermediate is larger than it must be.
+            common = min(sd + scale, sn)
+            numerator = _unscaled(quote(f"#n{k}"), sn)
+            denominator = _unscaled(quote(f"#d{k}"), sd)
+            scaled.append(f"{numerator} * {_power(sd + scale - common)} AS {quote(f'#a{k}')}")
+            scaled.append(f"{denominator} * {_power(sn - common)} AS {quote(f'#b{k}')}")
         middle = f"SELECT *, {', '.join(scaled)} FROM ({inner}) AS {quote('q')}"
         by_name = {column.name: (k, plan) for k, plan, column in ratios}
         outer: list[str] = []
@@ -404,6 +407,17 @@ class _Writer:
 def _power(exponent: int) -> str:
     """10^exponent as an exact `HUGEINT`; past its range, the cast fails, never a float."""
     return f"CAST('1{'0' * exponent}' AS HUGEINT)"
+
+
+def _unscaled(value: str, scale: int) -> str:
+    """The exact integer behind a `DECIMAL(p, scale)`, as a `HUGEINT`: its integer part and its
+    fraction are scaled apart, so a 38-digit value never overflows a `DECIMAL(38)` on the way."""
+    if scale == 0:
+        return f"CAST({value} AS HUGEINT)"
+    return (
+        f"(CAST(trunc({value}) AS HUGEINT) * {_power(scale)}"
+        f" + CAST(({value} - trunc({value})) * {_power(scale)} AS HUGEINT))"
+    )
 
 
 def _scale(logical: Mapping[str, object]) -> int:
