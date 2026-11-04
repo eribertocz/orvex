@@ -119,7 +119,10 @@ def check_manifest(corpus: Path, manifest: dict[str, object]) -> list[Finding]:
 
 
 def load_case(
-    corpus: Path, entry: dict[str, str], validator: jsonschema.Draft202012Validator
+    corpus: Path,
+    entry: dict[str, str],
+    validator: jsonschema.Draft202012Validator,
+    execute: bool = True,
 ) -> tuple[CaseReport | None, list[Finding]]:
     case = entry["id"]
     folder = corpus / "corpus" / "cases" / case
@@ -164,19 +167,26 @@ def load_case(
             findings.append(Finding("CORPUS_MODEL_INVALID", case, problems[0]))
         else:
             model = "valid"
+    status, reason = "not-run", "MODEL_INVALID" if model != "valid" else "NOT_EXECUTED"
+    if model == "valid" and execute:
+        from conformance.runners.corpus_execution import run_case
+
+        outcome = run_case(case, folder, model_path, code)
+        status, reason = outcome.status, outcome.reason
     report = CaseReport(
         case=case,
         title=entry["title"],
         expected=expected,
         error_code=code,
         model=model,
-        status="not-run",
-        reason="ENGINE_NOT_AVAILABLE",
+        status=status,
+        reason=reason,
     )
     return report, findings
 
 
-def run(root: Path = ROOT) -> tuple[list[CaseReport], list[Finding]]:
+def run(root: Path = ROOT, execute: bool = True) -> tuple[list[CaseReport], list[Finding]]:
+    """Every case checked, and run for real unless `execute` is false (P2-12)."""
     corpus = root / CORPUS
     findings = check_sources(corpus) + check_vendored(root / OSSIE)
     try:
@@ -190,7 +200,7 @@ def run(root: Path = ROOT) -> tuple[list[CaseReport], list[Finding]]:
     for entry in manifest["cases"]:
         if not (corpus / "corpus" / "cases" / entry["id"]).is_dir():
             continue
-        report, case_findings = load_case(corpus, entry, validator)
+        report, case_findings = load_case(corpus, entry, validator, execute)
         findings.extend(case_findings)
         if report is not None:
             reports.append(report)

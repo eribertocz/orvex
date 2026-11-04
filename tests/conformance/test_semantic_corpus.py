@@ -29,23 +29,36 @@ def copy_repository(tmp_path: Path) -> Path:
 
 
 def codes(root: Path) -> list[str]:
-    return sorted({finding.code for finding in run(root)[1]})
+    return sorted({finding.code for finding in run(root, execute=False)[1]})
 
 
-def test_every_case_loads_and_is_not_run() -> None:
+PASSING = {"CASE-001", "CASE-002", "CASE-003", "CASE-005", "CASE-014", "CASE-016", "CASE-018"}
+
+
+def test_every_case_is_answered_or_not_run_with_its_capability() -> None:
+    """P2-12 (#311): real results for what the engine supports; every other case is `not-run`
+    and names what it waits for. None fails, and a later rule moves cases into `PASSING`."""
     reports, findings = run()
     assert findings == []
     assert len(reports) == 21
-    assert {(report.status, report.reason) for report in reports} == {
-        ("not-run", "ENGINE_NOT_AVAILABLE")
-    }
+    assert {r.case for r in reports if r.status == "pass"} == PASSING
+    for report in reports:
+        assert report.status in ("pass", "not-run"), (report.case, report.reason)
+        if report.status == "not-run":
+            assert re.search(
+                r"\((C[0-9]|policy placement|S[0-9]|.*P2-[0-9]+|#[0-9]+)", report.reason
+            ), report
     assert sum(report.expected == "result" for report in reports) == 18
     assert sum(report.expected == "error" for report in reports) == 3
     assert {report.model for report in reports} == {"valid"}
 
 
 def test_expected_errors_map_to_product_codes() -> None:
-    mapped = {report.case: report.error_code for report in run()[0] if report.expected == "error"}
+    mapped = {
+        report.case: report.error_code
+        for report in run(execute=False)[0]
+        if report.expected == "error"
+    }
     assert mapped == {
         "CASE-016": "AMBIGUOUS_RELATIONSHIP_PATH",
         "CASE-017": "INCOMPATIBLE_UNITS",

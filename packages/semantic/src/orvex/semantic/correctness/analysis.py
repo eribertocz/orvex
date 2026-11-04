@@ -502,6 +502,9 @@ class _Analysis:
             facts,
             obligations,
             RULES,
+            bound=self.bound,
+            compiled=self.compiled,
+            caller_groups=self.groups,
         )
 
 

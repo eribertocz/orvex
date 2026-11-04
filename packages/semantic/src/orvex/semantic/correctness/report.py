@@ -8,7 +8,7 @@ were applied, each with its version. A rejection is never a report: it is a `Sem
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
 
@@ -16,6 +16,7 @@ from orvex.semantic.canonical import fingerprint
 from orvex.semantic.receipt import Obligation as ReceiptObligation
 
 REPORT_FORMAT = 1
+ISSUED = object()  # only `analyze` makes reports: the planner refuses any other (P2-12)
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +64,11 @@ class CorrectnessReport:
     obligations: tuple[Obligation, ...]  # sorted by id
     rules: tuple[tuple[str, int], ...]  # (rule, version), in the order they ran
     fingerprint: str
+    # What the planner reads; outside the identity, which the fingerprints above already bind.
+    bound: Any = field(default=None, compare=False, repr=False)
+    compiled: Any = field(default=None, compare=False, repr=False)
+    caller_groups: tuple[str, ...] = field(default=(), compare=False, repr=False)
+    issued: object = field(default=None, compare=False, repr=False)
 
     def document(self) -> dict[str, object]:
         return _document(
@@ -100,6 +106,10 @@ def make_report(
     facts: Mapping[str, Any],
     obligations: list[Obligation],
     rules: tuple[tuple[str, int], ...],
+    *,
+    bound: Any,  # noqa: ANN401
+    compiled: Any,  # noqa: ANN401
+    caller_groups: tuple[str, ...],
 ) -> CorrectnessReport:
     ordered = tuple(sorted(obligations, key=lambda o: o.id))
     document = _document(model_fingerprint, query_fingerprint, facts, ordered, rules)
@@ -110,6 +120,10 @@ def make_report(
         obligations=ordered,
         rules=rules,
         fingerprint=fingerprint("correctness_report", REPORT_FORMAT, document),
+        bound=bound,
+        compiled=compiled,
+        caller_groups=caller_groups,
+        issued=ISSUED,
     )
 
 
