@@ -146,8 +146,8 @@ def test_the_report_is_deterministic_and_order_does_not_change_its_facts() -> No
     assert one.fingerprint == run(query("revenue", "declared", group_by=[zone, day])).fingerprint
     assert one.facts == two.facts
     assert one.obligations == two.obligations
-    assert one.rules == RULES == (("C1", 1), ("C2", 1), ("C3", 1))
-    assert {"C1", "C2", "C3"} == IMPLEMENTED
+    assert one.rules == RULES == (("C1", 1), ("C2", 1), ("C3", 1), ("C5", 1))
+    assert {"C1", "C2", "C3", "C5"} == IMPLEMENTED
 
 
 SCRIPT = """
@@ -201,8 +201,8 @@ CASES: dict[str, tuple[frozenset[str], tuple[str, str] | None]] = {
     "CASE-006": (frozenset({"C1", "C2"}), None),
     "CASE-007": (frozenset({"C1", "C2"}), None),
     "CASE-008": (frozenset({"C1", "C2"}), None),
-    "CASE-009": (frozenset({"C1", "C5"}), ("COMPILER", "multi_fact")),
-    "CASE-010": (frozenset({"C1", "C2", "C5"}), ("UNSUPPORTED_OPERATION", "multi_fact")),
+    "CASE-009": (frozenset({"C1", "C5"}), None),
+    "CASE-010": (frozenset({"C1", "C2", "C5"}), None),
     "CASE-011": (frozenset({"C1", "C7"}), ("UNSUPPORTED_OPERATION", "bridge_allocation")),
     "CASE-012": (frozenset({"C1", "C6"}), ("UNSUPPORTED_OPERATION", "zoned_bucketing")),
     "CASE-013": (frozenset({"C1", "C6"}), ("UNSUPPORTED_OPERATION", "as_of_join")),
@@ -725,3 +725,10 @@ def test_an_obligation_field_reaches_no_view_until_the_allow_list_names_it() -> 
     assert set(shown) == {"rule", "obligation", "evidence"}
     undeclared = receipt(obligations=[Recorded("C1", "names nothing it declares")])
     assert undeclared.view(EVERYTHING)["plan"]["obligations"] == []
+
+
+def test_only_answered_shapes_name_an_implemented_rule() -> None:
+    """A shape refused as pending must name a rule not implemented: otherwise implementing that
+    rule would silently stop the refusal (P2-16, P2-17)."""
+    answered = {s for s, shape in SHAPES.items() if shape.rule in IMPLEMENTED}
+    assert answered == {"aggregate", "recomputable"}

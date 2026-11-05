@@ -25,7 +25,6 @@ from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 from tests.conformance.test_execution import Spy, ask, corpus_case, lake_for
-from tests.conformance.test_execution import no_policies as policies_for
 from tests.support.policies import VENDORS, extension
 
 Document = dict[str, Any]
@@ -279,21 +278,6 @@ def test_a_row_policy_any_fact_reaches_refuses_before_any_read(dataset: str) -> 
 def test_grouping_by_a_one_to_many_member_is_still_fanout() -> None:
     found = refused(query("order_revenue", "item_count", group_by=("order_items.product",)))
     assert found == ("UNSUPPORTED_OPERATION", {"operation": "fanout"})
-
-
-def test_facts_at_different_grains_wait_for_p2_17() -> None:
-    compiled, _, _ = corpus_case("CASE-010")
-    with pytest.raises(SemanticError) as caught:  # every check before a read, with no data
-        ce.prepare(
-            json.dumps(ce.QUERIES["CASE-010"]),
-            compiled,
-            policies_for(compiled),
-            ce.viewer_context(),
-        )
-    assert (caught.value.code, dict(caught.value.details)) == (
-        "UNSUPPORTED_OPERATION",
-        {"operation": "multi_fact"},
-    )
 
 
 # --- CASE-017 ---------------------------------------------------------------------------------

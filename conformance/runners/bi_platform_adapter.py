@@ -44,6 +44,14 @@ EXPLICIT_DECLARATIONS: dict[tuple[str, str], dict[str, Any]] = {
         "zero_denominator": "null",
         "rounding": {"scale": 2, "mode": "half_away_from_zero"},
     },
+    # gross_revenue - refunds: a metric over metrics, computed after the two facts are aligned on
+    # month x region (S7, P2-17). The case states no grain; its README and expected file do.
+    ("case-009", "net_revenue"): {
+        "over_metrics": {
+            "expression": "gross_revenue - refunds",
+            "align": {"grain": ["month", "region"], "time": "month"},
+        },
+    },
     ("case-010", "attainment"): {
         "additivity": "recomputable",
         "components": {"numerator": "actual_revenue", "denominator": "target_revenue"},

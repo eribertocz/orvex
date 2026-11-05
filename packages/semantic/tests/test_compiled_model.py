@@ -34,7 +34,7 @@ VENDORS = (CURRENT, *_PRODUCT["previous_vendor_names"])
 FORMS = ("yaml", "json")
 CORPUS = ROOT / "conformance/semantic-corpus/bi-platform/models"
 GOLDEN = Path(__file__).with_name("golden") / "corpus-fingerprints.json"
-NOT_YET = {"CASE-009", "CASE-021"}  # P2-17 and P2-20 declare them
+NOT_YET = {"CASE-021"}  # P2-20 declares it
 # Refused by design: CASE-017 adds USD to BOB in `combined` (P2-16), proven in test_ossie_corpus.
 REFUSED = {"CASE-017"}
 
@@ -183,8 +183,9 @@ def test_the_corpus_compiles_to_its_golden_fingerprints() -> None:
     """To refresh after an intended change, write `corpus_fingerprints()` to the golden file and
     review the diff: every changed fingerprint is a changed meaning."""
     golden = json.loads(GOLDEN.read_text("utf-8"))
-    # The 17 models P2-03 accepts, CASE-010 and CASE-006 translated, less CASE-017 (refused).
-    assert len(golden) == 18
+    # The 17 models P2-03 accepts, CASE-006, CASE-009 and CASE-010 translated, less CASE-017
+    # (refused).
+    assert len(golden) == 19
     assert corpus_fingerprints() == golden
 
 

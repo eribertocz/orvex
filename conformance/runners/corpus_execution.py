@@ -118,11 +118,23 @@ def load_tables(
                         sql=f"INSERT INTO {_quote(path.stem)} "
                         f"({', '.join(_quote(n) for n in names)}) VALUES ({values})",
                         parameters=[
-                            Parameter(name=f"v{i}", type=ParameterType("VARCHAR"), value=row[n])
+                            Parameter(
+                                name=f"v{i}",
+                                type=ParameterType("VARCHAR"),
+                                value=_month_start(row[n], columns[n].type),
+                            )
                             for i, n in enumerate(names)
                         ],
                     )
                 )
+
+
+def _month_start(value: str | None, kind: str) -> str | None:
+    """The corpus writes a month in a `date` column as `YYYY-MM` (CASE-010's targets): the date
+    the month starts on, as `same` compares it."""
+    if value is not None and kind == "DATE" and re.fullmatch(r"[0-9]{4}-[0-9]{2}", value):
+        return f"{value}-01"
+    return value
 
 
 @contextmanager
@@ -186,7 +198,6 @@ PENDING = {
 # Cases this runner cannot exercise yet, for a reason outside the engine's own refusals:
 # - their models compile only once their declarations exist (Owner decision of 2026-11-01, #283).
 NOT_YET: Mapping[str, str] = {
-    "CASE-009": "the model compiles after P2-17 (#283)",
     "CASE-021": "the model compiles after P2-20 (#283)",
     # Its expected file holds the overall count beside the per-region ones: a total (P2-23).
     # Both are answered exactly, and proven in tests/conformance/test_period_end.py.

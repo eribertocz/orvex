@@ -36,7 +36,18 @@ own home along exactly one many-to-one path. Each home is aggregated apart, to t
 grain, and the results are aligned on that grain only, so a fact's rows never meet another
 fact's rows; each metric gives the obligation `C3.isolate:<metric>`. A member one home cannot
 reach that way refuses the whole query, before any read: no fact is answered without a filter
-the question asked for. A metric that itself reads two datasets is still `multi_fact` (C5).
+the question asked for. A metric that itself reads two datasets is still `multi_fact`.
+
+**C5, conformed dimensions** (P2-17, #333). A fact that cannot reach a requested member is
+grouped and filtered by its own field of the same declared `conformed_dimension`, of the same
+type: in its own dataset or one it reaches many-to-one, exactly one. Conformance is declared,
+never inferred from names: a member with no declaration stays `ILLEGAL_GRAIN_TRANSITION`, and a
+declared one the fact has no single field for, or one of another type, is `multi_fact`.
+
+**Metrics over metrics** (S7 `over_metrics`). Each metric it names is aggregated in its own
+fact, the facts are aligned, and only then is it computed, row by row, from the aligned values:
+`+` and `-` exactly, a declared ratio by C2's one exact division. It is asked only at its declared
+alignment grain (`METRIC_ALIGNMENT_AMBIGUOUS` otherwise) and gives `C5.align:<metric>`.
 
 C1 validates the grain; it never authorizes an aggregation by itself. The metric's additivity
 must be `additive`, declared or derived (a plain `SUM` or `COUNT` with no `DISTINCT`); any other
@@ -70,6 +81,7 @@ RULES: tuple[tuple[str, int], ...] = (
     ("C1", 1),
     ("C2", 1),
     ("C3", 1),
+    ("C5", 1),
 )  # implemented, in the order they run
 IMPLEMENTED = frozenset(rule for rule, _ in RULES)
 
@@ -91,9 +103,9 @@ SHAPES: Mapping[str, Shape] = {
     "semi_additive": Shape("other non-additive axes", "a later issue"),
     "period_end_ties": Shape("a declared tie-breaking rule", "a later issue"),
     "period_end_filter": Shape("C6", "P2-20"),
-    "mixed_period_end": Shape("C5", "P2-17"),
+    "mixed_period_end": Shape("period end beside other metrics", "a later issue"),
     "non_additive": Shape("C2 non-additive", "a later issue"),
-    "multi_fact": Shape("C5", "P2-17"),
+    "multi_fact": Shape("alignment beyond declared conformed dimensions", "a later issue"),
     "fanout": Shape("one-to-many grouping", "a later issue"),
     "calendar_bucket": Shape("C6", "P2-19"),
     "zoned_bucketing": Shape("C6", "P2-19"),
@@ -129,7 +141,6 @@ _DECLARATION_SHAPES: Mapping[str, str] = {
     "allocation": "bridge_allocation",
     "context": "metric_context",
     "level_of_detail": "level_of_detail",
-    "over_metrics": "over_metrics",
     "reaggregable_state": "reaggregable_state",
 }
 _PLAIN_DECLARATIONS = frozenset(
@@ -145,6 +156,7 @@ _PLAIN_DECLARATIONS = frozenset(
         "currency",
         "unit",
         "home_dataset",
+        "over_metrics",  # S7: checked below, computed after alignment (C5)
         "rounding",
         "zero_denominator",
         "format",
@@ -594,6 +606,13 @@ class _Analysis:
             f for m in metrics for f in self.compiled.require(m).parsed.lineage
         }
         shapes |= self.field_shapes(sorted(read))
+        self.derived = {m: self.over(m) for m in metrics if self.is_derived(m)}
+        for metric in self.derived:
+            shapes |= self.declaration_shapes(metric)
+        metrics = sorted(
+            {m for m in metrics if m not in self.derived}
+            | {s for sources in self.derived.values() for s in sources}
+        )
         homes: dict[MemberId, set[str]] = {}
         for metric in metrics:
             homes[metric] = self.home(metric, self.compiled.require(metric))
@@ -613,6 +632,9 @@ class _Analysis:
         answered = {"additive", "recomputable", "distinct_count", "semi_additive"}
         _refuse_pending(shapes | {c for c, _ in classes.values() if c not in answered})
         home_of = {m: next(iter(found)) for m, found in homes.items()}
+        derived_classes = {m: self.additivity(m) for m in self.derived}
+        for metric in self.derived:
+            self.aligned(metric, derived_classes[metric][0])
         periods: dict[MemberId, tuple[MemberId, str]] = {}
         for metric, (kind, _) in classes.items():
             if kind == "recomputable":
@@ -635,18 +657,147 @@ class _Analysis:
         # C3: each home on its own, so every member is reached from every fact, or none is read.
         paths: dict[tuple[str, _Row], Path] = {}
         crossed: dict[str, set[str]] = {}
+        self.substitutes: dict[tuple[str, _Row], MemberId] = {}
+        alone = len(set(home_of.values())) == 1
         for home in sorted(set(home_of.values())):
             first = next(m for m in metrics if home_of[m] == home)
             for row in rows:
-                paths[home, row] = self.path(
-                    home, row, first, alone=len(set(home_of.values())) == 1
-                )
+                found = self.conformed(home, row, first, alone)
+                if found != row:
+                    self.substitutes[home, row] = found.member
+                paths[home, row] = self.path(home, found, first, alone=alone)
             crossed[home] = {
                 home,
                 *(d for (h, _), p in paths.items() if h == home for d in p.datasets),
             }
         self.check_datasets(set().union(*crossed.values()))
+        classes = {**classes, **derived_classes}
         return self.report(home_of, metrics, classes, paths, crossed)
+
+    # C5, conformed dimensions
+
+    def conformed_name(self, member: MemberId) -> str | None:
+        payload = self.payloads.get(self.compiled.require(member).parsed.pointer, {})
+        name = payload.get("conformed_dimension")
+        return sql.normalize(str(name)) if name is not None else None
+
+    def conformed(self, home: str, row: _Row, metric: MemberId, alone: bool) -> _Row:
+        """The row as the fact `home` reads it: itself when the fact reaches it, or, with other
+        facts, the fact's one field of the same declared conformed dimension and type."""
+        target = row.member.dataset or home
+        if alone or target == home or self.graph.paths(home, target):
+            return row
+        name = self.conformed_name(row.member)
+        if name is None:  # never inferred: no declared conformance, no alignment
+            raise SemanticError(
+                "ILLEGAL_GRAIN_TRANSITION",
+                {"metric": self.label(metric), "grain": [self.label(row.member)]},
+            )
+        reached = {home} | {
+            d
+            for d in self.graph.names
+            if d != home and any(self.safe(p) for p in self.graph.paths(home, d))
+        }
+        # A field the caller may not see is not there at all, so it is never revealed (P2-08).
+        candidates = [
+            m
+            for m in self.compiled.members
+            if m.kind == "field"
+            and m.dataset in reached
+            and m != row.member
+            and self.conformed_name(m) == name
+            and self.policies.protection(m, self.groups) != "hidden"
+        ]
+        wanted = self.compiled.require(row.member).typed.type.logical
+        if (
+            len(candidates) != 1
+            or row.role is not None
+            or self.compiled.require(candidates[0]).typed.type.logical != wanted
+        ):
+            _refuse_pending({"multi_fact"})
+        if self.policies.protection(candidates[0], self.groups) == "masked":
+            raise SemanticError(
+                "MEMBER_MASKED", {"member": self.label(candidates[0]), "operation": row.slot}
+            )
+        return _Row(candidates[0], None, row.bucket, row.slot)
+
+    # S7, metrics over metrics
+
+    def is_derived(self, metric: MemberId) -> bool:
+        payload = self.payloads.get(self.compiled.require(metric).parsed.pointer, {})
+        return "over_metrics" in payload
+
+    def over(self, metric: MemberId) -> tuple[MemberId, ...]:
+        """The metrics a metric over metrics names; each a plain metric of its own fact."""
+        compiled = self.compiled.require(metric)
+        over = self.payloads.get(compiled.parsed.pointer, {})["over_metrics"]
+        sources = tuple(m for m in compiled.parsed.depends_on if m.kind == "metric")
+        if (
+            not sources
+            or len(sources) != len(compiled.parsed.depends_on)
+            or (isinstance(over, Mapping) and "ignore_filters" in over)
+            or any(self.is_derived(m) for m in sources)
+        ):
+            _refuse_pending({"over_metrics"})
+        return sources
+
+    def aligned(self, metric: MemberId, kind: str) -> None:
+        """Computable after alignment, from the metrics it names, at its declared grain only."""
+        compiled = self.compiled.require(metric)
+        trees = dict(compiled.typed.payload)
+        sources = set(self.derived[metric])
+        if kind == "recomputable":
+            parts = ("components.numerator", "components.denominator")
+            ends = [self.source_of(trees[part].node) for part in parts]
+            expression = trees["over_metrics"].node
+            if isinstance(expression, sql.Cast) and not expression.safe:
+                expression = expression.operand
+            # Its expression must be the division of its components: nothing else is computed.
+            if (
+                any(end not in sources for end in ends)
+                or not isinstance(expression, sql.Binary)
+                or expression.op != "/"
+                or [self.source_of(expression.left), self.source_of(expression.right)] != ends
+            ):
+                _refuse_pending({"over_metrics"})
+        elif kind != "additive" or not self.plain_sum(trees["over_metrics"].node, sources):
+            _refuse_pending({"over_metrics"})
+        over = self.payloads.get(compiled.parsed.pointer, {})["over_metrics"]
+        assert isinstance(over, Mapping)  # `ossie-extensions` v1, checked on read
+        align = over["align"]
+        assert isinstance(align, Mapping)
+        declared = sorted(sql.normalize(str(g)) for g in align["grain"])
+        grouped = list(self.query.grouped)
+        names = [self.conformed_name(r.member) for r in grouped]
+        plain = all(r.bucket is None and r.role is None for r in grouped)
+        if not plain or None in names or sorted(str(n) for n in names) != declared:
+            raise SemanticError(
+                "METRIC_ALIGNMENT_AMBIGUOUS", {"metric": self.label(metric), "missing": "grain"}
+            )
+
+    def source_of(self, node: object) -> MemberId | None:
+        """The metric a bare reference names, or None."""
+        if not isinstance(node, sql.Ref):
+            return None
+        written = ".".join(node.parts)
+        return next(
+            (
+                m
+                for m in self.compiled.members
+                if m.kind == "metric" and sql.normalize(self.label(m)) == written
+            ),
+            None,
+        )
+
+    def plain_sum(self, node: object, sources: set[MemberId]) -> bool:
+        """Only `+` and `-` of the metrics it names: exact, with no rounding to declare."""
+        if isinstance(node, sql.Binary):
+            return (
+                node.op in ("+", "-")
+                and self.plain_sum(node.left, sources)
+                and self.plain_sum(node.right, sources)
+            )
+        return self.source_of(node) in sources
 
     def report(
         self,
@@ -698,6 +849,29 @@ class _Analysis:
                 obligations.append(obligation(m, "C2", name, prefix))
         if len(crossed) > 1:  # more than one fact: each aggregated apart (C3)
             obligations += [obligation(m, "C3", "isolate", "C3.isolate") for m in metrics]
+        for derived in sorted(self.derived, key=self.label):  # computed after alignment (C5)
+            sources = self.derived[derived]
+            reads = sorted({self.dataset(d) for m in sources for d in crossed[home_of[m]]})
+            for rule, kind, prefix in (
+                ("C5", "align", "C5.align"),
+                ("C2", "recompute", "C2.recompute"),
+            ):
+                if kind == "recompute" and classes[derived][0] != "recomputable":
+                    continue
+                obligations.append(
+                    Obligation(
+                        id=f"{prefix}:{self.label(derived)}",
+                        rule=rule,
+                        kind=kind,
+                        metric=self.label(derived),
+                        from_grain=to_grain,
+                        to_grain=to_grain,
+                        members=tuple(
+                            sorted({self.label(derived), *labels, *map(self.label, sources)})
+                        ),
+                        datasets=tuple(reads),
+                    )
+                )
         facts = {
             "mode": self.query.mode,
             "grain": [
@@ -732,6 +906,11 @@ class _Analysis:
                             self.graph.relationship_names[r] for r in path.relationships
                         ],
                     }
+                    | (
+                        {"as": self.label(self.substitutes[home, row])}
+                        if (home, row) in self.substitutes
+                        else {}
+                    )
                     for (home, row), path in paths.items()
                 ),
                 key=lambda e: (
@@ -745,6 +924,15 @@ class _Analysis:
             "datasets": sorted({self.dataset(d) for found in crossed.values() for d in found}),
             "row_policies": [],
         }
+        if self.derived:
+            facts["derived"] = [
+                {
+                    "metric": self.label(m),
+                    "over": [self.label(s) for s in self.derived[m]],
+                    "additivity": classes[m][0],
+                }
+                for m in sorted(self.derived, key=self.label)
+            ]
         unique_paths = []
         for entry in facts["paths"]:
             if entry not in unique_paths:

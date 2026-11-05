@@ -7,7 +7,11 @@ along many-to-one paths, and filters on members those paths reach.
 
 - **One aggregation per fact** (C3, P2-16). `facts` names each fact's own source; every join,
   filter, group and aggregate belongs to the one fact whose joins reach its source. Facts are
-  aggregated apart, each with every filter, and aligned on the requested grain only.
+  aggregated apart, each with every filter, and aligned on the requested grain only. A fact
+  that reads a conformed dimension through its own field (C5) groups and filters by that field.
+- **A metric over metrics is computed last** (S7): `derived` reads the aligned aggregates it
+  names, row by row, and is never aggregated. A source metric the question did not ask for is
+  aggregated but not `shown`.
 
 - **Only reports `analyze` made are planned.** Any other report is an internal error, so no
   plan exists that skipped the policies.
@@ -104,6 +108,19 @@ class Aggregate:
     source: str
     discharges: tuple[str, ...]  # obligation ids
     division: Division | None = None  # a ratio: its components, then this division
+    shown: bool = True  # False: only read by a metric over metrics
+
+
+@dataclass(frozen=True, slots=True)
+class Derived:
+    """A metric over metrics (S7): computed after alignment from the aggregates `over` names,
+    row by row; a ratio by its one `division` (C2), with `over` its numerator and denominator."""
+
+    name: str
+    metric: MemberId
+    over: tuple[str, ...]  # aggregate names
+    discharges: tuple[str, ...]
+    division: Division | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +143,8 @@ class SemanticPlan:
     fingerprint: str
     report: CorrectnessReport = field(compare=False, repr=False)
     facts: tuple[str, ...] = ("t0",)  # each fact's source, aggregated apart (C3)
+    derived: tuple[Derived, ...] = ()  # computed after alignment (S7)
+    outputs: tuple[str, ...] = ()  # with `derived`: every metric column, in the question's order
     # Set only by `plan`, after construction: a copy (`dataclasses.replace`) has none.
     issued: object = field(default=None, init=False, compare=False, repr=False)
 
@@ -140,36 +159,59 @@ def _key(member: MemberId) -> list[str]:
 
 
 def _document(plan: dict[str, Any]) -> dict[str, object]:
-    return {
-        "report": plan["report_fingerprint"],
-        "sources": [
-            [s.alias, s.dataset, s.table, s.route]
-            + (
-                [[_key(s.latest.axis), [_key(e) for e in s.latest.entity], s.latest.bucket]]
-                if s.latest
-                else []
-            )
-            for s in plan["sources"]
-        ],
-        "joins": [
-            [j.relationship, j.left, j.right, [[_key(a), _key(b)] for a, b in j.pairs]]
-            for j in plan["joins"]
-        ],
-        "filters": [[_key(f.member), f.source, _plain(f.predicate)] for f in plan["filters"]],
-        "groups": [[g.name, _key(g.member), g.source, g.bucket] for g in plan["groups"]],
-        "aggregates": [
-            [
-                a.name,
-                _key(a.metric),
-                a.source,
-                list(a.discharges),
-                [a.division.scale, a.division.mode, a.division.zero] if a.division else None,
-            ]
-            for a in plan["aggregates"]
-        ],
-        "order": [[s.name, s.descending, s.nulls_first] for s in plan["order"]],
-        "limit": plan["limit"],
-    } | ({"facts": list(plan["facts"])} if len(plan["facts"]) > 1 else {})
+    return (
+        {
+            "report": plan["report_fingerprint"],
+            "sources": [
+                [s.alias, s.dataset, s.table, s.route]
+                + (
+                    [[_key(s.latest.axis), [_key(e) for e in s.latest.entity], s.latest.bucket]]
+                    if s.latest
+                    else []
+                )
+                for s in plan["sources"]
+            ],
+            "joins": [
+                [j.relationship, j.left, j.right, [[_key(a), _key(b)] for a, b in j.pairs]]
+                for j in plan["joins"]
+            ],
+            "filters": [[_key(f.member), f.source, _plain(f.predicate)] for f in plan["filters"]],
+            "groups": [[g.name, _key(g.member), g.source, g.bucket] for g in plan["groups"]],
+            "aggregates": [
+                [
+                    a.name,
+                    _key(a.metric),
+                    a.source,
+                    list(a.discharges),
+                    [a.division.scale, a.division.mode, a.division.zero] if a.division else None,
+                ]
+                + ([] if a.shown else ["hidden"])
+                for a in plan["aggregates"]
+            ],
+            "order": [[s.name, s.descending, s.nulls_first] for s in plan["order"]],
+            "limit": plan["limit"],
+        }
+        | ({"facts": list(plan["facts"])} if len(plan["facts"]) > 1 else {})
+        | (
+            {
+                "derived": [
+                    [
+                        d.name,
+                        _key(d.metric),
+                        list(d.over),
+                        list(d.discharges),
+                        [d.division.scale, d.division.mode, d.division.zero]
+                        if d.division
+                        else None,
+                    ]
+                    for d in plan["derived"]
+                ],
+                "outputs": list(plan["outputs"]),
+            }
+            if plan["derived"]
+            else {}
+        )
+    )
 
 
 def _plain(value: object) -> object:
@@ -211,6 +253,21 @@ class _Planner:
             )
             for p in report.facts["paths"]
         }
+        # A fact reading a conformed dimension through its own field (C5).
+        self.conformed = {
+            (dataset[p["from"]], p["member"], p["slot"], p["role"]): p["as"]
+            for p in report.facts["paths"]
+            if "as" in p
+        }
+        self.derived = {d["metric"]: d for d in report.facts.get("derived", ())}
+
+    def read_as(self, home: str, member: MemberId, slot: str, role: str | None) -> MemberId:
+        """The member the fact `home` reads for `member`: itself, or its conformed field."""
+        written = self.graph.relationship_names.get(role, role) if role else None
+        label = self.conformed.get((home, self.label(member), slot, written))
+        if label is None:
+            return member
+        return next(m for m in self.compiled.members if self.label(m) == label)
 
     def source(self, alias: str, dataset: str) -> Source:
         route = "managed"  # every dataset is in the managed lake until route B (P2-29)
@@ -220,6 +277,19 @@ class _Planner:
 
     def label(self, member: MemberId) -> str:
         return self.compiled.require(member).parsed.label
+
+    def member(self, label: str) -> MemberId:
+        return next(m for m in self.compiled.members if self.label(m) == label)
+
+    def label_of(self, node: object) -> str:
+        """The label of the metric a bare reference names."""
+        assert isinstance(node, sql.Ref)  # `analyze` accepted only bare metric references
+        written = ".".join(node.parts)
+        return next(
+            self.label(m)
+            for m in self.compiled.members
+            if m.kind == "metric" and sql.normalize(self.label(m)) == written
+        )
 
     def fact(self, home: str) -> str:
         """The source of a fact: one per home dataset, never shared with another fact."""
@@ -233,6 +303,9 @@ class _Planner:
         """The source holding `member` for the fact `home`, joining along its path once."""
         written = self.graph.relationship_names.get(role, role) if role else None
         path = self.paths.get((home, self.label(member), slot, written), ())
+        if not path and self.conformed.get((home, self.label(member), slot, written)):
+            label = self.conformed[home, self.label(member), slot, written]
+            path = self.paths.get((home, label, slot, None), ())
         at, current = self.fact(home), home
         for depth in range(1, len(path) + 1):
             prefix = path[:depth]
@@ -273,11 +346,16 @@ class _Planner:
         metric_keys = [_member(m) for m, _, _ in canonical["metrics"]]
         members = [m for m, _, _ in group_keys] + metric_keys
         names = self.names(list(dict.fromkeys(members)))
-        homes = list(dict.fromkeys(self.home_of[self.label(m)] for m in metric_keys))
+        sources: list[MemberId] = []  # every aggregated metric, in the question's order
+        for metric in metric_keys:
+            derived = self.derived.get(self.label(metric))
+            over = [self.member(o) for o in derived["over"]] if derived else [metric]
+            sources += [m for m in over if m not in sources]
+        homes = list(dict.fromkeys(self.home_of[self.label(m)] for m in sources))
         facts = tuple(self.fact(home) for home in homes)
         filters = tuple(
             Filter(
-                _member(f["member"]),
+                self.read_as(home, _member(f["member"]), "filter", f["role"]),
                 self.alias(home, _member(f["member"]), "filter", f["role"]),
                 f["predicate"],
             )
@@ -294,7 +372,12 @@ class _Planner:
                 name = names[member]
                 if len(roles_of[member]) > 1 and role:  # one dimension through two roles
                     name = f"{name}_{self.graph.relationship_names[role]}"
-                group = Group(name, member, self.alias(home, member, "group_by", role), unit)
+                group = Group(
+                    name,
+                    self.read_as(home, member, "group_by", role),
+                    self.alias(home, member, "group_by", role),
+                    unit,
+                )
                 if group not in groups:
                     groups.append(group)
         obligations: dict[str, list[str]] = {}
@@ -304,20 +387,45 @@ class _Planner:
             e.pointer.rsplit("/custom_extensions/", 1)[0]: e.payload
             for e in self.compiled.ossie.product_extensions
         }
-        aggregates = []
-        for metric in dict.fromkeys(metric_keys):
-            label = self.label(metric)
+
+        def division_of(metric: MemberId) -> Division | None:
             payload = payloads.get(self.compiled.require(metric).parsed.pointer, {})
-            division = None
-            if payload.get("additivity") == "recomputable":
-                rounding = payload["rounding"]
-                assert isinstance(rounding, Mapping)  # `ossie-extensions` v1, checked on read
-                division = Division(
-                    int(rounding["scale"]), str(rounding["mode"]), str(payload["zero_denominator"])
-                )
+            if payload.get("additivity") != "recomputable":
+                return None
+            rounding = payload["rounding"]
+            assert isinstance(rounding, Mapping)  # `ossie-extensions` v1, checked on read
+            return Division(
+                int(rounding["scale"]), str(rounding["mode"]), str(payload["zero_denominator"])
+            )
+
+        asked = set(metric_keys)
+        column = {m: names[m] if m in asked else f"#{self.label(m)}" for m in sources}
+        aggregates = []
+        for metric in sources:
+            label = self.label(metric)
             discharges = tuple(sorted(obligations[label]))
             source = self.fact(self.home_of[label])
-            aggregates.append(Aggregate(names[metric], metric, source, discharges, division))
+            aggregates.append(
+                Aggregate(
+                    column[metric], metric, source, discharges, division_of(metric), metric in asked
+                )
+            )
+        derived_steps = []
+        for metric in dict.fromkeys(metric_keys):
+            found = self.derived.get(self.label(metric))
+            if found is None:
+                continue
+            inputs = tuple(column[self.member(o)] for o in found["over"])
+            division = division_of(metric)
+            if division is not None:  # its numerator, then its denominator
+                trees = dict(self.compiled.require(metric).typed.payload)
+                ends = [
+                    self.label_of(trees[p].node)
+                    for p in ("components.numerator", "components.denominator")
+                ]
+                inputs = tuple(column[self.member(e)] for e in ends)
+            discharges = tuple(sorted(obligations[self.label(metric)]))
+            derived_steps.append(Derived(names[metric], metric, inputs, discharges, division))
         order = [
             Sort(names[_member(m)], direction == "desc", nulls == "first")
             for m, direction, nulls in canonical["order"]
@@ -347,6 +455,7 @@ class _Planner:
                 fact.alias, fact.dataset, fact.table, fact.route, Latest(axis, entity, bucket)
             )
         discharged = {o for a in aggregates for o in a.discharges}
+        discharged |= {o for d in derived_steps for o in d.discharges}
         left = {o.id for o in self.report.obligations} - discharged
         if left:
             raise PlanError(f"obligations left undischarged: {sorted(left)}")
@@ -360,6 +469,8 @@ class _Planner:
             "order": tuple(order),
             "limit": int(canonical["limit"]) if canonical.get("limit") is not None else None,
             "facts": facts,
+            "derived": tuple(derived_steps),
+            "outputs": tuple(names[m] for m in dict.fromkeys(metric_keys)) if derived_steps else (),
         }
         found = SemanticPlan(
             **parts,
