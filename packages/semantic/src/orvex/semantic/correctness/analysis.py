@@ -49,6 +49,15 @@ fact, the facts are aligned, and only then is it computed, row by row, from the 
 `+` and `-` exactly, a declared ratio by C2's one exact division. It is asked only at its declared
 alignment grain (`METRIC_ALIGNMENT_AMBIGUOUS` otherwise) and gives `C5.align:<metric>`.
 
+**C7, bridges** (P2-18, #334). A metric that declares `allocation` through a bridge is grouped
+by a member reached through it: from the fact, many-to-one to the bridge's `left` side, into the
+bridge, out through its `right` side, then many-to-one. Each fact row counts `value * weight`,
+exactly, summed per group and rounded once with the metric's declared `rounding`. The weights of
+every normalization group the query reads are validated in the same read
+(`BRIDGE_WEIGHTS_INVALID`). It gives `C7.weights:<bridge>` and `C7.allocate:<metric>`. Only a
+plain `SUM` of one fact, with no other fact and no metric over metrics, is allocated; a bridge
+crossed by a metric that declares none, or by two bridges, stays `bridge_allocation`.
+
 C1 validates the grain; it never authorizes an aggregation by itself. The metric's additivity
 must be `additive`, declared or derived (a plain `SUM` or `COUNT` with no `DISTINCT`); any other
 class is refused until its rule lands, and a metric with neither is refused as
@@ -82,6 +91,7 @@ RULES: tuple[tuple[str, int], ...] = (
     ("C2", 1),
     ("C3", 1),
     ("C5", 1),
+    ("C7", 1),
 )  # implemented, in the order they run
 IMPLEMENTED = frozenset(rule for rule, _ in RULES)
 
@@ -111,7 +121,7 @@ SHAPES: Mapping[str, Shape] = {
     "zoned_bucketing": Shape("C6", "P2-19"),
     "ordered": Shape("C6", "P2-20"),
     "as_of_join": Shape("C6", "P2-20"),
-    "bridge_allocation": Shape("C7", "P2-18"),
+    "bridge_allocation": Shape("a bridge with no declared allocation", "a later issue"),
     "metric_context": Shape("S1", "P4"),
     "level_of_detail": Shape("S1", "P4"),
     "over_metrics": Shape("S7", "#237"),
@@ -138,7 +148,6 @@ _DATASET_SHAPES: Mapping[str, str] = {"history": "history"}
 # listed here or in `_PLAIN_DECLARATIONS` refuses the query (`metric_extension`).
 _DECLARATION_SHAPES: Mapping[str, str] = {
     "window": "ordered",
-    "allocation": "bridge_allocation",
     "context": "metric_context",
     "level_of_detail": "level_of_detail",
     "reaggregable_state": "reaggregable_state",
@@ -157,6 +166,7 @@ _PLAIN_DECLARATIONS = frozenset(
         "unit",
         "home_dataset",
         "over_metrics",  # S7: checked below, computed after alignment (C5)
+        "allocation",  # C7: checked when a path crosses its bridge
         "rounding",
         "zero_denominator",
         "format",
@@ -546,7 +556,7 @@ class _Analysis:
             self.ambiguous(home, target, safe)
         if not safe:
             if any(self.graph.bridge(d) for p in paths for d in p.datasets):
-                return self._pending("bridge_allocation")
+                return self.allocated(home, row, paths)
             return self._pending("fanout")
         if any(step.temporal for step in safe[0].steps):
             return self._pending("as_of_join")
@@ -658,6 +668,8 @@ class _Analysis:
         paths: dict[tuple[str, _Row], Path] = {}
         crossed: dict[str, set[str]] = {}
         self.substitutes: dict[tuple[str, _Row], MemberId] = {}
+        self.aggregated, self.home_of, self.homes = metrics, home_of, set(home_of.values())
+        self.bridges: dict[str, str] = {}
         alone = len(set(home_of.values())) == 1
         for home in sorted(set(home_of.values())):
             first = next(m for m in metrics if home_of[m] == home)
@@ -673,6 +685,119 @@ class _Analysis:
         self.check_datasets(set().union(*crossed.values()))
         classes = {**classes, **derived_classes}
         return self.report(home_of, metrics, classes, paths, crossed)
+
+    # C7, bridges
+
+    def allocated(self, home: str, row: _Row, paths: list[Path]) -> Path:
+        """The one path through the declared bridge of every metric of `home`, or a refusal."""
+        metrics = [m for m in self.aggregated if self.home_of.get(m) == home]
+        bridges = {self.bridge_of(m) for m in metrics}
+        if len(bridges) != 1 or None in bridges or self.derived or len(self.homes) != 1:
+            return self._pending("bridge_allocation")
+        (bridge,) = bridges
+        assert bridge is not None
+        found = [p for p in paths if self.through(home, p, bridge)]
+        if len(found) > 1:
+            self.ambiguous(home, row.member.dataset or home, found)
+        if not found:
+            return self._pending("bridge_allocation")
+        for metric in metrics:
+            self.allocatable(metric, bridge)
+        self.bridges[home] = bridge
+        return found[0]
+
+    def bridge_of(self, metric: MemberId) -> str | None:
+        payload = self.payloads.get(self.compiled.require(metric).parsed.pointer, {})
+        allocation = payload.get("allocation")
+        if not isinstance(allocation, Mapping):
+            return None
+        return sql.normalize(str(allocation["bridge"]))
+
+    def bridge(self, bridge: str) -> Mapping[str, Any]:
+        found = self.graph.payloads.get(bridge, {}).get("bridge")
+        if not isinstance(found, Mapping):  # an allocation naming a dataset that is no bridge
+            _refuse_pending({"bridge_allocation"})
+        assert isinstance(found, Mapping)
+        return found
+
+    def through(self, home: str, path: Path, bridge: str) -> bool:
+        """Many-to-one to the bridge's left side, into the bridge by its `left` relationship,
+        out by its `right` one, then many-to-one: the bridge once, no other unsafe step."""
+        declared = self.bridge(bridge)
+        left, right = (sql.normalize(str(declared[k])) for k in ("left", "right"))
+        datasets = path.datasets
+        if datasets.count(bridge) != 1 or any(
+            self.graph.bridge(d) for d in datasets if d != bridge
+        ):
+            return False
+        at = datasets.index(bridge)
+        steps = path.steps
+        if at + 1 >= len(steps) or steps[at].relationship != left:
+            return False
+        if steps[at + 1].relationship != right or not steps[at + 1].safe:
+            return False
+        others = [s for i, s in enumerate(steps) if i not in (at, at + 1)]
+        return all(s.safe for s in others)
+
+    def allocatable(self, metric: MemberId, bridge: str) -> None:
+        """A plain `SUM` with a declared rounding, a decimal weight, and a normalization scope
+        of the entity the bridge's left side reaches."""
+        compiled = self.compiled.require(metric)
+        payload = self.payloads.get(compiled.parsed.pointer, {})
+        node = compiled.typed.tree.node if compiled.typed.tree is not None else None
+        plain = (
+            isinstance(node, sql.Call)
+            and node.name == "SUM"
+            and not node.distinct
+            and node.filter is None
+            and len(node.arguments) == 1
+        )
+        declared = self.bridge(bridge)
+        weight = MemberId("field", bridge, sql.normalize(str(declared["weight"])))
+        scope = declared.get("normalization_scope")
+        entities = scope.get("entities", ()) if isinstance(scope, Mapping) else ()
+        left = sql.normalize(str(declared["left"]))
+        target = next(
+            (
+                sql.normalize(str(r["to"]))
+                for r in self.relationships()
+                if sql.normalize(str(r["name"])) == left
+            ),
+            None,
+        )
+        entity = self.graph.payloads.get(target or "", {}).get("entity")
+        if (
+            not plain
+            or weight not in self.compiled.members
+            or self.compiled.require(weight).typed.type.logical.datatype
+            not in ("Decimal", "Integer")
+            or list(entities) != [entity]
+        ):
+            _refuse_pending({"bridge_allocation"})
+        # The bridge's own fields are read too: its weight and the keys it joins on. One the
+        # caller may not see, or sees masked, is never read (P2-08), and never named.
+        read = [weight] + [
+            MemberId("field", bridge, sql.normalize(str(c)))
+            for r in self.relationships()
+            for side, columns in (("from", "from_columns"), ("to", "to_columns"))
+            if sql.normalize(str(r[side])) == bridge
+            for c in r[columns]
+        ]
+        if any(self.policies.protection(m, self.groups) != "visible" for m in read):
+            _refuse_pending({"bridge_allocation"})
+        if "rounding" not in payload:  # rounding is declared, never the engine's (#325)
+            raise SemanticError(
+                "MISSING_EXTENSION_DECLARATION",
+                {"element": "metric", "name": self.label(metric), "declaration": "rounding"},
+            )
+        rounding = payload["rounding"]
+        logical = compiled.typed.type.logical
+        if not isinstance(rounding, Mapping) or rounding.get("scale") != logical.scale:
+            _refuse_pending({"bridge_allocation"})  # rounded to the metric's own declared type
+
+    def relationships(self) -> tuple[Mapping[str, Any], ...]:
+        found = self.compiled.ossie.document.get("relationships", ())
+        return tuple(found) if isinstance(found, tuple) else ()
 
     # C5, conformed dimensions
 
@@ -849,6 +974,22 @@ class _Analysis:
                 obligations.append(obligation(m, "C2", name, prefix))
         if len(crossed) > 1:  # more than one fact: each aggregated apart (C3)
             obligations += [obligation(m, "C3", "isolate", "C3.isolate") for m in metrics]
+        for home, bridge in sorted(self.bridges.items()):  # allocated through a bridge (C7)
+            allocated = [m for m in metrics if home_of[m] == home]
+            weights = obligation(allocated[0], "C7", "weights", "C7.weights")
+            obligations.append(
+                Obligation(
+                    id=f"C7.weights:{self.dataset(bridge)}",
+                    rule="C7",
+                    kind="weights",
+                    metric=weights.metric,
+                    from_grain=weights.from_grain,
+                    to_grain=weights.to_grain,
+                    members=weights.members,
+                    datasets=weights.datasets,
+                )
+            )
+            obligations += [obligation(m, "C7", "allocate", "C7.allocate") for m in allocated]
         for derived in sorted(self.derived, key=self.label):  # computed after alignment (C5)
             sources = self.derived[derived]
             reads = sorted({self.dataset(d) for m in sources for d in crossed[home_of[m]]})
@@ -924,6 +1065,14 @@ class _Analysis:
             "datasets": sorted({self.dataset(d) for found in crossed.values() for d in found}),
             "row_policies": [],
         }
+        if self.bridges:
+            facts["allocations"] = [
+                {
+                    "bridge": self.dataset(bridge),
+                    "metrics": sorted(self.label(m) for m in metrics if home_of[m] == home),
+                }
+                for home, bridge in sorted(self.bridges.items())
+            ]
         if self.derived:
             facts["derived"] = [
                 {

@@ -304,14 +304,37 @@ def run_case(
     wanted = [list(row.values()) for row in expected]
     columns = found.result.envelope()["columns"]
     names = [c["name"] for c in columns]
-    # The corpus names a bucketed column after its bucket ("month"); the engine after its member.
-    accepted = [{c["name"], c.get("bucket", {}).get("unit", c["name"])} for c in columns]
+    # The corpus names a bucketed column after its bucket ("month"), and a dimension after its
+    # declared conformed dimension ("campaign"); the engine after its member.
+    conformed = {
+        e.pointer.rsplit("/custom_extensions/", 1)[0]: str(e.payload["conformed_dimension"])
+        for e in compiled.ossie.product_extensions
+        if "conformed_dimension" in e.payload
+    }
+    accepted = [
+        {c["name"], c.get("bucket", {}).get("unit", c["name"])}
+        | {
+            conformed[m.parsed.pointer]
+            for m in (compiled.members[k] for k in compiled.members if _is(k, c["member"]))
+            if m.parsed.pointer in conformed
+        }
+        for c in columns
+    ]
     header = list(expected[0]) if expected else []
     if len(header) != len(names) or any(h not in a for h, a in zip(header, accepted, strict=True)):
         return CaseRun("fail", f"columns {names}")
     got = rows_of(found)
     dates = [c["encoding"] == "DATE" for c in found.result.envelope()["columns"]]
     return CaseRun("pass", "") if same(got, wanted, dates) else CaseRun("fail", f"rows {got}")
+
+
+def _is(member: Any, written: Mapping[str, Any]) -> bool:  # noqa: ANN401
+    """Whether a compiled member is the one a result column names."""
+    from orvex.semantic.ossie import sql
+
+    dataset = written.get("dataset")
+    expected = sql.normalize(str(dataset)) if dataset else None
+    return bool(member.name == sql.normalize(str(written["name"])) and member.dataset == expected)
 
 
 def same(got: list[list[str | None]], wanted: list[list[str | None]], dates: list[bool]) -> bool:
