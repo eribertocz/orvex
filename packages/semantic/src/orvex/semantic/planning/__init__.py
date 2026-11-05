@@ -82,6 +82,7 @@ class Group:
     member: MemberId
     source: str  # alias
     bucket: str | None
+    zone: str | None = None  # an instant's bucket: cut in this zone (C6)
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,7 +177,10 @@ def _document(plan: dict[str, Any]) -> dict[str, object]:
                 for j in plan["joins"]
             ],
             "filters": [[_key(f.member), f.source, _plain(f.predicate)] for f in plan["filters"]],
-            "groups": [[g.name, _key(g.member), g.source, g.bucket] for g in plan["groups"]],
+            "groups": [
+                [g.name, _key(g.member), g.source, g.bucket] + ([g.zone] if g.zone else [])
+                for g in plan["groups"]
+            ],
             "aggregates": [
                 [
                     a.name,
@@ -260,6 +264,9 @@ class _Planner:
             if "as" in p
         }
         self.derived = {d["metric"]: d for d in report.facts.get("derived", ())}
+        self.zones = {
+            (g["member"], g["bucket"]): g["zone"] for g in report.facts["grain"] if "zone" in g
+        }
 
     def read_as(self, home: str, member: MemberId, slot: str, role: str | None) -> MemberId:
         """The member the fact `home` reads for `member`: itself, or its conformed field."""
@@ -377,6 +384,7 @@ class _Planner:
                     self.read_as(home, member, "group_by", role),
                     self.alias(home, member, "group_by", role),
                     unit,
+                    self.zones.get((self.label(member), unit)),
                 )
                 if group not in groups:
                     groups.append(group)

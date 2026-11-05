@@ -78,3 +78,8 @@ reason = "Maintenance records: last_maintenance reads one aggregate row; history
 file = "packages/server/src/orvex/server/scheduler.py"
 call = "to_pylist"
 reason = "Run records: one row per model of the project (model_history_request groups by model) and one aggregate row for the last run"
+
+[[allow]]
+file = "packages/semantic/src/orvex/semantic/execution.py"
+call = "as_py"
+reason = "One scalar per check: a count DuckDB computed (points of a zone the engine converts differently from the pinned tzdata, C6); never data rows"

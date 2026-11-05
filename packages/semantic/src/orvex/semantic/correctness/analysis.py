@@ -82,6 +82,7 @@ RULES: tuple[tuple[str, int], ...] = (
     ("C2", 1),
     ("C3", 1),
     ("C5", 1),
+    ("C6", 1),
 )  # implemented, in the order they run
 IMPLEMENTED = frozenset(rule for rule, _ in RULES)
 
@@ -102,15 +103,14 @@ SHAPES: Mapping[str, Shape] = {
     "approximate": Shape("approximate aggregate", "a later issue"),
     "semi_additive": Shape("other non-additive axes", "a later issue"),
     "period_end_ties": Shape("a declared tie-breaking rule", "a later issue"),
-    "period_end_filter": Shape("C6", "P2-20"),
+    "period_end_filter": Shape("a filter on a period-end axis", "P2-20"),
     "mixed_period_end": Shape("period end beside other metrics", "a later issue"),
     "non_additive": Shape("C2 non-additive", "a later issue"),
     "multi_fact": Shape("alignment beyond declared conformed dimensions", "a later issue"),
     "fanout": Shape("one-to-many grouping", "a later issue"),
-    "calendar_bucket": Shape("C6", "P2-19"),
-    "zoned_bucketing": Shape("C6", "P2-19"),
-    "ordered": Shape("C6", "P2-20"),
-    "as_of_join": Shape("C6", "P2-20"),
+    "calendar_bucket": Shape("model calendars", "a later issue"),
+    "ordered": Shape("S9 windows", "P2-20"),
+    "as_of_join": Shape("C6 as-of joins", "P2-20"),
     "bridge_allocation": Shape("C7", "P2-18"),
     "metric_context": Shape("S1", "P4"),
     "level_of_detail": Shape("S1", "P4"),
@@ -125,7 +125,7 @@ SHAPES: Mapping[str, Shape] = {
     "segment_filter": Shape("S7-S14", "#237"),
     "hierarchy_filter": Shape("S7-S14", "#237"),
     "calculated_field": Shape("S10", "#237"),
-    "history": Shape("C6", "P2-20"),
+    "history": Shape("versioned history", "a later issue"),
     "metric_extension": Shape("unknown declaration", "a later issue"),
 }
 # A field or dataset declaration that changes the values read needs its own rule.
@@ -598,10 +598,13 @@ class _Analysis:
         rows = query.rows
         for member in [*metrics, *(r.member for r in rows)]:
             self.answerable(member)
-        for row in rows:
-            typed = self.compiled.require(row.member).typed.type
-            if typed.buckets_instant or (row.bucket and typed.logical.datatype == "DateTimeTz"):
-                shapes.add("zoned_bucketing")
+        # C6: an instant is cut into calendar units in its declared zone, never the host's.
+        self.zones = {
+            (r.member, r.bucket): self.zone_of(r.member)
+            for r in rows
+            if r.bucket
+            and self.compiled.require(r.member).typed.type.logical.datatype == "DateTimeTz"
+        }
         read = {r.member for r in rows} | {
             f for m in metrics for f in self.compiled.require(m).parsed.lineage
         }
@@ -673,6 +676,26 @@ class _Analysis:
         self.check_datasets(set().union(*crossed.values()))
         classes = {**classes, **derived_classes}
         return self.report(home_of, metrics, classes, paths, crossed)
+
+    # C6, zones
+
+    def zone_of(self, member: MemberId) -> str:
+        """The zone a query bucket of an instant applies: the field's own `time_zone`, then the
+        value's, then the model's `default_time_zone`, as the compiler resolves one (P2-04)."""
+        compiled = self.compiled.require(member)
+        own = self.payloads.get(compiled.parsed.pointer, {}).get("time_zone")
+        declared = own.get("name") if isinstance(own, Mapping) else None
+        found = (
+            declared
+            or compiled.typed.type.logical.zone
+            or self.payloads.get("", {}).get("default_time_zone")
+        )
+        if not found:  # nothing declares one: never the server's zone
+            raise SemanticError(
+                "MISSING_EXTENSION_DECLARATION",
+                {"element": "field", "name": self.label(member), "declaration": "time_zone"},
+            )
+        return str(found)
 
     # C5, conformed dimensions
 
@@ -820,6 +843,9 @@ class _Analysis:
             for label, role, bucket in requested
         )
         natural = {h: [self.key_label(h, key) for key in self.graph.grain(h)] for h in crossed}
+        zones: dict[tuple[str, str | None], str] = {
+            (self.label(m), b): z for (m, b), z in self.zones.items()
+        }
         labels = {label for label, _, _ in requested}
 
         def obligation(metric: MemberId, rule: str, kind: str, prefix: str) -> Obligation:
@@ -876,6 +902,7 @@ class _Analysis:
             "mode": self.query.mode,
             "grain": [
                 {"member": label, "role": role, "bucket": bucket}
+                | ({"zone": zones[label, bucket]} if (label, bucket) in zones else {})
                 for label, role, bucket in requested
             ],
             "metrics": [

@@ -146,8 +146,8 @@ def test_the_report_is_deterministic_and_order_does_not_change_its_facts() -> No
     assert one.fingerprint == run(query("revenue", "declared", group_by=[zone, day])).fingerprint
     assert one.facts == two.facts
     assert one.obligations == two.obligations
-    assert one.rules == RULES == (("C1", 1), ("C2", 1), ("C3", 1), ("C5", 1))
-    assert {"C1", "C2", "C3", "C5"} == IMPLEMENTED
+    assert one.rules == RULES == (("C1", 1), ("C2", 1), ("C3", 1), ("C5", 1), ("C6", 1))
+    assert {"C1", "C2", "C3", "C5", "C6"} == IMPLEMENTED
 
 
 SCRIPT = """
@@ -204,16 +204,16 @@ CASES: dict[str, tuple[frozenset[str], tuple[str, str] | None]] = {
     "CASE-009": (frozenset({"C1", "C5"}), None),
     "CASE-010": (frozenset({"C1", "C2", "C5"}), None),
     "CASE-011": (frozenset({"C1", "C7"}), ("UNSUPPORTED_OPERATION", "bridge_allocation")),
-    "CASE-012": (frozenset({"C1", "C6"}), ("UNSUPPORTED_OPERATION", "zoned_bucketing")),
-    "CASE-013": (frozenset({"C1", "C6"}), ("UNSUPPORTED_OPERATION", "as_of_join")),
+    "CASE-012": (frozenset({"C1", "C6"}), None),
+    "CASE-013": (frozenset({"C1", "C6 as-of joins"}), ("UNSUPPORTED_OPERATION", "as_of_join")),
     "CASE-014": (frozenset({"C1"}), None),
     "CASE-015": (frozenset({"C1", "policy placement"}), ("UNSUPPORTED_OPERATION", "row_policy")),
     "CASE-016": (frozenset({"C1", "C4"}), ("AMBIGUOUS_RELATIONSHIP_PATH", "")),
     "CASE-017": (frozenset({"C1"}), ("INCOMPATIBLE_UNITS", "")),  # refused when compiled
     "CASE-018": (frozenset({"C1"}), None),
-    "CASE-019": (frozenset({"C1", "C6"}), ("UNSUPPORTED_OPERATION", "zoned_bucketing")),
+    "CASE-019": (frozenset({"C1", "C6"}), None),
     "CASE-020": (frozenset({"C1", "C2"}), ("ILLEGAL_TEMPORAL_REAGGREGATION", "")),
-    "CASE-021": (frozenset({"C1", "C6"}), ("COMPILER", "ordered")),
+    "CASE-021": (frozenset({"C1", "S9 windows"}), ("COMPILER", "ordered")),
 }
 
 

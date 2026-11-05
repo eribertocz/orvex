@@ -21,7 +21,8 @@ restrictive below it) and volatility. The rules are the engine's own, never a di
   without it: P2-04e records the missing declaration). A quotient, a mean or a narrowing `CAST`
   that may exceed its type carries the overflow obligation too;
 - a calendar operation on an instant applies the bucketing field's own `time_zone`, then the
-  bucketed value's, then the model's `default_time_zone`;
+  bucketed value's, then the model's `default_time_zone`; `DATE_TRUNC` of an instant to a day,
+  week, month, quarter or year is the local `Date` the bucket starts on (P2-19);
 - approximation only when explicit: `CAST … AS DOUBLE`/`FLOAT`, `APPROX_*`, `STDDEV` and
   `VARIANCE`, `SQRT`/`LN`/`EXP`/`POWER`/`LOG`/trigonometry/`PI`, or a `Float` column. A
   number literal is exact, exponent included;
@@ -92,6 +93,9 @@ APPROXIMATING = frozenset(
     TAN ASIN ACOS ATAN ATAN2 RADIANS DEGREES PI
     """.split()  # noqa: SIM905 - a word list reads better than one string per line
 )
+
+
+_CALENDAR_UNITS = frozenset({"DAY", "WEEK", "MONTH", "QUARTER", "YEAR"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -703,7 +707,11 @@ class _Checker:
         target = values[0].type.logical
         instant = target.datatype == "DateTimeTz"
         zone = self._zone(values[0]) if instant else None
-        if node.name in ("DATE_TRUNC", "DATEADD"):
+        if node.name == "DATE_TRUNC" and instant and part in _CALENDAR_UNITS:
+            # The local date the bucket starts on, in `zone` (C6, P2-19): a calendar day,
+            # week, month, quarter or year of an instant is a date, never an instant.
+            logical = LogicalType("Date")
+        elif node.name in ("DATE_TRUNC", "DATEADD"):
             logical = replace(target, zone=zone) if instant else target
         else:
             logical = LogicalType("Integer", width=64, signed=True)
