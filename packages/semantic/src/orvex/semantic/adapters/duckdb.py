@@ -68,6 +68,9 @@ class PhysicalQuery:
     # Then BIGINT columns: (column, bridge) for a metric allocated through a bridge (C7), each
     # row holding how many normalization groups read have invalid weights; any refuses all.
     weights: tuple[tuple[str, str], ...] = ()
+    # Then BIGINT columns: (column, relationship) for an as-of join (C6), each row holding how
+    # many rows read match not exactly one valid row; any refuses the whole result.
+    as_of: tuple[tuple[str, str], ...] = ()
 
 
 def quote(name: str) -> str:
@@ -114,6 +117,7 @@ class _Writer:
         self.zone: str | None = None  # the zone of the field being written (C6)
         self.zones: set[str] = set()  # every zone the statement converts to
         self.weights: list[tuple[str, str]] = []  # (column, bridge): invalid weight groups
+        self.as_of: list[tuple[str, str]] = []  # (column, relationship): rows not matched once
 
     def bind(self, kind: str, value: str | None) -> str:
         name = f"p{len(self.parameters)}"
@@ -362,10 +366,14 @@ class _Writer:
             text, columns, checks = parts[0]
         else:
             text, columns, checks = self.align(parts)
-        if self.weights and (len(parts) > 1 or plan.derived):
+        if (self.weights or self.as_of) and (len(parts) > 1 or plan.derived):
             raise PlanError("a bridge is allocated only in one fact, with no metric over metrics")
         if plan.derived:
             text, columns, checks = self.derive(text, columns, checks)
+        if plan.windows:
+            if len(parts) > 1 or plan.derived:
+                raise PlanError("a running total is computed over one fact's aggregation")
+            text, columns = self.accumulate(text, columns, checks)
         if plan.order:
             text += " ORDER BY " + ", ".join(
                 f"{quote(s.name)} {'DESC' if s.descending else 'ASC'} "
@@ -382,6 +390,7 @@ class _Writer:
             checks=tuple(checks),
             zones=tuple(sorted(self.zones)),
             weights=tuple(self.weights),
+            as_of=tuple(self.as_of),
         )
 
     def members(self, fact: str) -> set[str]:
@@ -441,6 +450,11 @@ class _Writer:
             on = " AND ".join(
                 f"{self.field(a, join.left)} = {self.field(b, join.right)}" for a, b in join.pairs
             )
+            if join.as_of is not None:  # the row valid when the event happened, closed-open
+                event = self.field(join.as_of.event, join.left)
+                start = self.field(join.as_of.valid_from, join.right)
+                end = self.field(join.as_of.valid_to, join.right)
+                on += f" AND {start} <= {event} AND {event} < {end}"
             rows += f" LEFT JOIN {quote(sources[join.right].table)} AS {quote(join.right)} ON {on}"
         conditions = [
             self.predicate(self.field(f.member, f.source), f.predicate, f.member)
@@ -455,6 +469,11 @@ class _Writer:
             select.append(f"{check} AS {quote(name)}")
             weights.append(quote(name))
             self.weights.append((name, aggregate.allocation.bridge))
+        for join in (j for j in plan.joins if j.left in own and j.as_of):
+            name = f"#t{len(self.as_of)}"
+            select.append(f"{self.unmatched(join, rows, conditions)} AS {quote(name)}")
+            weights.append(quote(name))
+            self.as_of.append((name, self.relationship_name(join.relationship)))
         text = "SELECT " + ", ".join(select) + rows
         if conditions:
             text += " WHERE " + " AND ".join(conditions)
@@ -464,6 +483,40 @@ class _Writer:
         if ratios:
             text, checks = self.divide(text, columns, ratios, after=weights)
         return text, columns, checks
+
+    def relationship_name(self, normalized: str) -> str:
+        found = self.compiled.ossie.document.get("relationships", ())
+        relationships = found if isinstance(found, tuple) else ()
+        return next(
+            str(r["name"]) for r in relationships if sql.normalize(str(r["name"])) == normalized
+        )
+
+    def unmatched(self, join: Any, rows: str, conditions: list[str]) -> str:  # noqa: ANN401
+        """How many left rows the question reads match not exactly one right row, counted on
+        the whole right table, whatever filters keep of it: in the same statement (C6)."""
+        as_of = join.as_of
+        keys = [self.field(r, join.left) for r in as_of.rows]
+        values = [self.field(a, join.left) for a, _ in join.pairs]
+        event = self.field(as_of.event, join.left)
+        read = ", ".join(f"{v} AS {quote(f'#r{i}')}" for i, v in enumerate([*keys, *values, event]))
+        table = next(s.table for s in self.plan.sources if s.alias == join.right)
+        n = len(keys)
+        on = " AND ".join(
+            f"{self.field(b, '#h')} = {quote('#u')}.{quote(f'#r{n + i}')}"
+            for i, (_, b) in enumerate(join.pairs)
+        )
+        moment = f"{quote('#u')}.{quote(f'#r{n + len(values)}')}"
+        start = self.field(as_of.valid_from, "#h")
+        end = self.field(as_of.valid_to, "#h")
+        matches = (
+            f"(SELECT count(*) FROM {quote(table)} AS {quote('#h')} WHERE {on}"
+            f" AND {start} <= {moment} AND {moment} < {end})"
+        )
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        return (
+            f"(SELECT count(*) FROM (SELECT DISTINCT {read}{rows}{where}) AS {quote('#u')}"
+            f" WHERE {matches} <> 1)"
+        )
 
     def allocated(self, aggregate: Any) -> tuple[str, int]:  # noqa: ANN401
         """`SUM(value * weight)`, exact: the product keeps both scales (C7)."""
@@ -597,6 +650,52 @@ class _Writer:
             return text, final, checks + more
         kept = ", ".join(quote(c.name) for c in final) + "".join(", " + quote(k) for k in keep)
         return f"SELECT {kept} FROM ({text}) AS {quote('b')}", final, checks
+
+    def accumulate(
+        self, inner: str, columns: list[ColumnSpec], checks: list[tuple[str, str]]
+    ) -> tuple[str, list[ColumnSpec]]:
+        """Each running total over the aggregated rows (S9): summed in its order from the start
+        of its partition, exactly, never aggregated again. Then the filters on its own groups
+        choose the rows shown, so a filter never restarts it. Only the question's columns are
+        kept, in its order, then every extra column."""
+        by_name = {c.name: c for c in columns}
+        steps = {w.name: w for w in self.plan.windows}
+        dimensions = [c for c in columns if c.role == "dimension"]
+        select = [quote(c.name) for c in dimensions]
+        outputs: list[ColumnSpec] = []
+        for name in self.plan.outputs:
+            step = steps.get(name)
+            if step is None:
+                outputs.append(by_name[name])
+                select.append(quote(name))
+                continue
+            column = self.column(step.metric, step.name, "metric", None)
+            outputs.append(column)
+            ordered = step.order[: len(step.order) - step.partitions]
+            partitions = step.order[len(step.order) - step.partitions :]
+            within = (
+                f"PARTITION BY {', '.join(quote(p) for p in partitions)} " if partitions else ""
+            )
+            order = ", ".join(f"{quote(o)} ASC NULLS LAST" for o in ordered)
+            total = (
+                f"SUM({quote(step.over)}) OVER ({within}ORDER BY {order}"
+                " ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)"
+            )
+            select.append(f"CAST({total} AS {column.encoding}) AS {quote(name)}")
+        extra = [n for n, _ in checks] + [n for n, _ in self.weights] + [n for n, _ in self.as_of]
+        select += [quote(n) for n in extra]
+        text = f"SELECT {', '.join(select)} FROM ({inner}) AS {quote('w')}"
+        if self.plan.after:
+            shown = " AND ".join(
+                self.predicate(quote(f.source), f.predicate, f.member) for f in self.plan.after
+            )
+            # A failed check keeps every row, so the refusal it carries is never filtered away.
+            failed = [f"{quote(n)}" for n, _ in checks] + [
+                f"{quote(n)} > 0" for n, _ in [*self.weights, *self.as_of]
+            ]
+            keep = " OR ".join([f"({shown})", *failed])
+            text = f"SELECT * FROM ({text}) AS {quote('v')} WHERE {keep}"
+        return text, dimensions + outputs
 
     def over(self, node: sql.Node, step: Any) -> str:  # noqa: ANN401
         """`+` and `-` of the aligned aggregates a metric over metrics names."""

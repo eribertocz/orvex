@@ -195,10 +195,8 @@ PENDING = {
 }
 
 
-# Cases this runner cannot exercise yet, for a reason outside the engine's own refusals:
-# - their models compile only once their declarations exist (Owner decision of 2026-11-01, #283).
+# Cases this runner cannot exercise yet, for a reason outside the engine's own refusals.
 NOT_YET: Mapping[str, str] = {
-    "CASE-021": "the model compiles after P2-20 (#283)",
     # Its expected file holds the overall count beside the per-region ones: a total (P2-23).
     # Both are answered exactly, and proven in tests/conformance/test_period_end.py.
     "CASE-008": "the overall count is a total (P2-23)",

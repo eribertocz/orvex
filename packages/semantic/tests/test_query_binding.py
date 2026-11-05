@@ -33,7 +33,6 @@ VENDORS = (CURRENT, *_PRODUCT["previous_vendor_names"])
 CORPUS = ROOT / "conformance/semantic-corpus/bi-platform/models"
 QUERIES = json.loads((ROOT / "conformance/runners/corpus_queries.json").read_text("utf-8"))
 GOLDEN = Path(__file__).with_name("golden") / "corpus-query-fingerprints.json"
-NOT_YET = {"CASE-021"}  # its model compiles after P2-20
 REFUSED = {"CASE-017"}  # its model is refused by design: USD + BOB (P2-16)
 INSTANT = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
 LIMITS = Limits(detail_page_size=1000)
@@ -469,7 +468,7 @@ def corpus_model(path: Path) -> CompiledModel:
 def corpus_fingerprints() -> dict[str, str]:
     found = {}
     for case, document in sorted(QUERIES["queries"].items()):
-        if case in NOT_YET | REFUSED:
+        if case in REFUSED:
             continue
         found[case] = bind(document, corpus_model(CORPUS / f"{case}.yaml")).fingerprint
     return found
@@ -479,23 +478,6 @@ def test_every_corpus_query_is_written_and_binds() -> None:
     assert sorted(QUERIES["queries"]) == sorted(p.stem for p in CORPUS.glob("CASE-0??.yaml"))
     golden = json.loads(GOLDEN.read_text("utf-8"))
     assert corpus_fingerprints() == golden
-
-
-@pytest.mark.parametrize("case", sorted(NOT_YET))
-def test_queries_of_models_that_do_not_compile_yet_are_valid(case: str) -> None:
-    from orvex.semantic.query.binding import _decode
-
-    assert _decode(json.dumps(QUERIES["queries"][case]))["mode"] == "aggregate"
-
-
-@pytest.mark.xfail(
-    reason="CASE-021 compiles once P2-20 supplies its declarations (Owner decision of "
-    "2026-11-01, #283)",
-    strict=True,
-)
-@pytest.mark.parametrize("case", sorted(NOT_YET))
-def test_queries_of_models_that_do_not_compile_yet_bind(case: str) -> None:
-    bind(QUERIES["queries"][case], corpus_model(CORPUS / f"{case}.yaml"))
 
 
 def test_fingerprints_are_equal_across_processes_and_hash_seeds() -> None:

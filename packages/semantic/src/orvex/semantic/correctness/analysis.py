@@ -93,6 +93,7 @@ RULES: tuple[tuple[str, int], ...] = (
     ("C5", 1),
     ("C6", 1),
     ("C7", 1),
+    ("S9", 1),
 )  # implemented, in the order they run
 IMPLEMENTED = frozenset(rule for rule, _ in RULES)
 
@@ -119,7 +120,8 @@ SHAPES: Mapping[str, Shape] = {
     "multi_fact": Shape("alignment beyond declared conformed dimensions", "a later issue"),
     "fanout": Shape("one-to-many grouping", "a later issue"),
     "calendar_bucket": Shape("model calendars", "a later issue"),
-    "ordered": Shape("S9 windows", "P2-20"),
+    "ordered": Shape("S9 windows other than a running total", "a later issue"),
+    "window_filter": Shape("a filter on a bucketed window order", "a later issue"),
     "as_of_join": Shape("C6 as-of joins", "P2-20"),
     "bridge_allocation": Shape("a bridge with no declared allocation", "a later issue"),
     "metric_context": Shape("S1", "P4"),
@@ -147,7 +149,6 @@ _DATASET_SHAPES: Mapping[str, str] = {"history": "history"}
 # A metric declaration that changes how it is computed needs its own rule. Any declaration not
 # listed here or in `_PLAIN_DECLARATIONS` refuses the query (`metric_extension`).
 _DECLARATION_SHAPES: Mapping[str, str] = {
-    "window": "ordered",
     "context": "metric_context",
     "level_of_detail": "level_of_detail",
     "reaggregable_state": "reaggregable_state",
@@ -166,6 +167,7 @@ _PLAIN_DECLARATIONS = frozenset(
         "unit",
         "home_dataset",
         "over_metrics",  # S7: checked below, computed after alignment (C5)
+        "window",  # S9: checked below, computed after aggregation
         "allocation",  # C7: checked when a path crosses its bridge
         "rounding",
         "zero_denominator",
@@ -558,9 +560,30 @@ class _Analysis:
             if any(self.graph.bridge(d) for p in paths for d in p.datasets):
                 return self.allocated(home, row, paths)
             return self._pending("fanout")
-        if any(step.temporal for step in safe[0].steps):
-            return self._pending("as_of_join")
+        for at, step in enumerate(safe[0].steps):
+            if step.temporal:
+                self.as_of(home, safe[0], at)
         return safe[0]
+
+    def as_of(self, home: str, path: Path, at: int) -> None:
+        """C6: a temporal relationship is crossed forward, from the rows whose `event_time` it
+        declares, closed-open and exactly one match, which the read checks (P2-20)."""
+        step = path.steps[at]
+        start = home if at == 0 else path.steps[at - 1].to
+        relationship = next(
+            r for r in self.relationships() if sql.normalize(str(r["name"])) == step.relationship
+        )
+        declared = self.graph.relationship_payloads.get(step.relationship, {}).get("temporal")
+        forward = sql.normalize(str(relationship["from"])) == start
+        if (
+            not forward
+            or not isinstance(declared, Mapping)
+            or declared.get("boundary", "closed_open") != "closed_open"
+            or declared.get("match") != "exactly_one"
+            or not self.graph.keys.get(start)
+        ):
+            _refuse_pending({"as_of_join"})
+        self.temporal.setdefault(home, set()).add(step.relationship)
 
     def safe(self, path: Path) -> bool:
         return all(s.safe for s in path.steps) and not any(
@@ -620,11 +643,13 @@ class _Analysis:
         }
         shapes |= self.field_shapes(sorted(read))
         self.derived = {m: self.over(m) for m in metrics if self.is_derived(m)}
-        for metric in self.derived:
+        self.windows = {m: self.window_of(m) for m in metrics if self.is_window(m)}
+        for metric in [*self.derived, *self.windows]:
             shapes |= self.declaration_shapes(metric)
         metrics = sorted(
-            {m for m in metrics if m not in self.derived}
+            {m for m in metrics if m not in self.derived and m not in self.windows}
             | {s for sources in self.derived.values() for s in sources}
+            | set(self.windows.values())
         )
         homes: dict[MemberId, set[str]] = {}
         for metric in metrics:
@@ -648,6 +673,12 @@ class _Analysis:
         derived_classes = {m: self.additivity(m) for m in self.derived}
         for metric in self.derived:
             self.aligned(metric, derived_classes[metric][0])
+        self.after: list[_Row] = []  # filters that only choose the rows shown (S9)
+        self.order: dict[MemberId, list[_Row]] = {}
+        if self.windows and (len(set(home_of.values())) > 1 or self.derived):
+            _refuse_pending({"ordered"})
+        for metric in self.windows:
+            self.windowed(metric)
         periods: dict[MemberId, tuple[MemberId, str]] = {}
         for metric, (kind, _) in classes.items():
             if kind == "recomputable":
@@ -673,6 +704,7 @@ class _Analysis:
         self.substitutes: dict[tuple[str, _Row], MemberId] = {}
         self.aggregated, self.home_of, self.homes = metrics, home_of, set(home_of.values())
         self.bridges: dict[str, str] = {}
+        self.temporal: dict[str, set[str]] = {}
         alone = len(set(home_of.values())) == 1
         for home in sorted(set(home_of.values())):
             first = next(m for m in metrics if home_of[m] == home)
@@ -685,6 +717,8 @@ class _Analysis:
                 home,
                 *(d for (h, _), p in paths.items() if h == home for d in p.datasets),
             }
+        if self.temporal and (len(crossed) > 1 or self.derived):  # guarded in one fact only
+            _refuse_pending({"as_of_join"})
         self.check_datasets(set().union(*crossed.values()))
         classes = {**classes, **derived_classes}
         return self.report(home_of, metrics, classes, paths, crossed)
@@ -871,6 +905,69 @@ class _Analysis:
 
     # S7, metrics over metrics
 
+    # S9, running totals
+
+    def is_window(self, metric: MemberId) -> bool:
+        payload = self.payloads.get(self.compiled.require(metric).parsed.pointer, {})
+        return "window" in payload
+
+    def window(self, metric: MemberId) -> Mapping[str, Any]:
+        found = self.payloads.get(self.compiled.require(metric).parsed.pointer, {})["window"]
+        assert isinstance(found, Mapping)  # `ossie-extensions` v1, checked on read
+        return found
+
+    def window_of(self, metric: MemberId) -> MemberId:
+        """The metric a running total sums: a plain metric, aggregated first."""
+        window = self.window(metric)
+        sources = [m for m in self.compiled.require(metric).parsed.depends_on if m.kind == "metric"]
+        if (
+            window.get("function") != "running_total"
+            or window.get("densify") != "none"
+            or "frame" in window
+            or window.get("null_fill", "null") != "null"
+            or not window.get("order_by")
+            or len(sources) != 1
+            or self.is_window(sources[0])
+            or self.is_derived(sources[0])
+        ):
+            _refuse_pending({"ordered"})
+        return sources[0]
+
+    def window_names(self, member: MemberId) -> set[str]:
+        """The names a window's `order_by` and `partition_by` may use for a member: its own
+        name, or its declared conformed dimension."""
+        found = {member.name}
+        conformed = self.conformed_name(member)
+        return found | {conformed} if conformed else found
+
+    def windowed(self, metric: MemberId) -> None:
+        """Asked at exactly its order and partition: each one a requested group, every group one
+        of them. A filter on one of them only chooses the rows shown, after the running total."""
+        window = self.window(metric)
+        wanted = [sql.normalize(str(n)) for n in [*window["order_by"], *window["partition_by"]]]
+        grouped = list(self.query.grouped)
+        matched = [[n for n in wanted if n in self.window_names(r.member)] for r in grouped]
+        if (
+            len(set(wanted)) != len(wanted)
+            or any(len(m) != 1 or r.role is not None for m, r in zip(matched, grouped, strict=True))
+            or sorted(m[0] for m in matched) != sorted(wanted)
+        ):
+            raise SemanticError(
+                "METRIC_ALIGNMENT_AMBIGUOUS", {"metric": self.label(metric), "missing": "grain"}
+            )
+        self.order[metric] = [
+            next(r for r, m in zip(grouped, matched, strict=True) if m[0] == name)
+            for name in wanted
+        ]
+        for row in self.query.rows:
+            group = next((g for g in grouped if g.member == row.member), None)
+            if row.slot != "filter" or group is None:
+                continue
+            if group.bucket is not None:
+                _refuse_pending({"window_filter"})
+            if row not in self.after:
+                self.after.append(row)
+
     def is_derived(self, metric: MemberId) -> bool:
         payload = self.payloads.get(self.compiled.require(metric).parsed.pointer, {})
         return "over_metrics" in payload
@@ -1000,6 +1097,22 @@ class _Analysis:
                 obligations.append(obligation(m, "C2", name, prefix))
         if len(crossed) > 1:  # more than one fact: each aggregated apart (C3)
             obligations += [obligation(m, "C3", "isolate", "C3.isolate") for m in metrics]
+        for home, crossed_as_of in sorted(self.temporal.items()):  # guarded as-of joins (C6)
+            first = next(m for m in metrics if home_of[m] == home)
+            for name in sorted(crossed_as_of):
+                found = obligation(first, "C6", "as_of", "C6.as_of")
+                obligations.append(
+                    Obligation(
+                        id=f"C6.as_of:{self.graph.relationship_names[name]}",
+                        rule="C6",
+                        kind="as_of",
+                        metric=found.metric,
+                        from_grain=found.from_grain,
+                        to_grain=found.to_grain,
+                        members=found.members,
+                        datasets=found.datasets,
+                    )
+                )
         for home, bridge in sorted(self.bridges.items()):  # allocated through a bridge (C7)
             allocated = [m for m in metrics if home_of[m] == home]
             weights = obligation(allocated[0], "C7", "weights", "C7.weights")
@@ -1016,6 +1129,21 @@ class _Analysis:
                 )
             )
             obligations += [obligation(m, "C7", "allocate", "C7.allocate") for m in allocated]
+        for window in sorted(self.windows, key=self.label):  # computed after aggregation (S9)
+            source = self.windows[window]
+            found = obligation(source, "S9", "window", "S9.window")
+            obligations.append(
+                Obligation(
+                    id=f"S9.window:{self.label(window)}",
+                    rule="S9",
+                    kind="window",
+                    metric=self.label(window),
+                    from_grain=to_grain,
+                    to_grain=to_grain,
+                    members=tuple(sorted({self.label(window), *found.members})),
+                    datasets=found.datasets,
+                )
+            )
         for derived in sorted(self.derived, key=self.label):  # computed after alignment (C5)
             sources = self.derived[derived]
             reads = sorted({self.dataset(d) for m in sources for d in crossed[home_of[m]]})
@@ -1100,6 +1228,18 @@ class _Analysis:
                 }
                 for home, bridge in sorted(self.bridges.items())
             ]
+        if self.windows:
+            facts["windows"] = [
+                {
+                    "metric": self.label(m),
+                    "over": self.label(self.windows[m]),
+                    "order": [self.label(r.member) for r in self.order[m]],
+                    "partitions": len(self.window(m)["partition_by"]),
+                }
+                for m in sorted(self.windows, key=self.label)
+            ]
+            if self.after:
+                facts["after"] = sorted({self.label(r.member) for r in self.after})
         if self.derived:
             facts["derived"] = [
                 {

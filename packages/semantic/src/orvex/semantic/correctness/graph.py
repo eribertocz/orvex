@@ -67,11 +67,13 @@ class Graph:
             for column in [*_items(dataset, "primary_key"), *dimensions]:
                 self.written.setdefault((name, sql.normalize(str(column))), str(column))
         self.relationship_names: dict[str, str] = {}
+        self.relationship_payloads: dict[str, Mapping[str, Any]] = {}
         self.links: dict[str, list[Step]] = {name: [] for name in self.names}
         for at, relationship in enumerate(_items(document, "relationships")):
             name = sql.normalize(str(relationship["name"]))
             self.relationship_names[name] = str(relationship["name"])
             payload = payloads.get(f"/relationships/{at}", {})
+            self.relationship_payloads[name] = payload
             one_to_one = payload.get("cardinality") == "one_to_one"
             temporal = "temporal" in payload
             left = sql.normalize(str(relationship["from"]))
