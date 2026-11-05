@@ -78,6 +78,8 @@ from orvex.semantic.correctness.report import CorrectnessReport, Obligation, mak
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.policies import PolicyModel, read_caller
+from orvex.semantic.policies.caller import Caller
+from orvex.semantic.policies.placement import Placement, place
 from orvex.semantic.query.binding import BoundQuery
 
 
@@ -93,6 +95,7 @@ RULES: tuple[tuple[str, int], ...] = (
     ("C5", 1),
     ("C6", 1),
     ("C7", 1),
+    ("C9", 1),
     ("S9", 1),
 )  # implemented, in the order they run
 IMPLEMENTED = frozenset(rule for rule, _ in RULES)
@@ -302,12 +305,13 @@ class _Analysis:
         bound: BoundQuery,
         compiled: CompiledModel,
         policies: PolicyModel,
-        groups: Sequence[str],
+        caller: Caller,
     ) -> None:
         self.bound = bound
         self.compiled = compiled
         self.policies = policies
-        self.groups = tuple(groups)
+        self.caller = caller
+        self.groups = tuple(caller.groups)
         self.graph = Graph(compiled)
         self.payloads = {
             e.pointer.rsplit("/custom_extensions/", 1)[0]: e.payload
@@ -351,11 +355,10 @@ class _Analysis:
         return found
 
     def check_datasets(self, datasets: set[str]) -> None:
+        """Every dataset read is usable, and its row policies are placed for this caller: each
+        a mandatory restriction of its rows, before anything reads them (P2-21)."""
         self.policies.check_usable(datasets)
-        for rule in self.policies.row_policies:
-            reached = {rule.dataset, *(r.dataset for r in self.policies.propagation[rule.name])}
-            if reached & datasets:
-                raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "row_policy"})
+        self.placement: Placement = place(self.policies, datasets, self.caller, self.compiled)
 
     # members
 
@@ -1097,6 +1100,22 @@ class _Analysis:
                 obligations.append(obligation(m, "C2", name, prefix))
         if len(crossed) > 1:  # more than one fact: each aggregated apart (C3)
             obligations += [obligation(m, "C3", "isolate", "C3.isolate") for m in metrics]
+        placement = self.placement
+        first = metrics[0]
+        for dataset in sorted(placement.restrictions):  # placed at its source (C9)
+            found = obligation(first, "C9", "policy", "C9.policy")
+            obligations.append(
+                Obligation(
+                    id=f"C9.policy:{self.dataset(dataset)}",
+                    rule="C9",
+                    kind="policy",
+                    metric=found.metric,
+                    from_grain=found.from_grain,
+                    to_grain=found.to_grain,
+                    members=found.members,
+                    datasets=(self.dataset(dataset),),
+                )
+            )
         for home, crossed_as_of in sorted(self.temporal.items()):  # guarded as-of joins (C6)
             first = next(m for m in metrics if home_of[m] == home)
             for name in sorted(crossed_as_of):
@@ -1228,6 +1247,19 @@ class _Analysis:
                 }
                 for home, bridge in sorted(self.bridges.items())
             ]
+        if placement.applied:
+            facts["policies"] = [
+                {
+                    "policy": name,
+                    "applied": applied,
+                    "datasets": sorted(
+                        self.dataset(d)
+                        for d, found in placement.restrictions.items()
+                        if any(r.rule.name == name for r in found)
+                    ),
+                }
+                for name, applied in sorted(placement.applied.items())
+            ]
         if self.windows:
             facts["windows"] = [
                 {
@@ -1263,6 +1295,7 @@ class _Analysis:
             bound=self.bound,
             compiled=self.compiled,
             caller_groups=self.groups,
+            placement=self.placement,
         )
 
 
@@ -1276,4 +1309,4 @@ def analyze(
     v1, read by `read_caller`), or a `SemanticError`. Roles never widen anything: only the
     caller's groups decide what is visible (#238)."""
     caller = read_caller(context)
-    return _Analysis(bound, compiled, policies, caller.groups).analyze()
+    return _Analysis(bound, compiled, policies, caller).analyze()

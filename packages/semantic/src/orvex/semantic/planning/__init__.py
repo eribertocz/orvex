@@ -64,6 +64,7 @@ class Source:
     table: str  # the dataset's `source`, as the model writes it
     route: str
     latest: Latest | None = None
+    policies: tuple[str, ...] = ()  # the row policies restricting its rows, for this caller
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +193,8 @@ class SemanticPlan:
     derived: tuple[Derived, ...] = ()  # computed after alignment (S7)
     outputs: tuple[str, ...] = ()  # with `derived` or `windows`: every metric column, in order
     windows: tuple[Window, ...] = ()  # computed after aggregation (S9)
+    # The caller's row policies (P2-21), which the adapter places at every read of a table.
+    placement: Any = field(default=None, compare=False, repr=False)
     # Filters on a running total's own groups: they choose the rows shown, after it (S9).
     after: tuple[Filter, ...] = ()
     # Set only by `plan`, after construction: a copy (`dataclasses.replace`) has none.
@@ -221,6 +224,7 @@ def _document(plan: dict[str, Any]) -> dict[str, object]:
                     if s.latest
                     else []
                 )
+                + ([list(s.policies)] if s.policies else [])
                 for s in plan["sources"]
             ],
             "joins": [
@@ -378,7 +382,10 @@ class _Planner:
         route = "managed"  # every dataset is in the managed lake until route B (P2-29)
         if route not in ROUTES:
             raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "route"})
-        return Source(alias, dataset, self.tables[dataset], route)
+        placement = self.report.placement
+        restrictions = placement.of(dataset) if placement is not None else ()
+        names = tuple(sorted({r.rule.name for r in restrictions}))
+        return Source(alias, dataset, self.tables[dataset], route, policies=names)
 
     def label(self, member: MemberId) -> str:
         return self.compiled.require(member).parsed.label
@@ -637,9 +644,17 @@ class _Planner:
             at = next(i for i, s in enumerate(self.sources) if s.alias == alias)
             fact = self.sources[at]
             self.sources[at] = Source(
-                fact.alias, fact.dataset, fact.table, fact.route, Latest(axis, entity, bucket, zone)
+                fact.alias,
+                fact.dataset,
+                fact.table,
+                fact.route,
+                Latest(axis, entity, bucket, zone),
+                fact.policies,
             )
         discharged = {o for a in aggregates for o in a.discharges}
+        discharged |= {
+            f"C9.policy:{self.graph.names[s.dataset]}" for s in self.sources if s.policies
+        }
         discharged |= {o for d in derived_steps for o in d.discharges}
         discharged |= {o for w in window_steps for o in w.discharges}
         left = {o.id for o in self.report.obligations} - discharged
@@ -666,6 +681,7 @@ class _Planner:
             **parts,
             fingerprint=fingerprint("semantic_plan", PLAN_FORMAT, _document(parts)),
             report=self.report,
+            placement=self.report.placement,
         )
         object.__setattr__(found, "issued", ISSUED_PLAN)
         return found

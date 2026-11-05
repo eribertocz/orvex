@@ -28,7 +28,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.compute as pc
 from orvex.semantic import zonedata
-from orvex.semantic.adapters.duckdb import PhysicalQuery, compile_plan
+from orvex.semantic.adapters.duckdb import PhysicalQuery, compile_plan, quote
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.correctness import CorrectnessReport, analyze
@@ -42,6 +42,7 @@ from orvex.semantic.receipt import (
     ExecutionUse,
     Key,
     ModelUse,
+    PolicyUse,
     ReceiptRecord,
     build_receipt,
 )
@@ -242,6 +243,16 @@ def _execute(
     started = engine.now()
     clock = engine.clock()
     _check_zones(physical, engine)
+    placement = plan_.placement
+    applied = dict(placement.applied) if placement is not None else {}
+    notices = [
+        SemanticError("POLICY_ATTRIBUTE_MISSING", {"policy": name})
+        for name, how in sorted(applied.items())
+        if how == "no_rows"
+    ]
+    for name in _unregistered(placement, engine):  # a deny-list caller absent: zero rows
+        applied[name] = "no_rows"
+        notices.append(SemanticError("POLICY_MAPPING_MISSING", {"policy": name}))
     table = _read(physical, engine)
     duration = max(0, round((engine.clock() - clock) * 1000))
     limit = plan_.limit
@@ -258,6 +269,8 @@ def _execute(
         query_fingerprint=report.query_fingerprint,
         model_fingerprint=report.model_fingerprint,
         page=page,
+        notices=notices,
+        audience="builder" if read_caller(context).builder else "other",
     )
     compiled: CompiledModel = report.compiled
     snapshot = engine.snapshot
@@ -290,10 +303,47 @@ def _execute(
         result_key=engine.result_key,
         seal_key=engine.seal_key,
         obligations=[o.for_receipt() for o in report.obligations],
+        policies=[PolicyUse(name, "row", how) for name, how in sorted(applied.items())],
         plan_fingerprint=plan_.fingerprint,
     )
     referenced = result.with_receipt(record.receipt_id, record.reproducibility["class"])
     return Answer(referenced, record, report, plan_, physical)
+
+
+def _unregistered(placement: Any, engine: Engine) -> list[str]:  # noqa: ANN401
+    """The deny-list policies whose registration does not list the caller, by a count on the
+    question's own snapshot: the statement already gives their rows as none, this only says
+    why, with the notice `POLICY_MAPPING_MISSING`."""
+    if placement is None:
+        return []
+    from orvex.contracts.store.v1 import Parameter, ReadRequest
+
+    found: list[str] = []
+    rules = {r.rule.name: r for rs in placement.restrictions.values() for r in rs}
+    for name, restriction in sorted(rules.items()):
+        registration = restriction.rule.registration
+        if registration is None or restriction.no_rows:
+            continue
+        key = str(registration.get("attribute", "user_id"))
+        attribute = placement.attributes[key]  # present and of a fitting type, or no_rows
+        table = ".".join(quote(part) for part in str(registration["table"]).split("."))
+        column = quote(str(registration["key"]))
+        value = {"name": "p0", "type": "VARCHAR", "value": str(attribute[1])}
+        request = ReadRequest(
+            kind="read",
+            sql=(
+                f'SELECT count(*) AS "#registered" FROM {table}'
+                f" WHERE CAST({column} AS VARCHAR) = $p0"
+            ),
+            parameters=[Parameter.model_validate(value)],
+            snapshot=int(str(engine.snapshot["id"])),
+            batch_size=BATCH_SIZE,
+            timeout_ms=engine.timeout_ms,
+        )
+        counted = engine.read(request).read_all()
+        if not pc.max(counted.column("#registered")).as_py():  # one scalar: a count
+            found.append(name)
+    return found
 
 
 def _written(compiled: CompiledModel, dataset: str) -> str:

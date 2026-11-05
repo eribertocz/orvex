@@ -167,7 +167,16 @@ def engine_for(lake: Lake, **change: Any) -> Engine:  # noqa: ANN401
     return Engine(**arguments)
 
 
-def viewer_context(groups: Sequence[str] = ()) -> dict[str, Any]:
+# The caller a case's README describes, as `security-context` v1 attributes. Here only: the
+# imported files stay unchanged.
+CALLERS: Mapping[str, Mapping[str, Any]] = {
+    "CASE-015": {"tenant_id": {"type": "text", "value": "A"}},  # "Caller context tenant_id = A"
+}
+
+
+def viewer_context(
+    groups: Sequence[str] = (), attributes: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     return {
         "kind": "security_context",
         "version": 1,
@@ -175,7 +184,7 @@ def viewer_context(groups: Sequence[str] = ()) -> dict[str, Any]:
         "project": "corpus",
         "role": "viewer",
         "groups": sorted(set(groups)),
-        "attributes": {},
+        "attributes": dict(attributes or {}),
         "permission_fingerprint": "sha256:" + "0" * 64,
     }
 
@@ -188,7 +197,7 @@ def rows_of(found: Answer) -> list[list[str | None]]:
 
 # Refusals this runner names that the correctness engine's table does not hold.
 PENDING = {
-    "row_policy": "policy placement, P2-21",
+    "row_policy": "a row policy reached through a bridge, a later issue",
     "expression": "an expression the DuckDB adapter does not write yet",
     "bucket": "a calendar bucket the DuckDB adapter does not write yet",
     "route": "another data route, P2-29",
@@ -286,12 +295,13 @@ def run_case(
     inputs = sorted(p for p in (folder / "input").glob("*.csv") if p.stem in read_tables)
     query = json.dumps(QUERIES[case])
     try:  # every refusal comes before any data exists: a refused case loads nothing
-        prepare(query, compiled, policies, viewer_context())
+        prepare(query, compiled, policies, viewer_context(attributes=CALLERS.get(case, {})))
     except SemanticError as error:
         return _refused(error, expected_code)
     try:
         with case_lake(inputs, catalog_of(model_path)) as lake:
-            found = answer(query, compiled, policies, viewer_context(), engine_for(lake))
+            context = viewer_context(attributes=CALLERS.get(case, {}))
+            found = answer(query, compiled, policies, context, engine_for(lake))
     except SemanticError as error:
         return _refused(error, expected_code)
     except StoreError as error:

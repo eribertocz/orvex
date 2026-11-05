@@ -25,7 +25,7 @@ from orvex.semantic.query.binding import Limits, bind_query
 from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
-from tests.conformance.test_execution import Spy, ask, corpus_case, lake_for
+from tests.conformance.test_execution import ask, corpus_case, lake_for
 from tests.support.policies import VENDORS, extension
 
 Document = dict[str, Any]
@@ -292,15 +292,44 @@ def test_a_role_never_avoids_a_row_policy() -> None:
         groups=frozenset(),
         managed_tables={},
     )
-    for role in ("billing_customer", "shipping_customer"):  # the policy's own dataset
-        spy = Spy()
-        document = ce.QUERIES["CASE-016"] | {
-            "group_by": [{"member": "customer.country", "role": role}]
-        }
-        with lake_for("CASE-016") as lake, pytest.raises(SemanticError) as caught:
-            ask(document, compiled, lake, policy=policy, read=spy)
-        assert dict(caught.value.details) == {"operation": "row_policy"}
-        assert spy.calls == 0
+    # P2-21 (#341): the order is visible only when the customer on every role path passes:
+    # its billing customer is in BO and its shipping customer in PE, so no country sees it.
+    for country in ("BO", "PE"):
+        caller = ce.viewer_context(attributes={"country": {"type": "text", "value": country}})
+        for role in ("billing_customer", "shipping_customer"):
+            document = ce.QUERIES["CASE-016"] | {
+                "group_by": [{"member": "customer.country", "role": role}]
+            }
+            with lake_for("CASE-016") as lake:
+                found = ask(document, compiled, lake, policy=policy, context=caller)
+            assert ce.rows_of(found) == []
+    # Named to the billing role only, the policy no longer restricts the shipping path.
+    billing = read_policies(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "row_policies": [
+                    {
+                        "name": "own_country",
+                        "dataset": "customer",
+                        "kind": "predicate",
+                        "predicate": "country = $country",
+                        "roles": ["billing_customer"],
+                    }
+                ],
+            }
+        ),
+        compiled,
+        groups=frozenset(),
+        managed_tables={},
+    )
+    caller = ce.viewer_context(attributes={"country": {"type": "text", "value": "BO"}})
+    document = ce.QUERIES["CASE-016"] | {
+        "group_by": [{"member": "customer.country", "role": "billing_customer"}]
+    }
+    with lake_for("CASE-016") as lake:
+        found = ask(document, compiled, lake, policy=billing, context=caller)
+    assert ce.rows_of(found) == [["BO", "100.00"]]
 
 
 # --- receipts -------------------------------------------------------------------------------
@@ -377,7 +406,7 @@ def test_a_member_is_accepted_exactly_when_one_many_to_one_path_exists(
     assert accepted == (expected == 1)
 
 
-def test_a_row_policy_on_an_intermediate_dataset_refuses_through_any_role() -> None:
+def test_a_row_policy_on_an_intermediate_dataset_restricts_through_any_role() -> None:
     compiled, catalog = model(LONG, LONG_RELATIONSHIPS, "SUM(f.amount)")
     policy = read_policies(
         yaml.safe_dump(
@@ -394,14 +423,13 @@ def test_a_row_policy_on_an_intermediate_dataset_refuses_through_any_role() -> N
     )
     with lake_of(catalog, LONG_DATA) as lake:
         for role in ("a1", "a2"):  # both reach w through z, where the policy is
-            spy = Spy()
-            with pytest.raises(SemanticError) as caught:
-                ask(
+            for w, expected in (("2", []), ("1", [["via-a", "15.00"]])):
+                caller = ce.viewer_context(attributes={"w": {"type": "integer", "value": w}})
+                found = ask(
                     query({"member": "w.name", "role": role}),
                     compiled,
                     lake,
                     policy=policy,
-                    read=spy,
+                    context=caller,
                 )
-            assert dict(caught.value.details) == {"operation": "row_policy"}
-            assert spy.calls == 0
+                assert ce.rows_of(found) == expected

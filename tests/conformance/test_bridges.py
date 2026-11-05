@@ -393,19 +393,35 @@ def test_an_allocation_without_a_declared_rounding_is_refused() -> None:
     )
 
 
-@pytest.mark.parametrize("dataset", ["order_campaign", "orders", "campaign"])
-def test_a_row_policy_on_the_bridge_the_fact_or_the_member_refuses(dataset: str) -> None:
-    policy = read_policies(
+@pytest.mark.parametrize("dataset", ["orders", "campaign"])
+def test_a_row_policy_reaching_the_bridge_through_propagation_is_refused(dataset: str) -> None:
+    """P2-21 (#341): a policy reaching a bridge by propagation has no meaning yet: the bridge
+    is never read without it."""
+    found = refused(query(), policy=row_policy(dataset, f"{TABLES[dataset][0]} IS NOT NULL"))
+    assert found == ("UNSUPPORTED_OPERATION", {"operation": "row_policy"})
+
+
+def test_a_row_policy_on_the_bridge_restricts_its_rows_before_the_weights() -> None:
+    """The weights are checked over the rows the caller may read only: here order 1 keeps only
+    campaign A, so its weights no longer add up and the whole result is refused."""
+    policy = row_policy("order_campaign", "campaign_id = 'A'")
+    with lake_of(DATA) as lake, pytest.raises(SemanticError) as caught:
+        ask(query(), COMPILED, lake, policy=policy)
+    assert dict(caught.value.details) == {"bridge": "order_campaign", "groups": "1"}
+    every = row_policy("order_campaign", "campaign_id IS NOT NULL")  # hides nothing
+    with lake_of(DATA) as lake:
+        found = ask(query(), COMPILED, lake, policy=every)
+    assert ce.rows_of(found) == [["Campaign A", "110.00"], ["Campaign B", "40.00"]]
+    assert {s.dataset for s in found.plan.sources if s.policies} == {"ORDER_CAMPAIGN"}
+
+
+def row_policy(dataset: str, predicate: str) -> PolicyModel:
+    return read_policies(
         yaml.safe_dump(
             {
                 "version": 1,
                 "row_policies": [
-                    {
-                        "name": "own",
-                        "dataset": dataset,
-                        "kind": "predicate",
-                        "predicate": f"{TABLES[dataset][0]} IS NOT NULL",
-                    }
+                    {"name": "own", "dataset": dataset, "kind": "predicate", "predicate": predicate}
                 ],
             }
         ),
@@ -413,5 +429,3 @@ def test_a_row_policy_on_the_bridge_the_fact_or_the_member_refuses(dataset: str)
         groups=frozenset(),
         managed_tables={},
     )
-    found = refused(query(), policy=policy)
-    assert found == ("UNSUPPORTED_OPERATION", {"operation": "row_policy"})
