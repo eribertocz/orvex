@@ -133,7 +133,27 @@ def history_model() -> CompiledModel:
                 "custom_extensions": [extension({"element": "relationship", "temporal": temporal})],
             }
         ],
-        "metrics": [{"name": "revenue", "expression": {"sql": "SUM(sales.amount)"}}],
+        "metrics": [
+            {"name": "revenue", "expression": {"sql": "SUM(sales.amount)"}},
+            {
+                "name": "running_by_region",
+                "expression": {"dialects": [{"dialect": VENDORS[0], "expression": "revenue"}]},
+                "custom_extensions": [
+                    extension(
+                        {
+                            "element": "metric",
+                            "window": {
+                                "function": "running_total",
+                                "of": "revenue",
+                                "partition_by": ["region"],
+                                "order_by": ["sale_date"],
+                                "densify": "none",
+                            },
+                        }
+                    )
+                ],
+            },
+        ],
         "custom_extensions": [extension({"element": "model", "default_time_zone": "UTC"})],
     }
     return compile_document(document, HISTORY_CATALOG)
@@ -254,6 +274,33 @@ def test_revenue_through_history_is_never_double_counted(
         expected[region] = expected.get(region, Decimal(0)) + Decimal(cents) / 100
     found = by_region({"sales": rows, "customer_history": history})
     assert found == [[r, f"{expected[r]:.2f}"] for r in sorted(expected)]
+
+
+def test_a_running_total_by_a_historical_member_is_answered() -> None:
+    data = CASE_013 | {"sales": [*CASE_013["sales"], ["3", "1", "2026-04-01", "1.00"]]}
+    group_by = ("sales.sale_date", "customer_history.region")
+    with lake_of(data, HISTORY_CATALOG) as lake:
+        found = ce.rows_of(ask(query("running_by_region", group_by=group_by), HISTORY, lake))
+    assert found == [
+        ["2026-01-15", "North", "100.00"],
+        ["2026-03-15", "South", "200.00"],
+        ["2026-04-01", "South", "201.00"],
+    ]
+
+
+def test_a_filter_that_shows_nothing_never_hides_an_unmatched_row() -> None:
+    overlap = {
+        "customer_history": [
+            ["1", "North", "2026-01-01", "2026-02-15"],
+            ["1", "South", "2026-02-01", "9999-12-31"],
+        ],
+        "sales": [["1", "1", "2026-02-10", "7.00"]],
+    }
+    nothing = date_filter("sales.sale_date", "2030-01-01", "2030-01-02")
+    group_by = ("sales.sale_date", "customer_history.region")
+    with lake_of(overlap, HISTORY_CATALOG) as lake, pytest.raises(SemanticError) as caught:
+        ask(query("running_by_region", group_by=group_by, filters=[nothing]), HISTORY, lake)
+    assert caught.value.code == "TEMPORAL_MATCH_NOT_UNIQUE"
 
 
 # --- running totals ---------------------------------------------------------------------------
@@ -444,6 +491,23 @@ def test_a_hidden_source_hides_the_running_total() -> None:
         "MEMBER_NOT_FOUND",
         {"member": "cumulative"},
     )
+
+
+def test_a_masked_partition_hides_the_running_total() -> None:
+    """A masked member a window partitions by makes the window hidden (inherited protection)."""
+    policy = read_policies(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "column_policies": [{"member": "daily.region", "default": "masked", "mask": "*"}],
+            }
+        ),
+        DAILY,
+        groups=frozenset(),
+        managed_tables={},
+    )
+    found = refused(query("cumulative_by_region", group_by=("daily.day", "daily.region")), policy)
+    assert found == ("MEMBER_NOT_FOUND", {"member": "cumulative_by_region"})
 
 
 @settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])

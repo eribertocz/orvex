@@ -571,7 +571,7 @@ class _Planner:
             found_window = self.windows.get(self.label(metric))
             if found_window is None:
                 continue
-            by_label = {self.label(g.member): g.name for g in groups if g.source == facts[0]}
+            by_label = {self.label(g.member): g.name for g in groups}  # one fact: every group
             window_steps.append(
                 Window(
                     names[metric],

@@ -686,10 +686,15 @@ class _Writer:
         select += [quote(n) for n in extra]
         text = f"SELECT {', '.join(select)} FROM ({inner}) AS {quote('w')}"
         if self.plan.after:
-            shown = [
+            shown = " AND ".join(
                 self.predicate(quote(f.source), f.predicate, f.member) for f in self.plan.after
+            )
+            # A failed check keeps every row, so the refusal it carries is never filtered away.
+            failed = [f"{quote(n)}" for n, _ in checks] + [
+                f"{quote(n)} > 0" for n, _ in [*self.weights, *self.as_of]
             ]
-            text = f"SELECT * FROM ({text}) AS {quote('v')} WHERE {' AND '.join(shown)}"
+            keep = " OR ".join([f"({shown})", *failed])
+            text = f"SELECT * FROM ({text}) AS {quote('v')} WHERE {keep}"
         return text, dimensions + outputs
 
     def over(self, node: sql.Node, step: Any) -> str:  # noqa: ANN401
