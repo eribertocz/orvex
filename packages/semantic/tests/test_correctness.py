@@ -146,8 +146,8 @@ def test_the_report_is_deterministic_and_order_does_not_change_its_facts() -> No
     assert one.fingerprint == run(query("revenue", "declared", group_by=[zone, day])).fingerprint
     assert one.facts == two.facts
     assert one.obligations == two.obligations
-    assert one.rules == RULES == (("C1", 1), ("C2", 1), ("C3", 1), ("C5", 1))
-    assert {"C1", "C2", "C3", "C5"} == IMPLEMENTED
+    assert one.rules == RULES == (("C1", 1), ("C2", 1), ("C3", 1), ("C5", 1), ("C7", 1))
+    assert {"C1", "C2", "C3", "C5", "C7"} == IMPLEMENTED
 
 
 SCRIPT = """
@@ -203,7 +203,7 @@ CASES: dict[str, tuple[frozenset[str], tuple[str, str] | None]] = {
     "CASE-008": (frozenset({"C1", "C2"}), None),
     "CASE-009": (frozenset({"C1", "C5"}), None),
     "CASE-010": (frozenset({"C1", "C2", "C5"}), None),
-    "CASE-011": (frozenset({"C1", "C7"}), ("UNSUPPORTED_OPERATION", "bridge_allocation")),
+    "CASE-011": (frozenset({"C1", "C7"}), None),
     "CASE-012": (frozenset({"C1", "C6"}), ("UNSUPPORTED_OPERATION", "zoned_bucketing")),
     "CASE-013": (frozenset({"C1", "C6"}), ("UNSUPPORTED_OPERATION", "as_of_join")),
     "CASE-014": (frozenset({"C1"}), None),

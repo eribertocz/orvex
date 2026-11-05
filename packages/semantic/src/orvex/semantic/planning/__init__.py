@@ -102,6 +102,22 @@ class Division:
 
 
 @dataclass(frozen=True, slots=True)
+class Allocation:
+    """A metric counted through a bridge (C7): each fact row's value times its bridge row's
+    `weight`, exactly. The weights of every normalization group read (the fact side's `scope`
+    fields, matched to the bridge's) must add up to `total` within `tolerance`, in the same
+    read, or the whole result is refused."""
+
+    bridge: str  # the bridge dataset, as written
+    source: str  # the bridge's alias
+    weight: MemberId
+    scope: tuple[tuple[MemberId, MemberId], ...]  # (fact-side field, bridge field)
+    side: str  # the alias of the fact-side fields
+    total: str
+    tolerance: str
+
+
+@dataclass(frozen=True, slots=True)
 class Aggregate:
     name: str
     metric: MemberId
@@ -109,6 +125,7 @@ class Aggregate:
     discharges: tuple[str, ...]  # obligation ids
     division: Division | None = None  # a ratio: its components, then this division
     shown: bool = True  # False: only read by a metric over metrics
+    allocation: Allocation | None = None  # through a bridge (C7), rounded by `division`
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +203,7 @@ def _document(plan: dict[str, Any]) -> dict[str, object]:
                     [a.division.scale, a.division.mode, a.division.zero] if a.division else None,
                 ]
                 + ([] if a.shown else ["hidden"])
+                + ([_allocation(a.allocation)] if a.allocation else [])
                 for a in plan["aggregates"]
             ],
             "order": [[s.name, s.descending, s.nulls_first] for s in plan["order"]],
@@ -212,6 +230,18 @@ def _document(plan: dict[str, Any]) -> dict[str, object]:
             else {}
         )
     )
+
+
+def _allocation(found: Allocation) -> list[object]:
+    return [
+        found.bridge,
+        found.source,
+        _key(found.weight),
+        [[_key(x), _key(y)] for x, y in found.scope],
+        found.side,
+        found.total,
+        found.tolerance,
+    ]
 
 
 def _plain(value: object) -> object:
@@ -260,6 +290,9 @@ class _Planner:
             if "as" in p
         }
         self.derived = {d["metric"]: d for d in report.facts.get("derived", ())}
+        self.allocated = {
+            m: a["bridge"] for a in report.facts.get("allocations", ()) for m in a["metrics"]
+        }
 
     def read_as(self, home: str, member: MemberId, slot: str, role: str | None) -> MemberId:
         """The member the fact `home` reads for `member`: itself, or its conformed field."""
@@ -277,6 +310,29 @@ class _Planner:
 
     def label(self, member: MemberId) -> str:
         return self.compiled.require(member).parsed.label
+
+    def allocation(self, label: str) -> Allocation | None:
+        """The bridge a metric is counted through, from the join that enters it."""
+        written = self.allocated.get(label)
+        if written is None:
+            return None
+        bridge = next(n for n, w in self.graph.names.items() if w == written)
+        declared = self.graph.payloads[bridge]["bridge"]
+        left = sql.normalize(str(declared["left"]))
+        aliases = {s.alias: s.dataset for s in self.sources}
+        entering = [j for j in self.joins if j.relationship == left and aliases[j.right] == bridge]
+        if len(entering) != 1:
+            raise PlanError(f"the bridge {written} is entered {len(entering)} times")
+        (join,) = entering
+        return Allocation(
+            written,
+            join.right,
+            MemberId("field", bridge, sql.normalize(str(declared["weight"]))),
+            join.pairs,
+            join.left,
+            str(declared["total"]),
+            str(declared["tolerance"]),
+        )
 
     def member(self, label: str) -> MemberId:
         return next(m for m in self.compiled.members if self.label(m) == label)
@@ -390,6 +446,10 @@ class _Planner:
 
         def division_of(metric: MemberId) -> Division | None:
             payload = payloads.get(self.compiled.require(metric).parsed.pointer, {})
+            if self.label(metric) in self.allocated:  # rounded once, after the sum (C7)
+                rounding = payload["rounding"]
+                assert isinstance(rounding, Mapping)  # `analyze` required it
+                return Division(int(rounding["scale"]), str(rounding["mode"]), "null")
             if payload.get("additivity") != "recomputable":
                 return None
             rounding = payload["rounding"]
@@ -407,7 +467,13 @@ class _Planner:
             source = self.fact(self.home_of[label])
             aggregates.append(
                 Aggregate(
-                    column[metric], metric, source, discharges, division_of(metric), metric in asked
+                    column[metric],
+                    metric,
+                    source,
+                    discharges,
+                    division_of(metric),
+                    metric in asked,
+                    self.allocation(label),
                 )
             )
         derived_steps = []

@@ -52,6 +52,9 @@ EXPLICIT_DECLARATIONS: dict[tuple[str, str], dict[str, Any]] = {
             "align": {"grain": ["month", "region"], "time": "month"},
         },
     },
+    # SUM(order_total * allocation_weight) through order_campaign: rounded once, after the sum,
+    # half away from zero to the cents its expected file shows (#334).
+    ("case-011", "allocated_revenue"): {"rounding": {"scale": 2, "mode": "half_away_from_zero"}},
     ("case-010", "attainment"): {
         "additivity": "recomputable",
         "components": {"numerator": "actual_revenue", "denominator": "target_revenue"},
