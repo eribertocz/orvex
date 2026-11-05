@@ -35,6 +35,7 @@ from orvex.semantic.correctness import CorrectnessReport, analyze
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.planning import PlanError, SemanticPlan, plan
+from orvex.semantic.planning.discharge import verify_physical
 from orvex.semantic.policies import PolicyModel, read_caller
 from orvex.semantic.query.binding import SCOPES, BoundQuery, Limits, bind_query
 from orvex.semantic.receipt import (
@@ -302,7 +303,7 @@ def _execute(
         result_canonical=result.canonical(engine.encoder),
         result_key=engine.result_key,
         seal_key=engine.seal_key,
-        obligations=[o.for_receipt() for o in report.obligations],
+        obligations=[o.for_receipt(plan_.evidence[o.id]) for o in report.obligations],
         policies=[PolicyUse(name, "row", how) for name, how in sorted(applied.items())],
         plan_fingerprint=plan_.fingerprint,
     )
@@ -375,4 +376,5 @@ def answer(
     report = analyze(bound, compiled, policies, context)
     logical = plan(report)
     physical = compile_plan(logical)
+    verify_physical(logical, physical)  # the statement holds the plan's evidence (C9)
     return _execute(physical, engine, report, logical, context)

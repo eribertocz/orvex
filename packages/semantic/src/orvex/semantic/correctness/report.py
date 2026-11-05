@@ -46,11 +46,13 @@ class Obligation:
             "datasets": list(self.datasets),
         }
 
-    def for_receipt(self) -> ReceiptObligation:
-        """The receipt's record of this obligation; its evidence comes from the plan (C9)."""
+    def for_receipt(self, evidence: str | None = None) -> ReceiptObligation:
+        """The receipt's record of this obligation, with the label of the plan step that
+        discharges it, as the discharge check verified it (C9)."""
         return ReceiptObligation(
             rule=self.rule,
             obligation=self.id,
+            evidence=evidence,
             members=self.members,
             datasets=self.datasets,
         )
@@ -69,6 +71,7 @@ class CorrectnessReport:
     compiled: Any = field(default=None, compare=False, repr=False)
     caller_groups: tuple[str, ...] = field(default=(), compare=False, repr=False)
     placement: Any = field(default=None, compare=False, repr=False)  # the caller's row policies
+    policies: Any = field(default=None, compare=False, repr=False)  # the model they come from
     # Set only by `make_report`, after construction: a copy (`dataclasses.replace`) or any
     # other instance has none, so the planner refuses it.
     issued: object = field(default=None, init=False, compare=False, repr=False)
@@ -114,6 +117,7 @@ def make_report(
     compiled: Any,  # noqa: ANN401
     caller_groups: tuple[str, ...],
     placement: Any = None,  # noqa: ANN401
+    policies: Any = None,  # noqa: ANN401
 ) -> CorrectnessReport:
     ordered = tuple(sorted(obligations, key=lambda o: o.id))
     document = _document(model_fingerprint, query_fingerprint, facts, ordered, rules)
@@ -128,6 +132,7 @@ def make_report(
         compiled=compiled,
         caller_groups=caller_groups,
         placement=placement,
+        policies=policies,
     )
     object.__setattr__(report, "issued", ISSUED)
     return report
