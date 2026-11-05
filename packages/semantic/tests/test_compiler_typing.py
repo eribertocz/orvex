@@ -265,7 +265,7 @@ def test_case_019_bucketing_carries_the_declared_zone() -> None:
     )
     for typed in typed_both(document):
         day = typed.members[f("business_day")]
-        assert day.type.logical == LogicalType("DateTimeTz", zone="America/La_Paz")
+        assert day.type.logical == LogicalType("Date")  # the local day it starts on (P2-19)
         assert day.tree is not None
         assert day.tree.type.buckets_instant
         assert day.tree.type.bucket_zone == "America/La_Paz"

@@ -44,8 +44,8 @@
     "semantic_fingerprint": "sha256:9973166e8fe46b4bfd1a744a11fb7a49916bc64d1adca850a87e5fae25a847f9"
   },
   "CASE-012": {
-    "model_fingerprint": "sha256:f97e77eec4e3e6420e7bf99f547c438bc692ba4d92a6878b7ac902ae29188c98",
-    "semantic_fingerprint": "sha256:fd4eda15d6980fc3ec994798ad9d4fef10e174f55544d87fd3995f9287241e96"
+    "model_fingerprint": "sha256:1fdce395cf64cec7b012e72f72975ecf0f43fd21dd1454c09af0ec8ca5f613e9",
+    "semantic_fingerprint": "sha256:275f4f63d6effd2dc4a9f82a0446b83e2b206f5f6eabf4dec3351ca6ab411fdf"
   },
   "CASE-013": {
     "model_fingerprint": "sha256:09cf8b947a05ea31dd4d91cc811bf168e03a76609db20cf56367e134764f7d90",
@@ -68,8 +68,8 @@
     "semantic_fingerprint": "sha256:bcd707343c5c1e4f3e8d991700d9044a2e4b338ef5ea6929ccc9dcf746e0e136"
   },
   "CASE-019": {
-    "model_fingerprint": "sha256:1333e27477683586834f4fb29968afbdca46278161bb079ac122bc922c6c057b",
-    "semantic_fingerprint": "sha256:661cc45a51959a9bab0e3f5861a8b2645c6770212217ab1e7d4e4c69d5d35953"
+    "model_fingerprint": "sha256:a4e4b15fba1f82f9cd6b294574262e2b02131770101f54d6b74d73be97061020",
+    "semantic_fingerprint": "sha256:482e1c7792b7c66f80611986b463c23e8e0958679c3868b2941ac34914648f9c"
   },
   "CASE-020": {
     "model_fingerprint": "sha256:42b7f765f45f9912378818cc878678d16c1a2f12bf267c1493885b0320268bce",

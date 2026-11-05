@@ -27,6 +27,7 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
+from orvex.semantic import zonedata
 from orvex.semantic.adapters.duckdb import PhysicalQuery, compile_plan
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
@@ -152,6 +153,39 @@ def receipt_question(report: CorrectnessReport) -> dict[str, Any]:
     return question
 
 
+def _check_zones(physical: PhysicalQuery, engine: Engine) -> None:
+    """Every zone the statement converts to, checked on this engine against the pinned
+    `tzdata` before the question's read (C6): once per zone and connection."""
+    if not physical.zones:
+        return
+    from orvex.contracts.store.v1 import Parameter, ReadRequest
+
+    snapshot = engine.snapshot.get("id") if isinstance(engine.snapshot, Mapping) else None
+    if not isinstance(snapshot, int) or isinstance(snapshot, bool):
+        raise PlanError("no snapshot was fixed for this question: nothing is read")
+
+    def count(zone: str) -> int:
+        request = ReadRequest(
+            kind="read",
+            sql=zonedata.CHECK_SQL,
+            parameters=[Parameter.model_validate(p) for p in zonedata.parameters(zone)],
+            snapshot=snapshot,
+            batch_size=BATCH_SIZE,
+            timeout_ms=engine.timeout_ms,
+        )
+        table = engine.read(request).read_all()
+        if [(f.name, f.type) for f in table.schema] != [("#different", pa.int64())]:
+            raise PlanError("the zone check returned another shape")
+        found = pc.max(table.column("#different")).as_py()  # one scalar: a count
+        return int(found) if found is not None else 0
+
+    owner = getattr(engine.read, "__self__", engine.read)
+    try:
+        zonedata.verify(physical.zones, owner, count)
+    except zonedata.ZoneDataMismatch:
+        raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "time_zone_data"}) from None
+
+
 def _read(physical: PhysicalQuery, engine: Engine) -> pa.Table:
     from orvex.contracts.store.v1 import Parameter, ReadRequest
 
@@ -198,6 +232,7 @@ def _execute(
     """One read of `physical` on `engine.snapshot`, and its result and receipt."""
     started = engine.now()
     clock = engine.clock()
+    _check_zones(physical, engine)
     table = _read(physical, engine)
     duration = max(0, round((engine.clock() - clock) * 1000))
     limit = plan_.limit

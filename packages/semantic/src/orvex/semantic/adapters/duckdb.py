@@ -24,6 +24,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from orvex.semantic.catalog.building import _logical
+from orvex.semantic.compiler.catalog import LogicalType
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.errors import SemanticError
@@ -39,7 +40,8 @@ _COMPARISON = frozenset({"=", "<>", "<", "<=", ">", ">="})
 _LOGICAL = frozenset({"AND", "OR"})
 _CALLS = frozenset({"COALESCE", "NULLIF", "ABS", "LOWER", "UPPER"})
 _AGGREGATES = frozenset({"SUM", "COUNT"})
-_BUCKETS = frozenset({"day", "month", "quarter", "year"})
+_BUCKETS = frozenset({"day", "week", "month", "quarter", "year"})  # a date's (Monday weeks)
+_CLOCK = frozenset({"hour", "minute"})  # an instant's only: it stays an instant
 _PARAMETER_TYPES = {
     "text": "VARCHAR",
     "date": "DATE",
@@ -60,6 +62,9 @@ class PhysicalQuery:
     # Extra BOOLEAN columns after `columns`: (column, metric) for a ratio declared
     # `zero_denominator: reject`; any true row refuses the whole result.
     checks: tuple[tuple[str, str], ...] = ()
+    # The zones the statement converts instants to (C6): each checked against the pinned
+    # `tzdata` on the engine before it is read (`execution`).
+    zones: tuple[str, ...] = ()
     # Then BIGINT columns: (column, bridge) for a metric allocated through a bridge (C7), each
     # row holding how many normalization groups read have invalid weights; any refuses all.
     weights: tuple[tuple[str, str], ...] = ()
@@ -106,6 +111,8 @@ class _Writer:
         self.parameters: list[dict[str, str | None]] = []
         self.dataset_alias = {s.alias: s.dataset for s in plan.sources}
         self.ratios = 0  # each ratio's own columns, numbered across every fact
+        self.zone: str | None = None  # the zone of the field being written (C6)
+        self.zones: set[str] = set()  # every zone the statement converts to
         self.weights: list[tuple[str, str]] = []  # (column, bridge): invalid weight groups
 
     def bind(self, kind: str, value: str | None) -> str:
@@ -116,10 +123,32 @@ class _Writer:
     # members
 
     def field(self, member: MemberId, alias: str) -> str:
-        tree = self.compiled.require(member).parsed.tree
+        compiled = self.compiled.require(member)
+        tree = compiled.parsed.tree
         if tree is None:
             raise _unsupported()
-        return self.node(tree, alias, member.dataset or "", "field")
+        outer, self.zone = self.zone, compiled.typed.type.bucket_zone  # its calendar's zone
+        try:
+            return self.node(tree, alias, member.dataset or "", "field")
+        finally:
+            self.zone = outer
+
+    def cut(self, unit: str, value: str, zone: str | None) -> str:
+        """`value` cut to the calendar `unit` (C6, P2-19). An instant is converted to `zone`
+        first, never the session's: a day or longer is the local date it starts on; an hour or
+        a minute stays an instant, the one its local hour starts at, so an hour that repeats
+        when clocks go back stays two rows, each with its offset."""
+        if zone is None:
+            if unit not in _BUCKETS:
+                raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "bucket"})
+            return f"CAST(date_trunc('{unit}', {value}) AS DATE)"
+        if unit not in _BUCKETS | _CLOCK:
+            raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "bucket"})
+        self.zones.add(zone)
+        local = f"timezone({self.bind('VARCHAR', zone)}, {value})"
+        if unit in _BUCKETS:
+            return f"CAST(date_trunc('{unit}', {local}) AS DATE)"
+        return f"({value} - ({local} - date_trunc('{unit}', {local})))"
 
     def metric(self, member: MemberId, alias: str) -> str:
         tree = self.compiled.require(member).parsed.tree
@@ -213,8 +242,11 @@ class _Writer:
             # midnight, so it is cast back. A truncation of an instant needs C6 (P2-19).
             part, operand = node.arguments
             unit = part.value.lower() if isinstance(part, sql.String) else None
-            if unit in _BUCKETS and self.datatype(operand, dataset, context) == "Date":
-                return f"CAST(date_trunc('{unit}', {again(operand)}) AS DATE)"
+            kind = self.datatype(operand, dataset, context)
+            if unit is not None and kind == "Date":
+                return self.cut(unit, again(operand), None)
+            if unit is not None and kind == "DateTimeTz" and self.zone is not None:
+                return self.cut(unit, again(operand), self.zone)
             raise _unsupported()
         if name in _AGGREGATES and context == "metric":
             arguments = node.arguments
@@ -287,7 +319,11 @@ class _Writer:
     def column(self, member: MemberId, name: str, role: str, bucket: str | None) -> ColumnSpec:
         typed = self.compiled.require(member).typed.type
         logical = dict(_logical(typed.logical))
-        if bucket is not None and logical["family"] != "Date":
+        if bucket is not None and logical["family"] == "DateTimeTz" and bucket in _BUCKETS:
+            logical = dict(_logical(LogicalType("Date")))  # the local date it starts on (C6)
+        elif bucket is not None and not (
+            logical["family"] == "Date" or (logical["family"] == "DateTimeTz" and bucket in _CLOCK)
+        ):
             raise _unsupported()
         nullable = typed.nullable or (role == "dimension" and bool(self.plan.joins))
         return ColumnSpec(
@@ -311,10 +347,8 @@ class _Writer:
             return quote(source.table)
         axis = self.field(latest.axis, "s")
         period = axis
-        if latest.bucket is not None:
-            if latest.bucket not in _BUCKETS:
-                raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "bucket"})
-            period = f"CAST(date_trunc('{latest.bucket}', {axis}) AS DATE)"
+        if latest.bucket is not None:  # the same period the question groups by, in its zone
+            period = self.cut(latest.bucket, axis, latest.zone)
         partition = ", ".join([self.field(e, "s") for e in latest.entity] + [period])
         return (
             f"(SELECT * FROM {quote(source.table)} AS {quote('s')} QUALIFY row_number() OVER "
@@ -346,6 +380,7 @@ class _Writer:
             tuple(columns),
             plan.fingerprint,
             checks=tuple(checks),
+            zones=tuple(sorted(self.zones)),
             weights=tuple(self.weights),
         )
 
@@ -369,9 +404,7 @@ class _Writer:
         for group in (g for g in plan.groups if g.source in own):
             expression = self.field(group.member, group.source)
             if group.bucket is not None:
-                if group.bucket not in _BUCKETS:
-                    raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "bucket"})
-                expression = f"CAST(date_trunc('{group.bucket}', {expression}) AS DATE)"
+                expression = self.cut(group.bucket, expression, group.zone)
             select.append(f"{expression} AS {quote(group.name)}")
             grouped.append(expression)
             columns.append(self.column(group.member, group.name, "dimension", group.bucket))

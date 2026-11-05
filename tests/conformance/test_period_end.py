@@ -33,11 +33,13 @@ def snapshots_model(
     key: tuple[str, ...] = ("account_id", "day"),
     axes: list[Any] | None = None,
     extra_metrics: list[dict[str, Any]] | None = None,
+    day: str = "DATE",
+    zone: str = "UTC",
 ) -> tuple[CompiledModel, dict[str, Any]]:
     columns = {
         "snapshot_id": SourceColumn("BIGINT", False),
         "account_id": SourceColumn("BIGINT", False),
-        "day": SourceColumn("DATE", False),
+        "day": SourceColumn(day, False),
         "region": SourceColumn("VARCHAR"),
         "customer": SourceColumn("VARCHAR"),
         "balance": SourceColumn("DECIMAL(18,2)"),
@@ -94,7 +96,7 @@ def snapshots_model(
             },
             *(extra_metrics or []),
         ],
-        "custom_extensions": [extension({"element": "model", "default_time_zone": "UTC"})],
+        "custom_extensions": [extension({"element": "model", "default_time_zone": zone})],
     }
     loaded = read(json.dumps(document).encode(), "semantic/snapshots.ossie.json", VENDORS)
     return compile_model(loaded, {"t": columns}, VENDORS), {"t": columns}
@@ -423,3 +425,13 @@ def test_distinct_counts_equal_a_python_reference(pairs: list[tuple[str, str | N
     total = len({c for _, c in pairs if c})
     assert overall == [[str(total)]]
     assert total <= sum(expected.values())
+
+
+def test_a_period_end_over_instants_takes_its_period_in_the_declared_zone() -> None:
+    """P2-19 (#337): both snapshots are on 31 January in La Paz; the later one is the balance."""
+    compiled, catalog = snapshots_model(day="TIMESTAMP WITH TIME ZONE", zone="America/La_Paz")
+    data = rows(
+        (1, "2026-01-31T14:00:00Z", "N", "10.00"), (1, "2026-02-01T03:00:00Z", "N", "20.00")
+    )
+    found = answer_of(compiled, catalog, data, query("balance", group_by=BY_MONTH))
+    assert ce.rows_of(found) == [["N", "2026-01-01", "20.00"]]

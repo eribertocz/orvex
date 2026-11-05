@@ -229,7 +229,7 @@ def test_every_accepted_corpus_model_types(path: Path) -> None:
             assert revenue.type.logical == LogicalType("Decimal", 38, 2)
         if path.stem == "CASE-019" and form == "json":
             day = typed.members[MemberId("field", "EVENTS", "BUSINESS_DAY")]
-            assert day.type.logical == LogicalType("DateTimeTz", zone="America/La_Paz")
+            assert day.type.logical == LogicalType("Date")  # the local day it starts on (P2-19)
             assert day.tree is not None
             assert day.tree.type.bucket_zone == "America/La_Paz"
 
