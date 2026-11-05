@@ -3,7 +3,8 @@
 DuckDB converts instants with its built-in ICU library, whose zone data version it does not
 report. The model fingerprint records the pinned `tzdata` version (`compiler/zones.py`), so a
 zone is used only once the engine is shown to agree with it: on both sides of every change of
-the zone's UTC offset from 1970 to 2100, and at both ends of that range.
+the zone's UTC offset from 1970 to 2100, at both ends of that range, and once a week between,
+so a change only the engine has is seen too.
 
 **Once per zone and connection, with a safe cache** (Owner decision, 2026-11-04):
 - the cache key is the engine's reader (its connection), the zone and the pinned `tzdata`
@@ -51,7 +52,7 @@ def pinned(zone: str) -> ZoneInfo:
 @cache
 def points(zone: str) -> tuple[tuple[int, int], ...]:
     """(UTC epoch second, local wall-clock epoch second) on both sides of every offset change
-    from 1970 to 2100, and at both ends, by the pinned `tzdata`."""
+    from 1970 to 2100, at both ends, and every week between, by the pinned `tzdata`."""
     tz = pinned(zone)
 
     def offset(at: datetime) -> timedelta:
@@ -59,7 +60,9 @@ def points(zone: str) -> tuple[tuple[int, int], ...]:
         assert found is not None  # a zone always has an offset
         return found
 
-    instants = [START, END - _SECOND]
+    # Every week too: a change the engine has and the pinned data lacks is seen within a week.
+    instants = [START + timedelta(days=7 * n) for n in range((END - START).days // 7 + 1)]
+    instants += [END - _SECOND]
     day, before = START, offset(START)
     while day < END:
         after_day = day + timedelta(days=1)

@@ -54,6 +54,7 @@ class Latest:
     axis: MemberId
     entity: tuple[MemberId, ...]
     bucket: str | None  # the period: the axis's own value when None
+    zone: str | None = None  # an instant axis: its period cut in this zone (C6)
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,7 +167,10 @@ def _document(plan: dict[str, Any]) -> dict[str, object]:
             "sources": [
                 [s.alias, s.dataset, s.table, s.route]
                 + (
-                    [[_key(s.latest.axis), [_key(e) for e in s.latest.entity], s.latest.bucket]]
+                    [
+                        [_key(s.latest.axis), [_key(e) for e in s.latest.entity], s.latest.bucket]
+                        + ([s.latest.zone] if s.latest.zone else [])
+                    ]
                     if s.latest
                     else []
                 )
@@ -450,9 +454,9 @@ class _Planner:
             axis = next(m for m in self.compiled.members if self.label(m) == ends[0])
             home = axis.dataset or ""
             alias = self.fact(home)
-            bucket = next(
-                (g.bucket for g in groups if g.member == axis and g.source == alias), None
-            )
+            period = next((g for g in groups if g.member == axis and g.source == alias), None)
+            bucket = period.bucket if period else None
+            zone = period.zone if period else None
             # `analyze` accepted the key as exactly the declared entity plus the axis.
             entity = tuple(
                 MemberId("field", home, key) for key in self.graph.keys[home] if key != axis.name
@@ -460,7 +464,7 @@ class _Planner:
             at = next(i for i, s in enumerate(self.sources) if s.alias == alias)
             fact = self.sources[at]
             self.sources[at] = Source(
-                fact.alias, fact.dataset, fact.table, fact.route, Latest(axis, entity, bucket)
+                fact.alias, fact.dataset, fact.table, fact.route, Latest(axis, entity, bucket, zone)
             )
         discharged = {o for a in aggregates for o in a.discharges}
         discharged |= {o for d in derived_steps for o in d.discharges}

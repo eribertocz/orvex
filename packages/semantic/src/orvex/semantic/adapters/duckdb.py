@@ -343,10 +343,8 @@ class _Writer:
             return quote(source.table)
         axis = self.field(latest.axis, "s")
         period = axis
-        if latest.bucket is not None:
-            if latest.bucket not in _BUCKETS:
-                raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "bucket"})
-            period = f"CAST(date_trunc('{latest.bucket}', {axis}) AS DATE)"
+        if latest.bucket is not None:  # the same period the question groups by, in its zone
+            period = self.cut(latest.bucket, axis, latest.zone)
         partition = ", ".join([self.field(e, "s") for e in latest.entity] + [period])
         return (
             f"(SELECT * FROM {quote(source.table)} AS {quote('s')} QUALIFY row_number() OVER "

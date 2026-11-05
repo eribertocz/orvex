@@ -3,9 +3,9 @@ units (C6), and the engine's zone data is checked against the pinned `tzdata`.""
 
 from __future__ import annotations
 
+import itertools
 import json
 import threading
-import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
@@ -13,6 +13,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+import duckdb
 import pyarrow as pa
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -176,14 +177,36 @@ def test_a_business_time_field_applies_its_own_zone() -> None:
     assert buckets(["2026-01-02T04:30:00Z"], "day") == ["2026-01-02"]
 
 
-def test_the_session_s_zone_never_applies(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TZ", "Asia/Tokyo")
-    time.tzset()
-    try:
-        assert buckets(["2026-01-01T02:00:00Z"], "day") == ["2025-12-31"]
-    finally:
-        monkeypatch.delenv("TZ")
-        time.tzset()
+@pytest.mark.parametrize("unit", ["day", "hour", "minute", "month"])
+def test_the_session_s_zone_never_applies(unit: str) -> None:
+    """The statement, run on connections whose session zone differs, gives the same rows."""
+    instants = ["2026-01-01T02:00:00Z", "2026-01-01T03:59:30Z", "2026-03-31T23:30:00Z"]
+    with lake_of(instants) as lake:
+        physical = ask(by(unit), COMPILED, lake).physical
+    answers: list[pa.Table] = []
+    for session in ("UTC", "Asia/Tokyo", "Pacific/Kiritimati", "America/Adak"):
+        connection = duckdb.connect()
+        connection.execute(f"SET TimeZone = '{session}'")
+        connection.execute(
+            "CREATE TABLE events (event_id BIGINT, event_time TIMESTAMPTZ, amount DECIMAL(18,2))"
+        )
+        for n, at in enumerate(instants, 1):
+            connection.execute("INSERT INTO events VALUES (?, ?::TIMESTAMPTZ, 1.00)", [n, at])
+        values = {p["name"]: p["value"] for p in physical.parameters}
+        found: pa.Table = connection.sql(physical.sql, params=values).to_arrow_table()
+        answers.append(found)
+        connection.close()
+    # The same instants and values; Arrow labels an instant with the session's zone, so the
+    # values are compared as UTC instants.
+    plain = [
+        [
+            [v.astimezone(UTC) if isinstance(v, datetime) else v for v in c]
+            for c in a.to_pydict().values()
+        ]
+        for a in answers
+    ]
+    assert all(p == plain[0] for p in plain)
+    assert answers[0].num_rows >= 2
 
 
 # --- edges ------------------------------------------------------------------------------------
@@ -332,9 +355,20 @@ def test_the_engine_agrees_with_the_pinned_tzdata_at_every_change() -> None:
     assert len(zonedata.points("America/New_York")) > 400  # both sides of every change
 
 
+def test_the_check_also_samples_every_week() -> None:
+    """A change only the engine has is seen: Asuncion keeps -03 all year since tzdata 2024b,
+    so an engine still applying -04 in winter disagrees at the weekly points."""
+    winter = [
+        t for t, _ in zonedata.points("America/Asuncion") if 1908000000 <= t <= 1912000000
+    ]  # July 2030
+    assert winter
+    gaps = [b - a for a, b in itertools.pairwise(winter)]
+    assert all(gap <= 7 * 86400 for gap in gaps)
+
+
 # --- property ---------------------------------------------------------------------------------
 
-ZONES = ["America/La_Paz", "America/New_York", "Asia/Kolkata", "Australia/Lord_Howe"]
+ZONES = ["America/La_Paz", "America/New_York", "Asia/Kolkata", "Asia/Kathmandu"]
 
 
 def reference(at: datetime, unit: str, zone: str) -> str:
