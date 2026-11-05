@@ -345,8 +345,31 @@ def test_a_fact_missing_a_requested_conformed_dimension_is_refused() -> None:
     assert found == ("UNSUPPORTED_OPERATION", {"operation": "multi_fact"})
 
 
-@pytest.mark.parametrize("dataset", ["refunds", "targets"])
-def test_a_row_policy_on_any_fact_refuses_before_any_read(dataset: str) -> None:
+@pytest.mark.parametrize(
+    ("dataset", "expected"),
+    [
+        # P2-21 (#341): each fact restricted at its own read, before alignment.
+        (
+            "refunds",
+            [
+                ["2026-01-01", "North", "300.00", None, "400.00"],
+                ["2026-01-01", "South", "100.00", None, "80.00"],
+                ["2026-02-01", "East", "50.00", None, None],
+            ],
+        ),
+        (
+            "targets",
+            [
+                ["2026-01-01", "North", "300.00", "20.00", "400.00"],
+                ["2026-01-01", "South", "100.00", "5.00", None],
+                ["2026-02-01", "East", "50.00", None, None],
+            ],
+        ),
+    ],
+)
+def test_a_row_policy_on_any_fact_restricts_it_before_alignment(
+    dataset: str, expected: Rows
+) -> None:
     policy = read_policies(
         yaml.safe_dump(
             {
@@ -356,7 +379,7 @@ def test_a_row_policy_on_any_fact_refuses_before_any_read(dataset: str) -> None:
                         "name": "own",
                         "dataset": dataset,
                         "kind": "predicate",
-                        "predicate": "amount > 0",
+                        "predicate": "amount > 90",
                     }
                 ],
             }
@@ -365,8 +388,11 @@ def test_a_row_policy_on_any_fact_refuses_before_any_read(dataset: str) -> None:
         groups=frozenset(),
         managed_tables={},
     )
-    found = refused(query("gross_revenue", "refunds", "target_revenue"), policy=policy)
-    assert found == ("UNSUPPORTED_OPERATION", {"operation": "row_policy"})
+    with lake_of(DATA) as lake:
+        found = ask(
+            query("gross_revenue", "refunds", "target_revenue"), COMPILED, lake, policy=policy
+        )
+    assert ce.rows_of(found) == expected
 
 
 @pytest.mark.parametrize("hidden", ["sales.amount", "refunds.amount"])

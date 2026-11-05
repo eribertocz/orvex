@@ -263,16 +263,32 @@ def test_a_filter_one_fact_cannot_reach_refuses_before_any_read() -> None:
 # --- policies and what stays refused ----------------------------------------------------------
 
 
-@pytest.mark.parametrize("dataset", ["order_items", "orders", "customers"])
-def test_a_row_policy_any_fact_reaches_refuses_before_any_read(dataset: str) -> None:
-    column = TABLES[dataset][0]
+@pytest.mark.parametrize(
+    ("dataset", "predicate", "expected"),
+    [
+        # P2-21 (#341): each fact restricted at its own read, and through propagation.
+        (
+            "order_items",
+            "product = 'pen'",
+            [["North", "100.00", "1"], ["South", "80.00", "1"], [None, "7.00", "1"]],
+        ),
+        ("orders", "order_total > 50", [["North", "100.00", "3"], ["South", "80.00", "2"]]),
+        ("customers", "region = 'North'", [["North", "100.00", "3"]]),
+    ],
+)
+def test_a_row_policy_restricts_every_fact_it_reaches(
+    dataset: str, predicate: str, expected: Rows
+) -> None:
     policy = policies(
         row_policies=[
-            {"name": "own", "dataset": dataset, "kind": "predicate", "predicate": f"{column} > 0"}
+            {"name": "own", "dataset": dataset, "kind": "predicate", "predicate": predicate}
         ]
     )
-    found = refused(query("order_revenue", "item_count"), policy)
-    assert found == ("UNSUPPORTED_OPERATION", {"operation": "row_policy"})
+    with lake_of(DATA) as lake:
+        found = ask(query("order_revenue", "item_count"), COMPILED, lake, policy=policy)
+    assert ce.rows_of(found) == expected
+    reached = {s.dataset for s in found.plan.sources if s.policies}
+    assert dataset.upper() in reached or dataset in {d.lower() for d in reached}
 
 
 def test_grouping_by_a_one_to_many_member_is_still_fanout() -> None:

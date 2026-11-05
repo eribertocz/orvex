@@ -149,9 +149,18 @@ def test_the_report_is_deterministic_and_order_does_not_change_its_facts() -> No
     assert (
         one.rules
         == RULES
-        == (("C1", 1), ("C2", 1), ("C3", 1), ("C5", 1), ("C6", 1), ("C7", 1), ("S9", 1))
+        == (
+            ("C1", 1),
+            ("C2", 1),
+            ("C3", 1),
+            ("C5", 1),
+            ("C6", 1),
+            ("C7", 1),
+            ("C9", 1),
+            ("S9", 1),
+        )
     )
-    assert {"C1", "C2", "C3", "C5", "C6", "C7", "S9"} == IMPLEMENTED
+    assert {"C1", "C2", "C3", "C5", "C6", "C7", "C9", "S9"} == IMPLEMENTED
 
 
 SCRIPT = """
@@ -211,7 +220,7 @@ CASES: dict[str, tuple[frozenset[str], tuple[str, str] | None]] = {
     "CASE-012": (frozenset({"C1", "C6"}), None),
     "CASE-013": (frozenset({"C1", "C6"}), None),
     "CASE-014": (frozenset({"C1"}), None),
-    "CASE-015": (frozenset({"C1", "policy placement"}), ("UNSUPPORTED_OPERATION", "row_policy")),
+    "CASE-015": (frozenset({"C1", "C9"}), None),
     "CASE-016": (frozenset({"C1", "C4"}), ("AMBIGUOUS_RELATIONSHIP_PATH", "")),
     "CASE-017": (frozenset({"C1"}), ("INCOMPATIBLE_UNITS", "")),  # refused when compiled
     "CASE-018": (frozenset({"C1"}), None),
@@ -592,17 +601,23 @@ OWN_ZONE = {
 }
 
 
-def test_a_dataset_a_row_policy_reaches_is_refused_until_its_placement() -> None:
+def test_a_row_policy_is_placed_on_every_dataset_it_reaches() -> None:
+    """P2-21 (#341): the policy's own dataset, and each dataset it reaches through any role,
+    carry it as a restriction with its obligation. This caller lacks `$user_id`: no rows."""
     policy = policies(row_policies=[OWN_ZONE])
-    for document in (
-        query("phones"),  # the policy's own dataset
-        query("revenue"),  # reached through `billing` and `shipping`
-        query("revenue", group_by=[{"member": "zones.label", "role": "billing"}]),
+    for document, datasets in (
+        (query("phones"), ["customers"]),
+        (query("revenue"), ["payments"]),
+        (query("revenue", group_by=[{"member": "zones.label", "role": "billing"}]), ["payments"]),
     ):
-        assert refusal(document, policy=policy) == (
-            "UNSUPPORTED_OPERATION",
-            {"operation": "row_policy"},
-        )
+        report = run(document, policy=policy)
+        (placed,) = report.facts["policies"]
+        assert placed["policy"] == "own_zone_only"
+        assert placed["applied"] == "no_rows"  # the context has no `user_id`
+        assert set(datasets) <= set(placed["datasets"])
+        assert {f"C9.policy:{d}" for d in placed["datasets"]} <= {
+            o.id for o in report.obligations
+        }
 
 
 def test_an_unusable_dataset_is_refused() -> None:

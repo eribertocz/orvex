@@ -17,6 +17,7 @@ parameters. It is the only stage that knows a dialect (`semantic-engine.md` §4)
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -30,6 +31,7 @@ from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.planning import ISSUED_PLAN, PlanError, SemanticPlan
+from orvex.semantic.policies import predicate as policy_grammar
 from orvex.semantic.result import ColumnSpec
 from orvex.semantic.result.descriptors import INTEGERS, OTHERS, pair_allowed
 
@@ -113,6 +115,18 @@ class _Writer:
         self.compiled: CompiledModel = plan.compiled
         self.parameters: list[dict[str, str | None]] = []
         self.dataset_alias = {s.alias: s.dataset for s in plan.sources}
+        document = self.compiled.ossie.document
+        datasets = document.get("datasets", ())
+        self.tables = {
+            sql.normalize(str(d["name"])): str(d.get("source", d["name"]))
+            for d in (datasets if isinstance(datasets, tuple) else ())
+        }
+        relationships = document.get("relationships", ())
+        self.relationships = {
+            sql.normalize(str(r["name"])): r
+            for r in (relationships if isinstance(relationships, tuple) else ())
+        }
+        self.placement = plan.placement  # the caller's row policies (P2-21)
         self.ratios = 0  # each ratio's own columns, numbered across every fact
         self.zone: str | None = None  # the zone of the field being written (C6)
         self.zones: set[str] = set()  # every zone the statement converts to
@@ -342,20 +356,156 @@ class _Writer:
             bucket={"unit": bucket} if bucket else None,
         )
 
+    # Row policies (P2-21): the one place a table is named.
+
+    def relation(self, dataset: str) -> str:
+        """The rows of `dataset` the caller may read: its table, restricted by every row policy
+        that applies, before anything else reads it (a join, a ranking, a check, an aggregate).
+        Every read of a table in the statement goes through here."""
+        table = quote(self.tables[dataset])
+        restrictions = self.placement.of(dataset) if self.placement else ()
+        if not restrictions:
+            return table
+        conditions = [self.restriction(r, dataset, "#p") for r in restrictions]
+        return f"(SELECT * FROM {table} AS {quote('#p')} WHERE {' AND '.join(conditions)})"
+
+    def restriction(self, restriction: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
+        """One policy on one dataset's row `alias`: its predicate on its own dataset, or, along
+        its propagation path, on the related row, which must exist unless `orphans: visible`."""
+        rule = restriction.rule
+        if restriction.no_rows or rule.predicate is None:  # an attribute is missing: no rows
+            return "FALSE"
+        if not restriction.path:
+            return self.policy_condition(rule, dataset, alias)
+        current, at, tables, links = dataset, alias, [], []
+        for depth, name in enumerate(reversed(restriction.path), 1):
+            related = self.relationships[name]
+            here = f"#c{depth}"
+            if sql.normalize(str(related["from"])) == current:
+                own, other, target = related["from_columns"], related["to_columns"], related["to"]
+            else:
+                own, other, target = related["to_columns"], related["from_columns"], related["from"]
+            target = sql.normalize(str(target))
+            tables.append(f"{quote(self.tables[target])} AS {quote(here)}")
+            links += [
+                f"{self.field(MemberId('field', current, sql.normalize(str(a))), at)}"
+                f" = {self.field(MemberId('field', target, sql.normalize(str(b))), here)}"
+                for a, b in zip(own, other, strict=True)
+            ]
+            current, at = target, here
+        chain = f"SELECT 1 FROM {', '.join(tables)} WHERE {' AND '.join(links)}"
+        passes = f"EXISTS ({chain} AND ({self.policy_condition(rule, current, at)}))"
+        if rule.orphans == "visible":
+            return f"(NOT EXISTS ({chain}) OR {passes})"
+        return passes
+
+    def policy_condition(self, rule: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
+        found = self.predicate_sql(rule.predicate, dataset, alias)
+        registration = rule.registration
+        if registration is not None:  # a deny-list holds only for registered callers
+            key = str(registration.get("attribute", "user_id"))
+            attribute = self.placement.attributes.get(key) if self.placement else None
+            value = (
+                self.bind("VARCHAR", str(attribute[1]))
+                if attribute is not None and attribute[0] in ("text", "integer")
+                else "NULL"
+            )
+            column = f"{quote('#g')}.{quote(str(registration['key']))}"
+            registered = (
+                f"EXISTS (SELECT 1 FROM {self.mapping(str(registration['table']))} AS "
+                f"{quote('#g')} WHERE CAST({column} AS VARCHAR) = {value})"
+            )
+            found = f"({registered} AND {found})"
+        return found
+
+    def mapping(self, table: str) -> str:
+        return ".".join(quote(part) for part in table.split("."))
+
+    def attribute_value(self, name: str, kinds: tuple[str, ...]) -> str:
+        """An attribute of the validated context, always a bound parameter."""
+        found = self.placement.attributes.get(name) if self.placement else None
+        if found is None or found[0] not in kinds:  # absent or of another type: never matches
+            return "NULL"
+        kind, value = found
+        if kind == "list":
+            assert isinstance(value, tuple)
+            text = self.bind("VARCHAR", json.dumps(list(value)))
+            return f"(SELECT unnest(CAST(CAST({text} AS JSON) AS VARCHAR[])))"
+        if kind == "boolean":
+            return f"CAST({self.bind('VARCHAR', 'true' if value else 'false')} AS BOOLEAN)"
+        if kind == "integer":
+            return f"CAST({self.bind('VARCHAR', str(value))} AS HUGEINT)"
+        return self.bind("VARCHAR", str(value))
+
+    def operand_sql(self, operand: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
+        if isinstance(operand, policy_grammar.Field):
+            return self.field(MemberId("field", dataset, operand.name), alias)
+        if isinstance(operand, policy_grammar.Attribute):
+            return self.attribute_value(operand.name, ("text", "integer", "boolean"))
+        if operand.kind == "boolean":
+            return "TRUE" if operand.text.upper() == "TRUE" else "FALSE"
+        if operand.kind == "integer":
+            return f"CAST({self.bind('VARCHAR', operand.text)} AS HUGEINT)"
+        return self.bind("VARCHAR", operand.text)  # already the literal's value
+
+    def predicate_sql(self, node: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
+        """A predicate of the closed grammar (`security-policies` v1), every value bound."""
+        g = policy_grammar
+        if isinstance(node, g.Compare):
+            op = "<>" if node.op == "!=" else node.op
+            left = self.operand_sql(node.left, dataset, alias)
+            right = self.operand_sql(node.right, dataset, alias)
+            return f"({left} {op} {right})"
+        if isinstance(node, g.IsNull):
+            field = self.operand_sql(node.field, dataset, alias)
+            return f"({field} IS {'NOT ' if node.negated else ''}NULL)"
+        if isinstance(node, g.InAttribute):
+            field = self.operand_sql(node.field, dataset, alias)
+            values = self.attribute_value(node.attribute.name, ("list",))
+            if values == "NULL":
+                return "FALSE"
+            return f"({field} {'NOT ' if node.negated else ''}IN {values})"
+        if isinstance(node, g.InSelect | g.Exists):
+            conditions = (
+                " AND ".join(
+                    f"{quote('#m')}.{quote(c.column)} = {self.operand_sql(c.value, dataset, alias)}"
+                    for c in node.conditions
+                )
+                or "TRUE"
+            )
+            table = f"{self.mapping(node.table)} AS {quote('#m')}"
+            if isinstance(node, g.InSelect):
+                field = self.operand_sql(node.field, dataset, alias)
+                return (
+                    f"({field} {'NOT ' if node.negated else ''}IN (SELECT "
+                    f"{quote('#m')}.{quote(node.column)} FROM {table} WHERE {conditions}))"
+                )
+            negated = "NOT " if node.negated else ""
+            return f"({negated}EXISTS (SELECT 1 FROM {table} WHERE {conditions}))"
+        if isinstance(node, g.Not):
+            return f"(NOT {self.predicate_sql(node.operand, dataset, alias)})"
+        if isinstance(node, g.Logical):
+            joined = f" {node.op} ".join(
+                self.predicate_sql(o, dataset, alias) for o in node.operands
+            )
+            return f"({joined})"
+        raise _unsupported()
+
     def fact(self, source: Any) -> str:  # noqa: ANN401
         """The fact's table, or, for a period-end metric, only each entity's latest row per
         period (C2): a ranking over the entity and the period, by the axis, newest first. The
         entity plus the axis is the key, so no two rows tie."""
         latest = source.latest
         if latest is None:
-            return quote(source.table)
+            return self.relation(source.dataset)
         axis = self.field(latest.axis, "s")
         period = axis
         if latest.bucket is not None:  # the same period the question groups by, in its zone
             period = self.cut(latest.bucket, axis, latest.zone)
         partition = ", ".join([self.field(e, "s") for e in latest.entity] + [period])
         return (
-            f"(SELECT * FROM {quote(source.table)} AS {quote('s')} QUALIFY row_number() OVER "
+            f"(SELECT * FROM {self.relation(source.dataset)} AS {quote('s')}"
+            " QUALIFY row_number() OVER "
             f"(PARTITION BY {partition} ORDER BY {axis} DESC) = 1)"
         )
 
@@ -455,7 +605,8 @@ class _Writer:
                 start = self.field(join.as_of.valid_from, join.right)
                 end = self.field(join.as_of.valid_to, join.right)
                 on += f" AND {start} <= {event} AND {event} < {end}"
-            rows += f" LEFT JOIN {quote(sources[join.right].table)} AS {quote(join.right)} ON {on}"
+            right = self.relation(sources[join.right].dataset)
+            rows += f" LEFT JOIN {right} AS {quote(join.right)} ON {on}"
         conditions = [
             self.predicate(self.field(f.member, f.source), f.predicate, f.member)
             for f in plan.filters
@@ -499,7 +650,7 @@ class _Writer:
         values = [self.field(a, join.left) for a, _ in join.pairs]
         event = self.field(as_of.event, join.left)
         read = ", ".join(f"{v} AS {quote(f'#r{i}')}" for i, v in enumerate([*keys, *values, event]))
-        table = next(s.table for s in self.plan.sources if s.alias == join.right)
+        table = self.relation(next(s.dataset for s in self.plan.sources if s.alias == join.right))
         n = len(keys)
         on = " AND ".join(
             f"{self.field(b, '#h')} = {quote('#u')}.{quote(f'#r{n + i}')}"
@@ -509,7 +660,7 @@ class _Writer:
         start = self.field(as_of.valid_from, "#h")
         end = self.field(as_of.valid_to, "#h")
         matches = (
-            f"(SELECT count(*) FROM {quote(table)} AS {quote('#h')} WHERE {on}"
+            f"(SELECT count(*) FROM {table} AS {quote('#h')} WHERE {on}"
             f" AND {start} <= {moment} AND {moment} < {end})"
         )
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
@@ -548,7 +699,9 @@ class _Writer:
         keys = [self.field(a, allocation.side) for a, _ in allocation.scope]
         own = [self.field(b, "#b") for _, b in allocation.scope]
         weight = self.field(allocation.weight, "#b")
-        table = next(s.table for s in self.plan.sources if s.alias == allocation.source)
+        table = self.relation(
+            next(s.dataset for s in self.plan.sources if s.alias == allocation.source)
+        )
         total, tolerance = (
             f"CAST({self.bind(number_parameter(v), v)} AS {number_parameter(v)})"
             for v in (allocation.total, allocation.tolerance)
@@ -556,7 +709,7 @@ class _Writer:
         sums = (
             f"(SELECT {', '.join(f'{c} AS {quote(f"#k{i}")}' for i, c in enumerate(own))}, "
             f"SUM({weight}) AS {quote('#s')}, count(*) - count({weight}) AS {quote('#n')} "
-            f"FROM {quote(table)} AS {quote('#b')} GROUP BY {', '.join(own)})"
+            f"FROM {table} AS {quote('#b')} GROUP BY {', '.join(own)})"
         )
         on = " AND ".join(f"{k} = {quote('#v')}.{quote(f'#k{i}')}" for i, k in enumerate(keys))
         s, n = f"{quote('#v')}.{quote('#s')}", f"{quote('#v')}.{quote('#n')}"

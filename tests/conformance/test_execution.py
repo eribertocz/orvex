@@ -57,13 +57,14 @@ def ask(
     compiled: CompiledModel,
     lake: Lake,
     policy: PolicyModel | None = None,
+    context: dict[str, Any] | None = None,
     **engine: Any,  # noqa: ANN401
 ) -> Answer:
     return answer(
         json.dumps(query),
         compiled,
         policy or no_policies(compiled),
-        ce.viewer_context(),
+        context or ce.viewer_context(),
         ce.engine_for(lake, **engine),
     )
 
@@ -433,19 +434,34 @@ class Spy:
         raise AssertionError("a refused question must not read")
 
 
-def test_a_row_policy_refuses_before_any_read() -> None:
+def test_a_row_policy_restricts_the_rows_with_the_caller_s_attribute() -> None:
+    """P2-21 (#341): CASE-015's tenant sees only its rows; the policy is in the receipt."""
     compiled, _, model = corpus_case("CASE-015")
     policy = read_policies(
         yaml.safe_dump(ce.policies_of(model)), compiled, groups=frozenset(), managed_tables={}
     )
-    spy = Spy()
-    with lake_for("CASE-015") as lake, pytest.raises(SemanticError) as caught:
-        ask(ce.QUERIES["CASE-015"], compiled, lake, policy=policy, read=spy)
-    assert (caught.value.code, dict(caught.value.details)) == (
-        "UNSUPPORTED_OPERATION",
-        {"operation": "row_policy"},
-    )
-    assert spy.calls == 0
+    tenant = ce.viewer_context(attributes={"tenant_id": {"type": "text", "value": "A"}})
+    with lake_for("CASE-015") as lake:
+        found = ask(ce.QUERIES["CASE-015"], compiled, lake, policy=policy, context=tenant)
+        other = ce.viewer_context(attributes={"tenant_id": {"type": "text", "value": "B"}})
+        theirs = ask(ce.QUERIES["CASE-015"], compiled, lake, policy=policy, context=other)
+        reads: list[object] = []
+
+        def counted(request: Any) -> Any:  # noqa: ANN401
+            reads.append(request)
+            return lake.read(request)
+
+        missing = ask(ce.QUERIES["CASE-015"], compiled, lake, policy=policy, read=counted)
+    assert ce.rows_of(found) == [["North", "100.00"], ["South", "50.00"]]
+    assert ce.rows_of(theirs) != ce.rows_of(found)
+    assert "$p" in found.physical.sql  # always bound
+    assert "'A'" not in found.physical.sql
+    used = found.receipt.document()["security"]["policies"]
+    assert [(p["kind"], p["applied"]) for p in used] == [("row", "restricted")]
+    # No `tenant_id` in the context: zero rows and the generic notice, never all rows.
+    assert ce.rows_of(missing) == []
+    assert [n["code"] for n in missing.result.envelope()["notices"]] == ["POLICY_ATTRIBUTE_MISSING"]
+    assert len(reads) == 1
 
 
 @pytest.mark.parametrize(
