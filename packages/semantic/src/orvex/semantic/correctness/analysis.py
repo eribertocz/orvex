@@ -698,6 +698,7 @@ class _Analysis:
             for d in self.graph.names
             if d != home and any(self.safe(p) for p in self.graph.paths(home, d))
         }
+        # A field the caller may not see is not there at all, so it is never revealed (P2-08).
         candidates = [
             m
             for m in self.compiled.members
@@ -705,6 +706,7 @@ class _Analysis:
             and m.dataset in reached
             and m != row.member
             and self.conformed_name(m) == name
+            and self.policies.protection(m, self.groups) != "hidden"
         ]
         wanted = self.compiled.require(row.member).typed.type.logical
         if (
@@ -713,6 +715,10 @@ class _Analysis:
             or self.compiled.require(candidates[0]).typed.type.logical != wanted
         ):
             _refuse_pending({"multi_fact"})
+        if self.policies.protection(candidates[0], self.groups) == "masked":
+            raise SemanticError(
+                "MEMBER_MASKED", {"member": self.label(candidates[0]), "operation": row.slot}
+            )
         return _Row(candidates[0], None, row.bucket, row.slot)
 
     # S7, metrics over metrics
@@ -742,7 +748,17 @@ class _Analysis:
         sources = set(self.derived[metric])
         if kind == "recomputable":
             parts = ("components.numerator", "components.denominator")
-            if any(self.source_of(trees[part].node) not in sources for part in parts):
+            ends = [self.source_of(trees[part].node) for part in parts]
+            expression = trees["over_metrics"].node
+            if isinstance(expression, sql.Cast) and not expression.safe:
+                expression = expression.operand
+            # Its expression must be the division of its components: nothing else is computed.
+            if (
+                any(end not in sources for end in ends)
+                or not isinstance(expression, sql.Binary)
+                or expression.op != "/"
+                or [self.source_of(expression.left), self.source_of(expression.right)] != ends
+            ):
                 _refuse_pending({"over_metrics"})
         elif kind != "additive" or not self.plain_sum(trees["over_metrics"].node, sources):
             _refuse_pending({"over_metrics"})

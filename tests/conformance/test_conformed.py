@@ -43,7 +43,9 @@ def field(name: str, conformed: str | None = None) -> Document:
 
 
 def model(
-    refunds_fields: list[Document] | None = None, refunds_month: str = "DATE"
+    refunds_fields: list[Document] | None = None,
+    refunds_month: str = "DATE",
+    ratio_text: str = "CAST(gross_revenue / target_revenue AS DECIMAL(18, 2))",
 ) -> tuple[CompiledModel, dict[str, dict[str, SourceColumn]]]:
     """sales and refunds at any grain, targets at month x region; no relationship at all."""
     refunds = refunds_fields or [
@@ -77,7 +79,6 @@ def model(
         }
         for t, fields in tables.items()
     }
-    ratio_text = "CAST(gross_revenue / target_revenue AS DECIMAL(18, 2))"
     ratio: Document = {
         "element": "metric",
         "additivity": "recomputable",
@@ -380,6 +381,56 @@ def test_a_metric_over_a_hidden_source_is_not_found(hidden: str) -> None:
     )
     found = refused(query("net_revenue"), policy=policy)
     assert found == ("MEMBER_NOT_FOUND", {"member": "net_revenue"})
+
+
+def column_policy(member: str, level: str) -> PolicyModel:
+    entry: Document = {"member": member, "default": level} | (
+        {"mask": "*"} if level == "masked" else {}
+    )
+    return read_policies(
+        yaml.safe_dump({"version": 1, "column_policies": [entry]}),
+        COMPILED,
+        groups=frozenset(),
+        managed_tables={},
+    )
+
+
+SOUTH = {
+    "scope": "board",
+    "member": "sales.region",
+    "predicate": {"op": "in", "values": [{"type": "text", "value": "South"}]},
+}
+
+
+@pytest.mark.parametrize("slot", ["group_by", "filter"])
+@pytest.mark.parametrize("hidden", ["refunds.region", "targets.region"])
+def test_a_hidden_conformed_field_is_never_read_in_its_place(slot: str, hidden: str) -> None:
+    """The fact's conformed field is hidden: it is not there, so the fact cannot align."""
+    metric = hidden.split(".")[0].replace("targets", "target_revenue")
+    document = (
+        query("gross_revenue", metric)
+        if slot == "group_by"
+        else query("gross_revenue", metric, group_by=("sales.month",), filters=[SOUTH])
+    )
+    found = refused(document, policy=column_policy(hidden, "hidden"))
+    assert found == ("UNSUPPORTED_OPERATION", {"operation": "multi_fact"})
+
+
+@pytest.mark.parametrize("slot", ["group_by", "filter"])
+def test_a_masked_conformed_field_is_refused_as_masked(slot: str) -> None:
+    document = (
+        query("gross_revenue", "refunds")
+        if slot == "group_by"
+        else query("gross_revenue", "refunds", group_by=("sales.month",), filters=[SOUTH])
+    )
+    found = refused(document, policy=column_policy("refunds.region", "masked"))
+    assert found == ("MEMBER_MASKED", {"member": "refunds.region", "operation": slot})
+
+
+def test_a_ratio_whose_expression_is_not_its_components_division_is_refused() -> None:
+    compiled, _ = model(ratio_text="gross_revenue - target_revenue")
+    found = refused(query("attainment"), compiled)
+    assert found == ("UNSUPPORTED_OPERATION", {"operation": "over_metrics"})
 
 
 # --- grains -----------------------------------------------------------------------------------
