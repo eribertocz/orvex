@@ -204,12 +204,20 @@ def _read(physical: PhysicalQuery, engine: Engine) -> pa.Table:
     table = reader.read_all()  # every batch, or the read's error: never a partial result
     expected = [(c.name, arrow_type(c.encoding)) for c in physical.columns]
     expected += [(name, pa.bool_()) for name, _ in physical.checks]
+    expected += [(name, pa.int64()) for name, _ in physical.weights]
     found = [(f.name, f.type) for f in table.schema]
     if found != expected:
         raise PlanError(f"the engine returned {found}, the plan describes {expected}")
     for name, metric in physical.checks:  # a declared `reject` refuses the whole result
         if table.filter(pc.fill_null(table.column(name), False)).num_rows:
             raise SemanticError("DIVISION_POLICY_VIOLATION", {"metric": metric})
+        table = table.drop_columns([name])
+    for name, bridge in physical.weights:  # invalid bridge weights refuse the whole result
+        invalid = pc.max(table.column(name)).as_py()  # one scalar, the same on every row
+        if invalid:
+            raise SemanticError(
+                "BRIDGE_WEIGHTS_INVALID", {"bridge": bridge, "groups": str(invalid)}
+            )
         table = table.drop_columns([name])
     return table
 

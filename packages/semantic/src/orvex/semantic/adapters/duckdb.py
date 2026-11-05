@@ -65,6 +65,9 @@ class PhysicalQuery:
     # The zones the statement converts instants to (C6): each checked against the pinned
     # `tzdata` on the engine before it is read (`execution`).
     zones: tuple[str, ...] = ()
+    # Then BIGINT columns: (column, bridge) for a metric allocated through a bridge (C7), each
+    # row holding how many normalization groups read have invalid weights; any refuses all.
+    weights: tuple[tuple[str, str], ...] = ()
 
 
 def quote(name: str) -> str:
@@ -110,6 +113,7 @@ class _Writer:
         self.ratios = 0  # each ratio's own columns, numbered across every fact
         self.zone: str | None = None  # the zone of the field being written (C6)
         self.zones: set[str] = set()  # every zone the statement converts to
+        self.weights: list[tuple[str, str]] = []  # (column, bridge): invalid weight groups
 
     def bind(self, kind: str, value: str | None) -> str:
         name = f"p{len(self.parameters)}"
@@ -358,6 +362,8 @@ class _Writer:
             text, columns, checks = parts[0]
         else:
             text, columns, checks = self.align(parts)
+        if self.weights and (len(parts) > 1 or plan.derived):
+            raise PlanError("a bridge is allocated only in one fact, with no metric over metrics")
         if plan.derived:
             text, columns, checks = self.derive(text, columns, checks)
         if plan.order:
@@ -375,6 +381,7 @@ class _Writer:
             plan.fingerprint,
             checks=tuple(checks),
             zones=tuple(sorted(self.zones)),
+            weights=tuple(self.weights),
         )
 
     def members(self, fact: str) -> set[str]:
@@ -411,6 +418,12 @@ class _Writer:
                 continue
             k = self.ratios
             self.ratios += 1
+            if aggregate.allocation is not None:  # the weighted sum, rounded once (C7)
+                written, scale = self.allocated(aggregate)
+                select.append(f"{written} AS {quote(f'#n{k}')}")
+                select.append(f"1 AS {quote(f'#d{k}')}")
+                ratios.append((k, (aggregate, (scale, 0)), column))
+                continue
             trees = dict(self.compiled.require(aggregate.metric).typed.payload)
             dataset = aggregate.metric.dataset or ""
             for part, prefix in (("components.numerator", "#n"), ("components.denominator", "#d")):
@@ -422,27 +435,85 @@ class _Writer:
                 _scale(_logical(trees["components.denominator"].type.logical)),
             )
             ratios.append((k, (aggregate, scales), column))
-        text = "SELECT " + ", ".join(select)
         sources = {s.alias: s for s in plan.sources}
-        text += f" FROM {self.fact(sources[fact])} AS {quote(fact)}"
+        rows = f" FROM {self.fact(sources[fact])} AS {quote(fact)}"
         for join in (j for j in plan.joins if j.left in own):
             on = " AND ".join(
                 f"{self.field(a, join.left)} = {self.field(b, join.right)}" for a, b in join.pairs
             )
-            text += f" LEFT JOIN {quote(sources[join.right].table)} AS {quote(join.right)} ON {on}"
+            rows += f" LEFT JOIN {quote(sources[join.right].table)} AS {quote(join.right)} ON {on}"
         conditions = [
             self.predicate(self.field(f.member, f.source), f.predicate, f.member)
             for f in plan.filters
             if f.source in own
         ]
+        weights: list[str] = []
+        for aggregate in (a for a in plan.aggregates if a.source in own and a.allocation):
+            assert aggregate.allocation is not None
+            name = f"#w{len(self.weights)}"
+            check = self.invalid_groups(aggregate.allocation, rows, conditions)
+            select.append(f"{check} AS {quote(name)}")
+            weights.append(quote(name))
+            self.weights.append((name, aggregate.allocation.bridge))
+        text = "SELECT " + ", ".join(select) + rows
         if conditions:
             text += " WHERE " + " AND ".join(conditions)
         if grouped:
             text += " GROUP BY " + ", ".join(grouped)
         checks: list[tuple[str, str]] = []
         if ratios:
-            text, checks = self.divide(text, columns, ratios)
+            text, checks = self.divide(text, columns, ratios, after=weights)
         return text, columns, checks
+
+    def allocated(self, aggregate: Any) -> tuple[str, int]:  # noqa: ANN401
+        """`SUM(value * weight)`, exact: the product keeps both scales (C7)."""
+        allocation = aggregate.allocation
+        tree = self.compiled.require(aggregate.metric).typed.tree
+        assert tree is not None  # a plain SUM, as `analyze` checked
+        assert isinstance(tree.node, sql.Call)
+        value = self.node(
+            tree.node.arguments[0], aggregate.source, aggregate.metric.dataset or "", "metric"
+        )
+        weight = self.field(allocation.weight, allocation.source)
+        weight_type = self.compiled.require(allocation.weight).typed.type.logical
+        scales = (_scale(_logical(tree.type.logical)), _scale(_logical(weight_type)))
+        scale = sum(scales)
+        if scale > 38:
+            raise _unsupported()
+        # Each operand widened first: the product is exact up to 38 digits, never narrower.
+        product = (
+            f"CAST(({value}) AS DECIMAL(38,{scales[0]}))"
+            f" * CAST(({weight}) AS DECIMAL(38,{scales[1]}))"
+        )
+        return f"SUM(CAST({product} AS DECIMAL(38,{scale})))", scale
+
+    def invalid_groups(self, allocation: Any, rows: str, conditions: list[str]) -> str:  # noqa: ANN401
+        """How many normalization groups the query reads have weights that are missing, `NULL`
+        or do not add up to the total within the tolerance: in the same statement, over the
+        same rows, so on the same snapshot. Every weight of a group counts, whatever filters
+        keep of its bridge rows."""
+        keys = [self.field(a, allocation.side) for a, _ in allocation.scope]
+        own = [self.field(b, "#b") for _, b in allocation.scope]
+        weight = self.field(allocation.weight, "#b")
+        table = next(s.table for s in self.plan.sources if s.alias == allocation.source)
+        total, tolerance = (
+            f"CAST({self.bind(number_parameter(v), v)} AS {number_parameter(v)})"
+            for v in (allocation.total, allocation.tolerance)
+        )
+        sums = (
+            f"(SELECT {', '.join(f'{c} AS {quote(f"#k{i}")}' for i, c in enumerate(own))}, "
+            f"SUM({weight}) AS {quote('#s')}, count(*) - count({weight}) AS {quote('#n')} "
+            f"FROM {quote(table)} AS {quote('#b')} GROUP BY {', '.join(own)})"
+        )
+        on = " AND ".join(f"{k} = {quote('#v')}.{quote(f'#k{i}')}" for i, k in enumerate(keys))
+        s, n = f"{quote('#v')}.{quote('#s')}", f"{quote('#v')}.{quote('#n')}"
+        bad = f"({s} IS NULL OR {n} > 0 OR abs({s} - {total}) > {tolerance})"
+        where = " AND ".join([*conditions, bad])
+        read = ", ".join(f"{k} AS {quote(f'#g{i}')}" for i, k in enumerate(keys))
+        return (
+            f"(SELECT count(*) FROM (SELECT DISTINCT {read}{rows} LEFT JOIN {sums} AS "
+            f"{quote('#v')} ON {on} WHERE {where}) AS {quote('#i')})"
+        )
 
     def align(
         self, parts: list[tuple[str, list[ColumnSpec], list[tuple[str, str]]]]
@@ -545,6 +616,7 @@ class _Writer:
         columns: list[ColumnSpec],
         ratios: list[tuple[int, Any, ColumnSpec]],
         keep: list[str] | None = None,
+        after: list[str] | None = None,
     ) -> tuple[str, list[tuple[str, str]]]:
         """Each ratio as one exact division of its aggregated components (C2): both scaled to
         exact `HUGEINT`s, divided with the remainder, rounded once as declared."""
@@ -586,7 +658,8 @@ class _Writer:
                 raise _unsupported()
         # Every check after every column: the order `execution` reads them in.
         kept = [quote(k) for k in keep or ()]
-        return f"SELECT {', '.join(outer + kept + flags)} FROM ({middle}) AS {quote('r')}", checks
+        selected = outer + kept + flags + list(after or ())  # columns, checks, then weights
+        return f"SELECT {', '.join(selected)} FROM ({middle}) AS {quote('r')}", checks
 
 
 def _power(exponent: int) -> str:
