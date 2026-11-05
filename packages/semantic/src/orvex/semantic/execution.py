@@ -325,10 +325,7 @@ def _unregistered(placement: Any, engine: Engine) -> list[str]:  # noqa: ANN401
         if registration is None or restriction.no_rows:
             continue
         key = str(registration.get("attribute", "user_id"))
-        attribute = placement.attributes.get(key)
-        if attribute is None or attribute[0] not in ("text", "integer"):
-            found.append(name)
-            continue
+        attribute = placement.attributes[key]  # present and of a fitting type, or no_rows
         table = ".".join(quote(part) for part in str(registration["table"]).split("."))
         column = quote(str(registration["key"]))
         value = {"name": "p0", "type": "VARCHAR", "value": str(attribute[1])}

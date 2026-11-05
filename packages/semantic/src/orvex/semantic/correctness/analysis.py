@@ -358,7 +358,7 @@ class _Analysis:
         """Every dataset read is usable, and its row policies are placed for this caller: each
         a mandatory restriction of its rows, before anything reads them (P2-21)."""
         self.policies.check_usable(datasets)
-        self.placement: Placement = place(self.policies, datasets, self.caller)
+        self.placement: Placement = place(self.policies, datasets, self.caller, self.compiled)
 
     # members
 

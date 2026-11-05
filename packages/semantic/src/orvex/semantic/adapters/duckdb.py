@@ -32,6 +32,7 @@ from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.planning import ISSUED_PLAN, PlanError, SemanticPlan
 from orvex.semantic.policies import predicate as policy_grammar
+from orvex.semantic.policies.placement import datatype as field_datatype
 from orvex.semantic.result import ColumnSpec
 from orvex.semantic.result.descriptors import INTEGERS, OTHERS, pair_allowed
 
@@ -404,12 +405,7 @@ class _Writer:
         registration = rule.registration
         if registration is not None:  # a deny-list holds only for registered callers
             key = str(registration.get("attribute", "user_id"))
-            attribute = self.placement.attributes.get(key) if self.placement else None
-            value = (
-                self.bind("VARCHAR", str(attribute[1]))
-                if attribute is not None and attribute[0] in ("text", "integer")
-                else "NULL"
-            )
+            value = self.attribute_value(key, ("text", "integer"), "String")
             column = f"{quote('#g')}.{quote(str(registration['key']))}"
             registered = (
                 f"EXISTS (SELECT 1 FROM {self.mapping(str(registration['table']))} AS "
@@ -421,56 +417,77 @@ class _Writer:
     def mapping(self, table: str) -> str:
         return ".".join(quote(part) for part in table.split("."))
 
-    def attribute_value(self, name: str, kinds: tuple[str, ...]) -> str:
-        """An attribute of the validated context, always a bound parameter."""
+    def attribute_value(self, name: str, kinds: tuple[str, ...], datatype: str | None) -> str:
+        """An attribute of the validated context, always a bound parameter, of the type it is
+        compared with. Placement already gave zero rows for any attribute that is absent or
+        does not fit (`fits`), so one here is an internal failure, and refuses the question:
+        a value is never substituted, where a `NOT` could make it match."""
         found = self.placement.attributes.get(name) if self.placement else None
-        if found is None or found[0] not in kinds:  # absent or of another type: never matches
-            return "NULL"
+        if found is None or found[0] not in kinds:
+            raise _unsupported()
         kind, value = found
         if kind == "list":
-            assert isinstance(value, tuple)
+            if not isinstance(value, tuple) or datatype not in ("Integer", "String"):
+                raise _unsupported()
             text = self.bind("VARCHAR", json.dumps(list(value)))
-            return f"(SELECT unnest(CAST(CAST({text} AS JSON) AS VARCHAR[])))"
+            element = "HUGEINT" if datatype == "Integer" else "VARCHAR"
+            return f"(SELECT unnest(CAST(CAST({text} AS JSON) AS {element}[])))"
         if kind == "boolean":
             return f"CAST({self.bind('VARCHAR', 'true' if value else 'false')} AS BOOLEAN)"
-        if kind == "integer":
+        if kind == "integer" and datatype != "String":
             return f"CAST({self.bind('VARCHAR', str(value))} AS HUGEINT)"
-        return self.bind("VARCHAR", str(value))
+        return self.bind("VARCHAR", str(value))  # text, or a key compared as text
+
+    def scalar_sql(self, operand: Any, other: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
+        """An operand of a comparison; an attribute takes the type of what it is compared with."""
+        if isinstance(operand, policy_grammar.Attribute):
+            datatype = (
+                field_datatype(self.compiled, dataset, other.name)
+                if isinstance(other, policy_grammar.Field)
+                else None
+            )
+            return self.attribute_value(operand.name, ("text", "integer", "boolean"), datatype)
+        return self.operand_sql(operand, dataset, alias)
 
     def operand_sql(self, operand: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
         if isinstance(operand, policy_grammar.Field):
             return self.field(MemberId("field", dataset, operand.name), alias)
         if isinstance(operand, policy_grammar.Attribute):
-            return self.attribute_value(operand.name, ("text", "integer", "boolean"))
+            return self.attribute_value(operand.name, ("text", "integer", "boolean"), None)
         if operand.kind == "boolean":
             return "TRUE" if operand.text.upper() == "TRUE" else "FALSE"
         if operand.kind == "integer":
             return f"CAST({self.bind('VARCHAR', operand.text)} AS HUGEINT)"
         return self.bind("VARCHAR", operand.text)  # already the literal's value
 
+    def condition_sql(self, condition: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
+        """`column = value` in a mapping subquery: an attribute is compared as text, the one
+        form a managed table's key is checked in (as a registration is)."""
+        column = f"{quote('#m')}.{quote(condition.column)}"
+        if isinstance(condition.value, policy_grammar.Attribute):
+            value = self.attribute_value(condition.value.name, ("text", "integer"), "String")
+            return f"CAST({column} AS VARCHAR) = {value}"
+        return f"{column} = {self.operand_sql(condition.value, dataset, alias)}"
+
     def predicate_sql(self, node: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
         """A predicate of the closed grammar (`security-policies` v1), every value bound."""
         g = policy_grammar
         if isinstance(node, g.Compare):
             op = "<>" if node.op == "!=" else node.op
-            left = self.operand_sql(node.left, dataset, alias)
-            right = self.operand_sql(node.right, dataset, alias)
+            left = self.scalar_sql(node.left, node.right, dataset, alias)
+            right = self.scalar_sql(node.right, node.left, dataset, alias)
             return f"({left} {op} {right})"
         if isinstance(node, g.IsNull):
             field = self.operand_sql(node.field, dataset, alias)
             return f"({field} IS {'NOT ' if node.negated else ''}NULL)"
         if isinstance(node, g.InAttribute):
             field = self.operand_sql(node.field, dataset, alias)
-            values = self.attribute_value(node.attribute.name, ("list",))
-            if values == "NULL":
-                return "FALSE"
+            datatype = field_datatype(self.compiled, dataset, node.field.name)
+            values = self.attribute_value(node.attribute.name, ("list",), datatype)
             return f"({field} {'NOT ' if node.negated else ''}IN {values})"
         if isinstance(node, g.InSelect | g.Exists):
             conditions = (
-                " AND ".join(
-                    f"{quote('#m')}.{quote(c.column)} = {self.operand_sql(c.value, dataset, alias)}"
-                    for c in node.conditions
-                )
+                " AND ".join(self.condition_sql(c, dataset, alias) for c in node.conditions)
                 or "TRUE"
             )
             table = f"{self.mapping(node.table)} AS {quote('#m')}"

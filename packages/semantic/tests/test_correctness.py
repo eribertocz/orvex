@@ -615,9 +615,7 @@ def test_a_row_policy_is_placed_on_every_dataset_it_reaches() -> None:
         assert placed["policy"] == "own_zone_only"
         assert placed["applied"] == "no_rows"  # the context has no `user_id`
         assert set(datasets) <= set(placed["datasets"])
-        assert {f"C9.policy:{d}" for d in placed["datasets"]} <= {
-            o.id for o in report.obligations
-        }
+        assert {f"C9.policy:{d}" for d in placed["datasets"]} <= {o.id for o in report.obligations}
 
 
 def test_an_unusable_dataset_is_refused() -> None:

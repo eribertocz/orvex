@@ -270,6 +270,83 @@ def test_a_missing_attribute_gives_zero_rows_and_a_generic_notice() -> None:
     assert "own_tenant" not in json.dumps(notice)  # the generic view names no policy
 
 
+ZONES = {
+    "name": "own_zones",
+    "dataset": "sales",
+    "kind": "predicate",
+    "predicate": "zone_id IN ($zones)",
+}
+
+
+def test_a_list_attribute_is_bound_as_a_typed_list() -> None:
+    with lake_of() as lake:
+        found = ask(query(), COMPILED, lake, policy=policies(ZONES), context=caller(zones=["2"]))
+    assert ce.rows_of(found) == [["South", "50.00"]]
+    assert "HUGEINT[]" in found.physical.sql
+    text = TENANT | {"predicate": "tenant_id IN ($tenants)"}
+    assert rows(policies(text), caller(tenants=["B", "x'y"])) == [["North", "999.00"]]
+
+
+def misfit(predicate: str, **attributes: Any) -> None:  # noqa: ANN401
+    """An attribute of a type that does not fit its use gives zero rows and the notice, also
+    under every negation: a value is never substituted, where `NOT` would make it match."""
+    rule: dict[str, Any] = {
+        "name": "own",
+        "dataset": "sales",
+        "kind": "predicate",
+        "predicate": predicate,
+    }
+    if "SELECT" in predicate:
+        rule["registration"] = DENY["registration"]
+    with lake_of() as lake:
+        found = ask(query(), COMPILED, lake, policy=policies(rule), context=caller(**attributes))
+    assert ce.rows_of(found) == []
+    assert [n["code"] for n in found.result.envelope()["notices"]] == ["POLICY_ATTRIBUTE_MISSING"]
+    assert "NOT FALSE" not in found.physical.sql
+
+
+@pytest.mark.parametrize(
+    ("predicate", "attributes"),
+    [
+        ("zone_id = $zone", {"zone": "1"}),  # text against an integer field
+        ("tenant_id = $tenant", {"tenant": 7}),  # an integer against a text field
+        ("NOT (zone_id = $zone)", {"zone": "1"}),
+        ("zone_id != $zone", {"zone": ["1"]}),  # a list where one value is compared
+        ("NOT (zone_id IN ($zones))", {"zones": "1"}),  # a scalar where a list is used
+        ("zone_id NOT IN ($zones)", {"zones": "1"}),
+        ("zone_id NOT IN ($zones)", {"zones": ["one"]}),  # a list of values not of the field's type
+        ("NOT (tenant_id IN ($tenants) AND zone_id = $zone)", {"tenants": ["A"], "zone": "1"}),
+        (
+            "zone_id NOT IN (SELECT zone_id FROM security.user_zone WHERE user_id = $user)",
+            {"user": ["u-1"], "user_id": "u-1"},
+        ),
+    ],
+)
+def test_an_attribute_that_does_not_fit_gives_zero_rows_even_negated(
+    predicate: str, attributes: dict[str, Any]
+) -> None:
+    misfit(predicate, **attributes)
+
+
+def test_a_deny_list_with_an_attribute_that_does_not_fit_gives_zero_rows() -> None:
+    deny = DENY | {
+        "predicate": "NOT EXISTS (SELECT 1 FROM security.user_zone WHERE zone_id = sales.zone_id"
+        " AND user_id = $dept)"
+    }
+    with lake_of() as lake:
+        found = ask(
+            query(),
+            COMPILED,
+            lake,
+            policy=policies(deny),
+            context=caller(dept=["u-1"], user_id="u-1"),
+        )
+    assert ce.rows_of(found) == []
+    assert [n["code"] for n in found.result.envelope()["notices"]] == ["POLICY_ATTRIBUTE_MISSING"]
+    fitting = caller(dept="u-1", user_id="u-1")
+    assert rows(policies(deny), fitting) == [["South", "50.00"]]
+
+
 def test_a_client_can_never_supply_an_attribute() -> None:
     # A filter value that looks like an attribute is only text, and only restricts further.
     looks = {
@@ -439,12 +516,19 @@ CELL = {
 
 @pytest.mark.parametrize(
     ("policy", "operation"),
-    [((HIERARCHY,), "hierarchy_policy"), ((), "cell_policy")],
+    [((HIERARCHY,), "hierarchy_policy"), ((), "cell_policy"), ((), "min_group_size")],
 )
 def test_hierarchies_and_conditional_cells_stay_refused_before_any_read(
     policy: tuple[Document, ...], operation: str
 ) -> None:
-    more: dict[str, Any] = {} if policy else {"column_policies": [CELL]}
+    threshold = {"dataset": "sales", "entity": "sales.sale_id", "min_group_size": 3}
+    more: dict[str, Any] = (
+        {}
+        if policy
+        else {"column_policies": [CELL]}
+        if operation == "cell_policy"
+        else {"aggregate_thresholds": [threshold]}
+    )
     spy = Spy()
     with lake_of() as lake, pytest.raises(SemanticError) as caught:
         ask(
