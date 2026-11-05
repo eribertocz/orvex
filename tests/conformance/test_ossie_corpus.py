@@ -21,7 +21,8 @@ revision (`c721ffc`, Owner policy of 2026-11-01):
     away from zero, empty for a zero denominator; Owner decisions of 2026-11-04, #325) and writes
     its expression with the metrics' own aggregates, so the translated model loads.
   - CASE-021: `window` (`running_total` of `daily_revenue` by `date`), not declared in the
-    corpus.
+    corpus. The adapter declares it, with the metric it is over as its product expression
+    (P2-20), so the translated model loads.
 - **CASE-013** is one of the conformant models: the official validator only warns when
   `to_columns` cover no key of `to`. It loads with an advisory; joining through that relationship
   needs the product's own as-of declaration, checked when it is used (P2-20). The test also adds
@@ -55,7 +56,7 @@ VENDORS = (_PRODUCT["ossie_vendor_name"], *_PRODUCT["previous_vendor_names"])
 
 # Case -> the metric expression that names another metric.
 # Translated by the adapter into an explicit product construct.
-EXPLICIT_EXTENSION = {"CASE-009", "CASE-010"}
+EXPLICIT_EXTENSION = {"CASE-009", "CASE-010", "CASE-021"}
 # Translated by the adapter into a declared ratio whose expression is standard Ossie SQL.
 DECLARED_RATIO = {"CASE-006"}
 FUTURE = {

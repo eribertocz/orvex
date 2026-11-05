@@ -55,6 +55,17 @@ EXPLICIT_DECLARATIONS: dict[tuple[str, str], dict[str, Any]] = {
     # SUM(order_total * allocation_weight) through order_campaign: rounded once, after the sum,
     # half away from zero to the cents its expected file shows (#334).
     ("case-011", "allocated_revenue"): {"rounding": {"scale": 2, "mode": "half_away_from_zero"}},
+    # A running SUM of daily_revenue ordered by date from the partition start (S9, #340). The
+    # corpus writes it as an SQL window over a metric, which Ossie forbids.
+    ("case-021", "cumulative_revenue"): {
+        "window": {
+            "function": "running_total",
+            "of": "daily_revenue",
+            "partition_by": [],
+            "order_by": ["date"],
+            "densify": "none",
+        },
+    },
     ("case-010", "attainment"): {
         "additivity": "recomputable",
         "components": {"numerator": "actual_revenue", "denominator": "target_revenue"},
@@ -429,17 +440,16 @@ def translate(model: dict[str, Any], vendor_name: str) -> tuple[dict[str, Any], 
                     metric["expression"] = {
                         "dialects": [{"dialect": "OSSIE_SQL_2026", "expression": rewritten}]
                     }
-                if "over_metrics" in members:
+                if "over_metrics" in members or "window" in members:
                     # An expression over metrics is no Ossie expression (spec L424): it moves,
                     # text unchanged, under the product's dialect token, which the declared
-                    # `over_metrics` makes explicit (ossie-extensions v1 README).
+                    # `over_metrics` or `window` makes explicit (ossie-extensions v1 README).
+                    # A window's own expression is the metric it is over: its declaration
+                    # says the rest (S9), so the corpus's SQL window is not kept.
+                    over = members.get("over_metrics")
+                    text = over["expression"] if over else str(members["window"]["of"])
                     metric["expression"] = {
-                        "dialects": [
-                            {
-                                "dialect": vendor_name,
-                                "expression": members["over_metrics"]["expression"],
-                            }
-                        ]
+                        "dialects": [{"dialect": vendor_name, "expression": text}]
                     }
                 put(metric, "metric", members)
 

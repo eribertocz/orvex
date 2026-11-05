@@ -82,4 +82,4 @@ reason = "Run records: one row per model of the project (model_history_request g
 [[allow]]
 file = "packages/semantic/src/orvex/semantic/execution.py"
 call = "as_py"
-reason = "One scalar per check, a count DuckDB computed: normalization groups with invalid bridge weights (C7), or points of a zone the engine converts differently from the pinned tzdata (C6); never data rows"
+reason = "One scalar per check, a count DuckDB computed: normalization groups with invalid bridge weights (C7), rows an as-of join matches not exactly once, or points of a zone the engine converts differently from the pinned tzdata (C6); never data rows"

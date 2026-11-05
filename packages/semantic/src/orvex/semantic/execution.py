@@ -205,6 +205,7 @@ def _read(physical: PhysicalQuery, engine: Engine) -> pa.Table:
     expected = [(c.name, arrow_type(c.encoding)) for c in physical.columns]
     expected += [(name, pa.bool_()) for name, _ in physical.checks]
     expected += [(name, pa.int64()) for name, _ in physical.weights]
+    expected += [(name, pa.int64()) for name, _ in physical.as_of]
     found = [(f.name, f.type) for f in table.schema]
     if found != expected:
         raise PlanError(f"the engine returned {found}, the plan describes {expected}")
@@ -217,6 +218,14 @@ def _read(physical: PhysicalQuery, engine: Engine) -> pa.Table:
         if invalid:
             raise SemanticError(
                 "BRIDGE_WEIGHTS_INVALID", {"bridge": bridge, "groups": str(invalid)}
+            )
+        table = table.drop_columns([name])
+    for name, relationship in physical.as_of:  # a row matched not exactly once refuses all
+        unmatched = pc.max(table.column(name)).as_py()  # one scalar, the same on every row
+        if unmatched:
+            raise SemanticError(
+                "TEMPORAL_MATCH_NOT_UNIQUE",
+                {"relationship": relationship, "violations": str(unmatched)},
             )
         table = table.drop_columns([name])
     return table

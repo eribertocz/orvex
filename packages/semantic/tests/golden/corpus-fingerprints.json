@@ -74,5 +74,9 @@
   "CASE-020": {
     "model_fingerprint": "sha256:42b7f765f45f9912378818cc878678d16c1a2f12bf267c1493885b0320268bce",
     "semantic_fingerprint": "sha256:9218781f474828c0bcd72cd40201f55bc8eea7405f7c3b930499a46ecd21b1ec"
+  },
+  "CASE-021": {
+    "model_fingerprint": "sha256:77f6a38c5d315b941f95ecb50d5ff3617edb0e36ede11be6364a90a53aa5e2b6",
+    "semantic_fingerprint": "sha256:fd107d6f3dc6367d07a718d21e00a74fe1e147146cdb8630508a882ab3c33c10"
   }
 }

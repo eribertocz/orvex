@@ -67,6 +67,18 @@ class Source:
 
 
 @dataclass(frozen=True, slots=True)
+class AsOf:
+    """A temporal relationship (C6): the right row valid when the left row's `event` happened,
+    `valid_from <= event < valid_to`. Exactly one must match each left row the question reads,
+    checked in the same read; `rows` are the left dataset's key fields."""
+
+    event: MemberId
+    valid_from: MemberId
+    valid_to: MemberId
+    rows: tuple[MemberId, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class Join:
     """Rows of `right` matched to each row of `left`, on equal pairs of fields. Never more
     than one match: every step is many-to-one or one-to-one (C1)."""
@@ -75,6 +87,7 @@ class Join:
     left: str  # alias
     right: str  # alias
     pairs: tuple[tuple[MemberId, MemberId], ...]  # (left field, right field)
+    as_of: AsOf | None = None  # a temporal relationship, guarded (C6)
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +156,20 @@ class Derived:
 
 
 @dataclass(frozen=True, slots=True)
+class Window:
+    """A running total (S9): the aggregate `over` summed over the aggregated rows, in the
+    order of the groups `order` names, restarting at each value of the last `partitions` of
+    them; computed after aggregation, never aggregated again."""
+
+    name: str
+    metric: MemberId
+    over: str  # an aggregate name
+    order: tuple[str, ...]  # group names: the order, then the partitions
+    partitions: int
+    discharges: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class Sort:
     name: str  # an output column
     descending: bool
@@ -163,7 +190,10 @@ class SemanticPlan:
     report: CorrectnessReport = field(compare=False, repr=False)
     facts: tuple[str, ...] = ("t0",)  # each fact's source, aggregated apart (C3)
     derived: tuple[Derived, ...] = ()  # computed after alignment (S7)
-    outputs: tuple[str, ...] = ()  # with `derived`: every metric column, in the question's order
+    outputs: tuple[str, ...] = ()  # with `derived` or `windows`: every metric column, in order
+    windows: tuple[Window, ...] = ()  # computed after aggregation (S9)
+    # Filters on a running total's own groups: they choose the rows shown, after it (S9).
+    after: tuple[Filter, ...] = ()
     # Set only by `plan`, after construction: a copy (`dataclasses.replace`) has none.
     issued: object = field(default=None, init=False, compare=False, repr=False)
 
@@ -195,6 +225,7 @@ def _document(plan: dict[str, Any]) -> dict[str, object]:
             ],
             "joins": [
                 [j.relationship, j.left, j.right, [[_key(a), _key(b)] for a, b in j.pairs]]
+                + ([_as_of(j.as_of)] if j.as_of else [])
                 for j in plan["joins"]
             ],
             "filters": [[_key(f.member), f.source, _plain(f.predicate)] for f in plan["filters"]],
@@ -237,6 +268,25 @@ def _document(plan: dict[str, Any]) -> dict[str, object]:
             if plan["derived"]
             else {}
         )
+        | (
+            {
+                "windows": [
+                    [
+                        w.name,
+                        _key(w.metric),
+                        w.over,
+                        list(w.order),
+                        w.partitions,
+                        list(w.discharges),
+                    ]
+                    for w in plan["windows"]
+                ],
+                "after": [[_key(f.member), f.source, _plain(f.predicate)] for f in plan["after"]],
+                "outputs": list(plan["outputs"]),
+            }
+            if plan["windows"]
+            else {}
+        )
     )
 
 
@@ -249,6 +299,15 @@ def _allocation(found: Allocation) -> list[object]:
         found.side,
         found.total,
         found.tolerance,
+    ]
+
+
+def _as_of(found: AsOf) -> list[object]:
+    return [
+        _key(found.event),
+        _key(found.valid_from),
+        _key(found.valid_to),
+        [_key(r) for r in found.rows],
     ]
 
 
@@ -298,6 +357,8 @@ class _Planner:
             if "as" in p
         }
         self.derived = {d["metric"]: d for d in report.facts.get("derived", ())}
+        self.windows = {w["metric"]: w for w in report.facts.get("windows", ())}
+        self.after = set(report.facts.get("after", ()))
         self.zones = {
             (g["member"], g["bucket"]): g["zone"] for g in report.facts["grain"] if "zone" in g
         }
@@ -397,7 +458,21 @@ class _Planner:
             (MemberId("field", left, a), MemberId("field", right, b))
             for a, b in zip(own, other, strict=True)
         )
-        return Join(name, left_alias, right_alias, pairs)
+        temporal = self.graph.relationship_payloads.get(name, {}).get("temporal")
+        as_of = None
+        if isinstance(temporal, Mapping):  # `analyze` accepted it, crossed forward only
+
+            def field(ref: object, side: str) -> MemberId:
+                parts = [sql.normalize(p) for p in str(ref).split(".")]
+                return MemberId("field", parts[0] if len(parts) == 2 else side, parts[-1])
+
+            as_of = AsOf(
+                field(temporal["event_time"], left),
+                field(temporal["valid_from"], right),
+                field(temporal["valid_to"], right),
+                tuple(MemberId("field", left, k) for k in self.graph.keys[left]),
+            )
+        return Join(name, left_alias, right_alias, pairs, as_of)
 
     def names(self, members: list[MemberId]) -> dict[MemberId, str]:
         """Each output column's name: the member's own name, or its label when two collide."""
@@ -416,7 +491,9 @@ class _Planner:
         sources: list[MemberId] = []  # every aggregated metric, in the question's order
         for metric in metric_keys:
             derived = self.derived.get(self.label(metric))
+            window = self.windows.get(self.label(metric))
             over = [self.member(o) for o in derived["over"]] if derived else [metric]
+            over = [self.member(window["over"])] if window else over
             sources += [m for m in over if m not in sources]
         homes = list(dict.fromkeys(self.home_of[self.label(m)] for m in sources))
         facts = tuple(self.fact(home) for home in homes)
@@ -428,6 +505,7 @@ class _Planner:
             )
             for home in homes
             for f in canonical["filters"]
+            if self.label(_member(f["member"])) not in self.after
         )
         roles_of: dict[MemberId, set[str | None]] = {}
         for member, role, _ in group_keys:
@@ -488,6 +566,35 @@ class _Planner:
                     self.allocation(label),
                 )
             )
+        window_steps = []
+        for metric in dict.fromkeys(metric_keys):
+            found_window = self.windows.get(self.label(metric))
+            if found_window is None:
+                continue
+            by_label = {self.label(g.member): g.name for g in groups if g.source == facts[0]}
+            window_steps.append(
+                Window(
+                    names[metric],
+                    metric,
+                    column[self.member(found_window["over"])],
+                    tuple(by_label[label] for label in found_window["order"]),
+                    int(found_window["partitions"]),
+                    tuple(sorted(obligations[self.label(metric)])),
+                )
+            )
+        after = tuple(
+            Filter(
+                _member(f["member"]),
+                next(
+                    g.name
+                    for g in groups
+                    if self.label(g.member) == self.label(_member(f["member"]))
+                ),
+                f["predicate"],
+            )
+            for f in canonical["filters"]
+            if self.label(_member(f["member"])) in self.after
+        )
         derived_steps = []
         for metric in dict.fromkeys(metric_keys):
             found = self.derived.get(self.label(metric))
@@ -534,6 +641,7 @@ class _Planner:
             )
         discharged = {o for a in aggregates for o in a.discharges}
         discharged |= {o for d in derived_steps for o in d.discharges}
+        discharged |= {o for w in window_steps for o in w.discharges}
         left = {o.id for o in self.report.obligations} - discharged
         if left:
             raise PlanError(f"obligations left undischarged: {sorted(left)}")
@@ -548,7 +656,11 @@ class _Planner:
             "limit": int(canonical["limit"]) if canonical.get("limit") is not None else None,
             "facts": facts,
             "derived": tuple(derived_steps),
-            "outputs": tuple(names[m] for m in dict.fromkeys(metric_keys)) if derived_steps else (),
+            "outputs": tuple(names[m] for m in dict.fromkeys(metric_keys))
+            if derived_steps or window_steps
+            else (),
+            "windows": tuple(window_steps),
+            "after": after,
         }
         found = SemanticPlan(
             **parts,

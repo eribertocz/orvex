@@ -146,8 +146,12 @@ def test_the_report_is_deterministic_and_order_does_not_change_its_facts() -> No
     assert one.fingerprint == run(query("revenue", "declared", group_by=[zone, day])).fingerprint
     assert one.facts == two.facts
     assert one.obligations == two.obligations
-    assert one.rules == RULES == (("C1", 1), ("C2", 1), ("C3", 1), ("C5", 1), ("C6", 1), ("C7", 1))
-    assert {"C1", "C2", "C3", "C5", "C6", "C7"} == IMPLEMENTED
+    assert (
+        one.rules
+        == RULES
+        == (("C1", 1), ("C2", 1), ("C3", 1), ("C5", 1), ("C6", 1), ("C7", 1), ("S9", 1))
+    )
+    assert {"C1", "C2", "C3", "C5", "C6", "C7", "S9"} == IMPLEMENTED
 
 
 SCRIPT = """
@@ -205,7 +209,7 @@ CASES: dict[str, tuple[frozenset[str], tuple[str, str] | None]] = {
     "CASE-010": (frozenset({"C1", "C2", "C5"}), None),
     "CASE-011": (frozenset({"C1", "C7"}), None),
     "CASE-012": (frozenset({"C1", "C6"}), None),
-    "CASE-013": (frozenset({"C1", "C6 as-of joins"}), ("UNSUPPORTED_OPERATION", "as_of_join")),
+    "CASE-013": (frozenset({"C1", "C6"}), None),
     "CASE-014": (frozenset({"C1"}), None),
     "CASE-015": (frozenset({"C1", "policy placement"}), ("UNSUPPORTED_OPERATION", "row_policy")),
     "CASE-016": (frozenset({"C1", "C4"}), ("AMBIGUOUS_RELATIONSHIP_PATH", "")),
@@ -213,7 +217,7 @@ CASES: dict[str, tuple[frozenset[str], tuple[str, str] | None]] = {
     "CASE-018": (frozenset({"C1"}), None),
     "CASE-019": (frozenset({"C1", "C6"}), None),
     "CASE-020": (frozenset({"C1", "C2"}), ("ILLEGAL_TEMPORAL_REAGGREGATION", "")),
-    "CASE-021": (frozenset({"C1", "S9 windows"}), ("COMPILER", "ordered")),
+    "CASE-021": (frozenset({"C1", "S9"}), None),
 }
 
 
@@ -287,7 +291,6 @@ def test_an_additive_metric_to_a_coarser_grain_is_accepted(name: str) -> None:
     ("name", "operation"),
     [
         ("biggest", "non_additive"),
-        ("running", "ordered"),
     ],
 )
 def test_a_metric_that_is_not_additive_is_refused_with_its_pending_rule(
@@ -296,6 +299,14 @@ def test_a_metric_that_is_not_additive_is_refused_with_its_pending_rule(
     # Its grain transition alone would be legal: payments' own grain, coarser.
     code, details = refusal(query(name))
     assert (code, details) == ("UNSUPPORTED_OPERATION", {"operation": operation})
+
+
+def test_a_running_total_asked_without_its_order_and_partition_is_ambiguous() -> None:
+    """P2-20 (#340): a running total is answered only at its declared order and partition."""
+    assert refusal(query("running")) == (
+        "METRIC_ALIGNMENT_AMBIGUOUS",
+        {"metric": "running", "missing": "grain"},
+    )
 
 
 def test_a_distinct_count_is_answered_with_its_obligation() -> None:
