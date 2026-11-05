@@ -24,7 +24,10 @@ from orvex.semantic.policies import InvalidContext, PolicyModel, read_policies
 from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
-from tests.conformance.test_execution import Spy, ask
+from tests.conformance import test_asof_windows as windows
+from tests.conformance import test_conformed as conformed
+from tests.conformance import test_period_end as period
+from tests.conformance.test_execution import Spy, ask, tiny_lake
 from tests.support.policies import VENDORS, extension
 
 Document = dict[str, Any]
@@ -44,7 +47,11 @@ CATALOG = {
         "country": SourceColumn("VARCHAR", False),
     },
 }
-MANAGED = {"security.user_zone": ("user_id", "zone_id"), "security.registered": ("user_id",)}
+MANAGED = {
+    "security.user_zone": ("user_id", "zone_id"),
+    "security.registered": ("user_id",),
+    "security.org_closure": ("ancestor", "descendant"),
+}
 
 
 def model() -> CompiledModel:
@@ -79,10 +86,15 @@ def model() -> CompiledModel:
 COMPILED = model()
 
 
-def policies(*rules: Document, groups: frozenset[str] = frozenset()) -> PolicyModel:
+def policies(
+    *rules: Document,
+    groups: frozenset[str] = frozenset(),
+    compiled: CompiledModel = COMPILED,
+    **more: Any,  # noqa: ANN401
+) -> PolicyModel:
     return read_policies(
-        yaml.safe_dump({"version": 1, "row_policies": list(rules)}),
-        COMPILED,
+        yaml.safe_dump({"version": 1, "row_policies": list(rules)} | more),
+        compiled,
         groups=groups,
         managed_tables=MANAGED,
     )
@@ -361,3 +373,194 @@ def test_no_filter_ever_widens_what_the_policy_allows(
         if t == tenant and r in shown:
             expected[r] = expected.get(r, Decimal(0)) + Decimal(c) / 100
     assert found == [[r, f"{expected[r]:.2f}"] for r in sorted(expected)]
+
+
+# --- the other read sites ---------------------------------------------------------------------
+
+REGION = {"name": "own_region", "kind": "predicate", "predicate": "region = $region"}
+
+
+def test_the_period_end_ranks_only_the_authorized_snapshots() -> None:
+    compiled, catalog = period.snapshots_model()
+    policy = policies(REGION | {"dataset": "t"}, compiled=compiled)
+    data = period.rows((1, "2026-01-10", "North", "100.00"), (1, "2026-01-20", "South", "999.00"))
+    document = period.query("balance", group_by=[{"member": "t.day", "bucket": {"unit": "month"}}])
+    with tiny_lake(catalog, data) as lake:
+        found = ask(document, compiled, lake, policy=policy, context=caller(region="North"))
+    assert ce.rows_of(found) == [["2026-01-01", "100.00"]]  # never the hidden later snapshot
+    assert found.physical.sql.count('"#p"') >= 2  # restricted in the ranking and in the read
+
+
+def test_the_as_of_guard_counts_only_the_authorized_history() -> None:
+    policy = policies(REGION | {"dataset": "customer_history"}, compiled=windows.HISTORY)
+    document = windows.query("revenue", group_by=windows.BY_REGION)
+    data = {
+        "sales": [["1", "1", "2026-01-15", "100.00"]],
+        "customer_history": [
+            ["1", "North", "2026-01-01", "2026-02-01"],
+            ["1", "South", "2026-01-01", "2026-02-01"],  # overlaps, but hidden
+        ],
+    }
+    with windows.lake_of(data, windows.HISTORY_CATALOG) as lake:
+        found = ask(document, windows.HISTORY, lake, policy=policy, context=caller(region="North"))
+    assert ce.rows_of(found) == [["North", "100.00"]]
+    assert found.physical.as_of is not None
+
+
+def test_the_running_total_accumulates_only_the_authorized_rows() -> None:
+    policy = policies(REGION | {"dataset": "daily"}, compiled=windows.DAILY)
+    document = windows.query("cumulative", group_by=("daily.day",))
+    with windows.lake_of(windows.DAYS, windows.DAILY_CATALOG) as lake:
+        found = ask(document, windows.DAILY, lake, policy=policy, context=caller(region="South"))
+    assert ce.rows_of(found) == [["2026-01-02", "10.00"], ["2026-01-03", "15.00"]]
+
+
+# --- still refused ----------------------------------------------------------------------------
+
+HIERARCHY = {
+    "name": "org",
+    "dataset": "sales",
+    "kind": "hierarchy",
+    "closure": {
+        "table": "security.org_closure",
+        "ancestor": "ancestor",
+        "descendant": "descendant",
+    },
+    "node": "org_node",
+    "field": "zone_id",
+}
+CELL = {
+    "member": "sales.region",
+    "default": "visible",
+    "mask": "*",
+    "visible_when": "zone_id = $zone_id",
+}
+
+
+@pytest.mark.parametrize(
+    ("policy", "operation"),
+    [((HIERARCHY,), "hierarchy_policy"), ((), "cell_policy")],
+)
+def test_hierarchies_and_conditional_cells_stay_refused_before_any_read(
+    policy: tuple[Document, ...], operation: str
+) -> None:
+    more: dict[str, Any] = {} if policy else {"column_policies": [CELL]}
+    spy = Spy()
+    with lake_of() as lake, pytest.raises(SemanticError) as caught:
+        ask(
+            query(("sales.sale_id",)),
+            COMPILED,
+            lake,
+            policy=policies(*policy, **more),
+            context=caller(),
+            read=spy,
+        )
+    assert (caught.value.code, dict(caught.value.details)) == (
+        "UNSUPPORTED_OPERATION",
+        {"operation": operation},
+    )
+    assert spy.calls == 0
+
+
+# --- the receipt ------------------------------------------------------------------------------
+
+
+class Viewer:
+    builder = False
+
+    def __init__(self, known: frozenset[str]) -> None:
+        self.known = known
+
+    def sees_member(self, member: str) -> bool:
+        return True
+
+    def sees_value(self, member: str, value: object) -> bool:
+        return True
+
+    def sees_dataset(self, dataset: str) -> bool:
+        return True
+
+    def knows_policy(self, name: str) -> bool:
+        return name in self.known
+
+
+def test_the_receipt_shows_an_exemption_only_to_a_viewer_who_may_know_the_policy() -> None:
+    exempt = TENANT | {"exempt_groups": ["auditors"]}
+    policy = policies(exempt, groups=frozenset({"auditors"}))
+    with lake_of() as lake:
+        found = ask(
+            query(), COMPILED, lake, policy=policy, context=caller(("auditors",), tenant="A")
+        )
+    told = found.receipt.view(Viewer(frozenset({"own_tenant"})))["security"]
+    assert [(p["name"], p["applied"]) for p in told["policies"]] == [("own_tenant", "exempt")]
+    untold = found.receipt.view(Viewer(frozenset()))["security"]
+    assert untold["policies"] == []
+    assert "own_tenant" not in json.dumps(found.receipt.view())
+
+
+CHANNEL = {"kind": "predicate", "predicate": "channel = $channel"}
+FACT = st.lists(
+    st.tuples(
+        st.sampled_from(["web", "shop"]),
+        st.sampled_from(["North", "South"]),
+        st.integers(-9999, 9999),
+    ),
+    max_size=6,
+)
+
+
+@settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    FACT,
+    FACT,
+    st.sampled_from(["web", "shop"]),
+    st.sets(st.sampled_from(["North", "South"]), min_size=1),
+)
+def test_aligned_facts_and_metrics_over_them_use_authorized_rows_only(
+    sales: list[tuple[str, str, int]],
+    refunds: list[tuple[str, str, int]],
+    channel: str,
+    shown: set[str],
+) -> None:
+    def table(found: list[tuple[str, str, int]]) -> list[list[str]]:
+        return [
+            [str(n), "2026-01-01", r, c, f"{Decimal(a) / 100:.2f}"]
+            for n, (c, r, a) in enumerate(found)
+        ]
+
+    def total(found: list[tuple[str, str, int]]) -> dict[str, Decimal]:
+        sums: dict[str, Decimal] = {}
+        for c, r, a in found:
+            if c == channel and r in shown:
+                sums[r] = sums.get(r, Decimal(0)) + Decimal(a) / 100
+        return sums
+
+    policy = policies(
+        CHANNEL | {"name": "own_sales", "dataset": "sales"},
+        CHANNEL | {"name": "own_refunds", "dataset": "refunds"},
+        compiled=conformed.COMPILED,
+    )
+    document = conformed.query(
+        "gross_revenue", "refunds", "net_revenue", filters=[region(*sorted(shown))]
+    )
+    data = {"sales": table(sales), "refunds": table(refunds), "targets": []}
+    with conformed.lake_of(data) as lake:
+        found = ask(
+            document, conformed.COMPILED, lake, policy=policy, context=caller(channel=channel)
+        )
+    gross, back = total(sales), total(refunds)
+
+    def shown_as(value: Decimal | None) -> str | None:
+        return None if value is None else f"{value:.2f}"
+
+    expected = [
+        [
+            "2026-01-01",
+            r,
+            shown_as(gross.get(r)),
+            shown_as(back.get(r)),
+            shown_as(gross[r] - back[r] if r in gross and r in back else None),
+        ]
+        for r in sorted(set(gross) | set(back))
+    ]
+    assert ce.rows_of(found) == expected
