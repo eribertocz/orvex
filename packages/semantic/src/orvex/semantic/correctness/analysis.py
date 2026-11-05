@@ -715,7 +715,9 @@ class _Analysis:
 
     def bridge(self, bridge: str) -> Mapping[str, Any]:
         found = self.graph.payloads.get(bridge, {}).get("bridge")
-        assert isinstance(found, Mapping)  # `ossie-extensions` v1, checked on read
+        if not isinstance(found, Mapping):  # an allocation naming a dataset that is no bridge
+            _refuse_pending({"bridge_allocation"})
+        assert isinstance(found, Mapping)
         return found
 
     def through(self, home: str, path: Path, bridge: str) -> bool:
@@ -771,6 +773,17 @@ class _Analysis:
             not in ("Decimal", "Integer")
             or list(entities) != [entity]
         ):
+            _refuse_pending({"bridge_allocation"})
+        # The bridge's own fields are read too: its weight and the keys it joins on. One the
+        # caller may not see, or sees masked, is never read (P2-08), and never named.
+        read = [weight] + [
+            MemberId("field", bridge, sql.normalize(str(c)))
+            for r in self.relationships()
+            for side, columns in (("from", "from_columns"), ("to", "to_columns"))
+            if sql.normalize(str(r[side])) == bridge
+            for c in r[columns]
+        ]
+        if any(self.policies.protection(m, self.groups) != "visible" for m in read):
             _refuse_pending({"bridge_allocation"})
         if "rounding" not in payload:  # rounding is declared, never the engine's (#325)
             raise SemanticError(

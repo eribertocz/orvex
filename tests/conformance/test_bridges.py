@@ -113,7 +113,11 @@ def model(
             {
                 "name": "allocated_revenue",
                 "expression": {"sql": f"{metric}(orders.order_total)"},
-                "custom_extensions": [extension(allocated)],
+                "custom_extensions": [
+                    extension(
+                        allocated | ({"additivity": "non_additive"} if metric == "MAX" else {})
+                    )
+                ],
             },
             {"name": "revenue", "expression": {"sql": "SUM(orders.order_total)"}},
         ],
@@ -258,6 +262,14 @@ def test_the_sum_is_rounded_once_and_never_adjusted() -> None:
     assert rows(data, query("revenue", group_by=())) == [["0.15"]]
 
 
+def test_the_largest_value_times_a_weight_is_exact() -> None:
+    data = DATA | {
+        "orders": [["1", "North", "9999999999999999.99"]],
+        "order_campaign": [["1", "A", "1.00"]],
+    }
+    assert rows(data) == [["Campaign A", "9999999999999999.99"]]
+
+
 # --- weights ----------------------------------------------------------------------------------
 
 
@@ -334,6 +346,30 @@ def test_an_allocated_metric_beside_an_unallocated_one_is_refused() -> None:
 def test_a_metric_that_is_not_a_plain_sum_is_refused() -> None:
     compiled, _ = model(metric="COUNT")  # additive, but not a value to weigh
     found = refused(query(), compiled)
+    assert found == ("UNSUPPORTED_OPERATION", {"operation": "bridge_allocation"})
+
+
+def test_a_non_additive_metric_through_a_bridge_is_refused() -> None:
+    compiled, _ = model(metric="MAX")
+    found = refused(query(), compiled)
+    assert found == ("UNSUPPORTED_OPERATION", {"operation": "non_additive"})
+
+
+@pytest.mark.parametrize("member", ["order_campaign.weight", "order_campaign.campaign_id"])
+@pytest.mark.parametrize("level", ["hidden", "masked"])
+def test_a_protected_bridge_field_is_never_read(member: str, level: str) -> None:
+    """The weight and the bridge's keys are read by the allocation, not by the metric's own
+    expression: one the caller may not see in full refuses, before any read, naming nothing."""
+    entry: Document = {"member": member, "default": level} | (
+        {"mask": "0" if member.endswith("weight") else "*"} if level == "masked" else {}
+    )
+    policy = read_policies(
+        yaml.safe_dump({"version": 1, "column_policies": [entry]}),
+        COMPILED,
+        groups=frozenset(),
+        managed_tables={},
+    )
+    found = refused(query(), policy=policy)
     assert found == ("UNSUPPORTED_OPERATION", {"operation": "bridge_allocation"})
 
 

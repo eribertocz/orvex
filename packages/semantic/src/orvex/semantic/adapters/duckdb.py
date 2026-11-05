@@ -443,10 +443,16 @@ class _Writer:
         )
         weight = self.field(allocation.weight, allocation.source)
         weight_type = self.compiled.require(allocation.weight).typed.type.logical
-        scale = _scale(_logical(tree.type.logical)) + _scale(_logical(weight_type))
+        scales = (_scale(_logical(tree.type.logical)), _scale(_logical(weight_type)))
+        scale = sum(scales)
         if scale > 38:
             raise _unsupported()
-        return f"SUM(CAST(({value}) * ({weight}) AS DECIMAL(38,{scale})))", scale
+        # Each operand widened first: the product is exact up to 38 digits, never narrower.
+        product = (
+            f"CAST(({value}) AS DECIMAL(38,{scales[0]}))"
+            f" * CAST(({weight}) AS DECIMAL(38,{scales[1]}))"
+        )
+        return f"SUM(CAST({product} AS DECIMAL(38,{scale})))", scale
 
     def invalid_groups(self, allocation: Any, rows: str, conditions: list[str]) -> str:  # noqa: ANN401
         """How many normalization groups the query reads have weights that are missing, `NULL`
