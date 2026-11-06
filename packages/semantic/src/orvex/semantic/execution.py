@@ -401,6 +401,11 @@ def _execute(
             adapter_version=physical.adapter_version,
             started_at=_instant(started),
             duration_ms=duration,
+            # The cells a detail page returned (P2-24); rows scanned are not known without the
+            # snapshot's statistics, so they are left out, never guessed.
+            actual={"cells": table.num_rows * len(physical.columns)}
+            if plan_.mode == "detail"
+            else None,
         ),
         result_canonical=result.canonical(engine.encoder),
         result_key=engine.result_key,
@@ -495,7 +500,8 @@ def answer(
             if pinned is None:
                 raise SemanticError("PAGE_CURSOR_INVALID", {"reason": "expired"})
             engine = replace(engine, snapshot=pinned)
-            start = state.position
+            # A float as its shortest exact text: bound as text and cast back, never rounded.
+            start = tuple(repr(v) if isinstance(v, float) else v for v in state.position)
     logical = plan(report, start)
     physical = compile_plan(logical)
     evidence = verify_physical(logical, physical)  # checked again, and in the statement (C9)

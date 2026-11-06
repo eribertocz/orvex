@@ -376,13 +376,16 @@ def _rows(p: _Plan, o: Obligation) -> str:
         step = next((s for s in p.graph.links[left] if s.relationship == join.relationship), None)
         if step is None or not step.safe or step.temporal or join.as_of is not None:
             raise DischargeError(f"{p.relationship(join.relationship)} could multiply the rows")
-    columns = {g.name: g.member for g in (*plan.rows, *plan.hidden)}
+    columns = {g.name: g for g in (*plan.rows, *plan.hidden)}
     normalized = p.sources[fact].dataset
     key = [MemberId("field", normalized, k) for k in p.graph.keys[normalized]]
-    tail = [(columns.get(s.name), s.descending) for s in plan.order[len(plan.order) - len(key) :]]
-    last = {member for member, descending in tail if not descending}
-    if not key or len(plan.order) < len(key) or not set(key) <= last:
-        raise DischargeError(f"{base}'s key is not the order's last tie-breaker")
+    sorted_by = {
+        columns[s.name].member
+        for s in plan.order
+        if s.name in columns and columns[s.name].source == fact and s.name not in dict(plan.masks)
+    }
+    if not key or not set(key) <= sorted_by:  # the whole key, by its real values: one order
+        raise DischargeError(f"{base}'s whole key is not in the order")
     masked = dict(plan.masks)
     wanted = p.plan.report.facts.get("masks", {})
     shown = {p.label(g.member): g.name for g in plan.rows}

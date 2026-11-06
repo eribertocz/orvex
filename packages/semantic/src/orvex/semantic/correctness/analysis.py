@@ -768,6 +768,17 @@ class _Analysis:
         keys = self.graph.keys.get(base, ())
         if not keys or any(MemberId("field", base, k) not in self.compiled.members for k in keys):
             raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "detail_key"})
+        # The key ends the order, so the caller must be able to sort by it: a masked key is
+        # never sorted on (decision 2), and a hidden one is never named.
+        for key in keys:
+            member = MemberId("field", base, key)
+            level = self.policies.protection(member, self.groups)
+            if level == "masked":
+                raise SemanticError(
+                    "MEMBER_MASKED", {"member": self.label(member), "operation": "sort"}
+                )
+            if level == "hidden":
+                raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "detail_key"})
         crossed = {base, *(d for p in paths.values() for d in p.datasets)}
         self.check_datasets(crossed)
         return self.detail_report(base, fields, paths, crossed)

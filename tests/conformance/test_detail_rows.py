@@ -438,3 +438,178 @@ def test_a_detail_plan_or_statement_that_breaks_its_grain_never_runs() -> None:
         assert sql != found.physical.sql
         with pytest.raises(DischargeError):
             verify_physical(plan, replace(found.physical, sql=sql))
+
+
+# --- after review: keys the caller cannot sort by, other orders, floats, hidden members ---------
+
+
+@pytest.mark.parametrize(
+    ("policy", "refusal"),
+    [
+        (
+            {"member": "sales.sale_id", "default": "masked", "mask": "#"},
+            ("MEMBER_MASKED", {"member": "sales.sale_id", "operation": "sort"}),
+        ),
+        (
+            {"member": "sales.sale_id", "default": "hidden"},
+            ("UNSUPPORTED_OPERATION", {"operation": "detail_key"}),
+        ),
+    ],
+)
+def test_a_page_whose_key_the_caller_cannot_sort_by_is_refused_before_any_read(
+    policy: Document, refusal: tuple[str, dict[str, str]]
+) -> None:
+    fields = ("sales.region", "sales.amount")
+    reads: list[Any] = []
+    with rp.lake_of() as lake, pytest.raises(SemanticError) as caught:
+        ask(
+            query(fields=fields),
+            rp.COMPILED,
+            lake,
+            policy=policies(column_policies=[policy]),
+            read=lambda r: reads.append(r),
+        )
+    assert (caught.value.code, dict(caught.value.details)) == refusal
+    assert reads == []
+
+
+@pytest.mark.parametrize(
+    "order",
+    [
+        [{"by": "sales.sale_id", "direction": "desc"}],
+        [{"by": "sales.sale_id"}, {"by": "sales.amount", "direction": "desc"}],
+        [
+            {"by": "customers.country", "nulls": "first"},
+            {"by": "sales.sale_id", "direction": "desc"},
+        ],
+    ],
+)
+def test_any_order_that_includes_the_key_pages_every_row_once(order: list[Document]) -> None:
+    with rp.lake_of() as lake:
+        rows, _ = Pager(lake).all(query(size=1, order=order))
+        whole = ce.rows_of(ask(query(size=10, order=order), rp.COMPILED, lake))
+    assert rows == whole
+    assert sorted(str(r[0]) for r in rows) == ["1", "2", "3", "4"]
+
+
+FLOATS = {"t": {"id": SourceColumn("BIGINT", False), "x": SourceColumn("DOUBLE")}}
+
+
+@settings(max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    st.lists(
+        st.one_of(st.none(), st.floats(allow_nan=False, allow_infinity=False, width=64)),
+        min_size=1,
+        max_size=8,
+    ),
+    st.integers(1, 3),
+    st.sampled_from(["asc", "desc"]),
+)
+def test_pages_sorted_by_a_float_continue_exactly(
+    values: list[float | None], size: int, direction: str
+) -> None:
+    document = {
+        "version": "0.2.0.dev0",
+        "name": "floats",
+        "datasets": [
+            {
+                "name": "t",
+                "source": "t",
+                "primary_key": ["id"],
+                "fields": [{"name": n, "expression": {"sql": n}} for n in FLOATS["t"]],
+            }
+        ],
+        "custom_extensions": [extension({"element": "model", "default_time_zone": "UTC"})],
+    }
+    compiled = compile_model(
+        read(json.dumps(document).encode(), "semantic/f.ossie.json", VENDORS), FLOATS, VENDORS
+    )
+    detail = query(size, [{"by": "t.x", "direction": direction}], fields=("t.id", "t.x"))
+    data = [{"id": str(n), "x": None if v is None else repr(v)} for n, v in enumerate(values)]
+    with tiny_lake(FLOATS, data) as lake:
+        snapshot = ce.engine_for(lake).snapshot
+        extra: dict[str, Any] = {
+            "cursors": FORM,
+            "pinned": lambda v: snapshot if v == str(snapshot["id"]) else None,
+        }
+        found = ask(detail, compiled, lake, **extra)
+        ids = [r[0] for r in ce.rows_of(found)]
+        while "next" in found.result.envelope()["page"]:
+            after = detail | {
+                "page": {**detail["page"], "after": found.result.envelope()["page"]["next"]}
+            }
+            found = ask(after, compiled, lake, **extra)
+            ids += [r[0] for r in ce.rows_of(found)]
+        whole = [
+            r[0]
+            for r in ce.rows_of(ask(detail | {"page": {"size": "100"}}, compiled, lake, **extra))
+        ]
+    assert ids == whole
+    assert sorted(ids, key=lambda i: int(str(i))) == [str(n) for n in range(len(values))]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"fields": [{"member": "sales.amount"}]},
+        {"order": [{"by": "sales.amount"}]},
+        {"filters": [rp.region("North") | {"member": "sales.amount"}]},
+    ],
+)
+def test_a_hidden_member_is_not_found_before_any_read(change: Document) -> None:
+    hidden = {"member": "sales.amount", "default": "hidden"}
+    reads: list[Any] = []
+    with rp.lake_of() as lake, pytest.raises(SemanticError) as caught:
+        ask(
+            query(fields=("sales.sale_id",), order=[{"by": "sales.sale_id"}]) | change,
+            rp.COMPILED,
+            lake,
+            policy=policies(column_policies=[hidden]),
+            read=lambda r: reads.append(r),
+        )
+    assert (caught.value.code, dict(caught.value.details)) == (
+        "MEMBER_NOT_FOUND",
+        {"member": "sales.amount"},
+    )
+    assert reads == []
+
+
+@settings(max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    st.lists(
+        st.tuples(
+            st.sampled_from("AB"), st.sampled_from(["1", "2", "9", None]), st.integers(-999, 999)
+        ),
+        min_size=1,
+        max_size=9,
+    ),
+    st.integers(1, 4),
+)
+def test_no_page_ever_shows_a_row_a_joined_policy_removes(sales: list[Sale], size: int) -> None:
+    country = {
+        "name": "own_country",
+        "dataset": "customers",
+        "kind": "predicate",
+        "predicate": "country = $country",
+    }
+    data = {
+        "sales": [
+            [str(n), t, "1", c or "", "North", f"{Decimal(v) / 100:.2f}"]
+            for n, (t, c, v) in enumerate(sales)
+        ],
+        "customers": [["1", "BO"], ["2", "PE"]],
+    }
+    with rp.lake_of(data=data) as lake:
+        rows, _ = Pager(
+            lake, policies(rp.TENANT, country), rp.caller(tenant="A", country="BO")
+        ).all(query(size, [{"by": "sales.sale_id"}]))
+    expected = [
+        str(n) for n, (t, c, _) in enumerate(sales) if t == "A" and c == "1"
+    ]  # orphans hidden too
+    assert [r[0] for r in rows] == expected
+
+
+def test_the_receipt_counts_the_cells_returned() -> None:
+    with rp.lake_of() as lake:
+        found = Pager(lake).page(query())
+    assert found.receipt.document()["execution"]["actual"] == {"cells": 8}  # two rows, four fields
