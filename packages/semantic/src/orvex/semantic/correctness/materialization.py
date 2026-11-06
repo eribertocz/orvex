@@ -144,34 +144,7 @@ def _prove(
             raise _No(reason)
         fields[row.member] = mapped(row.member, reason)
 
-    columns = {sql.normalize(m.name): m for m in own}
-    stored: dict[MemberId, MemberId] = {}  # base metric -> the table column storing it
-    for measure in table.get("measures", ()):
-        if "metric" not in measure:
-            continue
-        expression = sql.parse(str(measure["expression"]))
-        if not (
-            isinstance(expression, sql.Call)
-            and expression.name.upper() == "SUM"
-            and not expression.distinct
-            and expression.filter is None
-            and len(expression.arguments) == 1
-            and isinstance(expression.arguments[0], sql.Ref)
-            and len(expression.arguments[0].parts) == 1
-            and expression.arguments[0].parts[0] in columns
-        ):
-            continue  # not a re-aggregation this proof knows: the measure proves nothing
-        written = sql.normalize(str(measure["metric"]))
-        metric = next(
-            (
-                m
-                for m in compiled.members
-                if m.kind == "metric" and sql.normalize(m.name) == written
-            ),
-            None,
-        )
-        if metric is not None and metric.dataset in (None, home):
-            stored[metric] = columns[expression.arguments[0].parts[0]]
+    stored = stored_measures(compiled, dataset, table, home)
 
     used: dict[MemberId, MemberId] = {}
     components: dict[MemberId, tuple[MemberId, MemberId]] = {}
@@ -209,6 +182,47 @@ def _prove(
         if analysis.policies.protection(member, analysis.groups) != "visible":
             raise _No("policy")
     return fields, used, components
+
+
+def stored_measures(
+    compiled: Any,  # noqa: ANN401
+    dataset: str,
+    table: Mapping[str, Any],
+    home: str,
+) -> dict[MemberId, MemberId]:
+    """Each base metric an aggregate table stores, and the table column storing it: a measure
+    that names its `metric` and stores it as the plain sum of one column. Any other measure is
+    not a re-aggregation this proof knows, and proves nothing."""
+    own = [m for m in compiled.members if m.kind == "field" and m.dataset == dataset]
+    columns = {sql.normalize(m.name): m for m in own}
+    stored: dict[MemberId, MemberId] = {}
+    for measure in table.get("measures", ()):
+        if "metric" not in measure:
+            continue
+        expression = sql.parse(str(measure["expression"]))
+        if not (
+            isinstance(expression, sql.Call)
+            and expression.name.upper() == "SUM"
+            and not expression.distinct
+            and expression.filter is None
+            and len(expression.arguments) == 1
+            and isinstance(expression.arguments[0], sql.Ref)
+            and len(expression.arguments[0].parts) == 1
+            and expression.arguments[0].parts[0] in columns
+        ):
+            continue
+        written = sql.normalize(str(measure["metric"]))
+        metric = next(
+            (
+                m
+                for m in compiled.members
+                if m.kind == "metric" and sql.normalize(m.name) == written
+            ),
+            None,
+        )
+        if metric is not None and metric.dataset in (None, home):
+            stored[metric] = columns[expression.arguments[0].parts[0]]
+    return stored
 
 
 def _same_values(analysis: Any, metric: MemberId, column: MemberId) -> None:  # noqa: ANN401

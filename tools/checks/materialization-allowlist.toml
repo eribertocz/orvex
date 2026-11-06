@@ -88,3 +88,8 @@ reason = "One scalar per check, a count DuckDB computed: normalization groups wi
 file = "packages/semantic/src/orvex/semantic/execution.py"
 call = "to_pylist"
 reason = "With totals, the result's level column: one small integer per result row, written as the result's own row roles (P2-23), never source rows"
+
+[[allow]]
+file = "packages/semantic/src/orvex/semantic/evidence.py"
+call = "as_py"
+reason = "Evidence checks (P2-26): one row of BIGINT violation counts per statement, never data rows"

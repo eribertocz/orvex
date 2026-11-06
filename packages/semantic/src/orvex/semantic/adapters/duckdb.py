@@ -122,10 +122,16 @@ def number_parameter(text: str) -> str:
 class _Writer:
     def __init__(self, plan: SemanticPlan) -> None:
         self.plan = plan
-        self.compiled: CompiledModel = plan.compiled
+        self.model(plan.compiled, plan.placement, plan.rollup)
+        self.dataset_alias.update({s.alias: s.dataset for s in plan.sources})
+
+    def model(self, compiled: CompiledModel, placement: Any, rollup: Any) -> None:  # noqa: ANN401
+        """What every statement of one model needs: its tables, its relationships, the row
+        policies placed (none for an evidence check) and the aggregate table read (C8)."""
+        self.compiled = compiled
         self.parameters: list[dict[str, str | None]] = []
-        self.dataset_alias = {s.alias: s.dataset for s in plan.sources}
-        document = self.compiled.ossie.document
+        self.dataset_alias: dict[str, str] = {}
+        document = compiled.ossie.document
         datasets = document.get("datasets", ())
         self.tables = {
             sql.normalize(str(d["name"])): str(d.get("source", d["name"]))
@@ -136,7 +142,8 @@ class _Writer:
             sql.normalize(str(r["name"])): r
             for r in (relationships if isinstance(relationships, tuple) else ())
         }
-        self.placement = plan.placement  # the caller's row policies (P2-21)
+        self.placement = placement  # the caller's row policies (P2-21)
+        self.rollup = rollup
         self.ratios = 0  # each ratio's own columns, numbered across every fact
         self.zone: str | None = None  # the zone of the field being written (C6)
         self.zones: set[str] = set()  # every zone the statement converts to
@@ -151,7 +158,7 @@ class _Writer:
     # members
 
     def field(self, member: MemberId, alias: str) -> str:
-        rollup = self.plan.rollup
+        rollup = self.rollup
         if rollup is not None and member.dataset == rollup.base:  # read from the table (C8)
             if member not in rollup.fields:
                 raise PlanError("a base field the aggregate table does not keep")
@@ -184,16 +191,23 @@ class _Writer:
         return f"({value} - ({local} - date_trunc('{unit}', {local})))"
 
     def metric(self, member: MemberId, alias: str) -> str:
-        rollup = self.plan.rollup
+        rollup = self.rollup
         if rollup is not None:  # its stored column, re-aggregated as declared (C8)
             if member not in rollup.stored:
                 raise PlanError("a metric the aggregate table does not store")
-            encoding = self.column(member, "#m", "metric", None).encoding  # the metric's type
-            return f"CAST(SUM({self.field(rollup.stored[member], alias)}) AS {encoding})"
+            return self.stored(member, rollup.stored[member], alias)
         tree = self.compiled.require(member).parsed.tree
         if tree is None:
             raise _unsupported()
         return self.node(tree, alias, member.dataset or "", "metric")
+
+    def stored(self, metric: MemberId, column: MemberId, alias: str) -> str:
+        """A metric read from the aggregate-table column storing it: its sum, in the metric's
+        own type (C8). The same expression a question reads and a consistency check compares."""
+        typed = self.compiled.require(metric).typed.type
+        return (
+            f"CAST(SUM({self.field(column, alias)}) AS {encoding(dict(_logical(typed.logical)))})"
+        )
 
     def node(self, node: sql.Node, alias: str, dataset: str, context: str) -> str:
         def again(child: sql.Node) -> str:
@@ -385,7 +399,7 @@ class _Writer:
         """The rows of `dataset` the caller may read: its table, restricted by every row policy
         that applies, before anything else reads it (a join, a ranking, a check, an aggregate).
         Every read of a table in the statement goes through here."""
-        rollup = self.plan.rollup
+        rollup = self.rollup
         # The aggregate table in place of its base (C8), restricted by the base's policies,
         # whose fields it keeps as the grain it groups by: each group wholly in or out.
         read = rollup.dataset if rollup is not None and dataset == rollup.base else dataset
@@ -1221,3 +1235,189 @@ def compile_plan(plan: SemanticPlan) -> PhysicalQuery:
     if plan.issued is not ISSUED_PLAN:
         raise PlanError("not a plan of the planner")
     return _Writer(plan).statement()
+
+
+# Evidence checks (P2-26): one read-only statement per piece of evidence, on one snapshot.
+# Every table is read whole, with no row policy: a check is about the data, and returns
+# counts only, never a value.
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceCheck:
+    sql: str
+    parameters: tuple[Mapping[str, str | None], ...]  # `store/v1` `Parameter`s
+    counts: tuple[str, ...]  # one BIGINT column each, in order: the violations by kind
+
+
+Pair = tuple[MemberId, MemberId]
+
+
+class _Checks(_Writer):
+    def __init__(self, compiled: CompiledModel, **aliases: str) -> None:
+        """No plan: the model's tables, each read whole under its alias (`a="t"` for `#a`)."""
+        self.model(compiled, None, None)
+        self.dataset_alias.update({f"#{k}": v for k, v in aliases.items()})
+
+    def done(self, statement: str, counts: tuple[str, ...]) -> EvidenceCheck:
+        return EvidenceCheck(statement, tuple(self.parameters), counts)
+
+    def keys(self, fields: tuple[MemberId, ...], alias: str) -> list[str]:
+        return [self.field(f, alias) for f in fields]
+
+    def matched(self, pairs: tuple[Pair, ...], here: str, there: str, columns: str) -> str:
+        """Each (here, there) pair equal, `there` read from `columns` numbered `#k0`, ..."""
+        return " AND ".join(
+            f"{self.field(a, here)} = {quote(there)}.{quote(f'{columns}{i}')}"
+            for i, (a, _) in enumerate(pairs)
+        )
+
+
+def unique_check(compiled: CompiledModel, dataset: str, key: tuple[MemberId, ...]) -> EvidenceCheck:
+    """`unique`: the number of key values more than one row shares."""
+    w = _Checks(compiled, a=dataset)
+    keys = ", ".join(w.keys(key, "#a"))
+    return w.done(
+        f"SELECT count(*) AS {quote('#duplicates')} FROM (SELECT 1 FROM "
+        f"{w.relation(dataset)} AS {quote('#a')} GROUP BY {keys} HAVING count(*) > 1) AS "
+        f"{quote('#v')}",
+        ("#duplicates",),
+    )
+
+
+def overlap_check(
+    compiled: CompiledModel,
+    dataset: str,
+    entity: tuple[MemberId, ...],
+    start: MemberId,
+    end: MemberId,
+    referenced: tuple[str, tuple[Pair, ...]] | None = None,
+) -> EvidenceCheck:
+    """`non_overlap`, or the cardinality of a temporal relationship: the number of pairs of
+    rows of one entity whose closed-open intervals overlap. A row with a `NULL` bound matches
+    no instant, as an as-of join reads it (C6), so it overlaps nothing. With `referenced`
+    (a relationship's `from` dataset and its (from, to) pairs), only entities it refers to."""
+    w = _Checks(compiled, a=dataset, b=referenced[0] if referenced else dataset)
+    e = w.keys(entity, "#a")
+    a, b = w.field(start, "#a"), w.field(end, "#a")
+    read = ", ".join(
+        [
+            f"row_number() OVER () AS {quote('#n')}",
+            *(f"{v} AS {quote(f'#e{i}')}" for i, v in enumerate(e)),
+            f"{a} AS {quote('#f')}",
+            f"{b} AS {quote('#u')}",
+        ]
+    )
+    where = f"{a} IS NOT NULL AND {b} IS NOT NULL"
+    if referenced is not None:
+        source, pairs = referenced
+        on = " AND ".join(f"{w.field(f, '#b')} = {w.field(t, '#a')}" for f, t in pairs)
+        where += f" AND EXISTS (SELECT 1 FROM {w.relation(source)} AS {quote('#b')} WHERE {on})"
+    x, y = quote("#x"), quote("#y")
+    same = " AND ".join(
+        f"{x}.{quote(f'#e{i}')} IS NOT DISTINCT FROM {y}.{quote(f'#e{i}')}" for i in range(len(e))
+    )
+    return w.done(
+        f"WITH {quote('#r')} AS (SELECT {read} FROM {w.relation(dataset)} AS {quote('#a')}"
+        f" WHERE {where}) SELECT count(*) AS {quote('#overlaps')} FROM {quote('#r')} AS {x}"
+        f" JOIN {quote('#r')} AS {y} ON {same} AND {x}.{quote('#n')} < {y}.{quote('#n')}"
+        f" AND {x}.{quote('#f')} < {y}.{quote('#u')} AND {y}.{quote('#f')} < {x}.{quote('#u')}",
+        ("#overlaps",),
+    )
+
+
+def repeat_check(
+    compiled: CompiledModel, side: str, other: str, pairs: tuple[Pair, ...]
+) -> EvidenceCheck:
+    """A relationship's `cardinality`, one side: the number of `side` key values more than one
+    row shares that a row of `other` refers to; `pairs` are (other field, side field)."""
+    w = _Checks(compiled, a=side, b=other)
+    read = ", ".join(f"{w.field(s, '#a')} AS {quote(f'#k{i}')}" for i, (_, s) in enumerate(pairs))
+    keys = ", ".join(w.field(s, "#a") for _, s in pairs)
+    on = w.matched(pairs, "#b", "#v", "#k")
+    return w.done(
+        f"SELECT count(*) AS {quote('#repeated')} FROM (SELECT {read} FROM "
+        f"{w.relation(side)} AS {quote('#a')} GROUP BY {keys} HAVING count(*) > 1) AS "
+        f"{quote('#v')} WHERE EXISTS (SELECT 1 FROM {w.relation(other)} AS {quote('#b')}"
+        f" WHERE {on})",
+        ("#repeated",),
+    )
+
+
+def orphan_check(
+    compiled: CompiledModel, source: str, target: str, pairs: tuple[Pair, ...]
+) -> EvidenceCheck:
+    """`referential_integrity`: the number of distinct `from` key values, none of them `NULL`,
+    that no `to` row has; `pairs` are (from field, to field)."""
+    w = _Checks(compiled, a=source, b=target)
+    read = ", ".join(f"{w.field(f, '#a')} AS {quote(f'#k{i}')}" for i, (f, _) in enumerate(pairs))
+    known = " AND ".join(f"{w.field(f, '#a')} IS NOT NULL" for f, _ in pairs)
+    on = w.matched(tuple((t, f) for f, t in pairs), "#b", "#v", "#k")
+    return w.done(
+        f"SELECT count(*) AS {quote('#orphans')} FROM (SELECT DISTINCT {read} FROM "
+        f"{w.relation(source)} AS {quote('#a')} WHERE {known}) AS {quote('#v')}"
+        f" WHERE NOT EXISTS (SELECT 1 FROM {w.relation(target)} AS {quote('#b')} WHERE {on})",
+        ("#orphans",),
+    )
+
+
+def consistency_check(
+    compiled: CompiledModel,
+    base: str,
+    table: str,
+    grain: tuple[Pair, ...],
+    measures: tuple[Pair, ...],
+) -> EvidenceCheck:
+    """`consistent` (C8): the aggregate table against its base aggregated at the table's grain,
+    on one snapshot, by a full outer join on the grain where `NULL` matches `NULL`. The groups
+    the table is missing, the groups it has in addition, and the groups in both where a stored
+    measure differs, a `NULL` against a value included. Both sides are the expressions a
+    question reads: the metric on the base, and the stored column's sum in the metric's type.
+    `grain` is (base field, table field); `measures` (base metric, table column)."""
+    w = _Checks(compiled, a=base, c=table)
+
+    def side(own: str, alias: str, groups: list[str], values: list[str]) -> str:
+        select = ", ".join(
+            [
+                *(f"{g} AS {quote(f'#g{i}')}" for i, g in enumerate(groups)),
+                *(f"{v} AS {quote(f'#m{i}')}" for i, v in enumerate(values)),
+                f"TRUE AS {quote('#in')}",
+            ]
+        )
+        by = f" GROUP BY {', '.join(groups)}" if groups else ""
+        return f"SELECT {select} FROM {w.relation(own)} AS {quote(alias)}{by}"
+
+    def typed(metric: MemberId) -> str:
+        return encoding(dict(_logical(compiled.require(metric).typed.type.logical)))
+
+    sides = [
+        side(
+            base,
+            "#a",
+            [w.field(f, "#a") for f, _ in grain],
+            [f"CAST({w.metric(m, '#a')} AS {typed(m)})" for m, _ in measures],
+        ),
+        side(
+            table,
+            "#c",
+            [w.field(f, "#c") for _, f in grain],
+            [w.stored(m, c, "#c") for m, c in measures],
+        ),
+    ]
+    b, t = quote("#b"), quote("#t")
+    on = " AND ".join(
+        f"{b}.{quote(f'#g{i}')} IS NOT DISTINCT FROM {t}.{quote(f'#g{i}')}"
+        for i in range(len(grain))
+    )
+    differs = " OR ".join(
+        f"{b}.{quote(f'#m{i}')} IS DISTINCT FROM {t}.{quote(f'#m{i}')}"
+        for i in range(len(measures))
+    )
+    both = f"{b}.{quote('#in')} AND {t}.{quote('#in')}"
+    return w.done(
+        f"WITH {b} AS ({sides[0]}), {t} AS ({sides[1]}) SELECT"
+        f" count(*) FILTER (WHERE {t}.{quote('#in')} IS NULL) AS {quote('#missing')},"
+        f" count(*) FILTER (WHERE {b}.{quote('#in')} IS NULL) AS {quote('#additional')},"
+        f" count(*) FILTER (WHERE {both} AND ({differs or 'FALSE'})) AS {quote('#different')}"
+        f" FROM {b} FULL OUTER JOIN {t} ON {on or 'TRUE'}",
+        ("#missing", "#additional", "#different"),
+    )

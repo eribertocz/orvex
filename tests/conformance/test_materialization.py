@@ -20,6 +20,7 @@ from orvex.contracts.store.v1 import StatementRequest
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.correctness.discharge import DischargeError, verify_physical, verify_plan
+from orvex.semantic.evidence import verify
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies import PolicyModel, read_policies
 
@@ -246,8 +247,17 @@ def run(
                                 parameters=[],
                             )
                         )
-            consistent = (lambda name, snapshot: True) if verified else None
-            return ask(document, compiled, lake, consistent=consistent, **more)
+            return ask(document, compiled, lake, evidence=checked(compiled, lake, verified), **more)
+
+
+def checked(compiled: CompiledModel, lake: Any, verified: bool = True) -> Any:  # noqa: ANN401
+    """The records of the lake's snapshot, checked by P2-26's own statements; none when the
+    test wants the tables unverified."""
+    if not verified:
+        return None
+    snapshot = lake.current_snapshot().id
+    records = verify(compiled, lake.read, snapshot, at=ce.INSTANT).records
+    return lambda found: records if found["id"] == snapshot else ()
 
 
 SAMPLE: list[Sale] = [
@@ -626,7 +636,7 @@ def test_a_period_end_balance_is_not_eligible() -> None:
             period.query("balance", group_by=period.BY_MONTH),
             with_table,
             lake,
-            consistent=lambda n, s: True,
+            evidence=checked(with_table, lake),
         )
     assert evidence(found)["C8.equivalent:by_region"] == "base:t; not eligible: period_end"
 
