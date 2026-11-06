@@ -1,0 +1,1 @@
+{ "kind": "statistics", "tables": ["lake.staging.readings"], "snapshot": 12 }

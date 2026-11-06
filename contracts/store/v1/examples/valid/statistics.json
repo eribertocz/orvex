@@ -1,0 +1,5 @@
+{
+  "kind": "statistics",
+  "tables": ["staging.readings", "consumers"],
+  "snapshot": 12
+}

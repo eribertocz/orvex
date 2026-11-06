@@ -80,6 +80,10 @@ class PhysicalQuery:
     sorts: tuple[tuple[str, str], ...] = ()
     # Then, with totals (P2-23), one INTEGER column: how many groups the row keeps.
     level: str | None = None
+    # Every lake table the statement reads, once per read, as (table, dataset): the dataset
+    # whose rows `relation` gives, or none for any other read (a policy's or a path's table,
+    # an aggregate table). What a read-cost estimate counts (#352).
+    reads: tuple[tuple[str, str | None], ...] = ()
 
 
 LEVEL = "#level"  # with totals: how many groups a row keeps (P2-23)
@@ -130,6 +134,7 @@ class _Writer:
         policies placed (none for an evidence check) and the aggregate table read (C8)."""
         self.compiled = compiled
         self.parameters: list[dict[str, str | None]] = []
+        self.reads: list[tuple[str, str | None]] = []  # every table read, in order (#352)
         self.dataset_alias: dict[str, str] = {}
         document = compiled.ossie.document
         datasets = document.get("datasets", ())
@@ -403,6 +408,7 @@ class _Writer:
         # The aggregate table in place of its base (C8), restricted by the base's policies,
         # whose fields it keeps as the grain it groups by: each group wholly in or out.
         read = rollup.dataset if rollup is not None and dataset == rollup.base else dataset
+        self.reads.append((self.tables[read], dataset if read == dataset else None))
         table = quote(self.tables[read])
         restrictions = self.placement.of(dataset) if self.placement else ()
         if not restrictions:
@@ -427,6 +433,7 @@ class _Writer:
             else:
                 own, other, target = related["to_columns"], related["from_columns"], related["from"]
             target = sql.normalize(str(target))
+            self.reads.append((self.tables[target], None))
             tables.append(f"{quote(self.tables[target])} AS {quote(here)}")
             links += [
                 f"{self.field(MemberId('field', current, sql.normalize(str(a))), at)}"
@@ -455,6 +462,7 @@ class _Writer:
         return found
 
     def mapping(self, table: str) -> str:
+        self.reads.append((table, None))
         return ".".join(quote(part) for part in table.split("."))
 
     def attribute_value(self, name: str, kinds: tuple[str, ...], datatype: str | None) -> str:
@@ -632,6 +640,7 @@ class _Writer:
             plan.fingerprint,
             hidden=tuple(hidden),
             sorts=tuple((s.name, encodings[s.name]) for s in plan.order),
+            reads=tuple(self.reads),
         )
 
     def after_position(self, encodings: Mapping[str, str]) -> str:
@@ -705,6 +714,7 @@ class _Writer:
             weights=tuple(self.weights),
             as_of=tuple(self.as_of),
             level=LEVEL if plan.totals is not None else None,
+            reads=tuple(self.reads),
         )
 
     def totalled(self, fact: str) -> tuple[str, list[ColumnSpec], list[tuple[str, str]]]:

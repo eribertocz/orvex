@@ -197,10 +197,13 @@ Because `transform` and `semantic` live in the same product, the engine **re-ver
 - The estimate and the actual figures are recorded in the receipt so wrong estimates can be measured and improved.
 - **Detail pages (P2-24, Owner precision on #346).**
   - Exact limits come first: the page size is capped and refused when bound, and the statement reads at most `size + 1` rows.
-  - The read cost is estimated from the bound snapshot's DuckLake file statistics only (row counts, sizes, per-column minimum and maximum after pruning), as an **upper bound**, never a guess or a sample. `EXPLAIN` cardinalities are recorded for measurement only.
-  - A question is refused before running only on what is proven: a page size above the cap, or a **lower bound** above the budget. An upper bound above the budget is never a refusal by itself.
+  - The read cost is estimated from the bound snapshot's DuckLake file statistics only (`store/v1` `StatisticsRequest`, #352), as an **upper bound** of the rows of the lake files the answer can need, never a guess or a sample. It is not DuckDB's physical scan count, which can be higher (late materialization reads a file twice) or lower (DuckDB prunes row groups as well):
+    - every table the statement reads counts all its rows, once per read: each data file's row count before deletes, and the rows kept in the catalog (data inlining);
+    - only the base of the page, when the statement reads it once, is pruned. A file is left out when its exact minimum, maximum and null count prove it holds no row that a condition on a plain column of the base keeps: a filter (`in`, `range`, `is_null`, `is_not_null`), the cursor's start on the first sort key, or a conjunct of a row policy on the base;
+    - a file without the statistics a proof needs is counted, so the bound only gets looser, never wrong.
+  - The estimate decides nothing. **No lower bound is ever inferred from statistics** (Owner precision on #352): a filter, a policy, the start or `LIMIT` can stop the read early, and DuckDB skips row groups on its own. A question is refused before running only on a valid proof: today, a page size above the cap.
   - Every read runs with the time limit (the store interrupts the statement) and the engine's memory limit. Reaching either refuses the whole result with `QUERY_BUDGET_EXCEEDED` (`time_ms` or `memory_bytes`), never a partial page.
-  - **Without reliable statistics** (none for a dataset read, or incomplete for a pruning column), no estimate exists and none decides: the question runs under the limits, and the receipt omits `estimate`. Until `store` exposes a snapshot's file statistics, every detail page is in this case.
+  - **Without reliable statistics** (none from the store, or incomplete for any table read), no estimate exists: the question runs under the limits, and the receipt omits `estimate`. The estimate is recorded in the receipt for measurement, and never shown when row policies apply (#238 rule 12).
 
 ## 9. Matrix and totals support
 

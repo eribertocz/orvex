@@ -28,6 +28,7 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.compute as pc
+from orvex.contracts.store.v1 import StatisticsRequest, StatisticsResult
 from orvex.semantic import zonedata
 from orvex.semantic.adapters.duckdb import PhysicalQuery, compile_plan, quote
 from orvex.semantic.canonical import fingerprint
@@ -36,6 +37,7 @@ from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.correctness import CorrectnessReport, analyze
 from orvex.semantic.correctness.discharge import verify_physical
 from orvex.semantic.errors import SemanticError
+from orvex.semantic.estimates import estimate
 from orvex.semantic.evidence import CONSISTENT, EvidenceRecord, Ledger, relied
 from orvex.semantic.ossie import sql
 from orvex.semantic.planning import PlanError, SemanticPlan, plan
@@ -88,6 +90,9 @@ class Engine:
     # every piece of evidence is `declared`, and no aggregate table is read in place of its
     # base, since none is verified consistent (C8).
     evidence: Callable[[Mapping[str, object]], Iterable[EvidenceRecord]] | None = None
+    # Read-cost estimates (#352): the snapshot's file statistics (`store/v1`), none when the
+    # store gives none; supplied by `server`. None: no estimate, which decides nothing anyway.
+    statistics: Callable[[StatisticsRequest], StatisticsResult | None] | None = None
     clock: Callable[[], float] = time.monotonic
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
 
@@ -389,6 +394,12 @@ def _execute(
     for name in _unregistered(placement, engine):  # a deny-list caller absent: zero rows
         applied[name] = "no_rows"
         notices.append(SemanticError("POLICY_MAPPING_MISSING", {"policy": name}))
+    snapshot = engine.snapshot.get("id")
+    estimated = (  # an upper bound, recorded only: it never refuses (#352)
+        estimate(plan_, physical, report.compiled, engine.statistics, snapshot)
+        if isinstance(snapshot, int) and not isinstance(snapshot, bool)
+        else None
+    )
     table = _read(physical, engine, budgeted=plan_.mode == "detail")
     duration = max(0, round((engine.clock() - clock) * 1000))
     page: dict[str, object]
@@ -447,8 +458,10 @@ def _execute(
             preaggregation=plan_.rollup.name if plan_.rollup is not None else None,
             started_at=_instant(started),
             duration_ms=duration,
-            # The cells a detail page returned (P2-24); rows scanned are not known without the
-            # snapshot's statistics, so they are left out, never guessed.
+            # Rows the read may scan, an upper bound from the snapshot's statistics (#352),
+            # and the cells a detail page returned (P2-24); actual rows scanned are not
+            # measured, so they are left out, never guessed.
+            estimate=estimated,
             actual={"cells": table.num_rows * len(physical.columns)}
             if plan_.mode == "detail"
             else None,

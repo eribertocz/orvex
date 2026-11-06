@@ -17,7 +17,23 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 | `MaintenanceReport` | What one `maintain` call did (below) |
 | `StoreError` | `code`, `message`, `details` |
 | `ResultJson` | A read result as JSON: `columns` (`name`, DuckDB `type`) and positional `rows`, encoded exactly (below) |
+| `StatisticsRequest` | The file statistics of lake tables as of one `snapshot`, for read-cost upper bounds only (below) |
+| `StatisticsResult` | One `TableStatistics` per table asked, in order |
 | `SourceAttachment` | A source given to `open_lake` — files (`parquet`, `csv`, `duckdb`) or databases (`sqlite`, `postgres`); readable by name inside write transactions only (below) |
+
+## File statistics (`StatisticsRequest`, #352)
+
+`Lake.statistics(request)` reads the lake's own catalog on the store's connection, as of `request.snapshot`:
+
+- **Tables:** each `table` (schema `main`) or `schema.table` must be a lake table alive at the snapshot. Anything else is `STORE_STATEMENT_INVALID`, with `details.table` and `details.snapshot`. This covers a missing or dropped table, the catalog's own tables, and another catalog's tables. A snapshot that does not exist is `STORE_SNAPSHOT_NOT_FOUND` or `STORE_SNAPSHOT_EXPIRED`, as for a read.
+- **Per data file of the snapshot:**
+  - `rows`: the row count before deletes, so deleted rows keep it an upper bound of the file's live rows;
+  - `bytes`: the file size;
+  - for each column, `nulls` where the lake records it, and `min` and `max` only where the lake records them as exact, as text in the column's DuckDB type.
+- **`inlined_rows`:** the rows the catalog itself keeps for the table at the snapshot (data inlining). They have no column statistics.
+- **`complete`:** false when a file of the snapshot has no row count. Then no upper bound exists.
+- **What is never returned:** a path or any other catalog detail. The request runs under an admission slot and the lake's default time limit, like a read.
+- **What statistics prove:** an upper bound only. They are never a lower bound of what a read scans: filters, `LIMIT` and DuckDB's own pruning stop reads early.
 
 ## File sources (`SourceAttachment`)
 
