@@ -188,7 +188,8 @@ class _Writer:
         if rollup is not None:  # its stored column, re-aggregated as declared (C8)
             if member not in rollup.stored:
                 raise PlanError("a metric the aggregate table does not store")
-            return f"SUM({self.field(rollup.stored[member], alias)})"
+            encoding = self.column(member, "#m", "metric", None).encoding  # the metric's type
+            return f"CAST(SUM({self.field(rollup.stored[member], alias)}) AS {encoding})"
         tree = self.compiled.require(member).parsed.tree
         if tree is None:
             raise _unsupported()

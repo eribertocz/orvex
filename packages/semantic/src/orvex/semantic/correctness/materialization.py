@@ -100,24 +100,36 @@ def _prove(
     dict[MemberId, MemberId], dict[MemberId, MemberId], dict[MemberId, tuple[MemberId, MemberId]]
 ]:
     compiled = analysis.compiled
-    if analysis.derived or analysis.windows or analysis.periods or analysis.bridges:
+    if analysis.periods:
+        raise _No("period_end")
+    if analysis.derived or analysis.windows or analysis.bridges:
         raise _No("shape")
     if analysis.temporal or getattr(analysis.query, "totals", None):
         raise _No("shape")
     own = [m for m in compiled.members if m.kind == "field" and m.dataset == dataset]
-    by_dimension: dict[str, list[MemberId]] = {}
-    for member in own:
-        name = analysis.conformed_name(member)
-        if name is not None:
-            by_dimension.setdefault(name, []).append(member)
+    base_fields = [m for m in compiled.members if m.kind == "field" and m.dataset == home]
+
+    def by_dimension(members: list[MemberId]) -> dict[str, list[MemberId]]:
+        found: dict[str, list[MemberId]] = {}
+        for member in members:
+            name = analysis.conformed_name(member)
+            if name is not None:
+                found.setdefault(name, []).append(member)
+        return found
+
+    stored_by, based_by = by_dimension(own), by_dimension(base_fields)
 
     def mapped(member: MemberId, reason: str) -> MemberId:
+        """The table's field for one base field: the one field of its conformed dimension on
+        each side, so a field behind the dimension (a day under a month) never passes for it."""
         if member.kind != "field" or member.dataset != home:
             raise _No(reason)
         name = analysis.conformed_name(member)
-        if name is None or name not in grain or len(by_dimension.get(name, ())) != 1:
+        if name is None or name not in grain:
             raise _No(reason)
-        target = by_dimension[name][0]
+        if based_by.get(name) != [member] or len(stored_by.get(name, ())) != 1:
+            raise _No(reason)
+        target = stored_by[name][0]
         wanted = compiled.require(member).typed.type.logical
         if compiled.require(target).typed.type.logical != wanted:
             raise _No(reason)
@@ -167,6 +179,7 @@ def _prove(
         typed = compiled.require(metric).typed
         additivity = classes.get(metric, ("", ""))[0]
         if additivity == "additive" and metric in stored:
+            _same_values(analysis, metric, stored[metric])
             used[metric] = stored[metric]
             continue
         if additivity == "recomputable":
@@ -185,6 +198,7 @@ def _prove(
                 )
                 if match is None:
                     raise _No("ratio")
+                _same_values(analysis, match, stored[match])
                 ends.append(stored[match])
             components[metric] = (ends[0], ends[1])
             continue
@@ -195,6 +209,29 @@ def _prove(
         if analysis.policies.protection(member, analysis.groups) != "visible":
             raise _No("policy")
     return fields, used, components
+
+
+def _same_values(analysis: Any, metric: MemberId, column: MemberId) -> None:  # noqa: ANN401
+    """The stored column holds the metric's own values: the same logical type (an exact
+    decimal stays a decimal of the same scale, an integer an integer) and the same declared
+    unit or currency as the field the metric aggregates."""
+    compiled = analysis.compiled
+    if compiled.require(column).typed.type.logical != compiled.require(metric).typed.type.logical:
+        raise _No("metric")
+    tree = compiled.require(metric).parsed.tree
+    refs = sql.references(tree) if tree is not None else []
+    measured = [
+        MemberId("field", r.parts[0] if len(r.parts) == 2 else (metric.dataset or ""), r.parts[-1])
+        for r in refs
+    ]
+
+    def declared(member: MemberId) -> tuple[object, object, object]:
+        payload = analysis.payloads.get(compiled.require(member).parsed.pointer, {})
+        return payload.get("semantic_type"), payload.get("currency"), payload.get("unit")
+
+    sources = {declared(m) for m in measured if m in compiled.members}
+    if len(sources) > 1 or (sources and declared(column) not in sources):
+        raise _No("unit")
 
 
 def _class(analysis: Any, classes: Mapping[MemberId, tuple[str, str]], metric: MemberId) -> str:  # noqa: ANN401
