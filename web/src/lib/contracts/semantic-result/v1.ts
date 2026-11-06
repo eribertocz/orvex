@@ -65,6 +65,10 @@ export interface SemanticResult {
 	page: Page;
 	others_row?: Count;
 	/**
+	 * P2-23, `aggregate` only, present when the query asks for `totals`: one entry per row, in row order. `level` is how many `group_by` members the row keeps.
+	 */
+	row_roles?: RowRole[];
+	/**
 	 * @maxItems 64
 	 */
 	notices: Notice[];
@@ -182,6 +186,16 @@ export interface Page {
 	next?: Cursor;
 	limit?: number;
 	truncated?: boolean;
+}
+/**
+ * A row's role: `detail` keeps every group, `subtotal` the first `level` of them, `total` none. A dimension the row does not keep is `null`, which is never a value: `row_roles` tells it from a real `NULL`.
+ *
+ * This interface was referenced by `SemanticResult`'s JSON-Schema
+ * via the `definition` "RowRole".
+ */
+export interface RowRole {
+	role: 'detail' | 'subtotal' | 'total';
+	level: Count;
 }
 /**
  * A `semantic-error/v1` warning or notice in the caller's audience view (that contract is the authority on each code).

@@ -202,6 +202,10 @@ export interface SemanticQuery {
 	coverage?: 'aligned' | 'full';
 	limit?: Count;
 	/**
+	 * P2-23: `none` (the default), `grand` (one grand-total row), or `rollup` (a subtotal for each prefix of `group_by` in presentation order, then the grand total). Computed by the engine at every level with the same correctness rules as the detail rows.
+	 */
+	totals?: 'none' | 'grand' | 'rollup';
+	/**
 	 * @minItems 1
 	 * @maxItems 256
 	 */

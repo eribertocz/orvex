@@ -48,6 +48,7 @@ from orvex.semantic.receipt import (
     build_receipt,
 )
 from orvex.semantic.result import SemanticResult, ValueEncoder, build_result
+from orvex.semantic.result.building import CellState
 from orvex.semantic.result.descriptors import arrow_type
 
 BATCH_SIZE = 65_536
@@ -208,6 +209,7 @@ def _read(physical: PhysicalQuery, engine: Engine) -> pa.Table:
     expected += [(name, pa.bool_()) for name, _ in physical.checks]
     expected += [(name, pa.int64()) for name, _ in physical.weights]
     expected += [(name, pa.int64()) for name, _ in physical.as_of]
+    expected += [(physical.level, pa.int32())] if physical.level else []
     found = [(f.name, f.type) for f in table.schema]
     if found != expected:
         raise PlanError(f"the engine returned {found}, the plan describes {expected}")
@@ -231,6 +233,34 @@ def _read(physical: PhysicalQuery, engine: Engine) -> pa.Table:
             )
         table = table.drop_columns([name])
     return table
+
+
+def _row_roles(
+    table: pa.Table, physical: PhysicalQuery, plan_: SemanticPlan
+) -> tuple[pa.Table, list[dict[str, object]] | None, list[CellState]]:
+    """With totals (P2-23): the table without its level column, each row's role, and a
+    running total's cells `undefined_at_total` at every total row (S9)."""
+    if physical.level is None:
+        return table, None, []
+    levels = table.column(physical.level).to_pylist()  # one small integer per result row
+    table = table.drop_columns([physical.level])
+    groups = sum(1 for c in physical.columns if c.role == "dimension")
+    roles: list[dict[str, object]] = [
+        {
+            "role": "total" if level == 0 else "detail" if level == groups else "subtotal",
+            "level": level,
+        }
+        for level in levels
+    ]
+    windows = {w.name for w in plan_.windows}
+    at = [i for i, c in enumerate(physical.columns) if c.name in windows]
+    states = [
+        CellState(row, column, "undefined_at_total")
+        for row, level in enumerate(levels)
+        if level != groups or not groups
+        for column in at
+    ]
+    return table, roles, states
 
 
 def _execute(
@@ -262,6 +292,7 @@ def _execute(
     truncated = limit is not None and table.num_rows > limit
     if truncated and limit is not None:
         table = table.slice(0, limit)
+    table, row_roles, states = _row_roles(table, physical, plan_)
     page: dict[str, object] = {"truncated": truncated}
     if limit is not None:
         page["limit"] = limit
@@ -274,6 +305,8 @@ def _execute(
         page=page,
         notices=notices,
         audience="builder" if read_caller(context).builder else "other",
+        cell_states=states,
+        row_roles=row_roles,
     )
     compiled: CompiledModel = report.compiled
     snapshot = engine.snapshot

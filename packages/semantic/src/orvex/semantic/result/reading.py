@@ -19,8 +19,10 @@ from orvex.semantic.result.building import (
     CELL_STATES_KEY,
     DUCKDB_TYPE,
     OTHERS_ROW_KEY,
+    ROW_ROLES_KEY,
     CellState,
     arrow_field,
+    check_row_roles,
     check_states,
     schema_validator,
     strict_json,
@@ -113,6 +115,9 @@ def _check_arrow(
     expected = {CELL_STATES_KEY: canonicalize(entries)}
     if others_row is not None:
         expected[OTHERS_ROW_KEY] = str(others_row).encode("ascii")
+    row_roles = envelope.get("row_roles")
+    if row_roles is not None:
+        expected[ROW_ROLES_KEY] = canonicalize(row_roles)
     if metadata != expected:
         raise InvalidResult("arrow_metadata", "the Arrow schema metadata differs from the envelope")
     states = {(e["row"], e["column"]) for e in entries}
@@ -164,6 +169,15 @@ def read_result(
     check_states(states, columns, len(rows), others_row if isinstance(others_row, int) else None)
     by_cell = {(entry.row, entry.column): entry.state for entry in states}
     _check_cells(rows, columns, by_cell)
+    roles = parsed.get("row_roles")
+    if roles is not None:
+        check_row_roles(
+            list(roles),
+            columns,
+            len(rows),
+            str(parsed["mode"]),
+            lambda row, column: rows[row][column] is not None or (row, column) in by_cell,
+        )
     if arrow is not None:
         _check_arrow(arrow, parsed, columns, rows, entries)
     if receipt is not None:

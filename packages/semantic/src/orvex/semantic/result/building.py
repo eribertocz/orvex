@@ -37,6 +37,7 @@ SCHEMA_FILE = "semantic-result-v1.json"
 DUCKDB_TYPE = b"duckdb_type"
 CELL_STATES_KEY = b"semantic.cell_states"
 OTHERS_ROW_KEY = b"semantic.others_row"
+ROW_ROLES_KEY = b"semantic.row_roles"
 FIELD_KEYS = (
     "member",
     "role",
@@ -139,6 +140,34 @@ def check_states(
             "others_placement",
             f"others cells {sorted(others)} are not the dimension cells {sorted(expected)}",
         )
+
+
+def check_row_roles(
+    roles: Sequence[Mapping[str, object]],
+    columns: Sequence[Mapping[str, object]],
+    row_count: int,
+    mode: str,
+    kept: Callable[[int, int], bool],
+) -> None:
+    """The rule on `row_roles` (P2-23): `aggregate` only, one entry per row, each role agreeing
+    with its level, and each dimension a row does not keep `null` (`kept(row, column)` says
+    whether that cell holds anything), so a rolled-up group is never read as a value."""
+    if mode != "aggregate":
+        raise InvalidResult("row_roles_mode", "row roles exist in aggregate mode only")
+    if len(roles) != row_count:
+        raise InvalidResult("row_roles_count", f"{len(roles)} row roles for {row_count} rows")
+    dimensions = [i for i, column in enumerate(columns) if column.get("role") == "dimension"]
+    for row, entry in enumerate(roles):
+        level, role = entry["level"], entry["role"]
+        if not isinstance(level, int) or not 0 <= level <= len(dimensions):
+            raise InvalidResult("row_roles_level", f"row {row} keeps {level} groups")
+        # With no group at all, the one row is the grand total.
+        expected = "total" if level == 0 else "detail" if level == len(dimensions) else "subtotal"
+        if role != expected:
+            raise InvalidResult("row_roles_role", f"row {row} is {role} at level {level}")
+        for column in dimensions[level:]:
+            if kept(row, column):
+                raise InvalidResult("row_roles_rolled_up", f"cell {row, column} holds a value")
 
 
 def _metadata_text(value: object) -> bytes:
@@ -320,6 +349,7 @@ def build_result(
     notices: Sequence[SemanticError] = (),
     locale: str | None = None,
     audience: str | None = None,
+    row_roles: Sequence[Mapping[str, object]] | None = None,
 ) -> SemanticResult:
     """The result of `table` described by `columns`, or `InvalidResult`.
 
@@ -337,6 +367,14 @@ def build_result(
         if entry.state not in KNOWN_STATES:
             raise InvalidResult("state_unknown", f"{entry.state!r} is not a state of v1")
     check_states(states, descriptors, table.num_rows, others_row)
+    if row_roles is not None:
+        check_row_roles(
+            row_roles,
+            descriptors,
+            table.num_rows,
+            mode,
+            lambda row, column: bool(table.column(column)[row].is_valid),
+        )
     per_column = [0] * len(columns)
     for entry in states:
         per_column[entry.column] += 1
@@ -371,6 +409,8 @@ def build_result(
     }
     if others_row is not None:
         envelope["others_row"] = others_row
+    if row_roles is not None:
+        envelope["row_roles"] = [{"role": r["role"], "level": r["level"]} for r in row_roles]
     problems = sorted(
         schema_validator().iter_errors({**envelope, "rows": []}), key=lambda e: list(e.path)
     )
@@ -380,6 +420,8 @@ def build_result(
     metadata = {CELL_STATES_KEY: canonicalize(state_list)}
     if others_row is not None:
         metadata[OTHERS_ROW_KEY] = str(others_row).encode("ascii")
+    if row_roles is not None:
+        metadata[ROW_ROLES_KEY] = canonicalize(envelope["row_roles"])
     arrow = pa.Table.from_arrays(
         [table.column(index) for index in range(table.num_columns)],
         schema=pa.schema(fields, metadata=metadata),

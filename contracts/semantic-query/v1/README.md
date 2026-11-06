@@ -20,6 +20,7 @@ Every object is closed: an unknown member is invalid. The only JSON number is `v
 | `top_n` | aggregate | `{by, n, per?, others}` (S10) |
 | `coverage` | aggregate | `aligned` or `full` (S3) |
 | `limit` | aggregate | a count |
+| `totals` | aggregate | `none` (default), `grand` or `rollup` (P2-23) |
 | `fields` | detail, required | 1–256 `{member, role?}` |
 | `page` | detail, required | `{size, after?}` |
 | `order` | both; detail: required | 1–64 `{by, direction?, nulls?}` |
@@ -38,6 +39,10 @@ Every object is closed: an unknown member is invalid. The only JSON number is `v
 - **`coverage`** (S3): the explicit choice, `aligned` or `full`, for comparing a partial period with a complete one (`semantic-engine.md` §8 S3, `COVERAGE_POLICY_REQUIRED`). Its exact semantics are bound in P2-05b and P2-11.
 - **`order`**: `by` names the metric or member to sort by. `direction` defaults to `asc` and `nulls` to `last`.
 - **`limit`**: at most this many rows.
+- **`totals`** (P2-23): `none`, the default and the same as leaving it out; `grand`, one grand-total row; or `rollup`, one subtotal level for each prefix of `group_by` in presentation order, then the grand total. `rollup` needs `group_by`; `totals` is refused in detail mode.
+  - Every level is computed by the engine in the same statement, from the same authorized rows, with the same correctness rules as the detail rows (`semantic-engine.md` §5): ratios and distinct counts are recomputed at each level, never added; a period-end balance at a level without its time axis takes each entity's value at the end of the whole range asked; a running total is `undefined_at_total` at every total level.
+  - Each subtotal comes after its group's rows, and the grand total last. An `order` on a metric sorts each level by its own value, as a pivot table does: the groups of a level by their subtotals, and within each group its rows. An `order` on a member sorts the levels that keep it.
+  - `limit` cuts the rows in that order; it never changes a total's value. Each row's role is in the result's `row_roles` (`semantic-result` v1).
 
 ### Detail mode (`semantic-engine.md` §9)
 - **`fields`**: row-level members in column order, each with an optional `role`.

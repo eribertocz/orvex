@@ -198,6 +198,10 @@ class SemanticPlan:
     placement: Any = field(default=None, compare=False, repr=False)
     # Filters on a running total's own groups: they choose the rows shown, after it (S9).
     after: tuple[Filter, ...] = ()
+    # Totals (P2-23): `grand` or `rollup`, and each total level as how many of the groups, in
+    # presentation order, it keeps; every level is computed in the same statement.
+    totals: str | None = None
+    levels: tuple[int, ...] = ()
     # Set only by `plan`, after construction: a copy (`dataclasses.replace`) has none.
     evidence: Mapping[str, str] = field(default_factory=dict, init=False, compare=False, repr=False)
     issued: object = field(default=None, init=False, compare=False, repr=False)
@@ -293,6 +297,7 @@ def _document(plan: dict[str, Any]) -> dict[str, object]:
             if plan["windows"]
             else {}
         )
+        | ({"totals": [plan["totals"], list(plan["levels"])]} if plan["totals"] else {})
     )
 
 
@@ -653,6 +658,7 @@ class _Planner:
                 Latest(axis, entity, bucket, zone),
                 fact.policies,
             )
+        totals = self.report.facts.get("totals")
         parts: dict[str, Any] = {
             "report_fingerprint": self.report.fingerprint,
             "sources": tuple(self.sources),
@@ -669,6 +675,8 @@ class _Planner:
             else (),
             "windows": tuple(window_steps),
             "after": after,
+            "totals": totals["kind"] if totals else None,
+            "levels": tuple(int(n) for n in totals["levels"]) if totals else (),
         }
         found = SemanticPlan(
             **parts,

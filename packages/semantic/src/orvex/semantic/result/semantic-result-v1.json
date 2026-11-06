@@ -69,6 +69,13 @@
     "others_row": {
       "$ref": "#/$defs/Count"
     },
+    "row_roles": {
+      "description": "P2-23, `aggregate` only, present when the query asks for `totals`: one entry per row, in row order. `level` is how many `group_by` members the row keeps.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RowRole"
+      }
+    },
     "notices": {
       "type": "array",
       "maxItems": 64,
@@ -111,7 +118,8 @@
           "page": {
             "$ref": "#/$defs/DetailPage"
           },
-          "others_row": false
+          "others_row": false,
+          "row_roles": false
         }
       }
     },
@@ -1376,6 +1384,27 @@
               ]
             }
           }
+        }
+      }
+    },
+    "RowRole": {
+      "description": "A row's role: `detail` keeps every group, `subtotal` the first `level` of them, `total` none. A dimension the row does not keep is `null`, which is never a value: `row_roles` tells it from a real `NULL`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "level"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "detail",
+            "subtotal",
+            "total"
+          ]
+        },
+        "level": {
+          "$ref": "#/$defs/Count"
         }
       }
     }

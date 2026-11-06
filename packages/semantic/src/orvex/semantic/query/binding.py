@@ -921,7 +921,9 @@ class _Canonical:
             "coverage": document.get("coverage"),
             "limit": document.get("limit"),
             "top_n": self.top_n(document.get("top_n")),
-        }
+        } | (  # only when asked: `none` and absent are the same query, with the same fingerprint
+            {"totals": document["totals"]} if document.get("totals", "none") != "none" else {}
+        )
 
     def metric_filter(self, at: int, entry: Json) -> list[object]:
         here = f"/metric_filters/{at}"
