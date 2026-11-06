@@ -82,6 +82,9 @@ class Engine:
     # it is still kept (None once expired); both supplied by `server`.
     cursors: CursorForm | None = None
     pinned: Callable[[str], Mapping[str, object] | None] | None = None
+    # C8 (P2-25): whether an aggregate table is verified consistent with its base on this
+    # snapshot (P2-26 evidence); none: never, so the base is always read (decision 1).
+    consistent: Callable[[str, Mapping[str, object]], bool] | None = None
     clock: Callable[[], float] = time.monotonic
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
 
@@ -411,8 +414,13 @@ def _execute(
     compiled: CompiledModel = report.compiled
     snapshot = engine.snapshot
     data = [
-        DataRead(
-            name=_written(compiled, source.dataset),
+        DataRead(  # the aggregate table, when it is read in place of its base (C8)
+            name=_written(
+                compiled,
+                plan_.rollup.dataset
+                if plan_.rollup is not None and source.dataset == plan_.rollup.base
+                else source.dataset,
+            ),
             route=source.route,
             retained=True,
             snapshot_id=int(str(snapshot["id"])),
@@ -432,6 +440,7 @@ def _execute(
             engine_version=engine.engine_version,
             adapter=physical.adapter,
             adapter_version=physical.adapter_version,
+            preaggregation=plan_.rollup.name if plan_.rollup is not None else None,
             started_at=_instant(started),
             duration_ms=duration,
             # The cells a detail page returned (P2-24); rows scanned are not known without the
@@ -535,7 +544,17 @@ def answer(
             engine = replace(engine, snapshot=pinned)
             # A float as its shortest exact text: bound as text and cast back, never rounded.
             start = tuple(repr(v) if isinstance(v, float) else v for v in state.position)
-    logical = plan(report, start)
+    rollup = next(  # the first proven table whose stored numbers are current (C8)
+        (
+            c.name
+            for c in report.materials
+            if c.eligible
+            and engine.consistent is not None
+            and engine.consistent(c.name, engine.snapshot)
+        ),
+        None,
+    )
+    logical = plan(report, start, rollup)
     physical = compile_plan(logical)
     evidence = verify_physical(logical, physical)  # checked again, and in the statement (C9)
     return _execute(physical, engine, report, logical, context, evidence, binding)

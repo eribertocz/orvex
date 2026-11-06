@@ -72,6 +72,7 @@ class CorrectnessReport:
     caller_groups: tuple[str, ...] = field(default=(), compare=False, repr=False)
     placement: Any = field(default=None, compare=False, repr=False)  # the caller's row policies
     policies: Any = field(default=None, compare=False, repr=False)  # the model they come from
+    materials: Any = field(default=(), compare=False, repr=False)  # C8 candidates, proved
     # Set only by `make_report`, after construction: a copy (`dataclasses.replace`) or any
     # other instance has none, so the planner refuses it.
     issued: object = field(default=None, init=False, compare=False, repr=False)
@@ -118,6 +119,7 @@ def make_report(
     caller_groups: tuple[str, ...],
     placement: Any = None,  # noqa: ANN401
     policies: Any = None,  # noqa: ANN401
+    materials: Any = (),  # noqa: ANN401
 ) -> CorrectnessReport:
     ordered = tuple(sorted(obligations, key=lambda o: o.id))
     document = _document(model_fingerprint, query_fingerprint, facts, ordered, rules)
@@ -133,6 +135,7 @@ def make_report(
         caller_groups=caller_groups,
         placement=placement,
         policies=policies,
+        materials=tuple(materials),
     )
     object.__setattr__(report, "issued", ISSUED)
     return report

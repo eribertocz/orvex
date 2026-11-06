@@ -280,8 +280,9 @@ def run_case(
         groups=frozenset(),
         managed_tables={},
     )
-    # A declared rollup (`aggregate_table`) is a materialization (C8): this planner never reads
-    # one, so it is not loaded.
+    # A declared rollup (`aggregate_table`) is a materialization (C8): it is read only when its
+    # stored numbers are verified consistent (P2-26) and the model declares what it stores; no
+    # normative case does both, so none is loaded.
     payloads = {
         e.pointer.rsplit("/custom_extensions/", 1)[0]: e.payload
         for e in compiled.ossie.product_extensions

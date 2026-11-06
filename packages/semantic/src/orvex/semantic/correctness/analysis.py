@@ -74,6 +74,7 @@ from typing import Any
 from orvex.semantic.compiler.compiled import CompiledMember, CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.correctness.graph import Graph, Path
+from orvex.semantic.correctness.materialization import Candidate, candidates
 from orvex.semantic.correctness.report import CorrectnessReport, Obligation, make_report
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
@@ -95,6 +96,7 @@ RULES: tuple[tuple[str, int], ...] = (
     ("C5", 1),
     ("C6", 1),
     ("C7", 1),
+    ("C8", 1),
     ("C9", 1),
     ("S9", 1),
 )  # implemented, in the order they run
@@ -321,6 +323,7 @@ class _Analysis:
         }
         self.query = _Query(bound)
         self.periods: dict[MemberId, tuple[MemberId, str]] = {}
+        self.materials: list[Candidate] = []  # C8: the aggregate tables of the one base
 
     # names, as the model writes them
 
@@ -1491,6 +1494,31 @@ class _Analysis:
             ]
             if self.after:
                 facts["after"] = sorted({self.label(r.member) for r in self.after})
+        # C8 (P2-25): every aggregate table of the one base, with the proof's outcome; which
+        # one is read is the plan's choice, once its consistency is known.
+        homes = {home_of[m] for m in metrics}
+        self.materials = (
+            candidates(self, next(iter(homes)), metrics, classes) if len(homes) == 1 else []
+        )
+        for candidate in self.materials:
+            home = candidate.base
+            obligations.append(
+                Obligation(
+                    id=f"C8.equivalent:{candidate.name}",
+                    rule="C8",
+                    kind="equivalent",
+                    metric="",
+                    from_grain=tuple(natural[home]),
+                    to_grain=to_grain,
+                    members=tuple(sorted({*(self.label(m) for m in metrics), *labels})),
+                    datasets=tuple(sorted({self.dataset(home), candidate.name})),
+                )
+            )
+        if self.materials:
+            facts["materializations"] = [
+                {"dataset": c.name, "eligible": c.eligible, "reason": c.reason}
+                for c in self.materials
+            ]
         if self.query.totals is not None:
             facts["totals"] = {"kind": self.query.totals, "levels": list(levels)}
         if self.derived:
@@ -1518,6 +1546,7 @@ class _Analysis:
             caller_groups=self.groups,
             placement=self.placement,
             policies=self.policies,
+            materials=self.materials,
         )
 
 

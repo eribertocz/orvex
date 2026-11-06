@@ -270,8 +270,9 @@ def test_evidence_is_deterministic() -> None:
 def test_every_rule_the_engine_applies_has_a_checker() -> None:
     assert {rule for rule, _ in RULES} == RULES_CHECKED
     used = {(o.rule, o.kind) for p in plans().values() for o in p.report.obligations}
-    # The corpus exercises every checker but the detail page's, which `test_detail_rows` does.
-    assert used | {("C1", "rows")} == set(CHECKERS)
+    # The corpus exercises every checker but the detail page's (`test_detail_rows`) and the
+    # aggregate table's (`test_materialization`): no normative case declares what a table stores.
+    assert used | {("C1", "rows"), ("C8", "equivalent")} == set(CHECKERS)
 
 
 def test_the_receipt_names_the_evidence_and_hides_it_from_who_cannot_see_its_datasets() -> None:
@@ -335,7 +336,7 @@ def test_every_obligation_kind_has_a_failing_plan() -> None:
     for case, obligation, _ in cases():
         found = plans()[case]
         kinds |= {(o.rule, o.kind) for o in found.report.obligations if o.id == obligation}
-    assert kinds | {("C1", "rows")} == set(CHECKERS)  # detail pages: `test_detail_rows`
+    assert kinds | {("C1", "rows"), ("C8", "equivalent")} == set(CHECKERS)  # tested apart
 
 
 def test_a_step_s_claim_alone_discharges_nothing() -> None:

@@ -273,17 +273,25 @@ export interface NormalizationScope {
 	entities: Names;
 }
 /**
- * S5: this dataset is an existing aggregate table at its `grain`; its measures replace base execution only when proven equivalent (C8).
+ * S5: this dataset is an existing aggregate table at its `grain`; its measures replace base execution only when proven equivalent (C8), which needs `base_dataset` and each measure's `metric`.
  */
 export interface AggregateTable {
 	/**
 	 * @minItems 1
 	 */
 	measures: [AggregateMeasure, ...AggregateMeasure[]];
+	/**
+	 * An Ossie identifier (expression_language.md L86): at most 128 characters; compared case-insensitively unless quoted.
+	 */
+	base_dataset?: string;
 }
 export interface AggregateMeasure {
 	name: Name;
 	expression: Expression;
+	/**
+	 * A metric: `metric` for a model metric, `dataset.metric` for a dataset metric.
+	 */
+	metric?: string;
 }
 export interface FieldPayload {
 	version: 1;

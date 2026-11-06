@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "element": "dataset",
+  "entity": "month_category",
+  "grain": {
+    "dimensions": [
+      "month",
+      "category"
+    ]
+  },
+  "aggregate_table": {
+    "base_dataset": "sales",
+    "measures": [
+      {
+        "name": "rollup_revenue",
+        "expression": "SUM(revenue)",
+        "metric": "revenue"
+      }
+    ]
+  }
+}

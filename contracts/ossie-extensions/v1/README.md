@@ -47,7 +47,7 @@ Every member is optional unless marked required; ⇒ marks a condition the schem
 - `history` (S12): `versioned` ⇒ `entity_key`, `version`, `recorded_at`, `deleted`.
 - `evidence`: `unique`, `non_overlap`, `append_only`.
 - `cache`, `certification`.
-- `aggregate_table` (S5): this dataset is an existing aggregate table at its `grain` ⇒ `grain`; its measures replace base execution only when proven equivalent (C8).
+- `aggregate_table` (S5): this dataset is an existing aggregate table at its `grain` ⇒ `grain`; its measures replace base execution only when proven equivalent (C8). The proof needs what the table stores, declared, never guessed from names (P2-25): `base_dataset`, the dataset it aggregates, and on each measure `metric`, the base metric it stores at the table's grain, with `expression` re-aggregating it (`SUM(column)`). Without them the table is never used.
 - `bridge` (C7) on a bridge dataset. A many-to-many is two Ossie many-to-one relationships through it, `left` and `right`. `weight` allocates within `normalization_scope`, summing to `total` within `tolerance`.
 
 **Field (`element: field`).**

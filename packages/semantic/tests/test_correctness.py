@@ -156,11 +156,12 @@ def test_the_report_is_deterministic_and_order_does_not_change_its_facts() -> No
             ("C5", 1),
             ("C6", 1),
             ("C7", 1),
+            ("C8", 1),
             ("C9", 1),
             ("S9", 1),
         )
     )
-    assert {"C1", "C2", "C3", "C5", "C6", "C7", "C9", "S9"} == IMPLEMENTED
+    assert {"C1", "C2", "C3", "C5", "C6", "C7", "C8", "C9", "S9"} == IMPLEMENTED
 
 
 SCRIPT = """
