@@ -171,6 +171,12 @@ Because `transform` and `semantic` live in the same product, the engine **re-ver
 - Budgets per query (rows scanned, result rows, matrix cells, time, memory) are configured per project with safe defaults. A plan whose estimate exceeds a budget is rejected **before** running with `QUERY_BUDGET_EXCEEDED` (or `MATRIX_TOO_WIDE`), stating which budget and the estimate, and suggesting a filter or a coarser grain.
 - The time and memory budgets are also enforced while running (the engine's own limits and cancellation), because estimates can be wrong.
 - The estimate and the actual figures are recorded in the receipt so wrong estimates can be measured and improved.
+- **Detail pages (P2-24, Owner precision on #346).**
+  - Exact limits come first: the page size is capped and refused when bound, and the statement reads at most `size + 1` rows.
+  - The read cost is estimated from the bound snapshot's DuckLake file statistics only (row counts, sizes, per-column minimum and maximum after pruning), as an **upper bound**, never a guess or a sample. `EXPLAIN` cardinalities are recorded for measurement only.
+  - A question is refused before running only on what is proven: a page size above the cap, or a **lower bound** above the budget. An upper bound above the budget is never a refusal by itself.
+  - Every read runs with the time limit (the store interrupts the statement) and the engine's memory limit. Reaching either refuses the whole result with `QUERY_BUDGET_EXCEEDED` (`time_ms` or `memory_bytes`), never a partial page.
+  - **Without reliable statistics** (none for a dataset read, or incomplete for a pruning column), no estimate exists and none decides: the question runs under the limits, and the receipt omits `estimate`. Until `store` exposes a snapshot's file statistics, every detail page is in this case.
 
 ## 9. Matrix and totals support
 
