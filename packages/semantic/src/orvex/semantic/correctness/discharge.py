@@ -62,7 +62,7 @@ class _Plan:
         return found
 
     def payload(self, label: str) -> Mapping[str, Any]:
-        """The metric's own `ORVEX` declaration, read from the model, never from the plan."""
+        """The metric's own product extension, read from the model, never from the plan."""
         member = next(m for m in self.compiled.members if self.label(m) == label)
         pointer = self.compiled.require(member).parsed.pointer
         for extension in self.compiled.ossie.product_extensions:
