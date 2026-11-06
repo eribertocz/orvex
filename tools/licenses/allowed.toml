@@ -8,3 +8,4 @@ development = ["MPL-2.0", "MIT-0", "BlueOak-1.0.0", "CC0-1.0", "Python-2.0"]
 
 # Per-package exceptions: package name -> reason. Each needs an issue or ADR reference.
 [exceptions]
+cffi = "#346: MIT-0, MIT without its attribution clause, so more permissive than an allowed runtime license; a runtime dependency of cryptography (page cursors)"
