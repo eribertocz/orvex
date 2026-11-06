@@ -16,12 +16,20 @@ reason is `expired` only when every other check passed.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import re
+import secrets
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from orvex.semantic.errors import SemanticError
 
 CURSOR = re.compile(r"[A-Za-z0-9_-]{1,1024}")
@@ -114,3 +122,56 @@ def verify_cursor(
     if status is SnapshotStatus.AVAILABLE:
         return state
     raise refused("expired" if status is SnapshotStatus.EXPIRED else "invalid")
+
+
+class SealedForm:
+    """The sealed cursor form (P2-24): AES-256-GCM under a key derived from the instance's
+    cursor secret, a fresh 96-bit nonce per cursor, and every binding as authenticated data.
+    The cursor holds the data version and the position, compressed then encrypted: it reveals
+    nothing, and any change to it or to a binding makes it fail to open."""
+
+    DOMAIN = b"orvex-semantic page cursor v1"
+
+    def __init__(self, secret: bytes) -> None:
+        if not isinstance(secret, bytes) or len(secret) < 32:
+            raise ValueError("a cursor secret has 32 bytes or more")
+        derived = hmac.new(secret, self.DOMAIN, hashlib.sha256).digest()
+        self._aead = AESGCM(derived)
+
+    @staticmethod
+    def _bound(binding: CursorBinding) -> bytes:
+        return json.dumps(
+            [
+                binding.query_fingerprint,
+                binding.model_fingerprint,
+                binding.permission_fingerprint,
+                binding.page_size,
+            ],
+            separators=(",", ":"),
+        ).encode()
+
+    def issue(self, binding: CursorBinding, state: CursorState) -> str:
+        plain = json.dumps(
+            [state.data_version, list(state.position)], separators=(",", ":"), allow_nan=False
+        ).encode()
+        nonce = secrets.token_bytes(12)
+        sealed = nonce + self._aead.encrypt(nonce, zlib.compress(plain, 9), self._bound(binding))
+        cursor = base64.urlsafe_b64encode(sealed).rstrip(b"=").decode("ascii")
+        if len(cursor) > 1024:
+            raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "cursor_size"})
+        return cursor
+
+    def open(self, cursor: str, binding: CursorBinding) -> CursorState | None:
+        try:
+            sealed = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+            plain = zlib.decompress(
+                self._aead.decrypt(sealed[:12], sealed[12:], self._bound(binding))
+            )
+            version, position = json.loads(plain)
+        except ValueError, InvalidTag, zlib.error, TypeError:
+            return None
+        if not isinstance(version, str) or not isinstance(position, list):
+            return None
+        if not all(v is None or isinstance(v, str | int | float | bool) for v in position):
+            return None
+        return CursorState(version, tuple(position))

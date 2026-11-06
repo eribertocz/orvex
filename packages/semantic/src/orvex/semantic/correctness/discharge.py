@@ -357,8 +357,43 @@ def _window(p: _Plan, o: Obligation) -> str:
     return f"window:{_target(o)}"
 
 
+def _rows(p: _Plan, o: Obligation) -> str:
+    """C1 for a detail page (P2-24): one row per row of the base dataset, as the model reads it:
+    the base read once, every field and sort column from it or along a many-to-one join, no
+    aggregation, the base's whole key last in the order, a page size, and every masked field
+    written as its mask."""
+    plan = p.plan
+    base = _target(o)
+    if plan.mode != "detail" or plan.aggregates or plan.groups or len(plan.facts) != 1:
+        raise DischargeError(f"{base} is not read one row per row")
+    fact = plan.facts[0]
+    if p.written(p.sources[fact].dataset) != base or plan.page is None:
+        raise DischargeError(f"{base} is not the page's base, read once")
+    if any(g.source not in p.trees[fact] for g in (*plan.rows, *plan.hidden)):
+        raise DischargeError("a field is read outside the base's joins")
+    for join in plan.joins:
+        left = p.sources[join.left].dataset
+        step = next((s for s in p.graph.links[left] if s.relationship == join.relationship), None)
+        if step is None or not step.safe or step.temporal or join.as_of is not None:
+            raise DischargeError(f"{p.relationship(join.relationship)} could multiply the rows")
+    columns = {g.name: g.member for g in (*plan.rows, *plan.hidden)}
+    normalized = p.sources[fact].dataset
+    key = [MemberId("field", normalized, k) for k in p.graph.keys[normalized]]
+    tail = [(columns.get(s.name), s.descending) for s in plan.order[len(plan.order) - len(key) :]]
+    last = {member for member, descending in tail if not descending}
+    if not key or len(plan.order) < len(key) or not set(key) <= last:
+        raise DischargeError(f"{base}'s key is not the order's last tie-breaker")
+    masked = dict(plan.masks)
+    wanted = p.plan.report.facts.get("masks", {})
+    shown = {p.label(g.member): g.name for g in plan.rows}
+    if any(shown.get(label) not in masked for label in wanted):
+        raise DischargeError("a masked field is not written as its mask")
+    return f"rows:{base}"
+
+
 CHECKERS: Mapping[tuple[str, str], Callable[[_Plan, Obligation], str]] = {
     ("C1", "aggregate"): _aggregate,
+    ("C1", "rows"): _rows,
     ("C2", "recompute"): _recompute,
     ("C2", "distinct"): _distinct,
     ("C2", "period_end"): _period_end,
@@ -517,6 +552,16 @@ def verify_physical(plan: Any, physical: Any) -> Evidence:  # noqa: ANN401
     for column, _ in (*physical.as_of, *physical.weights):
         if _quote(column) not in physical.sql:
             raise DischargeError("a guard column is missing from the statement")
+    if plan.mode == "detail":
+        if plan.page is None or not physical.sql.rstrip().endswith(f"LIMIT {plan.page + 1}"):
+            raise DischargeError("the detail statement is not one page and one more row")
+        for name, _ in plan.masks:  # written as its bound mask, never read
+            if not re.search(
+                rf"CAST\(\$p[0-9]+ AS VARCHAR\) AS {re.escape(_quote(name))}", physical.sql
+            ):
+                raise DischargeError("a masked field is read in the statement")
+        if (plan.start is not None) != (' AS "d" WHERE ' in physical.sql):
+            raise DischargeError("the page does not start where its cursor says")
     restricted = {_quote(s.table) for s in plan.sources if s.policies}
     reads = _table_reads(physical.sql)
     for table in restricted:

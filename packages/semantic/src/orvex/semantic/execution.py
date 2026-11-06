@@ -19,9 +19,10 @@ encoder and the snapshot it fixed when the question arrived.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -29,6 +30,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 from orvex.semantic import zonedata
 from orvex.semantic.adapters.duckdb import PhysicalQuery, compile_plan, quote
+from orvex.semantic.canonical import fingerprint
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.correctness import CorrectnessReport, analyze
@@ -48,6 +50,14 @@ from orvex.semantic.receipt import (
     build_receipt,
 )
 from orvex.semantic.result import SemanticResult, ValueEncoder, build_result
+from orvex.semantic.result.cursors import (
+    CursorBinding,
+    CursorForm,
+    CursorState,
+    SnapshotStatus,
+    issue_cursor,
+    verify_cursor,
+)
 from orvex.semantic.result.descriptors import arrow_type
 
 BATCH_SIZE = 65_536
@@ -66,6 +76,11 @@ class Engine:
     instant: datetime  # the query instant (P2-05)
     limits: Limits
     timeout_ms: int | None = None
+    memory_bytes: int | None = None  # the engine's memory limit, as `server` configured it
+    # Detail pages (P2-24): the cursor form, and the snapshot of a cursor's data version while
+    # it is still kept (None once expired); both supplied by `server`.
+    cursors: CursorForm | None = None
+    pinned: Callable[[str], Mapping[str, object] | None] | None = None
     clock: Callable[[], float] = time.monotonic
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
 
@@ -124,9 +139,19 @@ def receipt_question(report: CorrectnessReport) -> dict[str, Any]:
         for r in report.compiled.ossie.document.get("relationships", ())
     }
     question: dict[str, Any] = {"mode": canonical["mode"]}
-    question["metrics"] = [{"metric": _label(report, m)} for m, _, _ in canonical["metrics"]]
+    if canonical["mode"] == "detail":  # the fields shown and the page asked (P2-24)
+        question["fields"] = [
+            {"member": _label(report, m)} | ({"role": roles[role]} if role else {})
+            for m, role in canonical["fields"]
+        ]
+        page = canonical["page"]
+        question["page"] = {"size": page["size"]} | (
+            {"after": page["after"]} if page.get("after") is not None else {}
+        )
+    else:
+        question["metrics"] = [{"metric": _label(report, m)} for m, _, _ in canonical["metrics"]]
     group_by = []
-    for member, role, bucket in canonical["group_by"]:
+    for member, role, bucket in canonical.get("group_by", ()):
         entry: dict[str, Any] = {"member": _label(report, member)}
         if role:
             entry["role"] = roles[role]
@@ -188,7 +213,25 @@ def _check_zones(physical: PhysicalQuery, engine: Engine) -> None:
         raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "time_zone_data"}) from None
 
 
-def _read(physical: PhysicalQuery, engine: Engine) -> pa.Table:
+def _budget(error: Exception, engine: Engine) -> SemanticError | None:
+    """A read stopped by an execution limit, as the budget it reached (P2-24): the engine's
+    time limit (`STORE_TIMEOUT`, the store interrupts the statement) or its memory limit
+    (DuckDB's out-of-memory error, which the store reports with DuckDB's text). The whole
+    result is refused, never a partial page; any other failure stays what it is."""
+    code = getattr(error, "code", None)
+    if code == "STORE_TIMEOUT" and engine.timeout_ms is not None:
+        limit = str(engine.timeout_ms)
+        return SemanticError("QUERY_BUDGET_EXCEEDED", {"budget": "time_ms", "limit": limit})
+    details = getattr(error, "details", None)
+    text = str(details.get("duckdb", "")) if isinstance(details, Mapping) else ""
+    out_of_memory = code == "STORE_QUERY_FAILED" and text.startswith("Out of Memory Error")
+    if out_of_memory and engine.memory_bytes is not None:
+        limit = str(engine.memory_bytes)
+        return SemanticError("QUERY_BUDGET_EXCEEDED", {"budget": "memory_bytes", "limit": limit})
+    return None
+
+
+def _read(physical: PhysicalQuery, engine: Engine, budgeted: bool = False) -> pa.Table:
     from orvex.contracts.store.v1 import Parameter, ReadRequest
 
     snapshot = engine.snapshot.get("id") if isinstance(engine.snapshot, Mapping) else None
@@ -202,12 +245,19 @@ def _read(physical: PhysicalQuery, engine: Engine) -> pa.Table:
         batch_size=BATCH_SIZE,
         timeout_ms=engine.timeout_ms,
     )
-    reader = engine.read(request)
-    table = reader.read_all()  # every batch, or the read's error: never a partial result
+    try:
+        reader = engine.read(request)
+        table = reader.read_all()  # every batch, or the read's error: never a partial result
+    except Exception as error:
+        budget = _budget(error, engine) if budgeted else None
+        if budget is None:
+            raise
+        raise budget from error
     expected = [(c.name, arrow_type(c.encoding)) for c in physical.columns]
     expected += [(name, pa.bool_()) for name, _ in physical.checks]
     expected += [(name, pa.int64()) for name, _ in physical.weights]
     expected += [(name, pa.int64()) for name, _ in physical.as_of]
+    expected += [(name, arrow_type(encoding)) for name, encoding in physical.hidden]
     found = [(f.name, f.type) for f in table.schema]
     if found != expected:
         raise PlanError(f"the engine returned {found}, the plan describes {expected}")
@@ -233,6 +283,51 @@ def _read(physical: PhysicalQuery, engine: Engine) -> pa.Table:
     return table
 
 
+def _detail_page(
+    table: pa.Table,
+    physical: PhysicalQuery,
+    plan_: SemanticPlan,
+    engine: Engine,
+    binding: CursorBinding | None,
+) -> tuple[pa.Table, dict[str, object]]:
+    """A detail page (P2-24): at most `size` rows; when one more was read, a cursor to the next
+    page, sealing the last row's sort-key values and this snapshot. The hidden sort columns
+    never reach the result."""
+    size = plan_.page
+    if size is None or binding is None:
+        raise PlanError("a detail page has a size and a cursor binding")
+    page: dict[str, object] = {"size": size}
+    if table.num_rows > size:
+        table = table.slice(0, size)
+        if engine.cursors is None:
+            raise PlanError("no cursor form to continue a detail page with")
+        last = table.select([name for name, _ in physical.sorts]).slice(size - 1, 1)
+        text = "".join(
+            engine.encoder(pa.RecordBatchReader.from_batches(last.schema, last.to_batches()))
+        )
+        (position,) = json.loads(text)["rows"]  # one row: the exact values of its sort keys
+        state = CursorState(str(engine.snapshot["id"]), tuple(position))
+        page["next"] = issue_cursor(engine.cursors, binding, state)
+    if physical.hidden:
+        table = table.drop_columns([name for name, _ in physical.hidden])
+    return table, page
+
+
+def _status(engine: Engine) -> Callable[[str], SnapshotStatus]:
+    """How this engine sees a cursor's data version: kept, expired (an earlier snapshot no
+    longer kept), or foreign (anything this route never served)."""
+
+    def status(version: str) -> SnapshotStatus:
+        if engine.pinned is not None and engine.pinned(version) is not None:
+            return SnapshotStatus.AVAILABLE
+        current = engine.snapshot.get("id")
+        if version.isdigit() and isinstance(current, int) and int(version) <= current:
+            return SnapshotStatus.EXPIRED
+        return SnapshotStatus.FOREIGN
+
+    return status
+
+
 def _execute(
     physical: PhysicalQuery,
     engine: Engine,
@@ -240,6 +335,7 @@ def _execute(
     plan_: SemanticPlan,
     context: Mapping[str, Any],
     evidence: Mapping[str, str],
+    binding: CursorBinding | None = None,
 ) -> Answer:
     """One read of `physical` on `engine.snapshot`, and its result and receipt, which names
     the evidence of each obligation (C9)."""
@@ -256,19 +352,23 @@ def _execute(
     for name in _unregistered(placement, engine):  # a deny-list caller absent: zero rows
         applied[name] = "no_rows"
         notices.append(SemanticError("POLICY_MAPPING_MISSING", {"policy": name}))
-    table = _read(physical, engine)
+    table = _read(physical, engine, budgeted=plan_.mode == "detail")
     duration = max(0, round((engine.clock() - clock) * 1000))
-    limit = plan_.limit
-    truncated = limit is not None and table.num_rows > limit
-    if truncated and limit is not None:
-        table = table.slice(0, limit)
-    page: dict[str, object] = {"truncated": truncated}
-    if limit is not None:
-        page["limit"] = limit
+    page: dict[str, object]
+    if plan_.mode == "detail":
+        table, page = _detail_page(table, physical, plan_, engine, binding)
+    else:
+        limit = plan_.limit
+        truncated = limit is not None and table.num_rows > limit
+        if truncated and limit is not None:
+            table = table.slice(0, limit)
+        page = {"truncated": truncated}
+        if limit is not None:
+            page["limit"] = limit
     result = build_result(
         table,
         physical.columns,
-        mode="aggregate",
+        mode=plan_.mode,
         query_fingerprint=report.query_fingerprint,
         model_fingerprint=report.model_fingerprint,
         page=page,
@@ -376,7 +476,27 @@ def answer(
         compiled, query, instant=engine.instant, limits=engine.limits, hidden=hidden
     )
     report = analyze(bound, compiled, policies, context)
-    logical = plan(report)
+    binding: CursorBinding | None = None
+    start: tuple[Any, ...] | None = None
+    if bound.canonical["mode"] == "detail":
+        page = bound.canonical["page"]
+        unpaged = {**bound.canonical, "page": {"size": page["size"], "after": None}}
+        binding = CursorBinding(  # every page of one question, for this caller, alike
+            query_fingerprint=fingerprint("semantic_query", 1, _plain(unpaged)),
+            model_fingerprint=compiled.model_fingerprint,
+            permission_fingerprint=str(context["permission_fingerprint"]),
+            page_size=int(page["size"]),
+        )
+        if page.get("after") is not None:  # the next page: on its own snapshot, from its row
+            if engine.cursors is None:
+                raise SemanticError("PAGE_CURSOR_INVALID", {"reason": "invalid"})
+            state = verify_cursor(engine.cursors, page["after"], binding, _status(engine))
+            pinned = engine.pinned(state.data_version) if engine.pinned else None
+            if pinned is None:
+                raise SemanticError("PAGE_CURSOR_INVALID", {"reason": "expired"})
+            engine = replace(engine, snapshot=pinned)
+            start = state.position
+    logical = plan(report, start)
     physical = compile_plan(logical)
     evidence = verify_physical(logical, physical)  # checked again, and in the statement (C9)
-    return _execute(physical, engine, report, logical, context, evidence)
+    return _execute(physical, engine, report, logical, context, evidence, binding)

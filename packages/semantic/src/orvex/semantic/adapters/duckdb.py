@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -74,6 +74,10 @@ class PhysicalQuery:
     # Then BIGINT columns: (column, relationship) for an as-of join (C6), each row holding how
     # many rows read match not exactly one valid row; any refuses the whole result.
     as_of: tuple[tuple[str, str], ...] = ()
+    # Detail pages (P2-24): the sort columns not shown, after every column, as (name,
+    # encoding); and every sort column in order, whose last-row values start the next page.
+    hidden: tuple[tuple[str, str], ...] = ()
+    sorts: tuple[tuple[str, str], ...] = ()
 
 
 def quote(name: str) -> str:
@@ -526,8 +530,108 @@ class _Writer:
             f"(PARTITION BY {partition} ORDER BY {axis} DESC) = 1)"
         )
 
+    def detail(self) -> PhysicalQuery:
+        """A detail page (P2-24): the base rows, each field read along its many-to-one join
+        (a missing related row is `NULL`, never a lost row), a masked field written as its
+        mask and never read, every filter, then, from a cursor, only the rows strictly after
+        its position in the order, and one row more than the page, which says another follows.
+        The base's key is the order's last tie-breaker, so every page is one slice of one
+        order on one snapshot: no row repeats and none is skipped."""
+        plan = self.plan
+        fact = plan.facts[0]
+        masks = dict(plan.masks)
+        select: list[str] = []
+        columns: list[ColumnSpec] = []
+        for row in plan.rows:
+            spec = self.column(row.member, row.name, "field", None)
+            if row.source != fact:  # a related row may be missing
+                spec = replace(spec, nullable=True)
+            if row.name in masks:
+                spec = replace(spec, encoding="VARCHAR", nullable=False, mask=masks[row.name])
+                select.append(
+                    f"CAST({self.bind('VARCHAR', masks[row.name])} AS VARCHAR) AS {quote(row.name)}"
+                )
+            else:
+                select.append(f"{self.field(row.member, row.source)} AS {quote(row.name)}")
+            columns.append(spec)
+        hidden: list[tuple[str, str]] = []
+        for row in plan.hidden:
+            spec = self.column(row.member, row.name, "field", None)
+            select.append(f"{self.field(row.member, row.source)} AS {quote(row.name)}")
+            hidden.append((row.name, spec.encoding))
+        encodings = {c.name: c.encoding for c in columns} | dict(hidden)
+        sources = {s.alias: s for s in plan.sources}
+        rows = f" FROM {self.fact(sources[fact])} AS {quote(fact)}"
+        for join in plan.joins:
+            on = " AND ".join(
+                f"{self.field(a, join.left)} = {self.field(b, join.right)}" for a, b in join.pairs
+            )
+            right = self.relation(sources[join.right].dataset)
+            rows += f" LEFT JOIN {right} AS {quote(join.right)} ON {on}"
+        conditions = [
+            self.predicate(self.field(f.member, f.source), f.predicate, f.member)
+            for f in plan.filters
+        ]
+        text = "SELECT " + ", ".join(select) + rows
+        if conditions:
+            text += " WHERE " + " AND ".join(conditions)
+        if plan.start is not None:
+            text = f"SELECT * FROM ({text}) AS {quote('d')} WHERE {self.after_position(encodings)}"
+        text += " ORDER BY " + ", ".join(
+            f"{quote(s.name)} {'DESC' if s.descending else 'ASC'} "
+            f"NULLS {'FIRST' if s.nulls_first else 'LAST'}"
+            for s in plan.order
+        )
+        if plan.page is None:
+            raise PlanError("a detail page has a size")
+        text += f" LIMIT {int(plan.page) + 1}"
+        return PhysicalQuery(
+            text,
+            tuple(self.parameters),
+            tuple(columns),
+            plan.fingerprint,
+            hidden=tuple(hidden),
+            sorts=tuple((s.name, encodings[s.name]) for s in plan.order),
+        )
+
+    def after_position(self, encodings: Mapping[str, str]) -> str:
+        """The rows strictly after the cursor's position in the order (keyset pagination):
+        equal on every earlier sort column (`NULL` equal to `NULL`) and after it on this one,
+        where `NULLS FIRST` or `NULLS LAST` says where a `NULL` stands."""
+        plan = self.plan
+        if plan.start is None or len(plan.start) != len(plan.order):
+            raise PlanError("a page position has one value per sort column")
+        alternatives: list[str] = []
+        for at, sort in enumerate(plan.order):
+            column = quote(sort.name)
+            value = plan.start[at]
+            if value is None:
+                after = f"{column} IS NOT NULL" if sort.nulls_first else "FALSE"
+            else:
+                bound = self.typed(value, encodings[sort.name])
+                comparison = f"{column} {'<' if sort.descending else '>'} {bound}"
+                after = (
+                    f"({comparison} OR {column} IS NULL)" if not sort.nulls_first else comparison
+                )
+            equal = [
+                f"{quote(s.name)} IS NOT DISTINCT FROM "
+                + self.typed(plan.start[i], encodings[s.name])
+                for i, s in enumerate(plan.order[:at])
+            ]
+            alternatives.append("(" + " AND ".join([*equal, after]) + ")")
+        return "(" + " OR ".join(alternatives) + ")"
+
+    def typed(self, value: object, encoding: str) -> str:
+        """A position value, bound as text and cast to its column's type, so it is exact."""
+        if value is None:
+            return f"CAST(NULL AS {encoding})"
+        text = ("true" if value else "false") if isinstance(value, bool) else str(value)
+        return f"CAST({self.bind('VARCHAR', text)} AS {encoding})"
+
     def statement(self) -> PhysicalQuery:
         plan = self.plan
+        if plan.mode == "detail":
+            return self.detail()
         parts = [self.aggregation(fact) for fact in plan.facts]
         if len(parts) == 1:
             text, columns, checks = parts[0]
