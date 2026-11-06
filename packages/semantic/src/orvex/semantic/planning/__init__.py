@@ -676,7 +676,7 @@ class _Planner:
             report=self.report,
             placement=self.report.placement,
         )
-        from orvex.semantic.planning.discharge import verify_plan
+        from orvex.semantic.correctness.discharge import verify_plan
 
         # The evidence of every obligation, checked on the plan itself, never on the steps'
         # own claims (C9, P2-22): one without it is an internal error, and nothing runs.

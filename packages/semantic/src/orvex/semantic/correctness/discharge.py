@@ -26,6 +26,7 @@ from typing import Any
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.correctness.graph import Graph
 from orvex.semantic.correctness.report import Obligation
+from orvex.semantic.ossie import sql
 from orvex.semantic.planning import PlanError
 
 Evidence = dict[str, str]  # obligation id -> the label of the step that discharges it
@@ -59,6 +60,45 @@ class _Plan:
     def label(self, member: MemberId) -> str:
         found: str = self.compiled.require(member).parsed.label
         return found
+
+    def payload(self, label: str) -> Mapping[str, Any]:
+        """The metric's own `ORVEX` declaration, read from the model, never from the plan."""
+        member = next(m for m in self.compiled.members if self.label(m) == label)
+        pointer = self.compiled.require(member).parsed.pointer
+        for extension in self.compiled.ossie.product_extensions:
+            if extension.pointer.rsplit("/custom_extensions/", 1)[0] == pointer:
+                found: Mapping[str, Any] = extension.payload
+                return found
+        return {}
+
+    def components(self, label: str) -> tuple[str, str]:
+        """A ratio's declared numerator and denominator, as metric labels."""
+        member = next(m for m in self.compiled.members if self.label(m) == label)
+        trees = dict(self.compiled.require(member).typed.payload)
+        ends = []
+        for part in ("components.numerator", "components.denominator"):
+            node = trees[part].node
+            if not isinstance(node, sql.Ref):
+                raise DischargeError(f"{label} has no metric as a component")
+            written = ".".join(node.parts)
+            ends.append(
+                next(
+                    self.label(m)
+                    for m in self.compiled.members
+                    if m.kind == "metric" and sql.normalize(self.label(m)) == written
+                )
+            )
+        return ends[0], ends[1]
+
+    def division(self, label: str) -> tuple[int, str, str]:
+        """The declared rounding and zero-denominator policy of a ratio, or of an allocation
+        (rounded once, `null` on zero: there is no denominator)."""
+        payload = self.payload(label)
+        rounding = payload.get("rounding")
+        if not isinstance(rounding, Mapping):
+            raise DischargeError(f"{label} declares no rounding")
+        zero = str(payload.get("zero_denominator", "null"))
+        return int(rounding["scale"]), str(rounding["mode"]), zero
 
     def written(self, dataset: str) -> str:
         return self.graph.names.get(dataset, dataset)
@@ -119,18 +159,30 @@ def _aggregate(p: _Plan, o: Obligation) -> str:
 
 
 def _recompute(p: _Plan, o: Obligation) -> str:
-    """C2: a ratio divided once, after its components are aggregated, never averaged."""
-    derived = p.derived.get(_target(o))
+    """C2: a ratio divided once, after its components are aggregated, never averaged: its
+    numerator by its denominator, as declared, with the declared rounding and zero policy."""
+    name = _target(o)
+    derived = p.derived.get(name)
     if derived is not None:
         if derived.division is None or len(derived.over) != 2:
-            raise DischargeError(f"{_target(o)} is not divided once from its components")
-        if any(name not in p.by_name for name in derived.over):
-            raise DischargeError(f"{_target(o)} divides values no aggregation gives")
-        return f"derived:{_target(o)}"
-    found = p.aggregate(_target(o))
-    if found.division is None:
-        raise DischargeError(f"{_target(o)} is not recomputed from its components")
-    return f"aggregate:{p.fact_label(found.source)}"
+            raise DischargeError(f"{name} is not divided once from its components")
+        steps = [p.by_name.get(n) for n in derived.over]
+        if any(step is None for step in steps):
+            raise DischargeError(f"{name} divides values no aggregation gives")
+        found = tuple(p.label(step.metric) for step in steps if step is not None)
+        if found != p.components(name):
+            raise DischargeError(f"{name} does not divide its numerator by its denominator")
+        division = derived.division
+        evidence = f"derived:{name}"
+    else:
+        step = p.aggregate(name)
+        if step.division is None:
+            raise DischargeError(f"{name} is not recomputed from its components")
+        division = step.division
+        evidence = f"aggregate:{p.fact_label(step.source)}"
+    if (division.scale, division.mode, division.zero) != p.division(name):
+        raise DischargeError(f"{name} is not rounded as declared")
+    return evidence
 
 
 def _distinct(p: _Plan, o: Obligation) -> str:
@@ -147,21 +199,26 @@ def _distinct(p: _Plan, o: Obligation) -> str:
 
 
 def _period_end(p: _Plan, o: Obligation) -> str:
-    """C2: the fact read through its latest row per entity and period, by its declared axis,
-    the period cut as the question's group on that axis is."""
-    found = p.aggregate(_target(o))
+    """C2: the fact read through its latest row per entity and period: the entity is the
+    fact's key without the axis (`analyze` accepted exactly that key), the axis as declared,
+    and the period and zone those of the question's group on the axis, or none."""
+    name = _target(o)
+    found = p.aggregate(name)
     source = p.sources[found.source]
     latest = source.latest
-    period = p.metrics.get(_target(o), {}).get("period") or {}
+    period = p.metrics.get(name, {}).get("period") or {}
     if latest is None or p.label(latest.axis) != period.get("axis"):
-        raise DischargeError(f"{_target(o)} is not read at each entity's period end")
-    if not latest.entity:
-        raise DischargeError(f"{_target(o)} has no entity to take the period end of")
+        raise DischargeError(f"{name} is not read at each entity's period end")
+    key = p.graph.keys[source.dataset]
+    entity = tuple(MemberId("field", source.dataset, k) for k in key if k != latest.axis.name)
+    if not entity or latest.entity != entity or latest.axis.dataset != source.dataset:
+        raise DischargeError(f"{name} takes its period end per another entity")
     group = next(
         (g for g in p.plan.groups if g.member == latest.axis and g.source == source.alias), None
     )
-    if group is not None and (group.bucket, group.zone) != (latest.bucket, latest.zone):
-        raise DischargeError(f"{_target(o)} takes its period end in another period")
+    wanted = (group.bucket, group.zone) if group is not None else (None, None)
+    if (latest.bucket, latest.zone) != wanted:
+        raise DischargeError(f"{name} takes its period end in another period or zone")
     return f"latest:{p.fact_label(source.alias)}"
 
 
@@ -181,32 +238,97 @@ def _align(p: _Plan, o: Obligation) -> str:
         raise DischargeError(f"{_target(o)} is not computed after alignment")
     if any(name not in p.by_name for name in derived.over):
         raise DischargeError(f"{_target(o)} reads values no aggregation gives")
+    declared = next(
+        (d["over"] for d in p.plan.report.facts.get("derived", ()) if d["metric"] == _target(o)),
+        None,
+    )
+    read = {p.label(p.by_name[name].metric) for name in derived.over}
+    if declared is None or not read <= set(declared):
+        raise DischargeError(f"{_target(o)} reads metrics it is not declared over")
     return f"derived:{_target(o)}"
 
 
 def _as_of(p: _Plan, o: Obligation) -> str:
-    """C6: the temporal relationship crossed as an as-of join, with its guard."""
-    if not any(
-        j.as_of is not None and p.relationship(j.relationship) == _target(o) for j in p.plan.joins
+    """C6: the temporal relationship crossed as an as-of join, by its declared event time and
+    validity, with its guard over the left dataset's whole key."""
+    name = _target(o)
+    for join in p.plan.joins:
+        if join.as_of is None or p.relationship(join.relationship) != name:
+            continue
+        temporal = p.graph.relationship_payloads.get(join.relationship, {}).get("temporal")
+        if not isinstance(temporal, Mapping):
+            raise DischargeError(f"{name} declares no temporal match")
+        left, right = p.sources[join.left].dataset, p.sources[join.right].dataset
+
+        def field(ref: object, side: str) -> MemberId:
+            parts = [sql.normalize(x) for x in str(ref).split(".")]
+            return MemberId("field", parts[0] if len(parts) == 2 else side, parts[-1])
+
+        declared = (
+            field(temporal["event_time"], left),
+            field(temporal["valid_from"], right),
+            field(temporal["valid_to"], right),
+        )
+        rows = tuple(MemberId("field", left, k) for k in p.graph.keys[left])
+        found = (join.as_of.event, join.as_of.valid_from, join.as_of.valid_to)
+        if found != declared or not rows or join.as_of.rows != rows:
+            raise DischargeError(f"{name} is not matched by its declared validity")
+        return f"as_of:{name}"
+    raise DischargeError(f"{name} is not crossed as a guarded as-of join")
+
+
+def _bridge(p: _Plan, aggregate: Any, bridge: str) -> None:  # noqa: ANN401
+    """The allocation through `bridge` as the bridge declares it: entered by its `left`
+    relationship, weighed by its `weight`, normalized over that join's fields, to its `total`
+    within its `tolerance`."""
+    allocation = aggregate.allocation
+    normalized = next((n for n, w in p.graph.names.items() if w == bridge), None)
+    declared = p.graph.payloads.get(normalized or "", {}).get("bridge")
+    if allocation is None or not isinstance(declared, Mapping):
+        raise DischargeError(f"{bridge} is not allocated as it declares")
+    left = sql.normalize(str(declared["left"]))
+    entering = [
+        j
+        for j in p.plan.joins
+        if j.relationship == left and j.right == allocation.source and j.left == allocation.side
+    ]
+    weight = MemberId("field", normalized or "", sql.normalize(str(declared["weight"])))
+    if (
+        len(entering) != 1
+        or p.sources[allocation.source].dataset != normalized
+        or not allocation.scope
+        or allocation.scope != entering[0].pairs
+        or allocation.weight != weight
+        or (allocation.total, allocation.tolerance)
+        != (str(declared["total"]), str(declared["tolerance"]))
     ):
-        raise DischargeError(f"{_target(o)} is not crossed as a guarded as-of join")
-    return f"as_of:{_target(o)}"
+        raise DischargeError(f"{bridge} is not allocated as it declares")
 
 
 def _weights(p: _Plan, o: Obligation) -> str:
-    """C7: the bridge's weights checked in the read that allocates through it."""
-    if not any(
-        a.allocation is not None and a.allocation.bridge == _target(o) for a in p.plan.aggregates
-    ):
-        raise DischargeError(f"the weights of {_target(o)} are not checked")
-    return f"weights:{_target(o)}"
+    """C7: the bridge's weights checked in the read that allocates through it, as declared."""
+    bridge = _target(o)
+    found = [a for a in p.plan.aggregates if a.allocation and a.allocation.bridge == bridge]
+    if not found:
+        raise DischargeError(f"the weights of {bridge} are not checked")
+    for aggregate in found:
+        _bridge(p, aggregate, bridge)
+    return f"weights:{bridge}"
 
 
 def _allocate(p: _Plan, o: Obligation) -> str:
-    """C7: the metric allocated through its bridge, exactly, then rounded once."""
-    found = p.aggregate(_target(o))
-    if found.allocation is None or found.division is None:
-        raise DischargeError(f"{_target(o)} is not allocated exactly and rounded once")
+    """C7: the metric allocated through its declared bridge, exactly, then rounded once."""
+    name = _target(o)
+    found = p.aggregate(name)
+    bridges = [
+        a["bridge"] for a in p.plan.report.facts.get("allocations", ()) if name in a["metrics"]
+    ]
+    if found.allocation is None or found.division is None or bridges != [found.allocation.bridge]:
+        raise DischargeError(f"{name} is not allocated exactly and rounded once")
+    _bridge(p, found, found.allocation.bridge)
+    division = found.division
+    if (division.scale, division.mode) != p.division(name)[:2] or division.zero != "null":
+        raise DischargeError(f"{name} is not rounded as declared")
     return f"aggregate:{p.fact_label(found.source)}"
 
 
@@ -276,6 +398,19 @@ def _policies_reached(p: _Plan) -> None:
                 continue
             if rule.name not in source.policies:
                 raise DischargeError(f"{p.written(source.dataset)} is read without {rule.name}")
+            paths = {
+                r.path
+                for r in policies.propagation.get(rule.name, ())
+                if r.dataset == source.dataset
+            }
+            if rule.dataset == source.dataset:
+                paths.add(())
+            placed = [r for r in placement.of(source.dataset) if r.rule.name == rule.name]
+            if {r.path for r in placed} != paths or any(r.rule != rule for r in placed):
+                raise DischargeError(f"{rule.name} is not placed on each of its paths as declared")
+            missing = bool(policies.missing_attributes(rule.name, placement.attributes))
+            if missing and not all(r.no_rows for r in placed):
+                raise DischargeError(f"{rule.name} lacks an attribute but gives rows")
             if f"C9.policy:{p.written(source.dataset)}" not in obligations:
                 raise DischargeError(f"{p.written(source.dataset)} has no policy obligation")
 
@@ -296,52 +431,67 @@ def verify_plan(plan: Any) -> Evidence:  # noqa: ANN401
 _TOKEN = re.compile(r'"(?:[^"]|"")*"|\'(?:[^\']|\'\')*\'|\$?\w+|\S')
 
 
-def _table_reads(text: str) -> list[tuple[str, str | None, bool]]:
-    """Every table the statement reads, as (quoted table, quoted alias or None, whether it is
-    written as the restricted relation `(SELECT * FROM table AS "#p" WHERE …)`): an identifier
-    after `FROM`, `JOIN`, or a comma of a `FROM` list, that no `.` or `(` follows."""
+Read = tuple[tuple[str, ...], str | None, bool, bool]
+
+
+def _table_reads(text: str) -> list[Read]:
+    """Every table the statement reads, as (its quoted name parts, its quoted alias or None,
+    whether it is a restricted relation, whether it is read inside one). A table is an
+    identifier, qualified or not, after `FROM`, `JOIN` or a comma of a `FROM` list, that no
+    `(` follows. A restricted relation is `(SELECT * FROM table AS "#p" WHERE <condition>)`
+    with a condition other than a bare `TRUE`; everything inside its parentheses is read
+    inside it. Unbalanced parentheses are no statement to trust."""
     tokens = _TOKEN.findall(text)
-    found: list[tuple[str, str | None, bool]] = []
+    found: list[Read] = []
     listing: list[bool] = [False]  # per parenthesis depth: inside a FROM list
+    guarded: list[bool] = [False]  # per parenthesis depth: inside a restricted relation
+    ends = {"WHERE", "ON", "GROUP", "ORDER", "HAVING", "LIMIT", "QUALIFY", "UNION", "WINDOW"}
     for at, token in enumerate(tokens):
         upper = token.upper()
         if token == "(":
             listing.append(False)
+            guarded.append(guarded[-1])
             continue
         if token == ")":
+            if len(listing) == 1:
+                raise DischargeError("the statement's parentheses do not balance")
             listing.pop()
+            guarded.pop()
             continue
         starts = upper in ("FROM", "JOIN") or (token == "," and listing[-1])
         if upper in ("FROM", "JOIN"):
             listing[-1] = True
-        elif upper in (
-            "WHERE",
-            "ON",
-            "GROUP",
-            "ORDER",
-            "HAVING",
-            "LIMIT",
-            "QUALIFY",
-            "UNION",
-            "WINDOW",
-            "SELECT",
-        ):
+        elif upper in ends or upper == "SELECT":
             listing[-1] = False
-        if not starts or at + 1 >= len(tokens):
+        if not starts:
             continue
-        name = tokens[at + 1]
-        after = tokens[at + 2] if at + 2 < len(tokens) else ""
-        if not name.startswith('"') or after in (".", "("):
-            continue
-        alias = tokens[at + 3] if after.upper() == "AS" and at + 3 < len(tokens) else None
+        parts: list[str] = []
+        k = at + 1
+        while k < len(tokens) and tokens[k].startswith('"'):
+            parts.append(tokens[k])
+            if k + 1 < len(tokens) and tokens[k + 1] == ".":
+                k += 2
+                continue
+            k += 1
+            break
+        if not parts or (k < len(tokens) and tokens[k] == "("):
+            continue  # a subquery or a table function, read token by token
+        alias = tokens[k + 1] if k + 1 < len(tokens) and tokens[k].upper() == "AS" else None
+        condition = tokens[k + 3 : k + 5] if k + 4 < len(tokens) else []
         restricted = (
-            upper == "FROM"
-            and tokens[at - 2 : at] == ["SELECT", "*"]
+            len(parts) == 1
+            and upper == "FROM"
+            and at >= 3
+            and tokens[at - 3 : at] == ["(", "SELECT", "*"]
             and alias == '"#p"'
-            and at + 4 < len(tokens)
-            and tokens[at + 4].upper() == "WHERE"
+            and tokens[k + 2].upper() == "WHERE"
+            and [c.upper() for c in condition] != ["TRUE", ")"]
         )
-        found.append((name, alias, restricted))
+        found.append((tuple(parts), alias, restricted, guarded[-1]))
+        if restricted:
+            guarded[-1] = True
+    if len(listing) != 1:
+        raise DischargeError("the statement's parentheses do not balance")
     return found
 
 
@@ -349,11 +499,14 @@ def _quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def verify_physical(plan: Any, physical: Any) -> None:  # noqa: ANN401
-    """The statement holds what the plan's evidence promised, or `DischargeError`:
+def verify_physical(plan: Any, physical: Any) -> Evidence:  # noqa: ANN401
+    """The plan's evidence, checked again, and the statement holding what it promised, or
+    `DischargeError`:
     - a guard column for every as-of join and every allocation through a bridge;
     - every read of a dataset a policy restricts is its restricted relation, or a related row
-      read inside a propagation chain (`#c…`), never its bare table."""
+      read inside a restricted relation's propagation chain (`#c…`); never its bare table,
+      qualified or not, anywhere else."""
+    evidence = verify_plan(plan)
     p = _Plan(plan)
     as_of = {p.relationship(j.relationship) for j in plan.joins if j.as_of is not None}
     if {name for _, name in physical.as_of} != as_of:
@@ -367,10 +520,11 @@ def verify_physical(plan: Any, physical: Any) -> None:  # noqa: ANN401
     restricted = {_quote(s.table) for s in plan.sources if s.policies}
     reads = _table_reads(physical.sql)
     for table in restricted:
-        mine = [r for r in reads if r[0] == table]
-        if not any(is_restricted for _, _, is_restricted in mine):
+        mine = [r for r in reads if r[0][-1] == table]
+        if not any(is_restricted for _, _, is_restricted, _ in mine):
             raise DischargeError("a restricted dataset is not read through its restrictions")
-        for _, alias, is_restricted in mine:
-            chained = alias is not None and re.fullmatch(r'"#c[0-9]+"', alias) is not None
+        for _, alias, is_restricted, inside in mine:
+            chained = inside and alias is not None and re.fullmatch(r'"#c[0-9]+"', alias)
             if not (is_restricted or chained):
                 raise DischargeError("a restricted dataset is read without its restrictions")
+    return evidence

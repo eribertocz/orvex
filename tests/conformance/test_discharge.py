@@ -15,16 +15,16 @@ from orvex.semantic import execution
 from orvex.semantic.adapters import duckdb as adapter
 from orvex.semantic.correctness import analyze
 from orvex.semantic.correctness.analysis import RULES
-from orvex.semantic.correctness.report import Obligation
-from orvex.semantic.errors import SemanticError
-from orvex.semantic.planning import Division, PlanError, SemanticPlan, plan
-from orvex.semantic.planning.discharge import (
+from orvex.semantic.correctness.discharge import (
     CHECKERS,
     RULES_CHECKED,
     DischargeError,
     verify_physical,
     verify_plan,
 )
+from orvex.semantic.correctness.report import Obligation
+from orvex.semantic.errors import SemanticError
+from orvex.semantic.planning import Division, PlanError, SemanticPlan, plan
 from orvex.semantic.policies import read_policies
 from orvex.semantic.query.binding import Limits, bind_query
 
@@ -109,10 +109,27 @@ def mutations(found: SemanticPlan, obligation: Obligation) -> list[Mutation]:
         return out
     if kind == ("C2", "recompute"):
         if derived is not None:
-            steps = tuple(replace(d, division=None) if d is derived else d for d in found.derived)
-            return [("average a ratio", replace(found, derived=steps))]
+            assert derived.division is not None
+
+            def bent(**fields: Any) -> SemanticPlan:  # noqa: ANN401
+                steps = tuple(replace(d, **fields) if d is derived else d for d in found.derived)
+                return replace(found, derived=steps)
+
+            first, second = derived.over
+            other = replace(derived.division, scale=derived.division.scale + 1)
+            return [
+                ("average a ratio", bent(division=None)),
+                ("divide the denominator by the numerator", bent(over=(second, first))),
+                ("divide a component by itself", bent(over=(first, first))),
+                ("round another way", bent(division=other)),
+            ]
         assert aggregate is not None
-        return [("average a ratio", replace(found, aggregates=changed(division=None)))]
+        assert aggregate.division is not None
+        other = replace(aggregate.division, mode="half_even")
+        return [
+            ("average a ratio", replace(found, aggregates=changed(division=None))),
+            ("round another way", replace(found, aggregates=changed(division=other))),
+        ]
     if kind == ("C2", "period_end"):
         assert aggregate is not None
         sources = found.sources
@@ -128,9 +145,13 @@ def mutations(found: SemanticPlan, obligation: Obligation) -> list[Mutation]:
         out.append(
             ("no entity", replace(found, sources=at(latest=replace(fact.latest, entity=()))))
         )
-        other = "year" if fact.latest.bucket != "year" else "month"
-        bent = replace(fact.latest, bucket=other)
-        out.append(("another period", replace(found, sources=at(latest=bent))))
+        unit = "year" if fact.latest.bucket != "year" else "month"
+        yearly = replace(fact.latest, bucket=unit)
+        out.append(("another period", replace(found, sources=at(latest=yearly))))
+        per_day = replace(fact.latest, entity=(fact.latest.axis,))
+        out.append(("rank per day, not per entity", replace(found, sources=at(latest=per_day))))
+        zoned = replace(fact.latest, zone="America/La_Paz")
+        out.append(("cut the period in another zone", replace(found, sources=at(latest=zoned))))
         return out
     if kind == ("C5", "align"):
         assert derived is not None
@@ -141,17 +162,62 @@ def mutations(found: SemanticPlan, obligation: Obligation) -> list[Mutation]:
             ("read a value no aggregation gives", replace(found, derived=unknown)),
         ]
     if kind == ("C6", "as_of"):
+
+        def guarded(**fields: Any) -> SemanticPlan:  # noqa: ANN401
+            joins = tuple(
+                replace(j, as_of=replace(j.as_of, **fields)) if j.as_of else j for j in found.joins
+            )
+            return replace(found, joins=joins)
+
+        (temporal,) = [j.as_of for j in found.joins if j.as_of]
         joins = tuple(replace(j, as_of=None) for j in found.joins)
-        return [("join without the as-of guard", replace(found, joins=joins))]
+        return [
+            ("join without the as-of guard", replace(found, joins=joins)),
+            (
+                "swap the validity bounds",
+                guarded(valid_from=temporal.valid_to, valid_to=temporal.valid_from),
+            ),
+            ("guard no rows", guarded(rows=())),
+        ]
     if kind == ("C7", "weights"):
-        bare = tuple(
-            replace(a, allocation=None) if a.allocation and a.allocation.bridge == name else a
-            for a in found.aggregates
-        )
-        return [("allocate without checking weights", replace(found, aggregates=bare))]
+
+        def allocated(**fields: Any) -> SemanticPlan:  # noqa: ANN401
+            steps = tuple(
+                replace(a, allocation=replace(a.allocation, **fields) if fields else None)
+                if a.allocation and a.allocation.bridge == name
+                else a
+                for a in found.aggregates
+            )
+            return replace(found, aggregates=steps)
+
+        return [
+            ("allocate without checking weights", allocated()),
+            ("normalize over nothing", allocated(scope=())),
+            ("another tolerance", allocated(tolerance="0.5")),
+            ("another total", allocated(total="2")),
+        ]
     if kind == ("C9", "policy"):
         open_ = tuple(replace(s, policies=()) for s in found.sources)
-        return [("read without the row policy", replace(found, sources=open_))]
+        placement = found.placement
+        bent_rules = {
+            d: tuple(replace(r, rule=replace(r.rule, orphans="visible")) for r in rs)
+            for d, rs in placement.restrictions.items()
+        }
+        other_path = {
+            d: tuple(replace(r, path=("elsewhere",)) for r in rs)
+            for d, rs in placement.restrictions.items()
+        }
+        return [
+            ("read without the row policy", replace(found, sources=open_)),
+            (
+                "show orphans the policy hides",
+                replace(found, placement=replace(placement, restrictions=bent_rules)),
+            ),
+            (
+                "restrict along another path",
+                replace(found, placement=replace(placement, restrictions=other_path)),
+            ),
+        ]
     if kind == ("S9", "window"):
         assert window is not None
         rest_w = tuple(w for w in found.windows if w is not window)
@@ -308,6 +374,10 @@ def test_every_answered_case_s_statement_holds_its_evidence() -> None:
         ("CASE-011", {"weights": ()}),
         ("CASE-013", {"sql": "drop the guard column"}),
         ("CASE-015", {"sql": "read the bare table"}),
+        ("CASE-015", {"sql": "add a bare read named like a chain"}),
+        ("CASE-015", {"sql": "restrict by nothing"}),
+        ("CASE-015", {"sql": "read it qualified"}),
+        ("CASE-015", {"sql": "unbalance the parentheses"}),
     ],
 )
 def test_a_statement_without_its_evidence_is_refused_before_any_read(
@@ -321,6 +391,22 @@ def test_a_statement_without_its_evidence_is_refused_before_any_read(
     elif change.get("sql") == "read the bare table":
         bare = adapter._Writer(replace(found, placement=None)).statement()
         change = {"sql": bare.sql}
+    elif change.get("sql") == "add a bare read named like a chain":
+        change = {"sql": f'{written.sql} UNION ALL SELECT * FROM "sales" AS "#c1"'}
+    elif change.get("sql") == "restrict by nothing":
+        start = written.sql.index('(SELECT * FROM "sales" AS "#p" WHERE ')
+        depth, end = 0, start
+        while True:
+            depth += {"(": 1, ")": -1}.get(written.sql[end], 0)
+            if depth == 0:
+                break
+            end += 1
+        whole = written.sql[start : end + 1]
+        change = {"sql": written.sql.replace(whole, '(SELECT * FROM "sales" AS "#p" WHERE TRUE)')}
+    elif change.get("sql") == "read it qualified":
+        change = {"sql": f'{written.sql} UNION ALL SELECT * FROM "main"."sales" AS "x"'}
+    elif change.get("sql") == "unbalance the parentheses":
+        change = {"sql": written.sql + ")"}
     broken = replace(written, **change)
     with pytest.raises(DischargeError):
         verify_physical(found, broken)
@@ -330,5 +416,26 @@ def test_a_statement_without_its_evidence_is_refused_before_any_read(
     with lake_for(case) as lake, pytest.raises(PlanError):
         ask(
             ce.QUERIES[case], compiled, lake, policy=policies(case), context=context(case), read=spy
+        )
+    assert spy.calls == 0
+
+
+def test_a_forged_plan_given_to_execution_never_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Even a plan that claims to be issued is checked again before the statement runs."""
+    found = plans()["CASE-015"]
+    open_ = tuple(replace(s, policies=()) for s in found.sources)
+    forged = replace(found, sources=open_)
+    object.__setattr__(forged, "issued", found.issued)
+    monkeypatch.setattr(execution, "plan", lambda _: forged)
+    compiled, _, _ = corpus_case("CASE-015")
+    spy = Spy()
+    with lake_for("CASE-015") as lake, pytest.raises(DischargeError):
+        ask(
+            ce.QUERIES["CASE-015"],
+            compiled,
+            lake,
+            policy=policies("CASE-015"),
+            context=context("CASE-015"),
+            read=spy,
         )
     assert spy.calls == 0
