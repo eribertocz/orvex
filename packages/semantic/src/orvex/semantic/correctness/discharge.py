@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from typing import Any
 
 from orvex.semantic.compiler.parsing import MemberId
@@ -457,13 +458,36 @@ def verify_plan(plan: Any) -> Evidence:  # noqa: ANN401
     """The evidence of every obligation of the plan's report, or `DischargeError`."""
     p = _Plan(plan)
     evidence: Evidence = {}
+    groups = len(plan.report.facts["grain"])
+    expected = _levels(plan.totals, groups)
+    if tuple(plan.levels) != expected:
+        raise DischargeError("the plan's total levels are not the question's")
     for obligation in plan.report.obligations:
         checker = CHECKERS.get((obligation.rule, obligation.kind))
         if checker is None:
             raise DischargeError(f"no checker for {obligation.rule}.{obligation.kind}")
-        evidence[obligation.id] = checker(p, obligation)
+        base, at, level = obligation.id.partition("@")
+        if not at:
+            evidence[obligation.id] = checker(p, obligation)
+            continue
+        # A total level (P2-23): the same rule, at a level the plan computes.
+        if not level.isdigit() or int(level) not in plan.levels:
+            raise DischargeError(f"{obligation.id} is at a level the plan does not compute")
+        found = checker(p, replace(obligation, id=base))
+        evidence[obligation.id] = f"{found}@{level}"
     _policies_reached(p)
     return evidence
+
+
+def _levels(totals: str | None, groups: int) -> tuple[int, ...]:
+    """The total levels a question asks for, from its own `totals` and grain (P2-23)."""
+    if totals == "rollup":
+        return tuple(range(groups - 1, -1, -1))
+    if totals == "grand" and groups:
+        return (0,)
+    if totals not in (None, "grand"):
+        raise DischargeError(f"unknown totals {totals!r}")
+    return ()
 
 
 _TOKEN = re.compile(r'"(?:[^"]|"")*"|\'(?:[^\']|\'\')*\'|\$?\w+|\S')
@@ -533,6 +557,37 @@ def _table_reads(text: str) -> list[Read]:
     return found
 
 
+def _grouping_sets(text: str) -> list[int]:
+    """How many groups each grouping set of the statement keeps, across every `GROUPING SETS`
+    clause: one set per level per fact, the detail level included (P2-23). A set is one
+    parenthesized list; commas inside its expressions are deeper, so they never count."""
+    tokens = _TOKEN.findall(text)
+    found: list[int] = []
+    for at in range(len(tokens) - 2):
+        if [t.upper() for t in tokens[at : at + 2]] != ["GROUPING", "SETS"] or tokens[
+            at + 2
+        ] != "(":
+            continue
+        depth, commas, empty = 0, 0, True
+        for token in tokens[at + 2 :]:
+            if token == ")" and depth == 2:
+                found.append(0 if empty else commas + 1)
+            if token == "(":
+                depth += 1
+                if depth == 2:
+                    commas, empty = 0, True
+                    continue
+            elif token == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            elif token == "," and depth == 2:
+                commas += 1
+            if depth >= 2:
+                empty = False
+    return found
+
+
 def _quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
@@ -565,6 +620,15 @@ def verify_physical(plan: Any, physical: Any) -> Evidence:  # noqa: ANN401
                 raise DischargeError("a masked field is read in the statement")
         if (plan.start is not None) != (' AS "d" WHERE ' in physical.sql):
             raise DischargeError("the page does not start where its cursor says")
+    if (physical.level is not None) != (plan.totals is not None):
+        raise DischargeError("the statement's level column does not match the question's totals")
+    if plan.levels and plan.groups:
+        sets = _grouping_sets(physical.sql)
+        wanted = sorted(
+            n for _ in plan.facts for n in (len(plan.report.facts["grain"]), *plan.levels)
+        )
+        if sorted(sets) != wanted:
+            raise DischargeError("the statement's grouping sets are not the question's levels")
     restricted = {_quote(s.table) for s in plan.sources if s.policies}
     reads = _table_reads(physical.sql)
     for table in restricted:

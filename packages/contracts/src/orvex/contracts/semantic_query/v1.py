@@ -294,6 +294,10 @@ class SemanticQuery(BaseModel):
     S3: the explicit choice for comparing a partial period with a complete one (`COVERAGE_POLICY_REQUIRED`); bound in P2-05b and P2-11.
     """
     limit: Count | None = None
+    totals: Literal["none", "grand", "rollup"] | None = None
+    """
+    P2-23: `none` (the default), `grand` (one grand-total row), or `rollup` (a subtotal for each prefix of `group_by` in presentation order, then the grand total). Computed by the engine at every level with the same correctness rules as the detail rows.
+    """
     fields: Annotated[list[FieldModel] | None, Field(max_length=256, min_length=1)] = None
     page: Page | None = None
     order: Annotated[list[Order] | None, Field(max_length=64, min_length=1)] = None

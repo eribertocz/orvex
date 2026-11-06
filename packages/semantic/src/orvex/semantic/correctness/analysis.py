@@ -68,7 +68,7 @@ class is refused until its rule lands, and a metric with neither is refused as
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from orvex.semantic.compiler.compiled import CompiledMember, CompiledModel
@@ -234,6 +234,7 @@ class _Query:
         self.metrics: list[MemberId] = []
         self.rows: list[_Row] = []
         self.grouped: list[_Row] = []
+        self.totals: str | None = None  # P2-23: `grand` or `rollup`, when asked
         for entry in canonical.get("filters", ()):
             self._filter(entry, "filter")
         sorted_rows: list[MemberId] = []
@@ -248,6 +249,7 @@ class _Query:
             self.shapes.add("detail")
             return
         self.shapes.add("aggregate")
+        self.totals = canonical.get("totals")
         for member, context, apply in canonical["metrics"]:
             self.metrics.append(_member(member))
             if context is not None or apply:
@@ -1223,6 +1225,28 @@ class _Analysis:
             )
         return self.source_of(node) in sources
 
+    def distinct_groups(self) -> list[_Row]:
+        """The question's groups in presentation order, each once: a group asked twice is one
+        column of one grain, so it is one level."""
+        found: list[_Row] = []
+        for row in self.query.grouped:
+            if all(
+                (r.member, r.role, r.bucket) != (row.member, row.role, row.bucket) for r in found
+            ):
+                found.append(row)
+        return found
+
+    def levels(self) -> tuple[int, ...]:
+        """The total levels a question asks for, each as how many of its groups it keeps, in
+        presentation order: every prefix for `rollup`, none of them for `grand` (P2-23). With no
+        group at all, the one row is already the grand total."""
+        groups = len(self.distinct_groups())
+        if self.query.totals == "rollup":
+            return tuple(range(groups - 1, -1, -1))
+        if self.query.totals == "grand" and groups:
+            return (0,)
+        return ()
+
     def report(
         self,
         home_of: Mapping[MemberId, str],
@@ -1362,7 +1386,26 @@ class _Analysis:
                         datasets=tuple(reads),
                     )
                 )
-        facts = {
+        levels = self.levels()
+        if levels:  # each total level, by the same rules as the detail rows (P2-23)
+            if self.after:  # totals over rows a filter only hides: not defined yet
+                raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "totals_window_filter"})
+            per_level = [
+                o for o in obligations if o.kind not in ("policy", "as_of", "weights", "window")
+            ]
+            for n in levels:
+                kept = tuple(
+                    sorted(
+                        {
+                            self.label(r.member)
+                            + (f"[{written.get(r.role, r.role)}]" if r.role else "")
+                            + (f"@{r.bucket}" if r.bucket else "")
+                            for r in self.distinct_groups()[:n]
+                        }
+                    )
+                )
+                obligations += [replace(o, id=f"{o.id}@{n}", to_grain=kept) for o in per_level]
+        facts: dict[str, Any] = {
             "mode": self.query.mode,
             "grain": [
                 {"member": label, "role": role, "bucket": bucket}
@@ -1448,6 +1491,8 @@ class _Analysis:
             ]
             if self.after:
                 facts["after"] = sorted({self.label(r.member) for r in self.after})
+        if self.query.totals is not None:
+            facts["totals"] = {"kind": self.query.totals, "levels": list(levels)}
         if self.derived:
             facts["derived"] = [
                 {

@@ -370,6 +370,18 @@ class Notice(BaseModel):
     ]
 
 
+class RowRole(BaseModel):
+    """
+    A row's role: `detail` keeps every group, `subtotal` the first `level` of them, `total` none. A dimension the row does not keep is `null`, which is never a value: `row_roles` tells it from a real `NULL`.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    role: Literal["detail", "subtotal", "total"]
+    level: Count
+
+
 class Receipt(BaseModel):
     """
     The reference to this result's receipt (`receipt` v1, P2-07): its identity and reproducibility class.
@@ -401,6 +413,10 @@ class SemanticResult(BaseModel):
     cell_states: list[CellState]
     page: Page
     others_row: Count | None = None
+    row_roles: list[RowRole] | None = None
+    """
+    P2-23, `aggregate` only, present when the query asks for `totals`: one entry per row, in row order. `level` is how many `group_by` members the row keeps.
+    """
     notices: Annotated[list[Notice], Field(max_length=64)]
     receipt: Receipt | None = None
     """

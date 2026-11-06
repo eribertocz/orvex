@@ -68,6 +68,14 @@
     "limit": {
       "$ref": "#/$defs/Count"
     },
+    "totals": {
+      "description": "P2-23: `none` (the default), `grand` (one grand-total row), or `rollup` (a subtotal for each prefix of `group_by` in presentation order, then the grand total). Computed by the engine at every level with the same correctness rules as the detail rows.",
+      "enum": [
+        "none",
+        "grand",
+        "rollup"
+      ]
+    },
     "fields": {
       "type": "array",
       "minItems": 1,
@@ -150,8 +158,26 @@
           "contexts": false,
           "top_n": false,
           "coverage": false,
-          "limit": false
+          "limit": false,
+          "totals": false
         }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "totals"
+        ],
+        "properties": {
+          "totals": {
+            "const": "rollup"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "group_by"
+        ]
       }
     }
   ],
