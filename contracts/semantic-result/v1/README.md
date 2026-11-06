@@ -26,6 +26,7 @@ Every member below is required unless marked optional. Every object is closed, a
 | `cell_states` | `{row, column, state}` entries: the cells with no ordinary value (below) |
 | `page` | `detail`: `{size, next?}`, where `next` is absent on the last page. `aggregate`: `{limit?, truncated}`, never a cursor |
 | `others_row` | optional, `aggregate` only: the index of the recomputed "Others" row (S10 `top_n` with `others: true`) |
+| `row_roles` | `aggregate` only, present exactly when the query asks for `totals` (P2-23): one `{role, level}` per row, below |
 | `notices` | at most 64 `semantic-error/v1` messages of severity `warning` or `notice`, in the caller's audience view, so a notice never discloses more than an error would |
 | `receipt` | optional: `{receipt_id, reproducibility}`, the reference to this result's receipt (`receipt` v1, P2-07). The canonical form never includes it, because the receipt's result MAC covers the canonical form |
 
@@ -131,6 +132,19 @@ A result is invalid when any of these holds:
   - never in a calculation, a total or a sort;
   - shown with a generic indicator.
 - A producer emits only the states of the contract version it implements.
+
+## Row roles (totals)
+
+When the query asks for `totals` (`semantic-query` v1), `row_roles` has one entry per row, in row order:
+- `detail`: the row keeps every `group_by` member; `level` is their number;
+- `subtotal`: the row keeps the first `level` members, in presentation order, with `0 < level <` that number;
+- `total`: the grand total, `level` 0.
+
+**A dimension a row does not keep is `null`**, so with totals every dimension column is `nullable`. That `null` is not a value: `row_roles` is what tells "every region" from a region that is `NULL`. A running total is `undefined_at_total` in every `subtotal` and `total` row.
+
+A result is invalid when `row_roles` is present without `totals` in the query or in `detail` mode, when its length differs from `row_count`, when a role disagrees with its level, or when a dimension the row does not keep holds anything but `null`.
+
+**Arrow:** the schema metadata key `semantic.row_roles` holds the RFC 8785 bytes of the envelope's `row_roles`.
 
 ## What the schema checks, and what the reader adds
 

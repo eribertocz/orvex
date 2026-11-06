@@ -74,6 +74,11 @@ class PhysicalQuery:
     # Then BIGINT columns: (column, relationship) for an as-of join (C6), each row holding how
     # many rows read match not exactly one valid row; any refuses the whole result.
     as_of: tuple[tuple[str, str], ...] = ()
+    # Then, with totals (P2-23), one INTEGER column: how many groups the row keeps.
+    level: str | None = None
+
+
+LEVEL = "#level"  # with totals: how many groups a row keeps (P2-23)
 
 
 def quote(name: str) -> str:
@@ -345,6 +350,8 @@ class _Writer:
         ):
             raise _unsupported()
         nullable = typed.nullable or (role == "dimension" and bool(self.plan.joins))
+        # With totals, a dimension is `null` in each row that does not keep it (P2-23).
+        nullable = nullable or (role == "dimension" and self.plan.totals is not None)
         return ColumnSpec(
             name=name,
             member={"name": member.name} | ({"dataset": member.dataset} if member.dataset else {}),
@@ -508,10 +515,11 @@ class _Writer:
             return f"({joined})"
         raise _unsupported()
 
-    def fact(self, source: Any) -> str:  # noqa: ANN401
+    def fact(self, source: Any, whole: bool = False) -> str:  # noqa: ANN401
         """The fact's table, or, for a period-end metric, only each entity's latest row per
         period (C2): a ranking over the entity and the period, by the axis, newest first. The
-        entity plus the axis is the key, so no two rows tie."""
+        entity plus the axis is the key, so no two rows tie. `whole`: the period is the whole
+        range read, for a total level without the time axis (P2-23)."""
         latest = source.latest
         if latest is None:
             return self.relation(source.dataset)
@@ -519,7 +527,8 @@ class _Writer:
         period = axis
         if latest.bucket is not None:  # the same period the question groups by, in its zone
             period = self.cut(latest.bucket, axis, latest.zone)
-        partition = ", ".join([self.field(e, "s") for e in latest.entity] + [period])
+        entity = [self.field(e, "s") for e in latest.entity]
+        partition = ", ".join(entity if whole else [*entity, period])
         return (
             f"(SELECT * FROM {self.relation(source.dataset)} AS {quote('s')}"
             " QUALIFY row_number() OVER "
@@ -528,7 +537,7 @@ class _Writer:
 
     def statement(self) -> PhysicalQuery:
         plan = self.plan
-        parts = [self.aggregation(fact) for fact in plan.facts]
+        parts = [self.totalled(fact) for fact in plan.facts]
         if len(parts) == 1:
             text, columns, checks = parts[0]
         else:
@@ -541,7 +550,9 @@ class _Writer:
             if len(parts) > 1 or plan.derived:
                 raise PlanError("a running total is computed over one fact's aggregation")
             text, columns = self.accumulate(text, columns, checks)
-        if plan.order:
+        if plan.totals is not None:
+            text = self.by_level(text, columns, checks)
+        elif plan.order:
             text += " ORDER BY " + ", ".join(
                 f"{quote(s.name)} {'DESC' if s.descending else 'ASC'} "
                 f"NULLS {'FIRST' if s.nulls_first else 'LAST'}"
@@ -558,6 +569,72 @@ class _Writer:
             zones=tuple(sorted(self.zones)),
             weights=tuple(self.weights),
             as_of=tuple(self.as_of),
+            level=LEVEL if plan.totals is not None else None,
+        )
+
+    def totalled(self, fact: str) -> tuple[str, list[ColumnSpec], list[tuple[str, str]]]:
+        """One fact's aggregation, at the detail grain and at every total level (P2-23). A
+        period-end fact's levels without its time axis read each entity's latest row over the
+        whole range, so they are a second aggregation, in the same statement."""
+        plan = self.plan
+        own = self.members(fact)
+        groups = [g for g in plan.groups if g.source in own]
+        sets = [len(groups), *plan.levels] if plan.totals is not None else None
+        latest = next(s.latest for s in plan.sources if s.alias == fact)
+        if latest is None or not plan.levels:
+            return self.aggregation(fact, sets)
+        axis = next((at for at, g in enumerate(groups) if g.member == latest.axis), None)
+        if axis is None:
+            raise PlanError("a period-end fact is totalled without its time axis as a group")
+        if sets is None:
+            raise PlanError("total levels without totals")
+        keeps = [n for n in sets if n > axis]
+        drops = [n for n in sets if n <= axis]
+        if not drops:
+            return self.aggregation(fact, keeps)
+        text, columns, checks = self.aggregation(fact, keeps)
+        weights, as_of = len(self.weights), len(self.as_of)
+        other, _, _ = self.aggregation(fact, drops, whole=True)
+        # The second part's guards are the same guards over the same rows, in the same columns:
+        # the union names them as the first part does, and any failure in either refuses all.
+        del self.weights[weights:], self.as_of[as_of:]
+        return f"{text} UNION ALL {other}", columns, checks
+
+    def by_level(self, inner: str, columns: list[ColumnSpec], checks: list[tuple[str, str]]) -> str:
+        """The rows in the order of a pivot table (P2-23, Owner decision): at each level, the
+        groups by the question's order on its own value (a metric's value at that level, or the
+        level's own member), each subtotal after its group's rows, the grand total last."""
+        dimensions = [c.name for c in columns if c.role == "dimension"]
+        metrics = {c.name for c in columns if c.role == "metric"}
+        level = quote(LEVEL)
+        keys: list[str] = []
+        directions: list[str] = []
+        for i in range(1, len(dimensions) + 1):
+            keys.append(f"({level} < {i})")
+            directions.append("ASC NULLS LAST")
+            within = ", ".join([f"({level} >= {i})", *(quote(d) for d in dimensions[:i])])
+            for sort in self.plan.order:
+                way = "DESC" if sort.descending else "ASC"
+                direction = f"{way} NULLS {'FIRST' if sort.nulls_first else 'LAST'}"
+                if sort.name in metrics:
+                    keys.append(
+                        f"MAX(CASE WHEN {level} = {i} THEN {quote(sort.name)} END) "
+                        f"OVER (PARTITION BY {within})"
+                    )
+                    directions.append(direction)
+                elif sort.name == dimensions[i - 1]:
+                    keys.append(quote(sort.name))
+                    directions.append(direction)
+        names = [c.name for c in columns] + [n for n, _ in checks]
+        names += [n for n, _ in self.weights] + [n for n, _ in self.as_of] + [LEVEL]
+        kept = ", ".join(quote(n) for n in names)
+        if not keys:
+            return f"SELECT {kept} FROM ({inner}) AS {quote('o')}"
+        ordered = ", ".join(f"{key} AS {quote(f'#o{n}')}" for n, key in enumerate(keys))
+        by = ", ".join(f"{quote(f'#o{n}')} {d}" for n, d in enumerate(directions))
+        return (
+            f"SELECT {kept} FROM (SELECT *, {ordered} FROM ({inner}) AS {quote('o')})"
+            f" AS {quote('p')} ORDER BY {by}"
         )
 
     def members(self, fact: str) -> set[str]:
@@ -570,20 +647,29 @@ class _Writer:
             raise PlanError("a join reaches a source out of path order")
         return found
 
-    def aggregation(self, fact: str) -> tuple[str, list[ColumnSpec], list[tuple[str, str]]]:
-        """One fact aggregated on its own to the requested grain, with every filter (C3)."""
+    def aggregation(
+        self, fact: str, sets: list[int] | None = None, whole: bool = False
+    ) -> tuple[str, list[ColumnSpec], list[tuple[str, str]]]:
+        """One fact aggregated on its own to the requested grain, with every filter (C3). With
+        `sets` (P2-23), at each of those levels, each keeping that many of the groups in
+        presentation order, as grouping sets of one aggregation, with the level as a column."""
         plan = self.plan
         own = self.members(fact)
         select: list[str] = []
         grouped: list[str] = []
         columns: list[ColumnSpec] = []
-        for group in (g for g in plan.groups if g.source in own):
+        widest = max(sets) if sets else None  # with totals: the most groups any level keeps
+        for at, group in enumerate(g for g in plan.groups if g.source in own):
             expression = self.field(group.member, group.source)
             if group.bucket is not None:
                 expression = self.cut(group.bucket, expression, group.zone)
+            column = self.column(group.member, group.name, "dimension", group.bucket)
+            columns.append(column)
+            if widest is not None and at >= widest:  # a group no level here keeps: rolled up
+                select.append(f"CAST(NULL AS {column.encoding}) AS {quote(group.name)}")
+                continue
             select.append(f"{expression} AS {quote(group.name)}")
             grouped.append(expression)
-            columns.append(self.column(group.member, group.name, "dimension", group.bucket))
         ratios: list[tuple[int, Any, ColumnSpec]] = []
         for aggregate in (a for a in plan.aggregates if a.source in own):
             column = self.column(aggregate.metric, aggregate.name, "metric", None)
@@ -612,7 +698,7 @@ class _Writer:
             )
             ratios.append((k, (aggregate, scales), column))
         sources = {s.alias: s for s in plan.sources}
-        rows = f" FROM {self.fact(sources[fact])} AS {quote(fact)}"
+        rows = f" FROM {self.fact(sources[fact], whole)} AS {quote(fact)}"
         for join in (j for j in plan.joins if j.left in own):
             on = " AND ".join(
                 f"{self.field(a, join.left)} = {self.field(b, join.right)}" for a, b in join.pairs
@@ -642,10 +728,19 @@ class _Writer:
             select.append(f"{self.unmatched(join, rows, conditions)} AS {quote(name)}")
             weights.append(quote(name))
             self.as_of.append((name, self.relationship_name(join.relationship)))
+        if sets is not None:  # how many groups the row keeps: the detail rows keep them all
+            ungrouped = " + ".join(f"GROUPING({g})" for g in grouped) or "0"
+            select.append(f"CAST({len(grouped)} - ({ungrouped}) AS INTEGER) AS {quote(LEVEL)}")
+            if any(n > len(grouped) for n in sets):
+                raise PlanError("a level keeps more groups than the aggregation has")
+            weights.append(quote(LEVEL))
         text = "SELECT " + ", ".join(select) + rows
         if conditions:
             text += " WHERE " + " AND ".join(conditions)
-        if grouped:
+        if grouped and sets is not None:
+            levels = ", ".join(f"({', '.join(grouped[:n])})" for n in sets)
+            text += f" GROUP BY GROUPING SETS ({levels})"
+        elif grouped:
             text += " GROUP BY " + ", ".join(grouped)
         checks: list[tuple[str, str]] = []
         if ratios:
@@ -767,12 +862,20 @@ class _Writer:
         checks = [check for part in parts for check in part[2]]
         at_check = {check: names[i] for i, part in enumerate(parts) for check, _ in part[2]}
         select += [f"{at_check[check]}.{quote(check)}" for check, _ in checks]
+        # With totals, each level aligns with the same level only: a rolled-up group is never
+        # matched to a group whose value is `NULL` (P2-23).
+        keys = [quote(d.name) for d in dimensions]
+        if self.plan.totals is not None:
+            keys.append(quote(LEVEL))
+            select.append(
+                f"COALESCE({', '.join(f'{f}.{quote(LEVEL)}' for f in names)}) AS {quote(LEVEL)}"
+            )
         text = f"SELECT {', '.join(select)} FROM ({parts[0][0]}) AS {names[0]}"
         for i in range(1, len(parts)):
             on = " AND ".join(
-                f"COALESCE({', '.join(f'{f}.{quote(d.name)}' for f in names[:i])})"
-                f" IS NOT DISTINCT FROM {names[i]}.{quote(d.name)}"
-                for d in dimensions
+                f"COALESCE({', '.join(f'{f}.{key}' for f in names[:i])})"
+                f" IS NOT DISTINCT FROM {names[i]}.{key}"
+                for key in keys
             )
             text += f" FULL OUTER JOIN ({parts[i][0]}) AS {names[i]} ON {on or 'TRUE'}"
         return text, columns, checks
@@ -815,10 +918,12 @@ class _Writer:
         text = f"SELECT *{''.join(', ' + m for m in middle)} FROM ({inner}) AS {quote('a')}"
         final = dimensions + outputs
         keep = [check for check, _ in checks]
+        level = [quote(LEVEL)] if self.plan.totals is not None else []
         if ratios:
-            text, more = self.divide(text, final, ratios, keep)
+            text, more = self.divide(text, final, ratios, keep, after=level)
             return text, final, checks + more
         kept = ", ".join(quote(c.name) for c in final) + "".join(", " + quote(k) for k in keep)
+        kept += "".join(", " + k for k in level)
         return f"SELECT {kept} FROM ({text}) AS {quote('b')}", final, checks
 
     def accumulate(
@@ -843,16 +948,20 @@ class _Writer:
             outputs.append(column)
             ordered = step.order[: len(step.order) - step.partitions]
             partitions = step.order[len(step.order) - step.partitions :]
-            within = (
-                f"PARTITION BY {', '.join(quote(p) for p in partitions)} " if partitions else ""
-            )
+            totals = self.plan.totals is not None
+            keys = [quote(LEVEL)] * totals + [quote(p) for p in partitions]
+            within = f"PARTITION BY {', '.join(keys)} " if keys else ""
             order = ", ".join(f"{quote(o)} ASC NULLS LAST" for o in ordered)
             total = (
                 f"SUM({quote(step.over)}) OVER ({within}ORDER BY {order}"
                 " ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)"
             )
+            if totals:  # summed over the detail rows only; undefined at every total (S9)
+                detail = len(dimensions)
+                total = f"CASE WHEN {quote(LEVEL)} = {detail} THEN {total} END"
             select.append(f"CAST({total} AS {column.encoding}) AS {quote(name)}")
         extra = [n for n, _ in checks] + [n for n, _ in self.weights] + [n for n, _ in self.as_of]
+        extra += [LEVEL] if self.plan.totals is not None else []
         select += [quote(n) for n in extra]
         text = f"SELECT {', '.join(select)} FROM ({inner}) AS {quote('w')}"
         if self.plan.after:

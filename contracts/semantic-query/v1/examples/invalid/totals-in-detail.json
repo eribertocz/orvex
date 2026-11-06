@@ -1,0 +1,19 @@
+{
+  "kind": "semantic_query",
+  "version": 1,
+  "mode": "detail",
+  "fields": [
+    {
+      "member": "sales.region"
+    }
+  ],
+  "order": [
+    {
+      "by": "sales.region"
+    }
+  ],
+  "page": {
+    "size": 10
+  },
+  "totals": "grand"
+}

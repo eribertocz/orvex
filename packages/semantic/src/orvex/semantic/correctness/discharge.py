@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from typing import Any
 
 from orvex.semantic.compiler.parsing import MemberId
@@ -419,13 +420,36 @@ def verify_plan(plan: Any) -> Evidence:  # noqa: ANN401
     """The evidence of every obligation of the plan's report, or `DischargeError`."""
     p = _Plan(plan)
     evidence: Evidence = {}
+    groups = len(plan.report.facts["grain"])
+    expected = _levels(plan.totals, groups)
+    if tuple(plan.levels) != expected:
+        raise DischargeError("the plan's total levels are not the question's")
     for obligation in plan.report.obligations:
         checker = CHECKERS.get((obligation.rule, obligation.kind))
         if checker is None:
             raise DischargeError(f"no checker for {obligation.rule}.{obligation.kind}")
-        evidence[obligation.id] = checker(p, obligation)
+        base, at, level = obligation.id.partition("@")
+        if not at:
+            evidence[obligation.id] = checker(p, obligation)
+            continue
+        # A total level (P2-23): the same rule, at a level the plan computes.
+        if not level.isdigit() or int(level) not in plan.levels:
+            raise DischargeError(f"{obligation.id} is at a level the plan does not compute")
+        found = checker(p, replace(obligation, id=base))
+        evidence[obligation.id] = f"{found}@{level}"
     _policies_reached(p)
     return evidence
+
+
+def _levels(totals: str | None, groups: int) -> tuple[int, ...]:
+    """The total levels a question asks for, from its own `totals` and grain (P2-23)."""
+    if totals == "rollup":
+        return tuple(range(groups - 1, -1, -1))
+    if totals == "grand" and groups:
+        return (0,)
+    if totals not in (None, "grand"):
+        raise DischargeError(f"unknown totals {totals!r}")
+    return ()
 
 
 _TOKEN = re.compile(r'"(?:[^"]|"")*"|\'(?:[^\']|\'\')*\'|\$?\w+|\S')
@@ -517,6 +541,10 @@ def verify_physical(plan: Any, physical: Any) -> Evidence:  # noqa: ANN401
     for column, _ in (*physical.as_of, *physical.weights):
         if _quote(column) not in physical.sql:
             raise DischargeError("a guard column is missing from the statement")
+    if (physical.level is not None) != (plan.totals is not None):
+        raise DischargeError("the statement's level column does not match the question's totals")
+    if plan.levels and plan.groups and "GROUPING SETS" not in physical.sql:
+        raise DischargeError("the total levels are not computed by grouping sets")
     restricted = {_quote(s.table) for s in plan.sources if s.policies}
     reads = _table_reads(physical.sql)
     for table in restricted:

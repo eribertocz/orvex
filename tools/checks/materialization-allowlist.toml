@@ -83,3 +83,8 @@ reason = "Run records: one row per model of the project (model_history_request g
 file = "packages/semantic/src/orvex/semantic/execution.py"
 call = "as_py"
 reason = "One scalar per check, a count DuckDB computed: normalization groups with invalid bridge weights (C7), rows an as-of join matches not exactly once, registrations listing the caller (P2-21), or points of a zone the engine converts differently from the pinned tzdata (C6); never data rows"
+
+[[allow]]
+file = "packages/semantic/src/orvex/semantic/execution.py"
+call = "to_pylist"
+reason = "With totals, the result's level column: one small integer per result row, written as the result's own row roles (P2-23), never source rows"
