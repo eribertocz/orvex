@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -36,12 +36,14 @@ from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.correctness import CorrectnessReport, analyze
 from orvex.semantic.correctness.discharge import verify_physical
 from orvex.semantic.errors import SemanticError
+from orvex.semantic.evidence import CONSISTENT, EvidenceRecord, Ledger, relied
 from orvex.semantic.ossie import sql
 from orvex.semantic.planning import PlanError, SemanticPlan, plan
 from orvex.semantic.policies import PolicyModel, read_caller
 from orvex.semantic.query.binding import SCOPES, BoundQuery, Limits, bind_query
 from orvex.semantic.receipt import (
     DataRead,
+    EvidenceUse,
     ExecutionUse,
     Key,
     ModelUse,
@@ -82,9 +84,10 @@ class Engine:
     # it is still kept (None once expired); both supplied by `server`.
     cursors: CursorForm | None = None
     pinned: Callable[[str], Mapping[str, object] | None] | None = None
-    # C8 (P2-25): whether an aggregate table is verified consistent with its base on this
-    # snapshot (P2-26 evidence); none: never, so the base is always read (decision 1).
-    consistent: Callable[[str, Mapping[str, object]], bool] | None = None
+    # Evidence (P2-26): the verification records of a snapshot, supplied by `server`; none:
+    # every piece of evidence is `declared`, and no aggregate table is read in place of its
+    # base, since none is verified consistent (C8).
+    evidence: Callable[[Mapping[str, object]], Iterable[EvidenceRecord]] | None = None
     clock: Callable[[], float] = time.monotonic
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
 
@@ -369,6 +372,7 @@ def _execute(
     context: Mapping[str, Any],
     evidence: Mapping[str, str],
     binding: CursorBinding | None = None,
+    uses: Sequence[EvidenceUse] = (),
 ) -> Answer:
     """One read of `physical` on `engine.snapshot`, and its result and receipt, which names
     the evidence of each obligation (C9)."""
@@ -453,6 +457,7 @@ def _execute(
         result_key=engine.result_key,
         seal_key=engine.seal_key,
         obligations=[o.for_receipt(evidence[o.id]) for o in report.obligations],
+        evidence=uses,
         policies=[PolicyUse(name, "row", how) for name, how in sorted(applied.items())],
         plan_fingerprint=plan_.fingerprint,
     )
@@ -544,17 +549,22 @@ def answer(
             engine = replace(engine, snapshot=pinned)
             # A float as its shortest exact text: bound as text and cast back, never rounded.
             start = tuple(repr(v) if isinstance(v, float) else v for v in state.position)
-    rollup = next(  # the first proven table whose stored numbers are current (C8)
+    snapshot = engine.snapshot.get("id")
+    ledger = Ledger(  # the records of the snapshot read, for the declarations as they are
+        compiled,
+        engine.evidence(engine.snapshot) if engine.evidence is not None else (),
+        snapshot if isinstance(snapshot, int) and not isinstance(snapshot, bool) else -1,
+    )
+    rollup = next(  # the first proven table verified consistent on this snapshot (C8)
         (
             c.name
             for c in report.materials
-            if c.eligible
-            and engine.consistent is not None
-            and engine.consistent(c.name, engine.snapshot)
+            if c.eligible and ledger.verified(("dataset", c.dataset, CONSISTENT))
         ),
         None,
     )
     logical = plan(report, start, rollup)
     physical = compile_plan(logical)
     evidence = verify_physical(logical, physical)  # checked again, and in the statement (C9)
-    return _execute(physical, engine, report, logical, context, evidence, binding)
+    uses = ledger.uses(relied(logical))  # violated evidence: refused before any read (P2-26)
+    return _execute(physical, engine, report, logical, context, evidence, binding, uses)

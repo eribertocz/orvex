@@ -109,6 +109,30 @@ Every relationship cardinality, dataset uniqueness, temporal non-overlap and bri
 | `verified` | Checked against the data of a specific DuckLake snapshot, or, on a live engine after v1.0.0, at a recorded instant (ADR-0027 §7) | Usable; the receipt references the verification run or instant |
 | `violated` | The check failed on the current snapshot | **Not usable.** Queries depending on it are rejected with `EVIDENCE_VIOLATED` and the reason (for example "consumer_id is not unique in dim_consumers: 37 duplicates") |
 
+**How each piece of evidence is checked (P2-26).** Each check is one read-only statement on one snapshot. It reads every table whole, with no row policy, and returns counts only, never a value.
+
+| Evidence | Declared on | Violations counted |
+|---|---|---|
+| `unique` | a dataset (its primary key) | key values more than one row shares |
+| `non_overlap` | a dataset with `time_roles.validity` (the entity is `history.entity_key`, or else the primary key without the validity's start) | pairs of rows of one entity whose closed-open intervals overlap; a row with a `NULL` bound matches no instant, so it overlaps nothing |
+| `cardinality` | a relationship | `to` key values more than one row shares that a `from` row refers to, and the reverse for `one_to_one`; for a temporal relationship, overlapping versions of a referenced key |
+| `referential_integrity` | a relationship | distinct `from` keys, none `NULL`, with no `to` row |
+| `consistent` | an `aggregate_table` with `base_dataset` (implied, not listed) | groups the table is missing, groups it has in addition, and groups whose stored measure differs exactly from the base metric (a `NULL` against a value included), by a full outer join on the grain where `NULL` matches `NULL` |
+| `append_only` | a dataset | not checked: it compares two snapshots, and one statement reads one. It stays `declared`. |
+
+**Records.**
+- A record holds for one snapshot and for one declaration: a fingerprint of the model elements the check reads (the element, the datasets it reads, and every metric for `consistent`). On any other snapshot, or once the declaration changed, the evidence is `declared` again.
+- A check that does not finish within the verification budget leaves the evidence `declared`; builders are told. Any other failure of a check is an error, never a verification.
+
+**What a question relies on** comes from its plan, and is only what its answer depends on:
+- the `cardinality` of every relationship it joins through, as-of joins included: a repeated key among the rows it refers to multiplies them or matches an event twice;
+- the key (`unique`) of a period-end fact and of a detail page's base, whose rows are ranked or paged by it;
+- the consistency of the aggregate table it reads.
+
+`referential_integrity` and the `unique` key or `non_overlap` of a dataset reached by a join are checked and recorded, but no answer depends on them: a join keeps a row with no match in the `NULL` group, and a repeated key no row refers to multiplies nothing. They never refuse a question.
+
+Only declared evidence is listed: a property the model does not declare is not evidence. An aggregate table is read in place of its base only when `consistent` is verified on the snapshot read. Otherwise the base is read, with the same answer.
+
 Because `transform` and `semantic` live in the same product, the engine **re-verifies evidence after every successful transformation run** affecting the involved tables. Datasets outside the managed lake have no runs (ADR-0027 §7). An existing DuckLake is served only at its latest **verified** snapshot: a new snapshot is verified first, then served. A live engine (after v1.0.0) is verified on a schedule declared per connection (default daily), and the receipt carries the verification instant. On the managed lake and on an existing DuckLake, a dashboard can never show numbers that silently depend on a relationship the data no longer satisfies; on a live engine, data changed since the last verification is not yet checked, and the receipt says so by showing that instant.
 
 ## 7. Security inside the engine
