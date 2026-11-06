@@ -1049,11 +1049,22 @@ class _Analysis:
             )
         return self.source_of(node) in sources
 
+    def distinct_groups(self) -> list[_Row]:
+        """The question's groups in presentation order, each once: a group asked twice is one
+        column of one grain, so it is one level."""
+        found: list[_Row] = []
+        for row in self.query.grouped:
+            if all(
+                (r.member, r.role, r.bucket) != (row.member, row.role, row.bucket) for r in found
+            ):
+                found.append(row)
+        return found
+
     def levels(self) -> tuple[int, ...]:
         """The total levels a question asks for, each as how many of its groups it keeps, in
         presentation order: every prefix for `rollup`, none of them for `grand` (P2-23). With no
         group at all, the one row is already the grand total."""
-        groups = len(self.query.grouped)
+        groups = len(self.distinct_groups())
         if self.query.totals == "rollup":
             return tuple(range(groups - 1, -1, -1))
         if self.query.totals == "grand" and groups:
@@ -1213,7 +1224,7 @@ class _Analysis:
                             self.label(r.member)
                             + (f"[{written.get(r.role, r.role)}]" if r.role else "")
                             + (f"@{r.bucket}" if r.bucket else "")
-                            for r in self.query.grouped[:n]
+                            for r in self.distinct_groups()[:n]
                         }
                     )
                 )

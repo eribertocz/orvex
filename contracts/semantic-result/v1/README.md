@@ -136,9 +136,9 @@ A result is invalid when any of these holds:
 ## Row roles (totals)
 
 When the query asks for `totals` (`semantic-query` v1), `row_roles` has one entry per row, in row order:
-- `detail`: the row keeps every `group_by` member; `level` is their number;
+- `detail`: the row keeps every `group_by` member, at least one; `level` is their number;
 - `subtotal`: the row keeps the first `level` members, in presentation order, with `0 < level <` that number;
-- `total`: the grand total, `level` 0.
+- `total`: the grand total, `level` 0, which is also the one row of a question with no `group_by`.
 
 **A dimension a row does not keep is `null`**, so with totals every dimension column is `nullable`. That `null` is not a value: `row_roles` is what tells "every region" from a region that is `NULL`. A running total is `undefined_at_total` in every `subtotal` and `total` row.
 

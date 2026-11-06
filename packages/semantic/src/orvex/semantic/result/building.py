@@ -161,7 +161,8 @@ def check_row_roles(
         level, role = entry["level"], entry["role"]
         if not isinstance(level, int) or not 0 <= level <= len(dimensions):
             raise InvalidResult("row_roles_level", f"row {row} keeps {level} groups")
-        expected = "detail" if level == len(dimensions) else "total" if level == 0 else "subtotal"
+        # With no group at all, the one row is the grand total.
+        expected = "total" if level == 0 else "detail" if level == len(dimensions) else "subtotal"
         if role != expected:
             raise InvalidResult("row_roles_role", f"row {row} is {role} at level {level}")
         for column in dimensions[level:]:

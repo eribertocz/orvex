@@ -524,10 +524,12 @@ class _Writer:
         if latest is None:
             return self.relation(source.dataset)
         axis = self.field(latest.axis, "s")
-        period = axis
-        if latest.bucket is not None:  # the same period the question groups by, in its zone
-            period = self.cut(latest.bucket, axis, latest.zone)
         entity = [self.field(e, "s") for e in latest.entity]
+        # A bound value is written only where the statement uses it: the whole range has no
+        # period to cut, so its zone is never bound.
+        period = axis
+        if latest.bucket is not None and not whole:  # the question's period, in its zone
+            period = self.cut(latest.bucket, axis, latest.zone)
         partition = ", ".join(entity if whole else [*entity, period])
         return (
             f"(SELECT * FROM {self.relation(source.dataset)} AS {quote('s')}"
@@ -660,14 +662,14 @@ class _Writer:
         columns: list[ColumnSpec] = []
         widest = max(sets) if sets else None  # with totals: the most groups any level keeps
         for at, group in enumerate(g for g in plan.groups if g.source in own):
-            expression = self.field(group.member, group.source)
-            if group.bucket is not None:
-                expression = self.cut(group.bucket, expression, group.zone)
             column = self.column(group.member, group.name, "dimension", group.bucket)
             columns.append(column)
             if widest is not None and at >= widest:  # a group no level here keeps: rolled up
                 select.append(f"CAST(NULL AS {column.encoding}) AS {quote(group.name)}")
                 continue
+            expression = self.field(group.member, group.source)  # written, so bound, once used
+            if group.bucket is not None:
+                expression = self.cut(group.bucket, expression, group.zone)
             select.append(f"{expression} AS {quote(group.name)}")
             grouped.append(expression)
         ratios: list[tuple[int, Any, ColumnSpec]] = []
@@ -737,7 +739,9 @@ class _Writer:
         text = "SELECT " + ", ".join(select) + rows
         if conditions:
             text += " WHERE " + " AND ".join(conditions)
-        if grouped and sets is not None:
+        if sets is not None and widest is not None and any(g.source in own for g in plan.groups):
+            # Every level as its own set, the grand total `()` included, even when this part
+            # keeps no group at all: the statement states its levels (C9).
             levels = ", ".join(f"({', '.join(grouped[:n])})" for n in sets)
             text += f" GROUP BY GROUPING SETS ({levels})"
         elif grouped:

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -489,3 +490,290 @@ def test_a_result_whose_row_roles_lie_is_refused_by_the_reader() -> None:
     held = [["North", "web", *row[2:]] if i == len(rows) - 1 else row for i, row in enumerate(rows)]
     with pytest.raises(InvalidResult):  # a rolled-up group holding a value
         read_result(json.dumps(envelope | {"rows": held}))
+
+
+# --- after review: every rule by hypothesis, zones, one read ---------------------------------
+
+Snapshot = tuple[int, int, str, int]  # account, day of the quarter, region, cents
+
+
+def days(n: int) -> str:
+    return (date(2026, 1, 1) + timedelta(days=n)).isoformat()
+
+
+@settings(max_examples=30, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    st.dictionaries(
+        st.tuples(st.integers(1, 3), st.integers(0, 89)),
+        st.tuples(st.sampled_from(["North", "South"]), st.integers(-9999, 9999)),
+        min_size=1,
+        max_size=12,
+    ),
+    st.booleans(),
+)
+def test_period_end_at_every_level_equals_its_reference(
+    snapshots: dict[tuple[int, int], tuple[str, int]], region_first: bool
+) -> None:
+    compiled, catalog = period.snapshots_model()
+    data = period.rows(
+        *(
+            (a, days(d), r, f"{Decimal(c) / 100:.2f}")
+            for (a, d), (r, c) in sorted(snapshots.items())
+        )
+    )
+    month = {"member": "t.day", "bucket": {"unit": "month"}}
+    region = {"member": "t.region"}
+    group_by = [region, month] if region_first else [month, region]
+    with tiny_lake(catalog, data) as lake:
+        found = ask(period.query("balance", group_by=group_by, totals="rollup"), compiled, lake)
+    roles = found.result.envelope()["row_roles"]
+
+    def month_of(d: int) -> str:
+        return days(d)[:8] + "01"
+
+    def latest(
+        rows: dict[tuple[int, int], tuple[str, int]], by_month: bool
+    ) -> dict[tuple[int, str | None], tuple[int, str, int]]:
+        found_: dict[tuple[int, str | None], tuple[int, str, int]] = {}
+        for (a, d), (r, c) in rows.items():
+            key = (a, month_of(d) if by_month else None)
+            if key not in found_ or found_[key][0] < d:
+                found_[key] = (d, r, c)
+        return found_
+
+    expected: set[tuple[str, int, tuple[str | None, ...]]] = set()
+
+    def add(level: int, keys: list[tuple[tuple[str | None, ...], int]]) -> None:
+        sums: dict[tuple[str | None, ...], Decimal] = {}
+        for k, c in keys:
+            sums[k] = sums.get(k, Decimal(0)) + Decimal(c) / 100
+        role = "detail" if level == 2 else "total" if level == 0 else "subtotal"
+        for k, v in sums.items():
+            expected.add((role, level, (*k, *([None] * (2 - level)), shown(v))))
+
+    per_month = latest(snapshots, True)
+    overall = latest(snapshots, False)
+    if region_first:
+        add(2, [((r, m), c) for (_, m), (_, r, c) in per_month.items()])
+        add(1, [((r,), c) for _, (_, r, c) in overall.items()])  # without the axis: the latest
+    else:
+        add(2, [((m, r), c) for (_, m), (_, r, c) in per_month.items()])
+        add(1, [((m,), c) for (_, m), (_, _, c) in per_month.items()])  # the month is kept
+    add(0, [((), c) for _, (_, _, c) in overall.items()])
+    got_ = {
+        (r["role"], r["level"], tuple(row)) for r, row in zip(roles, ce.rows_of(found), strict=True)
+    }
+    assert got_ == expected
+
+
+def test_a_zoned_period_end_is_totalled_with_only_the_zones_it_uses() -> None:
+    compiled, catalog = period.snapshots_model(
+        day="TIMESTAMP WITH TIME ZONE", zone="America/La_Paz"
+    )
+    data = period.rows(
+        (1, "2026-01-31 23:00:00-04", "North", "100.00"),
+        (1, "2026-02-01 03:30:00+00", "North", "110.00"),  # still January 31 in La Paz
+        (2, "2026-02-15 12:00:00-04", "North", "200.00"),
+    )
+    with tiny_lake(catalog, data) as lake:
+        found = ask(
+            period.query("balance", group_by=period.BY_MONTH, totals="rollup"), compiled, lake
+        )
+    assert ce.rows_of(found) == [
+        ["North", "2026-01-01", "110.00"],
+        ["North", "2026-02-01", "200.00"],
+        ["North", None, "310.00"],
+        [None, None, "310.00"],
+    ]
+    used = {p["name"] for p in found.physical.parameters}
+    assert all(f"${name}" in found.physical.sql for name in used)  # every bound value is used
+
+
+@settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(
+    st.lists(
+        st.tuples(
+            st.sampled_from(["2026-01-01", "2026-02-01"]),
+            st.sampled_from(["North", "South"]),
+            st.integers(1, 99999),
+        ),
+        min_size=1,
+        max_size=8,
+    ),
+    st.lists(
+        st.tuples(
+            st.sampled_from(["2026-01-01", "2026-02-01"]),
+            st.sampled_from(["North", "South"]),
+            st.integers(1, 9999),
+        ),
+        max_size=6,
+    ),
+    st.dictionaries(
+        st.tuples(
+            st.sampled_from(["2026-01-01", "2026-02-01"]), st.sampled_from(["North", "South"])
+        ),
+        st.integers(0, 99999),
+        max_size=4,
+    ),
+)
+def test_metrics_over_metrics_at_every_level_equal_their_reference(
+    sales: list[tuple[str, str, int]],
+    refunds: list[tuple[str, str, int]],
+    targets: dict[tuple[str, str], int],
+) -> None:
+    def rows_(found: list[tuple[str, str, int]]) -> list[list[str]]:
+        return [
+            [str(n), m, r, "web", f"{Decimal(c) / 100:.2f}"] for n, (m, r, c) in enumerate(found)
+        ]
+
+    data = {
+        "sales": rows_(sales),
+        "refunds": rows_(refunds),
+        "targets": [[m, r, f"{Decimal(c) / 100:.2f}"] for (m, r), c in targets.items()],
+    }
+    document = conformed.query(
+        "gross_revenue", "refunds", "net_revenue", "attainment", totals="rollup"
+    )
+    with conformed.lake_of(data) as lake:
+        found = ask(document, conformed.COMPILED, lake)
+    roles = found.result.envelope()["row_roles"]
+    facts = {
+        "gross": sales,
+        "back": refunds,
+        "target": [(m, r, c) for (m, r), c in targets.items()],
+    }
+    expected = set()
+    for level in (2, 1, 0):
+        sums: dict[tuple[str, ...], dict[str, Decimal]] = {}
+        for name, entries in facts.items():
+            for m, r, c in entries:
+                key = (m, r)[:level]
+                sums.setdefault(key, {})
+                sums[key][name] = sums[key].get(name, Decimal(0)) + Decimal(c) / 100
+        for key, v in sums.items():
+            gross, back, target = v.get("gross"), v.get("back"), v.get("target")
+            net = gross - back if gross is not None and back is not None else None
+            ratio = (
+                (gross / target).quantize(CENT, ROUND_HALF_UP)
+                if gross is not None and target
+                else None
+            )
+            role = "detail" if level == 2 else "total" if level == 0 else "subtotal"
+            cells = (
+                *key,
+                *([None] * (2 - level)),
+                shown(gross),
+                shown(back),
+                shown(net),
+                shown(ratio),
+            )
+            expected.add((role, level, cells))
+    assert {
+        (r["role"], r["level"], tuple(row)) for r, row in zip(roles, ce.rows_of(found), strict=True)
+    } == expected
+
+
+@settings(max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(st.lists(st.tuples(st.integers(1, 99999), st.integers(0, 100)), min_size=1, max_size=6))
+def test_an_allocation_at_every_level_equals_its_reference(orders: list[tuple[int, int]]) -> None:
+    data = bridges.DATA | {
+        "orders": [[str(n), "North", f"{Decimal(c) / 100:.2f}"] for n, (c, _) in enumerate(orders)],
+        "order_campaign": [
+            row
+            for n, (_, w) in enumerate(orders)
+            for row in (
+                [str(n), "A", f"{Decimal(w) / 100:.2f}"],
+                [str(n), "B", f"{Decimal(100 - w) / 100:.2f}"],
+            )
+        ],
+    }
+    exact = {"Campaign A": Decimal(0), "Campaign B": Decimal(0)}
+    for c, w in orders:
+        exact["Campaign A"] += Decimal(c) / 100 * Decimal(w) / 100
+        exact["Campaign B"] += Decimal(c) / 100 * Decimal(100 - w) / 100
+    whole = sum(exact.values(), Decimal(0))
+
+    def rounded(value: Decimal) -> str:
+        return f"{value.quantize(CENT, ROUND_HALF_UP):.2f}"
+
+    assert bridges.rows(data, bridges.query(totals="rollup")) == [
+        ["Campaign A", rounded(exact["Campaign A"])],
+        ["Campaign B", rounded(exact["Campaign B"])],
+        [None, rounded(whole)],  # exact, then rounded once
+    ]
+
+
+def test_every_level_and_its_policy_are_one_read_on_one_snapshot() -> None:
+    compiled, catalog = period.snapshots_model()
+    policy = read_policies(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "row_policies": [
+                    {
+                        "name": "own",
+                        "dataset": "t",
+                        "kind": "predicate",
+                        "predicate": "region = $region",
+                    }
+                ],
+            }
+        ),
+        compiled,
+        groups=frozenset(),
+        managed_tables={},
+    )
+    context = ce.viewer_context((), {"region": {"type": "text", "value": "North"}})
+    data = period.rows(
+        (1, "2026-01-31", "North", "100.00"),
+        (2, "2026-01-31", "South", "999.00"),
+        (1, "2026-02-28", "North", "110.00"),
+    )
+    reads: list[Any] = []
+    with tiny_lake(catalog, data) as lake:
+
+        def counted(request: Any) -> Any:  # noqa: ANN401
+            reads.append(request)
+            return lake.read(request)
+
+        found = ask(
+            period.query("balance", group_by=period.BY_MONTH, totals="rollup"),
+            compiled,
+            lake,
+            policy=policy,
+            context=context,
+            read=counted,
+        )
+    assert ce.rows_of(found) == [
+        ["North", "2026-01-01", "100.00"],
+        ["North", "2026-02-01", "110.00"],
+        ["North", None, "110.00"],
+        [None, None, "110.00"],  # never South's 999.00, at any level
+    ]
+    assert len(reads) == 1
+    assert found.physical.sql.count('(SELECT * FROM "t" AS "#p" WHERE') == 2  # both union parts
+
+
+def test_a_group_asked_twice_is_one_level() -> None:
+    document = query("rollup", group_by=("t.region", "t.region"))
+    found = answer(document, SALES)
+    assert [r["level"] for r in found.result.envelope()["row_roles"]] == [1, 1, 1, 0]
+
+
+def test_with_no_group_the_one_row_is_the_grand_total() -> None:
+    found = answer(query("grand", group_by=()), SALES)
+    assert found.result.envelope()["row_roles"] == [{"role": "total", "level": 0}]
+    assert ce.rows_of(found) == [["701.00", "50.07", "3"]]
+
+
+def test_a_statement_missing_one_level_s_grouping_set_never_runs() -> None:
+    found = answer(query(), SALES)
+    sql = found.physical.sql
+    missing = (
+        sql.replace(', ("t"."REGION"))', ")", 1)
+        if ', ("t"."REGION"))' in sql
+        else sql.replace("GROUPING SETS ((", "GROUPING SETS (((", 1)
+    )
+    assert missing != sql
+    with pytest.raises(DischargeError):
+        verify_physical(found.plan, replace(found.physical, sql=missing))

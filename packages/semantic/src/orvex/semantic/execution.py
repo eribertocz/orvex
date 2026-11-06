@@ -247,7 +247,7 @@ def _row_roles(
     groups = sum(1 for c in physical.columns if c.role == "dimension")
     roles: list[dict[str, object]] = [
         {
-            "role": "detail" if level == groups else "total" if level == 0 else "subtotal",
+            "role": "total" if level == 0 else "detail" if level == groups else "subtotal",
             "level": level,
         }
         for level in levels
@@ -257,7 +257,7 @@ def _row_roles(
     states = [
         CellState(row, column, "undefined_at_total")
         for row, level in enumerate(levels)
-        if level != groups
+        if level != groups or not groups
         for column in at
     ]
     return table, roles, states

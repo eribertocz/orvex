@@ -519,6 +519,37 @@ def _table_reads(text: str) -> list[Read]:
     return found
 
 
+def _grouping_sets(text: str) -> list[int]:
+    """How many groups each grouping set of the statement keeps, across every `GROUPING SETS`
+    clause: one set per level per fact, the detail level included (P2-23). A set is one
+    parenthesized list; commas inside its expressions are deeper, so they never count."""
+    tokens = _TOKEN.findall(text)
+    found: list[int] = []
+    for at in range(len(tokens) - 2):
+        if [t.upper() for t in tokens[at : at + 2]] != ["GROUPING", "SETS"] or tokens[
+            at + 2
+        ] != "(":
+            continue
+        depth, commas, empty = 0, 0, True
+        for token in tokens[at + 2 :]:
+            if token == ")" and depth == 2:
+                found.append(0 if empty else commas + 1)
+            if token == "(":
+                depth += 1
+                if depth == 2:
+                    commas, empty = 0, True
+                    continue
+            elif token == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            elif token == "," and depth == 2:
+                commas += 1
+            if depth >= 2:
+                empty = False
+    return found
+
+
 def _quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
@@ -543,8 +574,13 @@ def verify_physical(plan: Any, physical: Any) -> Evidence:  # noqa: ANN401
             raise DischargeError("a guard column is missing from the statement")
     if (physical.level is not None) != (plan.totals is not None):
         raise DischargeError("the statement's level column does not match the question's totals")
-    if plan.levels and plan.groups and "GROUPING SETS" not in physical.sql:
-        raise DischargeError("the total levels are not computed by grouping sets")
+    if plan.levels and plan.groups:
+        sets = _grouping_sets(physical.sql)
+        wanted = sorted(
+            n for _ in plan.facts for n in (len(plan.report.facts["grain"]), *plan.levels)
+        )
+        if sorted(sets) != wanted:
+            raise DischargeError("the statement's grouping sets are not the question's levels")
     restricted = {_quote(s.table) for s in plan.sources if s.policies}
     reads = _table_reads(physical.sql)
     for table in restricted:
