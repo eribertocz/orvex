@@ -32,6 +32,7 @@ from orvex.semantic.adapters.duckdb import PhysicalQuery, compile_plan, quote
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.correctness import CorrectnessReport, analyze
+from orvex.semantic.correctness.discharge import verify_physical
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.planning import PlanError, SemanticPlan, plan
@@ -238,8 +239,10 @@ def _execute(
     report: CorrectnessReport,
     plan_: SemanticPlan,
     context: Mapping[str, Any],
+    evidence: Mapping[str, str],
 ) -> Answer:
-    """One read of `physical` on `engine.snapshot`, and its result and receipt."""
+    """One read of `physical` on `engine.snapshot`, and its result and receipt, which names
+    the evidence of each obligation (C9)."""
     started = engine.now()
     clock = engine.clock()
     _check_zones(physical, engine)
@@ -302,7 +305,7 @@ def _execute(
         result_canonical=result.canonical(engine.encoder),
         result_key=engine.result_key,
         seal_key=engine.seal_key,
-        obligations=[o.for_receipt() for o in report.obligations],
+        obligations=[o.for_receipt(evidence[o.id]) for o in report.obligations],
         policies=[PolicyUse(name, "row", how) for name, how in sorted(applied.items())],
         plan_fingerprint=plan_.fingerprint,
     )
@@ -375,4 +378,5 @@ def answer(
     report = analyze(bound, compiled, policies, context)
     logical = plan(report)
     physical = compile_plan(logical)
-    return _execute(physical, engine, report, logical, context)
+    evidence = verify_physical(logical, physical)  # checked again, and in the statement (C9)
+    return _execute(physical, engine, report, logical, context, evidence)

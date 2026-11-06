@@ -1296,6 +1296,7 @@ class _Analysis:
             compiled=self.compiled,
             caller_groups=self.groups,
             placement=self.placement,
+            policies=self.policies,
         )
 
 

@@ -15,8 +15,9 @@ along many-to-one paths, and filters on members those paths reach.
 
 - **Only reports `analyze` made are planned.** Any other report is an internal error, so no
   plan exists that skipped the policies.
-- **Every obligation is discharged** by a named step; one left over is an internal error and
-  the plan never runs (C9).
+- **Every obligation is discharged**, as `discharge.verify_plan` checks on the plan's own
+  structure, never on the steps' claims; one without evidence is an internal error and the
+  plan never runs (C9, P2-22).
 - **Each dataset carries its data route.** Only the managed lake runs here; any other route is
   refused (`UNSUPPORTED_OPERATION`, `operation: route`) until P2-29.
 - The plan names members and relationships, never SQL: it is the same for every engine.
@@ -198,6 +199,7 @@ class SemanticPlan:
     # Filters on a running total's own groups: they choose the rows shown, after it (S9).
     after: tuple[Filter, ...] = ()
     # Set only by `plan`, after construction: a copy (`dataclasses.replace`) has none.
+    evidence: Mapping[str, str] = field(default_factory=dict, init=False, compare=False, repr=False)
     issued: object = field(default=None, init=False, compare=False, repr=False)
 
     @property
@@ -651,15 +653,6 @@ class _Planner:
                 Latest(axis, entity, bucket, zone),
                 fact.policies,
             )
-        discharged = {o for a in aggregates for o in a.discharges}
-        discharged |= {
-            f"C9.policy:{self.graph.names[s.dataset]}" for s in self.sources if s.policies
-        }
-        discharged |= {o for d in derived_steps for o in d.discharges}
-        discharged |= {o for w in window_steps for o in w.discharges}
-        left = {o.id for o in self.report.obligations} - discharged
-        if left:
-            raise PlanError(f"obligations left undischarged: {sorted(left)}")
         parts: dict[str, Any] = {
             "report_fingerprint": self.report.fingerprint,
             "sources": tuple(self.sources),
@@ -683,6 +676,11 @@ class _Planner:
             report=self.report,
             placement=self.report.placement,
         )
+        from orvex.semantic.correctness.discharge import verify_plan
+
+        # The evidence of every obligation, checked on the plan itself, never on the steps'
+        # own claims (C9, P2-22): one without it is an internal error, and nothing runs.
+        object.__setattr__(found, "evidence", verify_plan(found))
         object.__setattr__(found, "issued", ISSUED_PLAN)
         return found
 
