@@ -449,15 +449,6 @@ def test_a_filter_follows_the_same_paths() -> None:
 @pytest.mark.parametrize(
     ("change", "operation"),
     [
-        (
-            {
-                "mode": "detail",
-                "fields": [{"member": "payments.amount"}],
-                "page": {"size": "10"},
-                "order": [{"by": "payments.payment_id"}],
-            },
-            "detail_rows",
-        ),
         ({"top_n": {"by": "revenue", "n": "3", "others": True}}, "top_n"),
         ({"coverage": "aligned"}, "coverage"),
         (
@@ -755,4 +746,23 @@ def test_only_answered_shapes_name_an_implemented_rule() -> None:
     """A shape refused as pending must name a rule not implemented: otherwise implementing that
     rule would silently stop the refusal (P2-16, P2-17)."""
     answered = {s for s, shape in SHAPES.items() if shape.rule in IMPLEMENTED}
-    assert answered == {"aggregate", "recomputable"}
+    assert answered == {"aggregate", "detail", "recomputable"}
+
+
+def test_a_detail_page_is_one_row_per_row_of_its_base_dataset() -> None:
+    """P2-24: the base is the dataset every field is read from or reached from, many-to-one;
+    its key ends the order, and the plan must read it one row per row (C1)."""
+    report = run(
+        {
+            "kind": "semantic_query",
+            "version": 1,
+            "mode": "detail",
+            "fields": [{"member": "payments.amount"}],
+            "page": {"size": "10"},
+            "order": [{"by": "payments.amount", "direction": "desc"}],
+        }
+    )
+    assert report.facts["base"] == "payments"
+    assert list(report.facts["order"][0]) == ["payments.amount", "desc", "last"]
+    assert list(report.facts["order"][-1][1:]) == ["asc", "last"]  # the key, last, ascending
+    assert [o.id for o in report.obligations] == ["C1.rows:payments"]

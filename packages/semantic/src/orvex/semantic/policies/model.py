@@ -276,6 +276,16 @@ class PolicyModel:
                 level = inherited
         return level
 
+    def mask_of(self, member: MemberId, groups: Collection[str] = ()) -> str:
+        """The text a masked field shows in place of every value (P2-24): its own mask when
+        its own policy masks it, else that of a masked member it reads. Never the value."""
+        candidates = [member, *sorted(self._sources.get(member, frozenset()))]
+        for found in candidates:
+            rule = self.column_policies.get(found)
+            if rule is not None and self._own(found, groups) == "masked" and rule.mask:
+                return rule.mask
+        return "***"
+
     def inherited(self, member: MemberId) -> tuple[MemberId, ...]:
         """The protected members `member` reads, for the compile report."""
         return tuple(sorted(s for s in self._sources.get(member, ()) if s in self.column_policies))

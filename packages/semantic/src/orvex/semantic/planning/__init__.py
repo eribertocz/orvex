@@ -198,6 +198,15 @@ class SemanticPlan:
     placement: Any = field(default=None, compare=False, repr=False)
     # Filters on a running total's own groups: they choose the rows shown, after it (S9).
     after: tuple[Filter, ...] = ()
+    # Detail pages (P2-24): the base dataset's rows, its fields in order (`rows`), the sort
+    # columns not shown (`hidden`), each masked field's mask, the page size, and where the page
+    # starts: the sort-key values of the previous page's last row, from a verified cursor.
+    mode: str = "aggregate"
+    rows: tuple[Group, ...] = ()
+    hidden: tuple[Group, ...] = ()
+    masks: tuple[tuple[str, str], ...] = ()
+    page: int | None = None
+    start: tuple[str | int | float | bool | None, ...] | None = None
     # Totals (P2-23): `grand` or `rollup`, and each total level as how many of the groups, in
     # presentation order, it keeps; every level is computed in the same statement.
     totals: str | None = None
@@ -295,6 +304,19 @@ def _document(plan: dict[str, Any]) -> dict[str, object]:
                 "outputs": list(plan["outputs"]),
             }
             if plan["windows"]
+            else {}
+        )
+        | (
+            {
+                "detail": [
+                    [[g.name, _key(g.member), g.source] for g in plan["rows"]],
+                    [[g.name, _key(g.member), g.source] for g in plan["hidden"]],
+                    [list(m) for m in plan["masks"]],
+                    plan["page"],
+                    list(plan["start"]) if plan["start"] is not None else None,
+                ]
+            }
+            if plan["mode"] == "detail"
             else {}
         )
         | ({"totals": [plan["totals"], list(plan["levels"])]} if plan["totals"] else {})
@@ -675,9 +697,18 @@ class _Planner:
             else (),
             "windows": tuple(window_steps),
             "after": after,
+            "mode": "aggregate",
+            "rows": (),
+            "hidden": (),
+            "masks": (),
+            "page": None,
+            "start": None,
             "totals": totals["kind"] if totals else None,
             "levels": tuple(int(n) for n in totals["levels"]) if totals else (),
         }
+        return self.issue(parts)
+
+    def issue(self, parts: dict[str, Any]) -> SemanticPlan:
         found = SemanticPlan(
             **parts,
             fingerprint=fingerprint("semantic_plan", PLAN_FORMAT, _document(parts)),
@@ -692,9 +723,82 @@ class _Planner:
         object.__setattr__(found, "issued", ISSUED_PLAN)
         return found
 
+    def detail(self, start: tuple[Any, ...] | None) -> SemanticPlan:
+        """A detail page (P2-24): the base dataset read once, each field joined along its one
+        many-to-one path, every filter, the order with the base's key last, and the page from
+        `start`, the verified cursor's position."""
+        facts = self.report.facts
+        dataset = {w: n for n, w in self.graph.names.items()}
+        base = dataset[facts["base"]]
+        fact = self.fact(base)
 
-def plan(report: CorrectnessReport) -> SemanticPlan:
-    """The plan of a report `analyze` made, or an internal error."""
+        def read(label: str, slot: str, role: str | None) -> tuple[MemberId, str]:
+            member = self.member(label)
+            normalized = self.written.get(role, role) if role else None
+            return member, self.alias(base, member, slot, normalized)
+
+        entries = [(e["member"], e["role"]) for e in facts["fields"]]
+        members = [self.member(label) for label, _ in entries]
+        names = self.names(list(dict.fromkeys(members)))
+        rows: list[Group] = []
+        for label, role in entries:
+            member, source = read(label, "field", role)
+            group = Group(names[member], member, source, None)
+            if group not in rows:
+                rows.append(group)
+        masks = tuple(
+            (names[self.member(label)], text)
+            for label, text in sorted(facts.get("masks", {}).items())
+        )
+        filters = tuple(
+            Filter(member, source, f["predicate"])
+            for f in self.canonical["filters"]
+            for member, source in [read(self.label(_member(f["member"])), "filter", f["role"])]
+        )
+        shown = {(g.member, g.source): g.name for g in rows}
+        hidden: list[Group] = []
+        order: list[Sort] = []
+        for label, direction, nulls in facts["order"]:
+            member, source = read(label, "sort", None)
+            name = shown.get((member, source))
+            if name is None:
+                name = f"#s{len(hidden)}"
+                hidden.append(Group(name, member, source, None))
+            order.append(Sort(name, direction == "desc", nulls == "first"))
+        return self.issue(
+            {
+                "report_fingerprint": self.report.fingerprint,
+                "sources": tuple(self.sources),
+                "joins": tuple(self.joins),
+                "filters": filters,
+                "groups": (),
+                "aggregates": (),
+                "order": tuple(order),
+                "limit": None,
+                "facts": (fact,),
+                "derived": (),
+                "outputs": (),
+                "windows": (),
+                "after": (),
+                "totals": None,
+                "levels": (),
+                "mode": "detail",
+                "rows": tuple(rows),
+                "hidden": tuple(hidden),
+                "masks": masks,
+                "page": int(self.canonical["page"]["size"]),
+                "start": tuple(start) if start is not None else None,
+            }
+        )
+
+
+def plan(report: CorrectnessReport, start: tuple[Any, ...] | None = None) -> SemanticPlan:
+    """The plan of a report `analyze` made, or an internal error. `start`: where a detail page
+    starts, from a cursor `execution` verified (P2-24)."""
     if report.issued is not ISSUED:
         raise PlanError("not a report of the correctness engine")
+    if report.facts["mode"] == "detail":
+        return _Planner(report).detail(start)
+    if start is not None:
+        raise PlanError("an aggregate question has no page to start from")
     return _Planner(report).build()

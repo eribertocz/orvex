@@ -111,7 +111,7 @@ class Shape:
 # later issue that implements a rule adds it to `RULES`; the tests list every corpus case.
 SHAPES: Mapping[str, Shape] = {
     "aggregate": Shape("C1", "P2-11"),
-    "detail_rows": Shape("detail rows", "P2-24"),
+    "detail": Shape("C1", "P2-24"),
     "recomputable": Shape("C2", "P2-13"),
     "holistic": Shape("holistic aggregate", "a later issue"),
     "approximate": Shape("approximate aggregate", "a later issue"),
@@ -246,7 +246,7 @@ class _Query:
                 sorted_rows.append(found)
         if self.mode != "aggregate":
             self.rows += [_Row(m, None, None, "sort") for m in sorted_rows]
-            self.shapes.add("detail_rows")
+            self.shapes.add("detail")
             return
         self.shapes.add("aggregate")
         self.totals = canonical.get("totals")
@@ -630,6 +630,8 @@ class _Analysis:
 
     def analyze(self) -> CorrectnessReport:
         self.check_policies()
+        if self.query.mode == "detail":
+            return self.analyze_detail()
         query = self.query
         shapes = set(query.shapes)
         metrics = sorted(set(query.metrics))
@@ -727,6 +729,180 @@ class _Analysis:
         self.check_datasets(set().union(*crossed.values()))
         classes = {**classes, **derived_classes}
         return self.report(home_of, metrics, classes, paths, crossed)
+
+    # detail rows (P2-24)
+
+    def analyze_detail(self) -> CorrectnessReport:
+        """A detail page: one row per row of its base dataset, the dataset every field is read
+        from or reached from along a many-to-one path (C1). A field across a path that could
+        multiply the base rows is refused (`NO_RELATIONSHIP_PATH`, decision 1 of #346), never
+        answered with repeated rows; the base needs a declared key, the last tie-breaker of a
+        stable order. Row policies restrict every dataset read (P2-21); a masked field shows
+        only its mask, and a masked member is never sorted or filtered on (`check_policies`)."""
+        canonical = self.bound.canonical
+        fields = [_Row(_member(m), role, None, "field") for m, role in canonical["fields"]]
+        rows = [*fields, *self.query.rows]
+        for row in rows:
+            self.answerable(row.member)
+        shapes = set(self.query.shapes) | self.field_shapes(sorted({r.member for r in rows}))
+        _refuse_pending(shapes)
+        candidates = list(dict.fromkeys(r.member.dataset for r in fields if r.member.dataset))
+        base: str | None = None
+        paths: dict[_Row, Path] = {}
+        unreachable: _Row | None = None
+        for home in candidates:
+            found: dict[_Row, Path] = {}
+            for row in rows:
+                path = self.row_path(home, row)
+                if path is None:
+                    unreachable = unreachable or row
+                    break
+                found[row] = path
+            else:
+                base, paths = home, found
+                break
+        if base is None:
+            target = unreachable.member.dataset if unreachable else None
+            raise SemanticError(
+                "NO_RELATIONSHIP_PATH",
+                {"from": self.dataset(candidates[0]), "to": self.dataset(target or "")},
+            )
+        keys = self.graph.keys.get(base, ())
+        if not keys or any(MemberId("field", base, k) not in self.compiled.members for k in keys):
+            raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "detail_key"})
+        # The key ends the order, so the caller must be able to sort by it: a masked key is
+        # never sorted on (decision 2), and a hidden one is never named.
+        for key in keys:
+            member = MemberId("field", base, key)
+            level = self.policies.protection(member, self.groups)
+            if level == "masked":
+                raise SemanticError(
+                    "MEMBER_MASKED", {"member": self.label(member), "operation": "sort"}
+                )
+            if level == "hidden":
+                raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "detail_key"})
+        crossed = {base, *(d for p in paths.values() for d in p.datasets)}
+        self.check_datasets(crossed)
+        return self.detail_report(base, fields, paths, crossed)
+
+    def row_path(self, home: str, row: _Row) -> Path | None:
+        """C4 for a detail row: the one many-to-one path from `home` to the member, or None when
+        none exists; two are ambiguous, and an as-of or bridge path is not a detail join yet."""
+        target = row.member.dataset or home
+        if row.role is None and target == home:
+            return Path(())
+        everything = self.graph.paths(home, target)
+        paths = [p for p in everything if row.role is None or row.role in p.relationships]
+        if row.role is not None and not paths and target == home:
+            self.role_invalid(row)
+        safe = [p for p in paths if self.safe(p)]
+        if len(safe) > 1:
+            self.ambiguous(home, target, safe)
+        if not safe:
+            return None
+        if any(step.temporal for step in safe[0].steps):
+            _refuse_pending({"as_of_join"})
+        return safe[0]
+
+    def detail_report(
+        self, base: str, fields: list[_Row], paths: Mapping[_Row, Path], crossed: set[str]
+    ) -> CorrectnessReport:
+        written = self.graph.relationship_names
+        canonical = self.bound.canonical
+        order = [[self.label(_member(m)), d, n] for m, d, n in canonical.get("order", ())]
+        named = {o[0] for o in order}
+        for key in self.graph.keys[base]:  # the base's key last: one order, so stable pages
+            label = self.key_label(base, key)
+            if label not in named:
+                order.append([label, "asc", "last"])
+        shown = [self.label(r.member) for r in fields]
+        datasets = tuple(sorted(self.dataset(d) for d in crossed))
+        obligations = [
+            Obligation(
+                id=f"C1.rows:{self.dataset(base)}",
+                rule="C1",
+                kind="rows",
+                metric="",
+                from_grain=tuple(self.key_label(base, k) for k in self.graph.keys[base]),
+                to_grain=tuple(self.key_label(base, k) for k in self.graph.keys[base]),
+                members=tuple(sorted(set(shown))),
+                datasets=datasets,
+            )
+        ]
+        for dataset in sorted(self.placement.restrictions):  # placed at its source (C9)
+            obligations.append(
+                Obligation(
+                    id=f"C9.policy:{self.dataset(dataset)}",
+                    rule="C9",
+                    kind="policy",
+                    metric="",
+                    from_grain=obligations[0].from_grain,
+                    to_grain=obligations[0].to_grain,
+                    members=obligations[0].members,
+                    datasets=(self.dataset(dataset),),
+                )
+            )
+        masks = {
+            self.label(r.member): self.policies.mask_of(r.member, self.groups)
+            for r in fields
+            if self.policies.protection(r.member, self.groups) == "masked"
+        }
+        facts: dict[str, Any] = {
+            "mode": "detail",
+            "base": self.dataset(base),
+            "grain": [],
+            "metrics": [],
+            "fields": [
+                {
+                    "member": self.label(r.member),
+                    "role": written.get(r.role, r.role) if r.role else None,
+                }
+                for r in fields
+            ],
+            "order": order,
+            "paths": sorted(
+                (
+                    {
+                        "member": self.label(row.member),
+                        "slot": row.slot,
+                        "role": written.get(row.role, row.role) if row.role else None,
+                        "from": self.dataset(base),
+                        "relationships": [written[r] for r in path.relationships],
+                    }
+                    for row, path in paths.items()
+                ),
+                key=lambda e: (e["member"], e["slot"], e["role"] or "", e["relationships"]),
+            ),
+            "datasets": list(datasets),
+            "row_policies": [],
+        }
+        if masks:
+            facts["masks"] = masks
+        if self.placement.applied:
+            facts["policies"] = [
+                {
+                    "policy": name,
+                    "applied": applied,
+                    "datasets": sorted(
+                        self.dataset(d)
+                        for d, found in self.placement.restrictions.items()
+                        if any(r.rule.name == name for r in found)
+                    ),
+                }
+                for name, applied in sorted(self.placement.applied.items())
+            ]
+        return make_report(
+            self.compiled.model_fingerprint,
+            self.bound.fingerprint,
+            facts,
+            obligations,
+            RULES,
+            bound=self.bound,
+            compiled=self.compiled,
+            caller_groups=self.groups,
+            placement=self.placement,
+            policies=self.policies,
+        )
 
     # C6, zones
 
