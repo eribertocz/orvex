@@ -256,17 +256,25 @@ class AggregateMeasure(BaseModel):
     )
     name: Name
     expression: Expression
+    metric: MetricRef | None = None
+    """
+    P2-25: the base metric this measure stores at the table's grain, re-aggregated by `expression`.
+    """
 
 
 class AggregateTable(BaseModel):
     """
-    S5: this dataset is an existing aggregate table at its `grain`; its measures replace base execution only when proven equivalent (C8).
+    S5: this dataset is an existing aggregate table at its `grain`; its measures replace base execution only when proven equivalent (C8), which needs `base_dataset` and each measure's `metric`.
     """
 
     model_config = ConfigDict(
         extra="forbid",
     )
     measures: Annotated[list[AggregateMeasure], Field(min_length=1)]
+    base_dataset: Name | None = None
+    """
+    P2-25: the dataset this table aggregates. With each measure's `metric`, what makes an equivalence proof possible; without it, the table never replaces base execution.
+    """
 
 
 class Align(BaseModel):

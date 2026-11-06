@@ -395,7 +395,45 @@ def _rows(p: _Plan, o: Obligation) -> str:
     return f"rows:{base}"
 
 
+def _equivalent(p: _Plan, o: Obligation) -> str:
+    """C8 (P2-25): the answer is the base's. Reading the base is trivially so; reading the
+    aggregate table needs the report's proof for it, and a plan the proof covers: one fact,
+    no join, every group and filter field mapped, every metric stored or a ratio of stored
+    components, and every restriction on the base decided by mapped fields alone."""
+    name = _target(o)
+    candidate = next((c for c in p.plan.report.materials if c.name == name), None)
+    if candidate is None:
+        raise DischargeError(f"{name} has no proof")
+    rollup = p.plan.rollup
+    if rollup is None or rollup.name != name:
+        if not candidate.eligible:
+            return f"base:{p.written(candidate.base)}; not eligible: {candidate.reason}"
+        return f"base:{p.written(candidate.base)}; eligible, consistency unverified"
+    if rollup is not candidate or not candidate.eligible:
+        raise DischargeError(f"{name} is read without its proof")
+    plan = p.plan
+    if len(plan.facts) != 1 or plan.joins or p.sources[plan.facts[0]].dataset != candidate.base:
+        raise DischargeError(f"{name} replaces more than its one base")
+    if any(g.member not in candidate.fields for g in plan.groups):
+        raise DischargeError(f"{name} does not keep a group")
+    if any(f.member not in candidate.fields for f in plan.filters):
+        raise DischargeError(f"{name} does not keep a filter's field")
+    for aggregate in plan.aggregates:
+        stored = aggregate.metric in candidate.stored and aggregate.division is None
+        ratio = aggregate.metric in candidate.components and aggregate.division is not None
+        if not (stored or ratio) or aggregate.allocation is not None:
+            raise DischargeError(f"{name} does not store {p.label(aggregate.metric)}")
+    if plan.derived or plan.windows or plan.totals is not None:
+        raise DischargeError(f"{name} answers no metric over metrics, window or total")
+    placement = plan.placement
+    for restriction in placement.of(candidate.base) if placement else ():
+        if restriction.path:
+            raise DischargeError(f"{name} cannot carry a propagated policy")
+    return f"rollup:{name}"
+
+
 CHECKERS: Mapping[tuple[str, str], Callable[[_Plan, Obligation], str]] = {
+    ("C8", "equivalent"): _equivalent,
     ("C1", "aggregate"): _aggregate,
     ("C1", "rows"): _rows,
     ("C2", "recompute"): _recompute,
@@ -588,6 +626,14 @@ def _grouping_sets(text: str) -> list[int]:
     return found
 
 
+def _table(plan: Any, dataset: str) -> str:  # noqa: ANN401
+    """The table a dataset reads, as the model declares it."""
+    for entry in plan.compiled.ossie.document.get("datasets", ()):
+        if sql.normalize(str(entry["name"])) == dataset:
+            return str(entry.get("source", entry["name"]))
+    raise DischargeError(f"no dataset {dataset}")
+
+
 def _quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
@@ -629,7 +675,18 @@ def verify_physical(plan: Any, physical: Any) -> Evidence:  # noqa: ANN401
         )
         if sorted(sets) != wanted:
             raise DischargeError("the statement's grouping sets are not the question's levels")
-    restricted = {_quote(s.table) for s in plan.sources if s.policies}
+    rollup = plan.rollup
+    if rollup is not None:  # the aggregate table is read, never its base (C8)
+        tables = {r[0][-1] for r in _table_reads(physical.sql)}
+        if _quote(_table(plan, rollup.dataset)) not in tables:
+            raise DischargeError("the aggregate table is not read")
+        if any(_quote(s.table) in tables for s in plan.sources if s.dataset == rollup.base):
+            raise DischargeError("the base is read with its aggregate table")
+    restricted = {
+        _quote(_table(plan, rollup.dataset) if rollup and s.dataset == rollup.base else s.table)
+        for s in plan.sources
+        if s.policies
+    }
     reads = _table_reads(physical.sql)
     for table in restricted:
         mine = [r for r in reads if r[0][-1] == table]

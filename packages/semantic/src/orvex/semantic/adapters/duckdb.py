@@ -151,6 +151,11 @@ class _Writer:
     # members
 
     def field(self, member: MemberId, alias: str) -> str:
+        rollup = self.plan.rollup
+        if rollup is not None and member.dataset == rollup.base:  # read from the table (C8)
+            if member not in rollup.fields:
+                raise PlanError("a base field the aggregate table does not keep")
+            member = rollup.fields[member]
         compiled = self.compiled.require(member)
         tree = compiled.parsed.tree
         if tree is None:
@@ -179,6 +184,12 @@ class _Writer:
         return f"({value} - ({local} - date_trunc('{unit}', {local})))"
 
     def metric(self, member: MemberId, alias: str) -> str:
+        rollup = self.plan.rollup
+        if rollup is not None:  # its stored column, re-aggregated as declared (C8)
+            if member not in rollup.stored:
+                raise PlanError("a metric the aggregate table does not store")
+            encoding = self.column(member, "#m", "metric", None).encoding  # the metric's type
+            return f"CAST(SUM({self.field(rollup.stored[member], alias)}) AS {encoding})"
         tree = self.compiled.require(member).parsed.tree
         if tree is None:
             raise _unsupported()
@@ -374,7 +385,11 @@ class _Writer:
         """The rows of `dataset` the caller may read: its table, restricted by every row policy
         that applies, before anything else reads it (a join, a ranking, a check, an aggregate).
         Every read of a table in the statement goes through here."""
-        table = quote(self.tables[dataset])
+        rollup = self.plan.rollup
+        # The aggregate table in place of its base (C8), restricted by the base's policies,
+        # whose fields it keeps as the grain it groups by: each group wholly in or out.
+        read = rollup.dataset if rollup is not None and dataset == rollup.base else dataset
+        table = quote(self.tables[read])
         restrictions = self.placement.of(dataset) if self.placement else ()
         if not restrictions:
             return table
@@ -794,9 +809,17 @@ class _Writer:
                 continue
             trees = dict(self.compiled.require(aggregate.metric).typed.payload)
             dataset = aggregate.metric.dataset or ""
-            for part, prefix in (("components.numerator", "#n"), ("components.denominator", "#d")):
-                tree = trees[part]
-                written = self.node(tree.node, aggregate.source, dataset, "metric")
+            rollup = plan.rollup
+            for at, (part, prefix) in enumerate(
+                (("components.numerator", "#n"), ("components.denominator", "#d"))
+            ):
+                if rollup is not None:  # each component from its stored column (C8)
+                    if aggregate.metric not in rollup.components:
+                        raise PlanError("a ratio whose components the aggregate table lacks")
+                    stored = rollup.components[aggregate.metric][at]
+                    written = f"SUM({self.field(stored, aggregate.source)})"
+                else:
+                    written = self.node(trees[part].node, aggregate.source, dataset, "metric")
                 select.append(f"{written} AS {quote(f'{prefix}{k}')}")
             scales = (
                 _scale(_logical(trees["components.numerator"].type.logical)),

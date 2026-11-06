@@ -201,6 +201,9 @@ class SemanticPlan:
     # Detail pages (P2-24): the base dataset's rows, its fields in order (`rows`), the sort
     # columns not shown (`hidden`), each masked field's mask, the page size, and where the page
     # starts: the sort-key values of the previous page's last row, from a verified cursor.
+    # C8 (P2-25): the aggregate table read in place of the base, proven equivalent and
+    # verified consistent on the snapshot read; every base field and metric is read from it.
+    rollup: Any = None
     mode: str = "aggregate"
     rows: tuple[Group, ...] = ()
     hidden: tuple[Group, ...] = ()
@@ -320,6 +323,21 @@ def _document(plan: dict[str, Any]) -> dict[str, object]:
             else {}
         )
         | ({"totals": [plan["totals"], list(plan["levels"])]} if plan["totals"] else {})
+        | (
+            {
+                "rollup": [
+                    plan["rollup"].name,
+                    sorted([_key(a), _key(b)] for a, b in plan["rollup"].fields.items()),
+                    sorted([_key(a), _key(b)] for a, b in plan["rollup"].stored.items()),
+                    sorted(
+                        [_key(a), _key(n), _key(d)]
+                        for a, (n, d) in plan["rollup"].components.items()
+                    ),
+                ]
+            }
+            if plan["rollup"] is not None
+            else {}
+        )
     )
 
 
@@ -697,6 +715,7 @@ class _Planner:
             else (),
             "windows": tuple(window_steps),
             "after": after,
+            "rollup": self.rollup,
             "mode": "aggregate",
             "rows": (),
             "hidden": (),
@@ -707,6 +726,8 @@ class _Planner:
             "levels": tuple(int(n) for n in totals["levels"]) if totals else (),
         }
         return self.issue(parts)
+
+    rollup: Any = None  # C8: set by `plan` when an aggregate table is read
 
     def issue(self, parts: dict[str, Any]) -> SemanticPlan:
         found = SemanticPlan(
@@ -782,6 +803,7 @@ class _Planner:
                 "after": (),
                 "totals": None,
                 "levels": (),
+                "rollup": None,
                 "mode": "detail",
                 "rows": tuple(rows),
                 "hidden": tuple(hidden),
@@ -792,13 +814,27 @@ class _Planner:
         )
 
 
-def plan(report: CorrectnessReport, start: tuple[Any, ...] | None = None) -> SemanticPlan:
+def plan(
+    report: CorrectnessReport,
+    start: tuple[Any, ...] | None = None,
+    rollup: str | None = None,
+) -> SemanticPlan:
     """The plan of a report `analyze` made, or an internal error. `start`: where a detail page
-    starts, from a cursor `execution` verified (P2-24)."""
+    starts, from a cursor `execution` verified (P2-24). `rollup`: the aggregate table to read
+    in place of the base, one the report proved equivalent and `execution` found verified
+    consistent on the snapshot read (C8, P2-25)."""
     if report.issued is not ISSUED:
         raise PlanError("not a report of the correctness engine")
     if report.facts["mode"] == "detail":
+        if rollup is not None:
+            raise PlanError("a detail page reads its base")
         return _Planner(report).detail(start)
     if start is not None:
         raise PlanError("an aggregate question has no page to start from")
-    return _Planner(report).build()
+    planner = _Planner(report)
+    if rollup is not None:
+        chosen = [c for c in report.materials if c.name == rollup and c.eligible]
+        if len(chosen) != 1:
+            raise PlanError("an aggregate table the report did not prove equivalent")
+        planner.rollup = chosen[0]
+    return planner.build()

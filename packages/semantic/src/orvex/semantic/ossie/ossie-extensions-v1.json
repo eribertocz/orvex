@@ -34,6 +34,10 @@
         },
         "expression": {
           "$ref": "#/$defs/Expression"
+        },
+        "metric": {
+          "$ref": "#/$defs/MetricRef",
+          "description": "P2-25: the base metric this measure stores at the table's grain, re-aggregated by `expression`."
         }
       }
     },
@@ -50,9 +54,13 @@
           "items": {
             "$ref": "#/$defs/AggregateMeasure"
           }
+        },
+        "base_dataset": {
+          "$ref": "#/$defs/Name",
+          "description": "P2-25: the dataset this table aggregates. With each measure's `metric`, what makes an equivalence proof possible; without it, the table never replaces base execution."
         }
       },
-      "description": "S5: this dataset is an existing aggregate table at its `grain`; its measures replace base execution only when proven equivalent (C8)."
+      "description": "S5: this dataset is an existing aggregate table at its `grain`; its measures replace base execution only when proven equivalent (C8), which needs `base_dataset` and each measure's `metric`."
     },
     "Align": {
       "type": "object",

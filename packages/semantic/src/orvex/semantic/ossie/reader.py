@@ -601,6 +601,12 @@ def _payload_references(element: _Element, payload: Json, index: _Index) -> Iter
                 yield index.dataset(preaggregation["base_dataset"]) is not None
             yield from (index.metric_ref(m) for m in preaggregation.get("metrics") or [])
     elif element.kind == "dataset":
+        table = payload.get("aggregate_table") or {}
+        if "base_dataset" in table:  # what an aggregate table stores, declared (P2-25)
+            yield index.dataset(table["base_dataset"]) is not None
+        yield from (
+            index.metric_ref(m["metric"]) for m in table.get("measures") or [] if "metric" in m
+        )
         for key in payload.get("entity_keys") or []:
             yield from (own(name) for name in key["fields"])
         roles = payload.get("time_roles") or {}
