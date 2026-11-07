@@ -2367,24 +2367,33 @@ class Lake:
         snapshot: int,
         cursor: duckdb.DuckDBPyConnection,
     ) -> bool:
-        """Any row (DuckLake's change feed) or column (its catalog) of one table changed after
-        `since` up to `snapshot`."""
+        """Any row or column of one table changed after `since` up to `snapshot`, from the
+        catalog alone (#364): every snapshot in that range lists what it changed
+        (`ducklake_snapshot_changes`), and any entry naming the table's id is a change, an
+        inlined insert or delete included; so is a column added, changed or dropped. Only
+        merging files (`compacted_table`) leaves every row as it was. No data file is opened,
+        and an entry this reader does not know counts as a change (fail closed)."""
         moved = (
-            "({0}.begin_snapshot > $since AND {0}.begin_snapshot <= $n) "
-            "OR ({0}.end_snapshot > $since AND {0}.end_snapshot <= $n)"
+            "(({0}.begin_snapshot > $since AND {0}.begin_snapshot <= $n) "
+            "OR ({0}.end_snapshot > $since AND {0}.end_snapshot <= $n))"
         )
-        rows = self._one(
-            "SELECT count(*) FROM ducklake_table_changes($lake, $schema, $table, $since + 1, $n)",
-            {"lake": LAKE, "schema": schema, "table": table, "since": since, "n": snapshot},
-            cursor,
-        )
-        columns = self._one(
-            f"SELECT count(*) FROM {self._metadata}.ducklake_column AS c "
-            f"WHERE c.table_id = $id AND ({moved.format('c')})",
+        meta = self._metadata
+        found = self._one(
+            f"SELECT (SELECT string_agg(s.changes_made, ',') FROM {meta}.ducklake_snapshot_changes "
+            "AS s WHERE s.snapshot_id > $since AND s.snapshot_id <= $n), "
+            f"(SELECT count(*) FROM {meta}.ducklake_column AS c "
+            f"WHERE c.table_id = $id AND {moved.format('c')})",
             {"id": table_id, "since": since, "n": snapshot},
             cursor,
         )
-        return any(int(str(found[0])) > 0 for found in (rows, columns) if found is not None)
+        if found is None:
+            return True  # nothing answered: changed (fail closed)
+        if int(str(found[1])) > 0:
+            return True
+        for kind, named in _CHANGE.findall(str(found[0] or "")):
+            if int(named) == table_id and kind not in _ROWS_KEPT:
+                return True
+        return False
 
     def table_columns(self, request: TablesRequest) -> TablesResult:
         """Every lake table alive at `request.snapshot`, with its columns as of that snapshot
@@ -2896,6 +2905,12 @@ def _bounded[T](cursor: duckdb.DuckDBPyConnection, deadline: float, work: Callab
         raise guard.error(error) from error
     finally:
         guard.stop()
+
+
+# An entry of `ducklake_snapshot_changes.changes_made` that names a table by its id, and the
+# kinds that leave every row of the table as it was (#364).
+_CHANGE = re.compile(r"([a-z_]+):([0-9]+)")
+_ROWS_KEPT = frozenset({"compacted_table"})
 
 
 def _snapshot_of(row: Sequence[object]) -> Snapshot:

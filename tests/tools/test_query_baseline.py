@@ -40,3 +40,20 @@ def test_the_record_shows_every_round_and_its_errors() -> None:
     )
     assert "wrong rows: 1" in text
     assert "| 1 | 100 |" in text
+
+
+def test_the_catalog_check_compares_the_members_and_a_network_error_is_counted() -> None:
+    model = {
+        "metrics": [{"name": "m"}],
+        "datasets": [{"name": "d", "fields": [{"name": "a"}, {"name": "b"}]}],
+    }
+    expected = {"catalog": qb.model_members(model)}
+    check = qb.checker("catalog", {"path": "/api/v1/semantic/catalog"}, expected)
+    whole = {
+        "metrics": [{"name": "m"}],
+        "datasets": [{"name": "d", "fields": [{"name": "a"}, {"name": "b"}]}],
+    }
+    short = {"metrics": [{"name": "m"}], "datasets": [{"name": "d", "fields": [{"name": "a"}]}]}
+    assert check(200, json.dumps(whole).encode()) == ""
+    assert check(200, json.dumps(short).encode()) == "wrong catalog"
+    assert check(0, b"TimeoutError") == "network TimeoutError"

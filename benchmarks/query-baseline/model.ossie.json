@@ -42,6 +42,81 @@
           }
         }
       ]
+    },
+    {
+      "name": "readings",
+      "source": "staging.readings",
+      "fields": [
+        {
+          "name": "reading_id",
+          "expression": {
+            "sql": "reading_id"
+          }
+        },
+        {
+          "name": "meter_id",
+          "expression": {
+            "sql": "meter_id"
+          }
+        },
+        {
+          "name": "period",
+          "expression": {
+            "sql": "period"
+          }
+        },
+        {
+          "name": "kwh",
+          "expression": {
+            "sql": "kwh"
+          }
+        },
+        {
+          "name": "status",
+          "expression": {
+            "sql": "status"
+          }
+        }
+      ]
+    },
+    {
+      "name": "consumers",
+      "source": "staging.consumers",
+      "primary_key": [
+        "consumer_id"
+      ],
+      "fields": [
+        {
+          "name": "consumer_id",
+          "expression": {
+            "sql": "consumer_id"
+          }
+        },
+        {
+          "name": "zone_id",
+          "expression": {
+            "sql": "zone_id"
+          }
+        },
+        {
+          "name": "tariff",
+          "expression": {
+            "sql": "tariff"
+          }
+        },
+        {
+          "name": "connected_on",
+          "expression": {
+            "sql": "connected_on"
+          }
+        },
+        {
+          "name": "status",
+          "expression": {
+            "sql": "status"
+          }
+        }
+      ]
     }
   ],
   "metrics": [
@@ -55,6 +130,12 @@
       "name": "total_readings",
       "expression": {
         "sql": "SUM(energy.readings)"
+      }
+    },
+    {
+      "name": "kwh_read",
+      "expression": {
+        "sql": "SUM(readings.kwh)"
       }
     }
   ]

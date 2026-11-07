@@ -125,3 +125,27 @@ def test_an_explanation_never_reads(
     monkeypatch.setattr(Lake, "read", read)
     for query in (h.aggregate(), h.detail(2)):
         assert explain(http, semantic, query).status_code == 200
+
+
+def test_a_next_page_whose_snapshot_is_gone_is_an_expired_cursor_error(
+    served: tuple[LocalSemantic, TestClient], tmp_path: Path
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from orvex.server import commands
+    from orvex.server.project import load_project
+
+    semantic, http = served
+    after = h.ask(http, semantic, h.detail(2)).json()["result"]["page"]["next"]
+    h.run(tmp_path)
+    home = tmp_path / f".{h.SLUG}"
+    with commands.project_lock(home):
+        lake = commands.open_existing(home, commands.lake_location(load_project(tmp_path), home))
+        try:
+            later = datetime.now(UTC) + timedelta(days=1)
+            lake.maintain(later, later)
+        finally:
+            lake.close()
+    response = explain(http, semantic, h.detail(2, after))
+    assert response.status_code == 400
+    assert response.json()["error"]["semantic"]["details"] == {"reason": "expired"}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from orvex.contracts.store.v1 import ChangesRequest, LakeLocation, StatementRequest
@@ -146,3 +147,26 @@ def test_without_counts_only_changed_is_answered_from_the_catalog(
     counted = changes(lake, base, later, "t", "other")
     assert [t.changed for t in found.tables] == [c for c, _ in counted]
     assert all(t.removed_rows is None for t in found.tables)
+
+
+def test_without_counts_no_data_file_is_opened(lake: Lake, base: int, tmp_path: Path) -> None:
+    """#364: with every data file of the lake gone, `changed` is still answered, from the
+    catalog alone; counting removed rows would have to open them."""
+    later = write(lake, "INSERT INTO t SELECT range + 1000, 1 FROM range(5000)")
+    files = list(tmp_path.rglob("*.parquet"))
+    if not files:
+        pytest.skip("this catalog keeps its data elsewhere")
+    for path in files:
+        path.unlink()
+    found = lake.changes(
+        ChangesRequest.model_validate(
+            {
+                "kind": "changes",
+                "tables": ["t", "other"],
+                "since": base,
+                "snapshot": later,
+                "count_removed": False,
+            }
+        )
+    )
+    assert [(t.changed, t.removed_rows) for t in found.tables] == [(True, None), (False, None)]

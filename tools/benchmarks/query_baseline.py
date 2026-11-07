@@ -45,6 +45,7 @@ from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
@@ -89,6 +90,60 @@ def nearest_rank(values: list[float], percent: float) -> float:
     or below it."""
     ordered = sorted(values)
     return ordered[max(0, math.ceil(percent / 100 * len(ordered)) - 1)]
+
+
+def lake_tables(folder: Path) -> dict[str, dict[str, int]]:
+    """Rows (counted by DuckDB) and bytes (the store's file statistics; inlined rows have no
+    file) of every lake table on the measured snapshot."""
+    from orvex.contracts.store.v1 import StatisticsRequest, TablesRequest
+
+    home = folder / f".{IDENTITY.slug}"
+    with commands.project_lock(home):
+        lake = commands.open_existing(home, commands.lake_location(load_project(folder), home))
+        try:
+            snapshot = lake.current_snapshot().id
+            tables = lake.table_columns(TablesRequest(kind="tables", snapshot=snapshot)).tables
+            names = sorted(
+                f"{t.schema_}.{t.table}" for t in tables if not t.schema_.startswith("_")
+            )
+            found: dict[str, dict[str, int]] = {}
+            for name in names:
+                stats = lake.statistics(
+                    StatisticsRequest.model_validate(
+                        {"kind": "statistics", "tables": [name], "snapshot": snapshot}
+                    )
+                )
+                (table,) = stats.tables
+                schema, _, bare = name.partition(".")
+                quoted = '"' + schema.replace('"', '""') + '"."' + bare.replace('"', '""') + '"'
+                counted = lake.read(
+                    ReadRequest(
+                        kind="read",
+                        sql=f"SELECT count(*) AS n FROM {quoted}",
+                        parameters=[],
+                        snapshot=snapshot,
+                        batch_size=1,
+                    )
+                )
+                (row,) = json.loads("".join(arrow_to_json(counted)))["rows"]
+                found[name] = {
+                    "rows": int(row[0]),
+                    "bytes": sum(int(f.bytes or 0) for f in table.files),
+                }
+            return found
+        finally:
+            lake.close()
+
+
+def cpu_model() -> str:
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        return ""
+    return ""
 
 
 def reference_rows(folder: Path, sql: str) -> list[list[object]]:
@@ -195,7 +250,31 @@ class Server:
                 status = response.status
         except urllib.error.HTTPError as error:
             content, status = error.read(), error.code
+        except (urllib.error.URLError, OSError) as error:  # counted as an error, by its kind
+            content, status = type(error).__name__.encode(), 0
         return status, content, (time.perf_counter() - started) * 1000
+
+
+def catalog_members(document: object) -> set[str]:
+    """Every member a `catalog` v1 document lists: metrics, and `dataset.field`."""
+    if not isinstance(document, dict):
+        return set()
+    found = {str(m["name"]) for m in document.get("metrics", []) if isinstance(m, dict)}
+    for dataset in document.get("datasets", []):
+        if isinstance(dataset, dict):
+            found |= {
+                f"{dataset['name']}.{f['name']}"
+                for f in dataset.get("fields", [])
+                if isinstance(f, dict)
+            }
+    return found
+
+
+def model_members(model: dict[str, Any]) -> set[str]:
+    found = {str(m["name"]) for m in model["metrics"]}
+    for dataset in model["datasets"]:
+        found |= {f"{dataset['name']}.{f['name']}" for f in dataset["fields"]}
+    return found
 
 
 def checker(
@@ -204,6 +283,8 @@ def checker(
     """A check of one answer: "" when it is right, else the kind of error."""
 
     def check(status: int, content: bytes) -> str:
+        if status == 0:
+            return f"network {content.decode()}"
         if status != 200:
             try:
                 return f"{status} {json.loads(content)['error']['code']}"
@@ -214,7 +295,7 @@ def checker(
             if document["result"]["rows"] != expected[name]:
                 return "wrong rows"
         elif name == "catalog":
-            if json.dumps(document).count('"name"') < expected["catalog"]:
+            if catalog_members(document) != expected["catalog"]:
                 return "wrong catalog"
         elif document.get("outcome") != "planned":
             return "not planned"
@@ -361,8 +442,7 @@ def main() -> int:
         if "reference" in spec
     }
     model: dict[str, Any] = json.loads((FIXED / "model.ossie.json").read_text("utf-8"))
-    datasets: list[dict[str, Any]] = model["datasets"]
-    expected["catalog"] = len(model["metrics"]) + sum(len(d["fields"]) for d in datasets)
+    expected["catalog"] = model_members(model)
     rounds = []
     all_timings: list[list[Timings]] = []
     for number in range(1, arguments.rounds + 1):
@@ -386,8 +466,9 @@ def main() -> int:
             else ""
         ),
         "dataset": {key: manifest[key] for key in ("size", "seed", "rows") if key in manifest},
-        "versions": load_baseline.versions(),
-        "machine": load_baseline.machine(),
+        "versions": {**load_baseline.versions(), "product": version("orvex")},
+        "machine": {**load_baseline.machine(), "cpu_model": cpu_model()},
+        "lake_tables": lake_tables(folder),
         "method": {
             "warm_up": WARM_UP,
             "sequential": SEQUENTIAL,

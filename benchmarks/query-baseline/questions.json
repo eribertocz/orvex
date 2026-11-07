@@ -71,6 +71,80 @@
     },
     "reference": "SELECT zone_id, sum(kwh) AS total_kwh FROM marts.zone_monthly_energy WHERE tariff = 'residential' GROUP BY ALL ORDER BY zone_id"
   },
+  "aggregate_fact_table": {
+    "path": "/api/v1/semantic/query",
+    "body": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "kwh_read"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "readings.period"
+        },
+        {
+          "member": "readings.status"
+        }
+      ],
+      "order": [
+        {
+          "by": "readings.period"
+        },
+        {
+          "by": "readings.status"
+        }
+      ]
+    },
+    "reference": "SELECT period, status, sum(kwh) AS kwh_read FROM staging.readings GROUP BY ALL ORDER BY period, status"
+  },
+  "detail_large_table": {
+    "path": "/api/v1/semantic/query",
+    "body": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "detail",
+      "fields": [
+        {
+          "member": "consumers.consumer_id"
+        },
+        {
+          "member": "consumers.zone_id"
+        },
+        {
+          "member": "consumers.tariff"
+        }
+      ],
+      "order": [
+        {
+          "by": "consumers.consumer_id",
+          "direction": "asc"
+        }
+      ],
+      "filters": [
+        {
+          "scope": "visual",
+          "member": "consumers.tariff",
+          "predicate": {
+            "op": "in",
+            "values": [
+              {
+                "type": "text",
+                "value": "industrial"
+              }
+            ]
+          }
+        }
+      ],
+      "page": {
+        "size": "1000"
+      }
+    },
+    "reference": "SELECT consumer_id, zone_id, tariff FROM staging.consumers WHERE tariff = 'industrial' ORDER BY consumer_id LIMIT 1000"
+  },
   "detail_first_page": {
     "path": "/api/v1/semantic/query",
     "body": {

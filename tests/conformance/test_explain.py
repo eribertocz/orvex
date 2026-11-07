@@ -39,6 +39,7 @@ CASES = sorted(
 )
 CANARIES = ("SELECT", " FROM ", '"#', "$p_", "AT (VERSION")
 PORT = 7878
+EVIDENCE_RECORDS = "SELECT element, name, kind, snapshot, declaration, status, violations, "
 
 
 class NoRead:
@@ -71,8 +72,9 @@ class NoRead:
         return self._lake.changes(request)
 
     def read(self, request: ReadRequest) -> pa.RecordBatchReader:
-        # Module state only: the evidence records in `_meta`, never a dataset.
-        assert "_meta.evidence_" in request.sql, "an explanation read data"
+        # Module state only: the evidence records' own statement, never a dataset.
+        assert request.sql.startswith(EVIDENCE_RECORDS), "an explanation read data"
+        assert "FROM _meta.evidence_records QUALIFY" in request.sql
         self.used.append("read:_meta")
         return self._lake.read(request)
 
@@ -148,7 +150,7 @@ def test_every_corpus_question_is_explained_without_reading_data(case: str) -> N
     if case in expected:
         assert document["outcome"] == "refused"
         assert document["refusal"]["code"] == expected[case]
-    elif case != "CASE-008":
+    else:  # CASE-008 included: its total is answered (P2-23); only the runner skips it
         assert (document["outcome"], document["stage"]) == ("planned", "planned")
     assert not any(use.startswith("read:") and use != "read:_meta" for use in guarded.used)
 
@@ -304,3 +306,46 @@ def test_no_estimate_under_a_row_policy() -> None:
         )
     assert explained["outcome"] == "planned"
     assert "estimate" not in explained
+
+
+def test_no_explanation_path_names_a_read() -> None:
+    """The boundary check (#364): neither `explain` nor `prepare` names anything that reads,
+    checks zones or executes; every read is `_execute`'s, which only `answer` calls."""
+    import inspect
+
+    from orvex.semantic import execution, explanation
+
+    for function in (explanation.explain, execution.prepare):
+        source = inspect.getsource(function)
+        for name in (".read(", "_read(", "_execute(", "_check_zones(", "_unregistered("):
+            assert name not in source, (function.__name__, name)
+    module = inspect.getsource(explanation)
+    assert "_execute" not in module
+    assert "answer(" not in module
+
+
+def test_a_refusal_for_another_audience_shows_only_public_details() -> None:
+    """A non-builder that sees nothing: the refusal in the `other` audience, public details
+    only, the question withheld, and no builder part."""
+    document = windows.query("moving", group_by=("daily.day",))
+    policies = no_policies(windows.DAILY)
+    context = ce.viewer_context()  # a viewer, not a builder
+    with windows.lake_of(windows.DAYS, windows.DAILY_CATALOG) as lake:
+        explained = explain(
+            json.dumps(document),
+            windows.DAILY,
+            policies,
+            context,
+            engine_without_reads(lake),
+            NO_ONE,
+        )
+    assert list(jsonschema.Draft202012Validator(SCHEMA).iter_errors(explained)) == []
+    assert explained["outcome"] == "refused"
+    refusal = explained["refusal"]
+    assert refusal["audience"] == "other"
+    codes = json.loads((ROOT / "contracts/semantic-error/v1/codes.json").read_text("utf-8"))
+    public = {k for k, v in codes[refusal["code"]]["details"].items() if v == "public"}
+    assert set(refusal["details"]) <= public
+    assert explained["question"] == {"mode": "aggregate", "withheld": True}
+    for part in ("plan", "evidence", "materialization", "estimate"):
+        assert part not in explained
