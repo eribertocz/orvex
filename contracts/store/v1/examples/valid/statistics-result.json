@@ -1,0 +1,22 @@
+{
+  "kind": "statistics_result",
+  "snapshot": 12,
+  "tables": [
+    {
+      "table": "staging.readings",
+      "complete": true,
+      "files": [
+        {
+          "rows": 1000000,
+          "bytes": 8388608,
+          "columns": [
+            { "column": "period", "min": "2026-01-01", "max": "2026-06-01", "nulls": 0 },
+            { "column": "note", "nulls": 12 }
+          ]
+        }
+      ],
+      "inlined_rows": 40
+    },
+    { "table": "consumers", "complete": false, "files": [], "inlined_rows": 0 }
+  ]
+}

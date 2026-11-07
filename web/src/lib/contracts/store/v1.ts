@@ -11,7 +11,9 @@ export type StoreMessage =
 	| MaintenanceReport
 	| StoreError
 	| ResultJson
-	| SourceAttachment;
+	| SourceAttachment
+	| StatisticsRequest
+	| StatisticsResult;
 /**
  * Where the lake is.
  */
@@ -51,6 +53,10 @@ export type ErrorCode =
  */
 export type SourceAttachment =
 	FileSourceAttachment | SqliteSourceAttachment | PostgresSourceAttachment;
+/**
+ * A lake table: `table` (schema `main`) or `schema.table`, as written in the lake.
+ */
+export type TableName = string;
 
 /**
  * A DuckLake lake with a DuckDB-file catalog (one process): the catalog at <catalog_path>, by default <path>/catalog.ducklake, and data files under <data_path>, by default <path>/data/.
@@ -276,4 +282,50 @@ export interface PostgresSourceAttachment {
 	 * With verify-full: `system` (the default) or `${env:NAME}`, a variable holding the path of a CA file, read by the store when the lake opens.
 	 */
 	sslrootcert?: string;
+}
+/**
+ * The file statistics of lake tables as of one snapshot, read from the lake's own catalog on the store's connection: never a path or any other catalog detail. For estimating read cost as an upper bound only (semantic-engine.md §8).
+ */
+export interface StatisticsRequest {
+	kind: 'statistics';
+	/**
+	 * @minItems 1
+	 * @maxItems 256
+	 */
+	tables: [TableName, ...TableName[]];
+	snapshot: number;
+}
+/**
+ * The answer to one `StatisticsRequest`, one entry per table asked, in order.
+ */
+export interface StatisticsResult {
+	kind: 'statistics_result';
+	snapshot: number;
+	tables: TableStatistics[];
+}
+/**
+ * One table as of the snapshot: its data files, and the rows kept in the catalog itself (data inlining), which have no column statistics. `complete` is false when a file the snapshot reads has no row count: then no upper bound exists.
+ */
+export interface TableStatistics {
+	table: TableName;
+	complete: boolean;
+	files: FileStatistics[];
+	inlined_rows: number;
+}
+/**
+ * One data file the snapshot reads: its row count before deletes (an upper bound of its live rows) and its size.
+ */
+export interface FileStatistics {
+	rows: number;
+	bytes: number;
+	columns: ColumnStatistics[];
+}
+/**
+ * One column of one data file. `min` and `max` are present only when the lake records them as exact, as text in the column's own DuckDB type; `nulls` when the lake records it.
+ */
+export interface ColumnStatistics {
+	column: string;
+	min?: string;
+	max?: string;
+	nulls?: number;
 }

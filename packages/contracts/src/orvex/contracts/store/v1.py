@@ -298,6 +298,67 @@ class ObjectStorage(RootModel[S3Storage | GcsStorage | AzureStorage]):
     """
 
 
+class TableName(RootModel[str]):
+    root: Annotated[str, Field(max_length=255, pattern="^[^.\\s][^.]*(\\.[^.\\s][^.]*)?$")]
+    """
+    A lake table: `table` (schema `main`) or `schema.table`, as written in the lake.
+    """
+
+
+class ColumnStatistics(BaseModel):
+    """
+    One column of one data file. `min` and `max` are present only when the lake records them as exact, as text in the column's own DuckDB type; `nulls` when the lake records it.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    column: Annotated[str, Field(min_length=1)]
+    min: str | None = None
+    max: str | None = None
+    nulls: Annotated[int | None, Field(ge=0)] = None
+
+
+class FileStatistics(BaseModel):
+    """
+    One data file the snapshot reads: its row count before deletes (an upper bound of its live rows) and its size.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    rows: Annotated[int, Field(ge=0)]
+    bytes: Annotated[int, Field(ge=0)]
+    columns: list[ColumnStatistics]
+
+
+class TableStatistics(BaseModel):
+    """
+    One table as of the snapshot: its data files, and the rows kept in the catalog itself (data inlining), which have no column statistics. `complete` is false when a file the snapshot reads has no row count: then no upper bound exists.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    table: TableName
+    complete: bool
+    files: list[FileStatistics]
+    inlined_rows: Annotated[int, Field(ge=0)]
+
+
+class StatisticsResult(BaseModel):
+    """
+    The answer to one `StatisticsRequest`, one entry per table asked, in order.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["statistics_result"]
+    snapshot: Annotated[int, Field(ge=0)]
+    tables: list[TableStatistics]
+
+
 class Parameter(BaseModel):
     """
     A named parameter bound to `$name` in the SQL. The value is text converted to the declared DuckDB type; exact values are never JSON numbers.
@@ -426,6 +487,19 @@ class LakeLocation(RootModel[LocalLakeLocation | SqliteLakeLocation | PostgresLa
     """
 
 
+class StatisticsRequest(BaseModel):
+    """
+    The file statistics of lake tables as of one snapshot, read from the lake's own catalog on the store's connection: never a path or any other catalog detail. For estimating read cost as an upper bound only (semantic-engine.md §8).
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["statistics"]
+    tables: Annotated[list[TableName], Field(max_length=256, min_length=1)]
+    snapshot: Annotated[int, Field(ge=0)]
+
+
 class StoreMessage(
     RootModel[
         LakeLocation
@@ -437,6 +511,8 @@ class StoreMessage(
         | StoreError
         | ResultJson
         | SourceAttachment
+        | StatisticsRequest
+        | StatisticsResult
     ]
 ):
     root: Annotated[
@@ -448,7 +524,9 @@ class StoreMessage(
         | MaintenanceReport
         | StoreError
         | ResultJson
-        | SourceAttachment,
+        | SourceAttachment
+        | StatisticsRequest
+        | StatisticsResult,
         Field(title="StoreMessage"),
     ]
     """

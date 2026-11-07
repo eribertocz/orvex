@@ -55,6 +55,9 @@ from orvex.contracts.store.v1 import (
     SqliteLakeLocation,
     SqliteSourceAttachment,
     StatementRequest,
+    StatisticsRequest,
+    StatisticsResult,
+    TableStatistics,
 )
 from orvex.store.errors import StoreError, register_secret
 from orvex.store.file_sources import view_query
@@ -2174,6 +2177,106 @@ class Lake:
             if cursor is not None:
                 cursor.close()
             self._admission.release()
+
+    def statistics(self, request: StatisticsRequest) -> StatisticsResult:
+        """The file statistics of lake tables as of `request.snapshot`, from the lake's own
+        catalog on the store's connection (#352). Only what an upper bound of read cost needs:
+        each data file's row count before deletes and size, each column's exact minimum and
+        maximum and null count where the lake keeps them, and the rows kept in the catalog
+        (data inlining). Never a path or any other catalog detail. A name that is not a lake
+        table at the snapshot is refused."""
+        deadline = time.monotonic() + self._timeout_ms(None) / 1000
+        self._admission.acquire(deadline)
+        try:
+            cursor = self._cursor()
+            guard = Guard(cursor, deadline)
+            try:
+                if self._snapshot(request.snapshot, cursor) is None:
+                    raise self._missing_snapshot(request.snapshot, cursor)
+                tables = [
+                    self._table_statistics(name.root, request.snapshot, cursor)
+                    for name in request.tables
+                ]
+            except duckdb.Error as error:
+                raise guard.error(error) from error
+            finally:
+                guard.stop()
+                cursor.close()
+        finally:
+            self._admission.release()
+        return StatisticsResult(kind="statistics_result", snapshot=request.snapshot, tables=tables)
+
+    def _table_statistics(
+        self, name: str, snapshot: int, cursor: duckdb.DuckDBPyConnection
+    ) -> TableStatistics:
+        """One table's statistics as one JSON row computed by DuckDB on the catalog: its id, its
+        files with their columns, and its inlined-data tables."""
+        schema, _, table = name.rpartition(".")
+        meta = self._metadata
+        alive = "{0}.begin_snapshot <= $n AND ({0}.end_snapshot IS NULL OR {0}.end_snapshot > $n)"
+        row = self._one(
+            f"WITH t AS (SELECT t.table_id FROM {meta}.ducklake_table AS t "
+            f"JOIN {meta}.ducklake_schema AS s USING (schema_id) "
+            f"WHERE lower(s.schema_name) = lower($schema) AND lower(t.table_name) = lower($table) "
+            f"AND {alive.format('t')} AND {alive.format('s')}), "
+            f"c AS (SELECT c.column_id, c.column_name FROM {meta}.ducklake_column AS c "
+            f"WHERE c.table_id IN (SELECT table_id FROM t) AND c.parent_column IS NULL "
+            f"AND {alive.format('c')}), "
+            f"f AS (SELECT f.data_file_id, f.record_count, f.file_size_bytes, f.file_order "
+            f"FROM {meta}.ducklake_data_file AS f WHERE f.table_id IN (SELECT table_id FROM t) "
+            f"AND {alive.format('f')}) "
+            "SELECT (SELECT count(*) FROM t), "
+            "(SELECT CAST(to_json(list({'rows': f.record_count, 'bytes': f.file_size_bytes, "
+            "'columns': (SELECT list({'column': c.column_name, "
+            "'min': CASE WHEN st.min_is_exact THEN st.min_value END, "
+            "'max': CASE WHEN st.max_is_exact THEN st.max_value END, "
+            "'nulls': st.null_count} ORDER BY c.column_id) "
+            f"FROM {meta}.ducklake_file_column_stats AS st JOIN c USING (column_id) "
+            "WHERE st.data_file_id = f.data_file_id)} "
+            "ORDER BY f.file_order, f.data_file_id)) AS VARCHAR) FROM f), "
+            f"(SELECT string_agg(i.table_name, '|' ORDER BY i.schema_version) "
+            f"FROM {meta}.ducklake_inlined_data_tables AS i "
+            "WHERE i.table_id IN (SELECT table_id FROM t))",
+            {"schema": schema or "main", "table": table, "n": snapshot},
+            cursor,
+        )
+        if row is None or row[0] != 1:
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                f"{name!r} is not a lake table at snapshot {snapshot}.",
+                {"table": name, "snapshot": str(snapshot)},
+            )
+        files = json.loads(str(row[1])) if row[1] is not None else []
+        inlined = 0
+        for inlined_table in str(row[2]).split("|") if row[2] else ():
+            # The catalog's own table name, read from the catalog: quoted as an identifier.
+            found = self._one(
+                f"SELECT count(*) FROM {meta}.{_identifier(inlined_table)} AS i "
+                "WHERE i._ducklake_begin_snapshot <= $n "
+                "AND (i._ducklake_end_snapshot IS NULL OR i._ducklake_end_snapshot > $n)",
+                {"n": snapshot},
+                cursor,
+            )
+            inlined += int(str(found[0])) if found is not None else 0
+        complete = all(f["rows"] is not None for f in files)
+        return TableStatistics.model_validate(
+            {
+                "table": name,
+                "complete": complete,
+                "files": [
+                    {
+                        "rows": f["rows"] or 0,
+                        "bytes": f["bytes"] or 0,
+                        "columns": [
+                            {k: v for k, v in c.items() if v is not None}
+                            for c in f["columns"] or ()
+                        ],
+                    }
+                    for f in files
+                ],
+                "inlined_rows": inlined,
+            }
+        )
 
     def read(self, request: ReadRequest) -> pa.RecordBatchReader:
         """Run one SELECT as of `request.snapshot` and return it once, as Arrow batches."""

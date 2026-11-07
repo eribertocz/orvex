@@ -30,6 +30,12 @@
     },
     {
       "$ref": "#/$defs/SourceAttachment"
+    },
+    {
+      "$ref": "#/$defs/StatisticsRequest"
+    },
+    {
+      "$ref": "#/$defs/StatisticsResult"
     }
   ],
   "$defs": {
@@ -774,6 +780,144 @@
           "$ref": "#/$defs/AzureStorage"
         }
       ]
+    },
+    "StatisticsRequest": {
+      "description": "The file statistics of lake tables as of one snapshot, read from the lake's own catalog on the store's connection: never a path or any other catalog detail. For estimating read cost as an upper bound only (semantic-engine.md §8).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "tables",
+        "snapshot"
+      ],
+      "properties": {
+        "kind": {
+          "const": "statistics"
+        },
+        "tables": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/TableName"
+          }
+        },
+        "snapshot": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "TableName": {
+      "description": "A lake table: `table` (schema `main`) or `schema.table`, as written in the lake.",
+      "type": "string",
+      "pattern": "^[^.\\s][^.]*(\\.[^.\\s][^.]*)?$",
+      "maxLength": 255
+    },
+    "ColumnStatistics": {
+      "description": "One column of one data file. `min` and `max` are present only when the lake records them as exact, as text in the column's own DuckDB type; `nulls` when the lake records it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "column"
+      ],
+      "properties": {
+        "column": {
+          "type": "string",
+          "minLength": 1
+        },
+        "min": {
+          "type": "string"
+        },
+        "max": {
+          "type": "string"
+        },
+        "nulls": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "FileStatistics": {
+      "description": "One data file the snapshot reads: its row count before deletes (an upper bound of its live rows) and its size.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rows",
+        "bytes",
+        "columns"
+      ],
+      "properties": {
+        "rows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ColumnStatistics"
+          }
+        }
+      }
+    },
+    "TableStatistics": {
+      "description": "One table as of the snapshot: its data files, and the rows kept in the catalog itself (data inlining), which have no column statistics. `complete` is false when a file the snapshot reads has no row count: then no upper bound exists.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "table",
+        "complete",
+        "files",
+        "inlined_rows"
+      ],
+      "properties": {
+        "table": {
+          "$ref": "#/$defs/TableName"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FileStatistics"
+          }
+        },
+        "inlined_rows": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "StatisticsResult": {
+      "description": "The answer to one `StatisticsRequest`, one entry per table asked, in order.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "snapshot",
+        "tables"
+      ],
+      "properties": {
+        "kind": {
+          "const": "statistics_result"
+        },
+        "snapshot": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TableStatistics"
+          }
+        }
+      }
     }
   }
 }
