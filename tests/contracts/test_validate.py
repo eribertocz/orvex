@@ -291,6 +291,39 @@ def test_open_inline_schema_under_paths_is_reported(tmp_path: Path) -> None:
     assert findings[0].detail.startswith("#/paths/")
 
 
+def with_example_contract(root: Path) -> Path:
+    """`_example/v1`, as `sample/v1`, beside the OpenAPI contract, for references to name."""
+    shutil.copytree(REPOSITORY_ROOT / "contracts" / "_example", root / "contracts" / "sample")
+    return root
+
+
+def test_a_reference_to_another_contract_s_document_is_closed_by_that_contract(
+    tmp_path: Path,
+) -> None:
+    """P2-27a (#363): `x-contract` stands for another contract's whole document."""
+    inline = "{x-contract: sample/v1, description: the example's document}"
+    root = with_example_contract(openapi_repository(tmp_path, "3.1.0", inline))
+    assert codes(root) == []
+
+
+@pytest.mark.parametrize(
+    ("inline", "problem"),
+    [
+        ("{x-contract: missing/v1}", "no JSON Schema contract missing/v1"),
+        ("{x-contract: sample}", "is <name>/v<N>"),
+        ("{x-contract: sample/v1, type: object}", "holds only x-contract and description"),
+        ("{x-contract: 3}", "is <name>/v<N>"),
+    ],
+)
+def test_a_contract_reference_names_a_contract_and_says_nothing_else(
+    tmp_path: Path, inline: str, problem: str
+) -> None:
+    root = with_example_contract(openapi_repository(tmp_path, "3.1.0", inline))
+    findings = validate_all(root)
+    assert [f.code for f in findings] == ["CONTRACT_SCHEMA_INVALID"]
+    assert problem in findings[0].detail
+
+
 def test_generated_files_on_disk_include_orphans_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -151,6 +151,8 @@ def open_objects(
         return
     if not isinstance(schema, dict):
         return
+    if CONTRACT_KEYWORD in schema:  # another contract's document: closed by that contract
+        return
     reference = schema.get("$ref")
     if isinstance(reference, str) and reference.startswith("#") and reference not in visited:
         visited.add(reference)
@@ -220,6 +222,35 @@ def unresolved_references(
     elif isinstance(node, list):
         for index, item in enumerate(node):
             yield from unresolved_references(document, item, f"{pointer}/{index}")
+
+
+CONTRACT_KEYWORD = "x-contract"
+_CONTRACT_NAME = re.compile(r"[a-z][a-z0-9-]*/v[1-9][0-9]*")
+
+
+def contract_references(node: object, pointer: str = "#") -> Iterator[tuple[str, object, object]]:
+    """Every schema that stands for another contract's whole document (`x-contract:
+    <name>/v<N>`), with the value and the schema itself."""
+    if isinstance(node, dict):
+        if CONTRACT_KEYWORD in node:
+            yield pointer, node[CONTRACT_KEYWORD], node
+        for key, value in node.items():
+            yield from contract_references(value, f"{pointer}/{key}")
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            yield from contract_references(item, f"{pointer}/{index}")
+
+
+def bad_contract_references(document: object, root: Path) -> Iterator[str]:
+    """A contract reference must name a JSON Schema contract of this repository, and say
+    nothing else but its description: the referenced contract is the whole schema."""
+    for pointer, name, schema in contract_references(document):
+        if not isinstance(name, str) or not _CONTRACT_NAME.fullmatch(name):
+            yield f"{pointer}: {CONTRACT_KEYWORD} is <name>/v<N>"
+        elif not (root / "contracts" / name / "schema.json").is_file():
+            yield f"{pointer}: no JSON Schema contract {name}"
+        elif not isinstance(schema, dict) or set(schema) - {CONTRACT_KEYWORD, "description"}:
+            yield f"{pointer}: a contract reference holds only {CONTRACT_KEYWORD} and description"
 
 
 def non_local_references(node: object, pointer: str = "#") -> Iterator[str]:
@@ -305,6 +336,10 @@ def check_contract(contract: ContractVersion, root: Path) -> list[Finding]:
     remote += [
         Finding("CONTRACT_SCHEMA_INVALID", document_path, f"unresolved local $ref at {reference}")
         for reference in unresolved_references(document)
+    ]
+    remote += [
+        Finding("CONTRACT_SCHEMA_INVALID", document_path, f"contract reference at {problem}")
+        for problem in bad_contract_references(document, root)
     ]
     if remote:
         return [*findings, *remote]

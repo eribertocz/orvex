@@ -28,4 +28,4 @@ Generated code is committed and never edited by hand; CI fails when it is stale 
 
 ## Closed objects
 
-Every object schema sets `additionalProperties: false`; `unevaluatedProperties: false` alone is reported as open, to keep one rule. Keys matched by `patternProperties` count as declared. The check follows every local `$ref` to its target, wherever the target lives in the document.
+A schema that stands for another contract's whole document says so with `x-contract: <name>/v<N>` (and at most a `description`), never with a `$ref` to another file: it must name a JSON Schema contract of this repository, which closes it, and generated types treat it as that contract's document, untyped. Every other object schema sets `additionalProperties: false`; `unevaluatedProperties: false` alone is reported as open, to keep one rule. Keys matched by `patternProperties` count as declared. The check follows every local `$ref` to its target, wherever the target lives in the document.

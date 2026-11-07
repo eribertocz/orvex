@@ -52,7 +52,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { type: object, description: "A semantic-query v1 document." }
+            schema: { x-contract: semantic-query/v1, description: "A semantic-query v1 document." }
       responses:
         "200":
           description: The result and the caller's view of its receipt.
@@ -76,7 +76,7 @@ paths:
             X-Request-Id: { $ref: "#/components/headers/RequestId" }
           content:
             application/json:
-              schema: { type: object, description: "A catalog v1 document." }
+              schema: { x-contract: catalog/v1, description: "A catalog v1 document." }
         default: { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
@@ -187,14 +187,14 @@ components:
         request_id: { type: string, minLength: 1 }
         semantic:
           description: The engine's whole `semantic-error` v1 message, for an engine error.
-          type: object
+          x-contract: semantic-error/v1
     SemanticAnswer:
       type: object
       additionalProperties: false
       required: [result, receipt]
       properties:
-        result: { type: object, description: "The semantic-result v1 JSON form." }
-        receipt: { type: object, description: "The caller's receipt v1 view of the result." }
+        result: { x-contract: semantic-result/v1, description: "The result's JSON form." }
+        receipt: { x-contract: receipt/v1, description: "The caller's view of its receipt." }
     ErrorEnvelope:
       type: object
       additionalProperties: false

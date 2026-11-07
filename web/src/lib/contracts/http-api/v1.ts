@@ -62,7 +62,9 @@ export interface ErrorBody {
 	/**
 	 * The engine's whole `semantic-error` v1 message, for an engine error.
 	 */
-	semantic?: {};
+	semantic?: {
+		[k: string]: unknown;
+	};
 }
 /**
  * This interface was referenced by `HttpApiV1`'s JSON-Schema
@@ -70,13 +72,17 @@ export interface ErrorBody {
  */
 export interface SemanticAnswer {
 	/**
-	 * The semantic-result v1 JSON form.
+	 * The result's JSON form.
 	 */
-	result: {};
+	result: {
+		[k: string]: unknown;
+	};
 	/**
-	 * The caller's receipt v1 view of the result.
+	 * The caller's view of its receipt.
 	 */
-	receipt: {};
+	receipt: {
+		[k: string]: unknown;
+	};
 }
 /**
  * This interface was referenced by `HttpApiV1`'s JSON-Schema

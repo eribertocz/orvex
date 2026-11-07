@@ -32,6 +32,7 @@ from orvex.store.json_encoding import arrow_to_json
 IDENTITY = load_identity()
 VENDORS = (IDENTITY.ossie_vendor_name, *IDENTITY.previous_vendor_names)
 SLUG = IDENTITY.slug
+PACKAGE = semantic_http.__name__.split(".", 1)[0]  # the server's own loggers
 PORT = 7878
 BASE = f"http://127.0.0.1:{PORT}"
 VERSIONS = Versions("0.0.0", (), ())
@@ -346,7 +347,7 @@ def test_the_code_is_exchanged_once_for_a_cookie_and_leaves_the_address(
         response = http.get(f"/dashboards?view=2&code={code}", follow_redirects=False)
     # Every log line the server writes; the test client's own (httpx) is not the server's.
     logged = "\n".join(
-        f"{r.getMessage()} {r.__dict__}" for r in caplog.records if r.name.startswith("orvex")
+        f"{r.getMessage()} {r.__dict__}" for r in caplog.records if r.name.startswith(PACKAGE)
     )
     assert logged
     assert response.status_code == 303

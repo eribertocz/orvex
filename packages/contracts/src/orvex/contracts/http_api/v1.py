@@ -68,7 +68,7 @@ class ErrorBody(BaseModel):
     message: Annotated[str, Field(min_length=1)]
     details: list[ErrorDetail]
     request_id: Annotated[str, Field(min_length=1)]
-    semantic: dict[str, Any] | None = None
+    semantic: Any | None = None
     """
     The engine's whole `semantic-error` v1 message, for an engine error.
     """
@@ -78,13 +78,13 @@ class SemanticAnswer(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    result: dict[str, Any]
+    result: Any
     """
-    The semantic-result v1 JSON form.
+    The result's JSON form.
     """
-    receipt: dict[str, Any]
+    receipt: Any
     """
-    The caller's receipt v1 view of the result.
+    The caller's view of its receipt.
     """
 
 
