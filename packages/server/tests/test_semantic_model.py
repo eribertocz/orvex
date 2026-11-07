@@ -295,12 +295,14 @@ def test_compiling_takes_no_caller_and_grants_nothing() -> None:
         "audience",
         "groups",
         "experimental",
+        "connections",  # names only, from `connections.yaml` (P2-29): never a caller
     ]
     assert list(SemanticModel.__dataclass_fields__) == [
         "compiled",
         "policies",
         "snapshot",
         "file",
+        "routing",  # every dataset's engine (P2-29): no permission
     ]
     assert "semantic_model" not in inspect.getsource(app)
     assert semantic_model.__name__ == "orvex.server.semantic_model"
@@ -335,3 +337,43 @@ def test_other_audiences_get_the_generic_message(tmp_path: Path) -> None:
     (problem,) = found.problems
     assert problem.code == "OSSIE_INVALID"
     assert "/datasets" not in problem.message
+
+
+def on_connection(name: str) -> str:
+    """The model with its dataset on the connection `name` (P2-29)."""
+    document = json.loads(model())
+    document["datasets"][0]["custom_extensions"] = [
+        extension({"element": "dataset", "connection": name})
+    ]
+    return json.dumps(document)
+
+
+@pytest.mark.parametrize("name", ["archive", "nowhere"], ids=["route a", "unknown"])
+def test_a_dataset_on_a_connection_is_a_problem_while_no_engine_is_direct_query(
+    tmp_path: Path, name: str
+) -> None:
+    """Every connection this release knows is extracted into the lake (Route A), so no dataset
+    is read on another engine: one naming a connection, known or not, is the model's problem."""
+    ran(tmp_path, **{"semantic/m.ossie.json": on_connection(name)})
+    with opened(tmp_path) as lake:
+        found = load_semantic(
+            tmp_path,
+            lake,
+            lake.current_snapshot().id,
+            VENDORS,
+            audience="builder",
+            connections=load_project(tmp_path).connections,
+        )
+    assert found.model is None
+    assert codes(found) == [("OSSIE_INVALID", "semantic/m.ossie.json")]
+    assert found.problems[0].message.startswith("reference at /datasets/0/custom_extensions")
+    code = commands.validate(tmp_path, out := io.StringIO())
+    assert code == 1
+    assert "OSSIE_INVALID semantic/m.ossie.json reference at /datasets/0" in out.getvalue()
+
+
+def test_a_model_without_connections_is_on_the_managed_lake(tmp_path: Path) -> None:
+    snapshot = ran(tmp_path, **{"semantic/m.ossie.json": model()})
+    found = loaded(tmp_path, snapshot)
+    assert found.model is not None
+    assert not found.model.routing.external

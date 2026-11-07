@@ -604,6 +604,10 @@ export interface DataRead {
 	snapshot?: Snapshot;
 	read_at?: Instant;
 	retained: boolean;
+	/**
+	 * A name of the model, the engine or the instance (a dataset, policy, rule, engine, key). Never a data value, a predicate or SQL.
+	 */
+	connection?: string;
 }
 /**
  * A snapshot read: managed lake (`id`); an existing DuckLake (`project`, `connection`, `id`, `committed_at`, ADR-0027 §5).

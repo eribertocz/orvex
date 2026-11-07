@@ -402,6 +402,7 @@ def _check_inputs(
         _require(read.route in ROUTES, "data_route", f"{read.name}: route {read.route!r}")
         if read.route == "live":
             _require(read.read_at is not None and read.snapshot_id is None, "data_route", read.name)
+            _require(read.connection is not None, "data_route", f"{read.name}: no connection")
             _require(
                 read.retained is False, "data_route", f"{read.name}: a live read is never retained"
             )
@@ -449,6 +450,7 @@ def _version(read: DataRead) -> dict[str, Any]:
     }
     if read.route == "live":
         version["read_at"] = read.read_at
+        version["connection"] = read.connection
     else:
         snapshot: dict[str, Any] = {"id": read.snapshot_id}
         for key in ("committed_at", "project", "connection"):
@@ -582,7 +584,8 @@ class ReceiptRecord:
             if visible:
                 shown = _version(DataRead(**{k: v for k, v in read.items() if k != "table"}))
                 shown["retained"] = read["retained"]
-                data.append(shown)
+                if shown not in data:  # a policy's tables, one version: named once, by it
+                    data.append(shown)
         view.update(
             model={
                 k: record["model"][k]

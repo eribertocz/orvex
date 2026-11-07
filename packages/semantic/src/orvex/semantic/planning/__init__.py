@@ -18,8 +18,9 @@ along many-to-one paths, and filters on members those paths reach.
 - **Every obligation is discharged**, as `discharge.verify_plan` checks on the plan's own
   structure, never on the steps' claims; one without evidence is an internal error and the
   plan never runs (C9, P2-22).
-- **Each dataset carries its data route.** Only the managed lake runs here; any other route is
-  refused (`UNSUPPORTED_OPERATION`, `operation: route`) until P2-29.
+- **Each dataset carries its data route** (`managed`, `existing_ducklake` or `live`), from the
+  routing `execution` gives (P2-29, `engines`); the route is part of the plan's identity.
+  Which engines may run is `execution`'s decision, never the planner's.
 - The plan names members and relationships, never SQL: it is the same for every engine.
 """
 
@@ -35,11 +36,10 @@ from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.correctness import CorrectnessReport
 from orvex.semantic.correctness.graph import Graph
 from orvex.semantic.correctness.report import ISSUED
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 
 PLAN_FORMAT = 1
-ROUTES = frozenset({"managed"})  # the data routes this release executes (ADR-0027)
+ROUTES = frozenset({"managed", "existing_ducklake", "live"})  # ADR-0027
 ISSUED_PLAN = object()
 
 
@@ -376,8 +376,9 @@ def _member(key: Any) -> MemberId:  # noqa: ANN401
 
 
 class _Planner:
-    def __init__(self, report: CorrectnessReport) -> None:
+    def __init__(self, report: CorrectnessReport, routes: Mapping[str, str] | None = None) -> None:
         self.report = report
+        self.routes = dict(routes or {})
         self.compiled: CompiledModel = report.compiled
         self.canonical = report.bound.canonical
         self.graph = Graph(self.compiled)
@@ -426,9 +427,9 @@ class _Planner:
         return next(m for m in self.compiled.members if self.label(m) == label)
 
     def source(self, alias: str, dataset: str) -> Source:
-        route = "managed"  # every dataset is in the managed lake until route B (P2-29)
+        route = self.routes.get(dataset, "managed")
         if route not in ROUTES:
-            raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "route"})
+            raise PlanError(f"an unknown data route {route!r}")
         placement = self.report.placement
         restrictions = placement.of(dataset) if placement is not None else ()
         names = tuple(sorted({r.rule.name for r in restrictions}))
@@ -818,20 +819,22 @@ def plan(
     report: CorrectnessReport,
     start: tuple[Any, ...] | None = None,
     rollup: str | None = None,
+    routes: Mapping[str, str] | None = None,
 ) -> SemanticPlan:
     """The plan of a report `analyze` made, or an internal error. `start`: where a detail page
     starts, from a cursor `execution` verified (P2-24). `rollup`: the aggregate table to read
     in place of the base, one the report proved equivalent and `execution` found verified
-    consistent on the snapshot read (C8, P2-25)."""
+    consistent on the snapshot read (C8, P2-25). `routes`: each dataset's data route (P2-29);
+    absent, the managed lake."""
     if report.issued is not ISSUED:
         raise PlanError("not a report of the correctness engine")
     if report.facts["mode"] == "detail":
         if rollup is not None:
             raise PlanError("a detail page reads its base")
-        return _Planner(report).detail(start)
+        return _Planner(report, routes).detail(start)
     if start is not None:
         raise PlanError("an aggregate question has no page to start from")
-    planner = _Planner(report)
+    planner = _Planner(report, routes)
     if rollup is not None:
         chosen = [c for c in report.materials if c.name == rollup and c.eligible]
         if len(chosen) != 1:

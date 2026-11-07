@@ -36,6 +36,7 @@
     }
   ],
   "limits": {
-    "policy_values": 1000
+    "policy_values": 1000,
+    "policy_value_bytes": 65536
   }
 }

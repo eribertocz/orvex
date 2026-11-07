@@ -560,6 +560,7 @@ def _check_semantic(checked: Checked, out: IO[str]) -> bool:
                     lake,
                     lake.current_snapshot().id,
                     (identity.ossie_vendor_name, *identity.previous_vendor_names),
+                    connections=project.connections,
                     audience="builder",  # local mode: whoever opens the project builds it
                 )
             finally:
@@ -1162,6 +1163,7 @@ def _evidence_after_run(
         lake,
         snapshot,
         (identity.ossie_vendor_name, *identity.previous_vendor_names),
+        connections=project.connections,
         audience="builder",  # local mode: whoever opens the project builds it
     )
     if loaded.model is None:
@@ -1194,6 +1196,7 @@ def evidence(folder: Path, identity: Identity, out: IO[str], dataset: str | None
                     lake,
                     lake.current_snapshot().id,
                     (identity.ossie_vendor_name, *identity.previous_vendor_names),
+                    connections=project.connections,
                     audience="builder",
                 )
                 if loaded.model is None:

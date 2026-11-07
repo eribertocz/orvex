@@ -503,7 +503,8 @@ SQL_OR_DATA = {
     "orvex.semantic.execution": {"answer", "prepare"},
     "orvex.semantic.explanation": {"explain"},
     "orvex.semantic.planning": {"plan"},
-    "orvex.semantic.adapters.duckdb": {"compile_plan"},
+    # `mapping_queries` (P2-29): a plan's mapping subqueries, for the managed lake.
+    "orvex.semantic.adapters.duckdb": {"compile_plan", "mapping_queries"},
 }
 
 
@@ -555,6 +556,8 @@ def test_every_public_path_to_sql_or_data_needs_the_policies_and_the_caller() ->
     for forged_plan in (replace(real.plan, filters=(), groups=()), replace(real.plan)):
         with pytest.raises(PlanError):
             adapter_module.compile_plan(forged_plan)
+        with pytest.raises(PlanError):
+            adapter_module.mapping_queries(forged_plan)
 
 
 def test_two_spellings_of_one_member_give_one_answer() -> None:

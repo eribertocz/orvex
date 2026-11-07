@@ -490,6 +490,10 @@
         },
         "aggregate_table": {
           "$ref": "#/$defs/AggregateTable"
+        },
+        "connection": {
+          "description": "The connection in `connections.yaml` whose engine holds this dataset (Direct Query, ADR-0027 §3; P2-29). Absent: the managed lake. The engine is derived from the connection, never declared here.",
+          "$ref": "#/$defs/Name"
         }
       },
       "dependentRequired": {

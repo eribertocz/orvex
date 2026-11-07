@@ -307,6 +307,7 @@ def _question(
         evidence=evidence,
         unchanged=unchanged,
         statistics=lake.statistics,
+        routing=model.routing,  # no adapter is supplied: no other engine is enabled (P2-29)
     )
     return _Question(model, policies, context, engine)
 
@@ -379,8 +380,17 @@ class ProjectSource:
             self.turn.release()
 
     def model(self, lake: Lake, snapshot: int) -> semantic_model.Loaded:
+        try:
+            connections = load_project(self.folder).connections
+        except ProjectLoadError as error:
+            raise Refused(422, "PROJECT_INVALID", "The project's settings have problems") from error
         return semantic_model.load_semantic(
-            self.folder, lake, snapshot, self.vendor_names, audience="builder"
+            self.folder,
+            lake,
+            snapshot,
+            self.vendor_names,
+            audience="builder",
+            connections=connections,
         )
 
 

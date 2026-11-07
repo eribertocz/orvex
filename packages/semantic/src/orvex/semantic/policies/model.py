@@ -42,6 +42,7 @@ SCHEMA_FILE = "security-policies-v1.json"
 MAX_PROBLEMS = 50
 MAX_PATHS = 256
 DEFAULT_POLICY_VALUES = 1000
+DEFAULT_POLICY_VALUE_BYTES = 65536  # the encoded size of every value bound for another engine
 Protection = Literal["visible", "masked", "hidden"]
 _RANK: dict[str, int] = {"visible": 0, "masked": 1, "hidden": 2}
 
@@ -627,8 +628,10 @@ def read_policies(
             "POLICY_NOT_SUPPORTED_ON_ENGINE",
             {"dataset": dataset, "policy": owner_name, "reason": "subquery_outside_lake"},
         )
+    written = document.get("limits", {})
     limits = {
-        "policy_values": document.get("limits", {}).get("policy_values", DEFAULT_POLICY_VALUES)
+        "policy_values": written.get("policy_values", DEFAULT_POLICY_VALUES),
+        "policy_value_bytes": written.get("policy_value_bytes", DEFAULT_POLICY_VALUE_BYTES),
     }
     return PolicyModel(
         tuple(rows),
