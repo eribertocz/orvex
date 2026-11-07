@@ -45,11 +45,11 @@ from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
-from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
 from orvex.contracts.store.v1 import ReadRequest
+from orvex.server import __version__ as server_version
 from orvex.server import commands
 from orvex.server.cli import free_port
 from orvex.server.identity import load_identity
@@ -471,7 +471,7 @@ def main() -> int:
             else ""
         ),
         "dataset": {key: manifest[key] for key in ("size", "seed", "rows") if key in manifest},
-        "versions": {**load_baseline.versions(), "product": version("orvex")},
+        "versions": {**load_baseline.versions(), "product": server_version},
         "machine": {**load_baseline.machine(), "cpu_model": cpu_model()},
         "lake_tables": lake_tables(folder),
         "method": {
