@@ -794,7 +794,7 @@
       ]
     },
     "StatisticsRequest": {
-      "description": "The file statistics of lake tables as of one snapshot, read from the lake's own catalog on the store's connection: never a path or any other catalog detail. For estimating read cost as an upper bound only (semantic-engine.md §8).",
+      "description": "The file statistics of lake tables as of one snapshot, read from the lake's own catalog on the store's connection: never a path or any other catalog detail. For estimating read cost as an upper bound only (semantic-engine.md \u00a78).",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1024,7 +1024,7 @@
       }
     },
     "ChangesRequest": {
-      "description": "What changed in lake tables between two snapshots (#355): whether each table changed at all (rows or columns) after `since` up to `snapshot`, from the lake's own change history, and how many of the rows it had at `since` it no longer has, compared by value by DuckDB reading the table at both versions. Counts only, never a value.",
+      "description": "What changed in lake tables between two snapshots (#355): whether each table changed at all (rows or columns) after `since` up to `snapshot`, from the lake's own change history, and how many of the rows it had at `since` it no longer has, compared by value by DuckDB reading the table at both versions. Counts only, never a value. With `count_removed: false`, only the catalog is read (#364).",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1053,6 +1053,10 @@
         "snapshot": {
           "type": "integer",
           "minimum": 0
+        },
+        "count_removed": {
+          "description": "False: only `changed`, from the catalog alone, and no row of any table is read (`removed_rows` is absent). Default true.",
+          "type": "boolean"
         }
       }
     },

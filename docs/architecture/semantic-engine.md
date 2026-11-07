@@ -236,7 +236,7 @@ The matrix (see `frontend.md`) sends a `MatrixQuery` (rows, columns, measures, t
 The engine is usable in three ways, all over the same contracts:
 
 1. **Library:** `orvex.semantic` Python API.
-2. **HTTP:** through `server` (`/api/v1/semantic/query`, `/explain`, `/catalog`, `/possible-values`, `/matrix`).
+2. **HTTP:** through `server` (`/api/v1/semantic/query`, `/explain`, `/catalog`, `/possible-values`, `/matrix`). `explain` answers a `semantic-explain` v1 document with no data read (P2-27b): the plan's own refusals are explained, and a question's errors (an invalid query, a hidden member) stay errors.
 3. **MCP:** through `mcp` (`describe_model`, `query`, `explain`, `list_dashboards`).
 
 ## 12. Error codes

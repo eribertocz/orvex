@@ -50,7 +50,7 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 
 `Lake.changes(request)` reads DuckLake's own change history from `since` (excluded) to `snapshot`, counted in DuckDB. It returns counts only:
 - `changed`: any row or column of the table changed, or the table was created, dropped or replaced.
-- `removed_rows`: the rows the table had at `since` that it no longer has at `snapshot`, compared by value as a multiset, with DuckDB reading the table at both versions. A row written back unchanged (a merge's delete and insert, or a table rebuilt with every row it had) still remains. A dropped table has lost every row; a table created since had none. The field is absent when a column the table had at `since` is gone.
+- `removed_rows`: the rows the table had at `since` that it no longer has at `snapshot`, compared by value as a multiset, with DuckDB reading the table at both versions. With `count_removed: false` (#364) it is never counted and is absent: only the catalog is read, never a row, which is what a proof that nothing changed needs. A row written back unchanged (a merge's delete and insert, or a table rebuilt with every row it had) still remains. A dropped table has lost every row; a table created since had none. The field is absent when a column the table had at `since` is gone.
 - **Refused:**
   - a name that is a lake table at neither snapshot (`STORE_STATEMENT_INVALID`);
   - a `since` after `snapshot` (`STORE_STATEMENT_INVALID`);

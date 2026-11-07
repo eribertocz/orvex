@@ -276,7 +276,8 @@ def test_the_sealed_form_names_a_genuine_cursor_s_snapshot_to_the_server_only() 
     assert form.data_version(cursor) == STATE.data_version
     assert "snapshot-41" not in cursor
     assert SealedForm(b"j" * 32).data_version(cursor) is None
-    flipped = cursor[:-1] + ("A" if cursor[-1] != "A" else "B")
+    middle = len(cursor) // 2  # the last character may hold only padding bits
+    flipped = cursor[:middle] + ("A" if cursor[middle] != "A" else "B") + cursor[middle + 1 :]
     for wrong in (flipped, cursor[:-4], "", "x" * 60, None, 41):
         assert form.data_version(wrong) is None
     assert verify_cursor(form, cursor, BINDING, AVAILABLE) == STATE

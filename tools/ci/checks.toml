@@ -363,6 +363,44 @@ local = false
 reason = "reports the result of this run's CI jobs; its rules are tested by governance-scripts"
 
 [[job]]
+workflow = "query-baseline.yml"
+job = "changes"
+kind = "check"
+digest = "deb602d4f8c4d7a6"
+required = false
+contexts = ["query-baseline-changes"]
+setup = []
+[[job.check]]
+name = "changes-query-baseline"
+run = "python3 .github/workflows/scripts/changes.py"
+local = false
+reason = "reads the pull request's base and head commits in CI; its rules are tested by governance-scripts"
+
+[[job]]
+workflow = "query-baseline.yml"
+job = "baseline"
+kind = "scoped"
+digest = "1468a63cdf9d4a7e"
+reason = "runs only when its workflow, script or fixed questions change, on the synthetic small dataset"
+paths = [".github/workflows/query-baseline.yml", "tools/benchmarks/query_baseline.py", "benchmarks/query-baseline/**"]
+setup = []
+
+[[job]]
+workflow = "query-baseline.yml"
+job = "query-baseline"
+kind = "check"
+digest = "807f77165928dafd"
+# Joins main's protection only after its three states are shown in CI (#267).
+required = false
+contexts = ["query-baseline"]
+setup = []
+[[job.check]]
+name = "query-baseline"
+run = "python3 .github/workflows/scripts/aggregate.py"
+local = false
+reason = "reports the result of this run's CI jobs; its rules are tested by governance-scripts"
+
+[[job]]
 workflow = "release.yml"
 job = "changes"
 kind = "check"

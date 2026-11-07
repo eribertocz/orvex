@@ -500,7 +500,8 @@ def test_hidden_masked_and_unusable_are_refused_before_any_read(
 
 
 SQL_OR_DATA = {
-    "orvex.semantic.execution": {"answer"},
+    "orvex.semantic.execution": {"answer", "prepare"},
+    "orvex.semantic.explanation": {"explain"},
     "orvex.semantic.planning": {"plan"},
     "orvex.semantic.adapters.duckdb": {"compile_plan"},
 }
@@ -522,11 +523,17 @@ def test_every_public_path_to_sql_or_data_needs_the_policies_and_the_caller() ->
             if value.__module__ != module.name:
                 continue
             source = inspect.getsource(value)
-            if any(t in source for t in ("compile_plan(", ".read(", "_Writer(", "_Planner(")):
+            tokens = ("compile_plan(", ".read(", "_Writer(", "_Planner(", "prepare(")
+            if any(t in source for t in tokens):
                 found.setdefault(module.name, set()).add(name)
     assert found == SQL_OR_DATA
-    # The one path from a question takes the policies and the caller.
-    assert {"policies", "context"} <= set(inspect.signature(answer).parameters)
+    # Every path from a question takes the policies and the caller (#364: `prepare`, and
+    # `explain`, which never reads).
+    from orvex.semantic.execution import prepare
+    from orvex.semantic.explanation import explain
+
+    for entry in (answer, prepare, explain):
+        assert {"policies", "context"} <= set(inspect.signature(entry).parameters)
     # The other two accept only what `analyze` (policies and caller) and `plan` made.
     compiled, _, _ = corpus_case("CASE-001")
     with lake_for("CASE-001") as lake:

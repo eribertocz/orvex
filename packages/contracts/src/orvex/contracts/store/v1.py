@@ -412,7 +412,7 @@ class TablesResult(BaseModel):
 
 class ChangesRequest(BaseModel):
     """
-    What changed in lake tables between two snapshots (#355): whether each table changed at all (rows or columns) after `since` up to `snapshot`, from the lake's own change history, and how many of the rows it had at `since` it no longer has, compared by value by DuckDB reading the table at both versions. Counts only, never a value.
+    What changed in lake tables between two snapshots (#355): whether each table changed at all (rows or columns) after `since` up to `snapshot`, from the lake's own change history, and how many of the rows it had at `since` it no longer has, compared by value by DuckDB reading the table at both versions. Counts only, never a value. With `count_removed: false`, only the catalog is read (#364).
     """
 
     model_config = ConfigDict(
@@ -422,6 +422,10 @@ class ChangesRequest(BaseModel):
     tables: Annotated[list[TableName], Field(max_length=256, min_length=1)]
     since: Annotated[int, Field(ge=0)]
     snapshot: Annotated[int, Field(ge=0)]
+    count_removed: bool | None = None
+    """
+    False: only `changed`, from the catalog alone, and no row of any table is read (`removed_rows` is absent). Default true.
+    """
 
 
 class TableChanges(BaseModel):

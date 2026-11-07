@@ -365,7 +365,7 @@ export interface TableColumn {
 	nullable: boolean;
 }
 /**
- * What changed in lake tables between two snapshots (#355): whether each table changed at all (rows or columns) after `since` up to `snapshot`, from the lake's own change history, and how many of the rows it had at `since` it no longer has, compared by value by DuckDB reading the table at both versions. Counts only, never a value.
+ * What changed in lake tables between two snapshots (#355): whether each table changed at all (rows or columns) after `since` up to `snapshot`, from the lake's own change history, and how many of the rows it had at `since` it no longer has, compared by value by DuckDB reading the table at both versions. Counts only, never a value. With `count_removed: false`, only the catalog is read (#364).
  */
 export interface ChangesRequest {
 	kind: 'changes';
@@ -376,6 +376,10 @@ export interface ChangesRequest {
 	tables: [TableName, ...TableName[]];
 	since: number;
 	snapshot: number;
+	/**
+	 * False: only `changed`, from the catalog alone, and no row of any table is read (`removed_rows` is absent). Default true.
+	 */
+	count_removed?: boolean;
 }
 /**
  * The answer to one `ChangesRequest`, one entry per table asked, in order.

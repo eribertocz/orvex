@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from orvex.contracts.store.v1 import ChangesRequest, LakeLocation, StatementRequest
@@ -115,3 +116,57 @@ def test_a_value_is_never_a_statement(lake: Lake, base: int) -> None:
         with pytest.raises(StoreError):
             changes(lake, base, base, name)
     assert changes(lake, base, base, "t") == [(False, 0)]
+
+
+@pytest.mark.parametrize(
+    "statements",
+    [
+        ("INSERT INTO t VALUES (100, 1)",),
+        ("DELETE FROM t WHERE id < 3",),
+        ("ALTER TABLE t DROP COLUMN v",),
+        ("DROP TABLE t",),
+        ("CREATE OR REPLACE TABLE t AS SELECT range AS id, range * 10 AS v FROM range(45)",),
+    ],
+)
+def test_without_counts_only_changed_is_answered_from_the_catalog(
+    lake: Lake, base: int, statements: tuple[str, ...]
+) -> None:
+    """#364: `count_removed: false` reads no row: `changed` as with counts, no `removed_rows`."""
+    later = write(lake, *statements)
+    found = lake.changes(
+        ChangesRequest.model_validate(
+            {
+                "kind": "changes",
+                "tables": ["t", "other"],
+                "since": base,
+                "snapshot": later,
+                "count_removed": False,
+            }
+        )
+    )
+    counted = changes(lake, base, later, "t", "other")
+    assert [t.changed for t in found.tables] == [c for c, _ in counted]
+    assert all(t.removed_rows is None for t in found.tables)
+
+
+def test_without_counts_no_data_file_is_opened(lake: Lake, base: int, tmp_path: Path) -> None:
+    """#364: with every data file of the lake gone, `changed` is still answered, from the
+    catalog alone; counting removed rows would have to open them."""
+    later = write(lake, "INSERT INTO t SELECT range + 1000, 1 FROM range(5000)")
+    files = list(tmp_path.rglob("*.parquet"))
+    if not files:
+        pytest.skip("this catalog keeps its data elsewhere")
+    for path in files:
+        path.unlink()
+    found = lake.changes(
+        ChangesRequest.model_validate(
+            {
+                "kind": "changes",
+                "tables": ["t", "other"],
+                "since": base,
+                "snapshot": later,
+                "count_removed": False,
+            }
+        )
+    )
+    assert [(t.changed, t.removed_rows) for t in found.tables] == [(True, None), (False, None)]

@@ -323,9 +323,9 @@ def create_app(
 
 
 def mount_semantic(app: FastAPI, local: LocalSemantic) -> None:
-    """`query` and `catalog` (`contracts/http-api/v1`). The session gate has already checked
-    the request's site, body type and token: what remains is the caller's own permissions,
-    which `access` gives and the engine applies."""
+    """`query`, `explain` and `catalog` (`contracts/http-api/v1`). The session gate has already
+    checked the request's site, body type and token: what remains is the caller's own
+    permissions, which `access` gives and the engine applies."""
     caller = LocalRequest(local.project, authenticated=True)
 
     def refusal(error: Exception, request_id: str) -> Response:
@@ -351,6 +351,21 @@ def mount_semantic(app: FastAPI, local: LocalSemantic) -> None:
             if wants_arrow(request):
                 return arrow_response(asked.arrow_table())
             return JSONResponse(asked.json_document())
+        except (SemanticError, semantic_http.Refused, semantic_http.ProjectBusy) as error:
+            return refusal(error, request_id)
+        except StoreError as error:
+            log.error("store error", extra={"request_id": request_id, "code": error.code})
+            return error_response(500, "INTERNAL_ERROR", "Unexpected server error", request_id)
+
+    @app.post("/api/v1/semantic/explain")
+    async def explain(request: Request) -> Response:
+        body = await request.body()
+        request_id = request_id_of(request)
+        try:
+            document = await run_in_threadpool(
+                semantic_http.explanation, local.semantic, body, caller
+            )
+            return JSONResponse(document)
         except (SemanticError, semantic_http.Refused, semantic_http.ProjectBusy) as error:
             return refusal(error, request_id)
         except StoreError as error:

@@ -1,0 +1,1 @@
+'refusal' is a required property

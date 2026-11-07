@@ -64,6 +64,30 @@ paths:
             application/vnd.apache.arrow.stream:
               schema: { type: string, format: binary }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/semantic/explain:
+    post:
+      operationId: postSemanticExplain
+      summary: What the engine would do with a question, and why, with no data read (P2-27b).
+      description: >-
+        The same body, session, caller and snapshot rules as `query`. Errors of category
+        `query` or `security` (an invalid query, an unknown or hidden member, a masked member,
+        a cursor) are sent as errors, as `query` sends them; the plan's own refusals (category
+        `correctness`, `budget` or `engine`) answer 200 with `outcome: refused`.
+      security: [{ session: [] }, { bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { x-contract: semantic-query/v1, description: "A semantic-query v1 document." }
+      responses:
+        "200":
+          description: The caller's `semantic-explain` v1 document.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { x-contract: semantic-explain/v1, description: "A semantic-explain v1 document." }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/semantic/catalog:
     get:
       operationId: getSemanticCatalog

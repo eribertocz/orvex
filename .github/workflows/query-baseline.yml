@@ -1,0 +1,121 @@
+# Query-performance baseline (#364, P2-27b). Started by hand: generates the synthetic `large`
+# dataset (seed 42), loads it with the real `run`, and asks the semantic HTTP API the fixed
+# questions of `benchmarks/query-baseline/` in independent rounds, each on a new server process,
+# at concurrency 1 and 4, every answer checked against its reference, on a GitHub-hosted runner
+# (4 CPUs, 16 GB for a public repository). The numbers are uploaded as an artifact and recorded
+# in `benchmarks/p2-query-baseline.md`.
+name: query-baseline
+
+on:
+  workflow_dispatch:
+    inputs:
+      size:
+        description: Synthetic dataset size
+        type: choice
+        options: [large, small]
+        default: large
+      rounds:
+        description: Independent rounds (each a new server process)
+        type: number
+        default: 3
+  # A change to this workflow or its script is tried on the `small` dataset, once; every pull
+  # request gets the `query-baseline` result (#267).
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # The paths that make this check apply (#267), read by changes.py and aggregate.py.
+  RELEVANT_PATHS: |
+    .github/workflows/query-baseline.yml
+    tools/benchmarks/query_baseline.py
+    benchmarks/query-baseline/**
+
+jobs:
+  # Whether this run changes a relevant path (#267): `changes.py` fails closed.
+  changes:
+    name: query-baseline-changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.changes.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/workflows/scripts/changes.py
+
+  baseline:
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    # One load of the large dataset and three rounds of questions; a hung step must fail the job.
+    timeout-minutes: 360
+    env:
+      SIZE: ${{ inputs.size || 'small' }}
+      ROUNDS: ${{ inputs.rounds || 1 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Install from the lock file and the workspace packages
+        run: |
+          python -m pip install --quiet pip==26.2.2
+          python -m pip install --quiet -r pylock.toml
+          for package in packages/*/; do
+            python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
+          done
+      - name: The machine
+        run: |
+          nproc
+          free -h
+          df -h "$RUNNER_TEMP"
+      - name: Generate the dataset
+        run: python -m tools.synthetic.generate --size "$SIZE" --seed 42 --out "$RUNNER_TEMP/data"
+      - name: Measure
+        run: >-
+          python -m tools.benchmarks.query_baseline --data "$RUNNER_TEMP/data"
+          --work "$RUNNER_TEMP/work" --out baseline --rounds "$ROUNDS"
+      - name: Disk left
+        if: always()
+        run: df -h "$RUNNER_TEMP"
+      # The results as an annotation too: readable through the check-runs API, where artifacts
+      # and logs may not be.
+      - name: Results as an annotation
+        if: always()
+        run: |
+          if [ -f baseline/results.json ]; then
+            python -c "import json, sys; text = json.dumps(json.load(open('baseline/results.json')), separators=(',', ':')); print('::notice title=query-baseline results::' + text.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A'))"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: query-baseline-${{ env.SIZE }}
+          path: baseline/
+          if-no-files-found: warn
+
+  # The required result (#267): passes when baseline ran and passed, reports "Not applicable"
+  # only when `changes` proved nothing relevant changed, and fails otherwise.
+  query-baseline:
+    needs: [changes, baseline]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 .github/workflows/scripts/aggregate.py
+        env:
+          CHECK: query-baseline
+          CHANGES: ${{ needs.changes.result }}
+          RELEVANT: ${{ needs.changes.outputs.relevant }}
+          RESULT: ${{ needs.baseline.result }}

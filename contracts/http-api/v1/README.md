@@ -29,7 +29,7 @@ The registry is `components.x-error-codes` in `openapi.yaml`; a test checks that
 
 ## Semantic routes (P2-27a)
 
-`POST /api/v1/semantic/query` and `GET /api/v1/semantic/catalog` exist only in local mode.
+`POST /api/v1/semantic/query`, `POST /api/v1/semantic/explain` (P2-27b, #364) and `GET /api/v1/semantic/catalog` exist only in local mode. `explain` answers a `semantic-explain` v1 document and reads no data; its errors follow the same table, except that the plan's own refusals (categories `correctness`, `budget`, `engine`) are explained with `outcome: refused` instead.
 
 - **Credentials.** Each serve session has three, all revoked when the server stops:
   - a one-time bootstrap code, valid for a few minutes, exchanged at `/?code=…` for a session cookie and a redirect without the code;

@@ -1,0 +1,50 @@
+{
+  "kind": "semantic_explain",
+  "version": 1,
+  "model_fingerprint": "sha256:4bc1b6e00959fa8f037c2ce1e3df1c60c1dae13825d0f29f0f0c3d81f159fa3d",
+  "snapshot": {
+    "id": 3,
+    "committed_at": "2026-11-07T15:48:37.723031Z"
+  },
+  "stage": "planned",
+  "query_fingerprint": "sha256:cf901419fd05abe91c6ae69b97dec641c8990f03ea0c96760d4bbed8ac5f2942",
+  "question": {
+    "mode": "detail",
+    "page": {
+      "size": "10"
+    },
+    "fields": [
+      {
+        "member": "readings.reading_id"
+      },
+      {
+        "member": "readings.kwh"
+      }
+    ],
+    "order": [
+      {
+        "by": "readings.reading_id",
+        "direction": "asc",
+        "nulls": "last"
+      }
+    ]
+  },
+  "plan": {
+    "plan_fingerprint": "sha256:c15a8a2dec234ff5a9768192ca18bc8073d18c1626a94a92ae57211416e641fd",
+    "obligations": [
+      {
+        "rule": "C1",
+        "obligation": "C1.rows:readings",
+        "evidence": "rows:readings"
+      }
+    ]
+  },
+  "evidence": [],
+  "materialization": {
+    "reason": "no_eligible_table"
+  },
+  "estimate": {
+    "rows_scanned": 4
+  },
+  "outcome": "planned"
+}
