@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import pytest
+from orvex.contracts.store.v1 import ChangesRequest, StatementRequest
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.correctness import analyze
@@ -208,7 +209,7 @@ def records_of(compiled: CompiledModel, lake: Lake) -> Any:  # noqa: ANN401
 
 VERIFIED = {
     ("sales", "unique"): ("verified", {"duplicates": 0}),
-    ("sales", "append_only"): "unsupported",
+    ("sales", "append_only"): "first",  # no earlier snapshot to compare against (#355)
     ("customers", "unique"): ("verified", {"duplicates": 0}),
     ("customer_history", "non_overlap"): ("verified", {"overlaps": 0}),
     ("sale_customer", "cardinality"): ("verified", {"repeated": 0}),
@@ -219,8 +220,8 @@ VERIFIED = {
 
 
 def test_every_declared_kind_is_verified_on_correct_data() -> None:
-    """`append_only` compares two snapshots, which no statement on one reads: it stays
-    `declared`, never `verified` on a guess."""
+    """`append_only` with no earlier snapshot of the dataset to compare against stays
+    `declared`, never `verified` on a guess (#355)."""
     assert outcomes(GOOD) == VERIFIED
 
 
@@ -520,10 +521,8 @@ def test_a_check_over_its_budget_stays_declared() -> None:
 
     found = verify(COMPILED, timed_out, 1, at=AT, budget_ms=1000)
     assert found.records == ()
-    assert {s.reason for s in found.skipped} == {"budget", "unsupported"}
-    assert {s.declaration.kind for s in found.skipped if s.reason == "unsupported"} == {
-        "append_only"
-    }
+    assert {s.reason for s in found.skipped} == {"budget", "first"}
+    assert {s.declaration.kind for s in found.skipped if s.reason == "first"} == {"append_only"}
     spy = Spy()
     nothing_left = verify(COMPILED, spy, 1, at=AT, budget_ms=0)  # nothing left: nothing read
     assert spy.calls == 0
@@ -548,3 +547,129 @@ def test_a_record_names_its_run_instant_and_declaration() -> None:
     ]
     assert found.records[0].declaration == fingerprints[found.records[0].key]
     assert replace(found.records[0], snapshot=snapshot).status == "verified"
+
+
+# --- append_only against the dataset's previous verified snapshot (#355) -----------------------
+
+
+def statement(lake: Lake, *sql: str) -> int:
+    with lake.transaction() as transaction:
+        for text in sql:
+            transaction.execute(StatementRequest(kind="statement", sql=text, parameters=[]))
+    return lake.current_snapshot().id
+
+
+# A data file, not rows kept in the catalog.
+MORE_SALES = "INSERT INTO sales SELECT 100 + range, 10, DATE '2026-03-01', 1.00 FROM range(20)"
+
+
+@pytest.mark.parametrize(
+    ("changes", "violations"),
+    [
+        ((MORE_SALES,), {"removed": 0}),  # rows only added
+        (("UPDATE sales SET amount = 9.99 WHERE sale_id = 1",), {"removed": 1}),
+        (("DELETE FROM sales WHERE sale_id = 2",), {"removed": 1}),
+        (
+            (
+                "UPDATE sales SET amount = 9.99 WHERE sale_id = 1",
+                "DELETE FROM sales WHERE sale_id = 2",
+            ),
+            {"removed": 2},
+        ),
+        (  # rows added after the baseline, then changed: the baseline's rows all remain
+            (
+                MORE_SALES,
+                "DELETE FROM sales WHERE sale_id = 101",
+                "UPDATE sales SET amount = 0.50 WHERE sale_id = 102",
+            ),
+            {"removed": 0},
+        ),
+        (  # a row deleted and written back unchanged: compared by value, it remains
+            (
+                "DELETE FROM sales WHERE sale_id = 3",
+                "INSERT INTO sales VALUES (3, 10, DATE '2026-02-01', 2.50)",
+            ),
+            {"removed": 0},
+        ),
+        (  # an update to the same value
+            ("UPDATE sales SET amount = 10.00 WHERE sale_id = 1",),
+            {"removed": 0},
+        ),
+        (  # rebuilt without one of its rows
+            ("CREATE OR REPLACE TABLE sales AS SELECT * FROM sales WHERE sale_id <> 2",),
+            {"removed": 1},
+        ),
+    ],
+)
+def test_append_only_counts_every_row_of_the_baseline_changed_or_removed(
+    changes: tuple[str, ...], violations: dict[str, int]
+) -> None:
+    with lake_of(GOOD) as lake:
+        baseline = lake.current_snapshot().id
+        first = verify(COMPILED, lake.read, baseline, at=AT, only=["sales"], changes=lake.changes)
+        assert [s.reason for s in first.skipped if s.declaration.kind == "append_only"] == ["first"]
+        for text in changes:  # one snapshot each: the comparison spans all of them
+            statement(lake, text)
+        found = verify(
+            COMPILED,
+            lake.read,
+            lake.current_snapshot().id,
+            at=AT,
+            only=["sales"],
+            changes=lake.changes,
+            baselines={"SALES": baseline},
+        )
+    (record,) = [r for r in found.records if r.kind == "append_only"]
+    assert dict(record.violations) == violations
+    assert record.status == ("violated" if any(violations.values()) else "verified")
+    assert record.tables == ("sales",)
+
+
+def test_append_only_counts_rows_of_data_files_in_the_baseline() -> None:
+    with lake_of(GOOD) as lake:
+        baseline = statement(lake, MORE_SALES)
+        statement(
+            lake,
+            "DELETE FROM sales WHERE sale_id = 101",
+            "UPDATE sales SET amount = 0.50 WHERE sale_id = 102",
+        )
+        found = verify(
+            COMPILED,
+            lake.read,
+            lake.current_snapshot().id,
+            at=AT,
+            only=["sales"],
+            changes=lake.changes,
+            baselines={"SALES": baseline},
+        )
+    (record,) = [r for r in found.records if r.kind == "append_only"]
+    assert dict(record.violations) == {"removed": 2}
+
+
+def test_a_record_holds_later_only_while_no_table_it_read_changed() -> None:
+    """Records of an earlier snapshot hold when the store proves the tables their check read
+    unchanged since (another table written, say); never once one of them changed."""
+    with lake_of(GOOD) as lake:
+        checked = lake.current_snapshot().id
+        records = verify(COMPILED, lake.read, checked, at=AT).records
+
+        def unchanged(record: EvidenceRecord, snapshot: int) -> bool:
+            request = {
+                "kind": "changes",
+                "tables": list(record.tables),
+                "since": record.snapshot,
+                "snapshot": snapshot,
+            }
+            found = lake.changes(ChangesRequest.model_validate(request))
+            return not any(t.changed for t in found.tables)
+
+        other = statement(lake, "CREATE SCHEMA _meta", "CREATE TABLE _meta.notes (x INTEGER)")
+        held = Ledger(COMPILED, records, other, unchanged)
+        assert {r.key for r in records} == set(held.records)
+        written = statement(lake, "INSERT INTO profiles VALUES (12, 'gold')")
+        after = Ledger(COMPILED, records, written, unchanged)
+        # Only the check that read `profiles` stops holding.
+        assert set(held.records) - set(after.records) == {
+            ("relationship", "CUSTOMER_PROFILE", "cardinality")
+        }
+        assert Ledger(COMPILED, records, other).records == {}  # no proof: nothing earlier holds

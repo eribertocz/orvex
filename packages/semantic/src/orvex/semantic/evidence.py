@@ -19,8 +19,14 @@ What each check counts as violations:
 - `consistent`, an aggregate table that names its `base_dataset`: the groups it is missing,
   has in addition, or stores differently.
 
-`append_only` compares two snapshots, which one statement on one snapshot cannot read: it is
-never checked here, so it stays `declared`, never `verified` on a guess.
+`append_only` compares the snapshot with the dataset's previous verified one (#355): the rows
+of the earlier snapshot deleted or updated since, counted by the store from the lake's own
+change history (`store/v1` `ChangesRequest`). With no earlier snapshot to compare against, it
+stays `declared`, never `verified` on a guess.
+
+A record checked on snapshot R also holds on a later snapshot S when the store proves that no
+table its check read changed after R up to S (`Ledger`, `unchanged`): the same rows, so the
+same outcome. Anything else of R is never carried over.
 
 A question relies on the evidence its answer depends on, from its plan (`relied`): the
 cardinality of every relationship it joins through, the key of a period-end fact and of a
@@ -90,6 +96,7 @@ class EvidenceRecord:
     violations: Mapping[str, int]  # by kind: `duplicates`, `missing`, ... (all zero: verified)
     at: datetime
     run: str | None = None  # the run that triggered it, when one did
+    tables: tuple[str, ...] = ()  # every lake table the check read, as the model names it
 
     @property
     def key(self) -> tuple[str, str, str]:
@@ -98,11 +105,12 @@ class EvidenceRecord:
 
 @dataclass(frozen=True, slots=True)
 class Skipped:
-    """A declaration left `declared`: `budget` (the check did not finish within its time) or
-    `unsupported` (no statement on one snapshot checks it). Builders are told."""
+    """A declaration left `declared`, and why: `budget` (the check did not finish within its
+    time), `unsupported` (no statement checks it) or `first` (`append_only` with no earlier
+    snapshot of the dataset to compare against). Builders are told."""
 
     declaration: Declaration
-    reason: Literal["budget", "unsupported"]
+    reason: Literal["budget", "unsupported", "first"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,7 +302,7 @@ def _statements(model: _Model, declaration: Declaration) -> tuple[EvidenceCheck,
             return (overlap_check(compiled, name, entity, start, end),)
         if kind == CONSISTENT:
             return (_consistency(model, name),)
-        raise _Unchecked  # append_only: two snapshots, never one statement
+        raise _Unchecked  # append_only compares two snapshots: `_append_only`, not a statement
     node = model.relationships[name]
     payload = model.payload("relationship", name)
     source, target = sql.normalize(str(node["from"])), sql.normalize(str(node["to"]))
@@ -368,11 +376,16 @@ def verify(
     budget_ms: int | None = None,
     only: Iterable[str] | None = None,
     clock: Callable[[], float] = time.monotonic,
+    changes: Callable[[Any], Any] | None = None,
+    baselines: Mapping[str, int] | None = None,
 ) -> Verification:
     """Every declaration of `compiled` (or of the datasets and relationships in `only`, by
     normalized name) checked on `snapshot` through `read` (`store/v1` `ReadRequest`s), within
     `budget_ms` for all of them. A check that does not finish in what is left of the budget,
-    or has none left, leaves its evidence `declared`; any other failure is raised."""
+    or has none left, leaves its evidence `declared`; any other failure is raised.
+    `append_only` is checked through `changes` (`store/v1` `ChangesRequest`) against the
+    dataset's snapshot in `baselines` (normalized name: the earlier snapshot it was verified
+    on); without one it stays `declared` (`first`)."""
     from orvex.contracts.store.v1 import Parameter, ReadRequest
 
     model = _Model(compiled)
@@ -382,6 +395,13 @@ def verify(
     skipped: list[Skipped] = []
     for declaration in declarations(compiled):
         if chosen is not None and declaration.name not in chosen:
+            continue
+        if declaration.kind == "append_only":
+            found = _append_only(model, declaration, snapshot, changes, baselines or {}, at, run)
+            if isinstance(found, Skipped):
+                skipped.append(found)
+            else:
+                records.append(found)
             continue
         try:
             statements = _statements(model, declaration)
@@ -425,9 +445,52 @@ def verify(
                 violations,
                 at,
                 run,
+                tuple(dict.fromkeys(t for s in statements for t in s.tables)),
             )
         )
     return Verification(tuple(records), tuple(skipped))
+
+
+def _append_only(
+    model: _Model,
+    declaration: Declaration,
+    snapshot: int,
+    changes: Callable[[Any], Any] | None,
+    baselines: Mapping[str, int],
+    at: datetime,
+    run: str | None,
+) -> EvidenceRecord | Skipped:
+    """`append_only`: no row the dataset had on its baseline snapshot missing on this one,
+    compared by value as a multiset by the store (a row written back unchanged remains). A
+    dropped table has lost every row; one that lost a column cannot be compared, and stays
+    `declared`."""
+    from orvex.contracts.store.v1 import ChangesRequest
+
+    since = baselines.get(declaration.name)
+    if changes is None or since is None or since >= snapshot:
+        return Skipped(declaration, "first")
+    table = str(model.datasets[declaration.name].get("source", declaration.dataset))
+    found = changes(
+        ChangesRequest.model_validate(
+            {"kind": "changes", "tables": [table], "since": since, "snapshot": snapshot}
+        )
+    )
+    (entry,) = found.tables
+    if entry.removed_rows is None:  # a column it had is gone: its rows cannot be compared
+        return Skipped(declaration, "unsupported")
+    violations = {"removed": int(entry.removed_rows)}
+    return EvidenceRecord(
+        declaration.element,
+        declaration.name,
+        declaration.kind,
+        snapshot,
+        declaration.fingerprint,
+        "violated" if any(violations.values()) else "verified",
+        violations,
+        at,
+        run,
+        (table,),
+    )
 
 
 class _OverBudget(Exception):
@@ -452,15 +515,26 @@ class Ledger:
     A record of another snapshot, or of a changed declaration, is no record: `declared`."""
 
     def __init__(
-        self, compiled: CompiledModel, records: Iterable[EvidenceRecord], snapshot: int
+        self,
+        compiled: CompiledModel,
+        records: Iterable[EvidenceRecord],
+        snapshot: int,
+        unchanged: Callable[[EvidenceRecord, int], bool] | None = None,
     ) -> None:
+        """`unchanged(record, snapshot)`: the store's proof that no table the record's check
+        read changed after its snapshot up to `snapshot`. Without it, only records of
+        `snapshot` itself hold. The newest record that holds is kept for each declaration."""
         self.declared = {d.key: d for d in declarations(compiled)}
         self.records: dict[tuple[str, str, str], EvidenceRecord] = {}
-        for record in records:
+        for record in sorted(records, key=lambda r: r.snapshot, reverse=True):
             declaration = self.declared.get(record.key)
-            if declaration is None or record.snapshot != snapshot:
+            if declaration is None or record.key in self.records:
                 continue
-            if record.declaration != declaration.fingerprint:
+            if record.declaration != declaration.fingerprint or record.snapshot > snapshot:
+                continue
+            if record.snapshot < snapshot and (
+                unchanged is None or not record.tables or not unchanged(record, snapshot)
+            ):
                 continue
             self.records[record.key] = record
 

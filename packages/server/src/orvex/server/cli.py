@@ -17,7 +17,7 @@ from types import FrameType
 
 import uvicorn
 from orvex.server.app import create_app
-from orvex.server.commands import run, runs, validate
+from orvex.server.commands import evidence, run, runs, validate
 from orvex.server.identity import Identity, load_identity
 from orvex.server.instance import (
     Project,
@@ -39,7 +39,7 @@ from orvex.server.versions import (
 )
 
 LOCAL_HOST = "127.0.0.1"
-COMMANDS = frozenset({"validate", "run", "runs", "schedule", "maintain"})
+COMMANDS = frozenset({"validate", "run", "runs", "schedule", "maintain", "evidence"})
 DEFAULT_PORT = 7878
 PORT_ATTEMPTS = 100
 MAX_PORT = 65_535
@@ -168,6 +168,12 @@ def command_parser(identity: Identity) -> argparse.ArgumentParser:
         help="expire snapshots older than the project's retention and compact the lake's files",
     )
     maintained.add_argument("project", type=Path, help="project folder")
+    checked = commands.add_parser(
+        "evidence",
+        help="check the semantic model's evidence on the lake's current snapshot (as its builder)",
+    )
+    checked.add_argument("project", type=Path, help="project folder")
+    checked.add_argument("--dataset", help="only this dataset's evidence and its relationships'")
     return parser
 
 
@@ -195,6 +201,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return runs(command.project, identity, command.limit, sys.stdout)
         if command.command == "maintain":
             return maintain(command.project, identity, sys.stdout)
+        if command.command == "evidence":
+            return evidence(command.project, identity, sys.stdout, command.dataset)
         return run(
             command.project,
             identity,

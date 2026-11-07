@@ -410,6 +410,47 @@ class TablesResult(BaseModel):
     tables: list[LakeTable]
 
 
+class ChangesRequest(BaseModel):
+    """
+    What changed in lake tables between two snapshots (#355): whether each table changed at all (rows or columns) after `since` up to `snapshot`, from the lake's own change history, and how many of the rows it had at `since` it no longer has, compared by value by DuckDB reading the table at both versions. Counts only, never a value.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["changes"]
+    tables: Annotated[list[TableName], Field(max_length=256, min_length=1)]
+    since: Annotated[int, Field(ge=0)]
+    snapshot: Annotated[int, Field(ge=0)]
+
+
+class TableChanges(BaseModel):
+    """
+    One table between `since` and `snapshot`. `changed`: any row or column changed, or the table was created, dropped or replaced. `removed_rows`: rows present at `since` and missing at `snapshot`, by value as a multiset (a dropped table lost every row; one created since had none); absent when a column it had at `since` is gone.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    table: TableName
+    changed: bool
+    removed_rows: Annotated[int | None, Field(ge=0)] = None
+
+
+class ChangesResult(BaseModel):
+    """
+    The answer to one `ChangesRequest`, one entry per table asked, in order.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["changes_result"]
+    since: Annotated[int, Field(ge=0)]
+    snapshot: Annotated[int, Field(ge=0)]
+    tables: list[TableChanges]
+
+
 class Parameter(BaseModel):
     """
     A named parameter bound to `$name` in the SQL. The value is text converted to the declared DuckDB type; exact values are never JSON numbers.
@@ -566,6 +607,8 @@ class StoreMessage(
         | StatisticsResult
         | TablesRequest
         | TablesResult
+        | ChangesRequest
+        | ChangesResult
     ]
 ):
     root: Annotated[
@@ -581,7 +624,9 @@ class StoreMessage(
         | StatisticsRequest
         | StatisticsResult
         | TablesRequest
-        | TablesResult,
+        | TablesResult
+        | ChangesRequest
+        | ChangesResult,
         Field(title="StoreMessage"),
     ]
     """
