@@ -1,6 +1,6 @@
 """Engines of a model's datasets: the Direct Query foundation (P2-29, #370; ADR-0027 §3 to §6).
 
-- **Engine per dataset.** A dataset names its connection in its `ORVEX` extension
+- **Engine per dataset.** A dataset names its connection in its product extension
   (`connection`); absent, it is in the managed lake. The engine is never declared in the
   model: `server` derives an `EngineCatalog` from `connections.yaml`, one `EngineEntry` per
   Direct Query connection, and `route_model` binds every dataset to its entry.
@@ -9,7 +9,7 @@
   sharing a dialect is never enough.
 - **One engine per question.** A relationship between datasets on different engines is refused
   when the model is bound, and a question that would read two engines is refused before any
-  read; both with `CROSS_ENGINE_QUERY`. Orvex never joins results of two engines.
+  read; both with `CROSS_ENGINE_QUERY`. Results of two engines are never joined.
 - **Capabilities.** Each entry states what its adapter can run (`CAPABILITIES`); a plan needing
   anything else is refused before any read with `UNSUPPORTED_OPERATION`, naming it.
 - **Enabled engines.** An entry is usable only with an adapter. `server` supplies adapters only
