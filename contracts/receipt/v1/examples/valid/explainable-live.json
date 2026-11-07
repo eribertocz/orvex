@@ -108,7 +108,8 @@
       "name": "payments",
       "route": "live",
       "read_at": "2026-11-02T12:00:00.000000Z",
-      "retained": false
+      "retained": false,
+      "connection": "warehouse"
     },
     {
       "for": "policy",

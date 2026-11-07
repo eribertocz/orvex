@@ -216,6 +216,10 @@ export interface DatasetPayload {
 	certification?: Certification;
 	bridge?: Bridge;
 	aggregate_table?: AggregateTable;
+	/**
+	 * An Ossie identifier (expression_language.md L86): at most 128 characters; compared case-insensitively unless quoted.
+	 */
+	connection?: string;
 }
 export interface EntityKey {
 	entity: Name;

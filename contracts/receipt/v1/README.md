@@ -69,7 +69,7 @@ Each MAC is separated by its purpose (`receipt-seal/v1`, `result-mac/v1`), so on
 ## Data versions
 - **Managed lake:** the snapshot id.
 - **Existing DuckLake:** the project, connection, snapshot id and commit time, never the id alone (ADR-0027 §5).
-- **Live engine** (after v1.0.0): the read instant. It is never retained.
+- **Live engine** (after v1.0.0): the read instant and the connection read through (P2-29). It is never retained.
 
 A data version read for a policy is named by the policy, never by its mapping table.
 

@@ -48,6 +48,7 @@ Every member is optional unless marked required; ⇒ marks a condition the schem
 - `evidence`: `unique`, `non_overlap`, `append_only`.
 - `cache`, `certification`.
 - `aggregate_table` (S5): this dataset is an existing aggregate table at its `grain` ⇒ `grain`; its measures replace base execution only when proven equivalent (C8). The proof needs what the table stores, declared, never guessed from names (P2-25): `base_dataset`, the dataset it aggregates, and on each measure `metric`, the base metric it stores at the table's grain, with `expression` re-aggregating it (`SUM(column)`). Without them the table is never used.
+- `connection` (P2-29; ADR-0027 §3): the `connections.yaml` connection whose engine reads this dataset in place, a Direct Query connection; absent, the dataset is in the managed lake. The engine is derived from the connection, never declared here. A name that is unknown, or not a Direct Query connection, is a problem of the model; a relationship between datasets on different engines is refused (`CROSS_ENGINE_QUERY`). No Direct Query engine is enabled in this release.
 - `bridge` (C7) on a bridge dataset. A many-to-many is two Ossie many-to-one relationships through it, `left` and `right`. `weight` allocates within `normalization_scope`, summing to `total` within `tolerance`.
 
 **Field (`element: field`).**

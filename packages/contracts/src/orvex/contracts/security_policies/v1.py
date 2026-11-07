@@ -159,6 +159,10 @@ class Limits(BaseModel):
     """
     The cap on values bound for another engine (ADR-0027 §6).
     """
+    policy_value_bytes: Annotated[int | None, Field(ge=1, le=16777216)] = None
+    """
+    The cap on the total encoded size, in bytes, of the values bound for another engine (ADR-0027 §6; P2-29). Above it, as above `policy_values`, the question is refused with `POLICY_NOT_SUPPORTED_ON_ENGINE` and no size is revealed.
+    """
 
 
 class SecurityPolicies(BaseModel):

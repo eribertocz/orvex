@@ -130,6 +130,7 @@ def test_reproducibility_is_derived_and_retained_is_not_guaranteed() -> None:
                 snapshot_id=None,
                 retained=False,
                 read_at="2026-11-02T12:00:00.000000Z",
+                connection="warehouse",
             )
         },
         "experimental_reader": {
@@ -286,6 +287,10 @@ def test_each_refusal_of_build_receipt() -> None:
         == "data_route"
     )
     assert refused(data=reads(route="existing_ducklake")) == "data_route"
+    live = {"route": "live", "snapshot_id": None, "retained": False}
+    assert (  # a live read names the connection it went through (P2-29)
+        refused(data=reads(**live, read_at="2026-11-02T12:00:00.000000Z")) == "data_route"
+    )
     assert refused(policies=[PolicyUse("zone_id IN (SELECT 1)", "row", "restricted")]) == "policy"
     assert refused(policies=[PolicyUse("own_zone_only", "row", "widened")]) == "policy"
     assert refused(execution=replace(EXECUTION, started_at="yesterday")) == "instant"

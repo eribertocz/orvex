@@ -607,6 +607,10 @@ class DatasetPayload(BaseModel):
     certification: Certification | None = None
     bridge: Bridge | None = None
     aggregate_table: AggregateTable | None = None
+    connection: Name | None = None
+    """
+    The connection in `connections.yaml` whose engine holds this dataset (Direct Query, ADR-0027 §3; P2-29). Absent: the managed lake. The engine is derived from the connection, never declared here.
+    """
 
 
 class FieldPayload(BaseModel):

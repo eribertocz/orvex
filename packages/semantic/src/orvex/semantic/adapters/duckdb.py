@@ -28,6 +28,7 @@ from orvex.semantic.catalog.building import _logical
 from orvex.semantic.compiler.catalog import LogicalType
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
+from orvex.semantic.engines import dataset_label
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.planning import ISSUED_PLAN, PlanError, SemanticPlan
@@ -130,10 +131,15 @@ def number_parameter(text: str) -> str:
 
 
 class _Writer:
-    def __init__(self, plan: SemanticPlan) -> None:
+    def __init__(
+        self, plan: SemanticPlan, values: Mapping[int, PolicyValues] | None = None
+    ) -> None:
         self.plan = plan
         self.model(plan.compiled, plan.placement, plan.rollup)
         self.dataset_alias.update({s.alias: s.dataset for s in plan.sources})
+        # Another engine (P2-29): every mapping subquery was evaluated on the managed lake
+        # first; its values, by the node (or the registration's rule), are bound here.
+        self.values = values
 
     def model(self, compiled: CompiledModel, placement: Any, rollup: Any) -> None:  # noqa: ANN401
         """What every statement of one model needs: its tables, its relationships, the row
@@ -456,6 +462,8 @@ class _Writer:
     def policy_condition(self, rule: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
         found = self.predicate_sql(rule.predicate, dataset, alias)
         registration = rule.registration
+        if registration is not None and self.values is not None:  # checked on the managed lake
+            return f"({self.flag(bool(self.resolved(rule).values))} AND {found})"
         if registration is not None:  # a deny-list holds only for registered callers
             key = str(registration.get("attribute", "user_id"))
             value = self.attribute_value(key, ("text", "integer"), "String")
@@ -467,7 +475,33 @@ class _Writer:
             found = f"({registered} AND {found})"
         return found
 
+    def resolved(self, key: object) -> PolicyValues:
+        found = self.values.get(id(key)) if self.values is not None else None
+        if found is None:  # every subquery is resolved before the adapter runs
+            raise PlanError("a mapping subquery reached another engine unresolved")
+        return found
+
+    def bound_subquery(self, node: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
+        """A mapping subquery as its values from the managed lake (P2-29; ADR-0027 §6), with
+        its exact meaning and one shape whatever the values: `IN` reads the values as one
+        bound list of the mapping column's type, so a `NULL` stays `NULL` (a `NOT IN` over a
+        set holding one keeps no row) and an empty list makes `IN` false and `NOT IN` true;
+        `EXISTS` is one bound boolean, whether any mapping row matched."""
+        found = self.resolved(node)
+        negated = "NOT " if node.negated else ""
+        if isinstance(node, policy_grammar.Exists):
+            return f"({negated}{self.flag(bool(found.values))})"
+        listed = self.bind("VARCHAR", json.dumps(list(found.values)))
+        values = f"(SELECT unnest(CAST(CAST({listed} AS JSON) AS {found.type}[])))"
+        field = self.operand_sql(node.field, dataset, alias)
+        return f"({field} {negated}IN {values})"
+
+    def flag(self, value: bool) -> str:
+        return f"CAST({self.bind('VARCHAR', 'true' if value else 'false')} AS BOOLEAN)"
+
     def mapping(self, table: str) -> str:
+        if self.values is not None:  # another engine never reads a managed-lake table
+            raise PlanError("another engine's statement read a managed-lake table")
         self.reads.append((table, None))
         return ".".join(quote(part) for part in table.split("."))
 
@@ -539,6 +573,8 @@ class _Writer:
             datatype = field_datatype(self.compiled, dataset, node.field.name)
             values = self.attribute_value(node.attribute.name, ("list",), datatype)
             return f"({field} {'NOT ' if node.negated else ''}IN {values})"
+        if isinstance(node, g.InSelect | g.Exists) and self.values is not None:
+            return self.bound_subquery(node, dataset, alias)
         if isinstance(node, g.InSelect | g.Exists):
             conditions = (
                 " AND ".join(self.condition_sql(c, dataset, alias) for c in node.conditions)
@@ -1246,11 +1282,133 @@ def _rounded(a: str, b: str, mode: str) -> str:
     return f"({quotient} + {step})"
 
 
-def compile_plan(plan: SemanticPlan) -> PhysicalQuery:
-    """The DuckDB query of a plan the planner made, or an internal error."""
+def compile_plan(
+    plan: SemanticPlan, values: Mapping[int, PolicyValues] | None = None
+) -> PhysicalQuery:
+    """The DuckDB query of a plan the planner made, or an internal error. `values`: for a
+    plan another engine runs in this dialect (P2-29), each mapping subquery's values from the
+    managed lake, bound in its place (`mapping_queries`)."""
     if plan.issued is not ISSUED_PLAN:
         raise PlanError("not a plan of the planner")
-    return _Writer(plan).statement()
+    return _Writer(plan, values).statement()
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyValues:
+    """A mapping subquery's values, as `store/v1` JSON text, and their DuckDB type."""
+
+    type: str
+    values: tuple[str | None, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MappingQuery:
+    """One mapping subquery of a plan's row policies, to evaluate on the managed lake before
+    another engine runs the plan (P2-29; ADR-0027 §6). `key` is the node's (or, for a
+    registration, the rule's) identity, as `compile_plan` looks it up; `exists`: only whether
+    a row matches is needed."""
+
+    key: int
+    policy: str
+    dataset: str
+    table: str
+    sql: str
+    parameters: tuple[Mapping[str, str | None], ...]
+    exists: bool
+
+
+def _target(writer: _Writer, restriction: Any, dataset: str) -> str:  # noqa: ANN401
+    """The dataset a restriction's predicate is written on: its own, or the end of its path."""
+    current = dataset
+    for name in reversed(restriction.path):
+        related = writer.relationships[name]
+        frm = sql.normalize(str(related["from"]))
+        current = sql.normalize(str(related["to" if frm == current else "from"]))
+    return current
+
+
+def mapping_queries(plan: SemanticPlan) -> list[MappingQuery]:
+    """Every mapping subquery and registration check of the row policies on the plan's
+    datasets, each a statement for the managed lake with every value bound. A subquery that
+    reads the row it restricts (a condition on a field) cannot be evaluated apart: it is
+    refused for another engine (`POLICY_NOT_SUPPORTED_ON_ENGINE`), never dropped."""
+    if plan.issued is not ISSUED_PLAN:
+        raise PlanError("not a plan of the planner")
+    writer = _Writer(plan)
+    placement = plan.placement
+    found: dict[int, MappingQuery] = {}
+    g = policy_grammar
+    for source in plan.sources:
+        for restriction in placement.of(source.dataset) if placement is not None else ():
+            rule = restriction.rule
+            if restriction.no_rows or rule.predicate is None:
+                continue
+            target = _target(writer, restriction, source.dataset)
+
+            def walk(
+                node: Any,  # noqa: ANN401
+                rule: Any = rule,  # noqa: ANN401
+                target: str = target,
+                dataset: str = dataset_label(plan.compiled, source.dataset),
+            ) -> None:
+                if isinstance(node, g.Not):
+                    walk(node.operand)
+                elif isinstance(node, g.Logical):
+                    for operand in node.operands:
+                        walk(operand)
+                elif isinstance(node, g.InSelect | g.Exists):
+                    if any(isinstance(c.value, g.Field) for c in node.conditions):
+                        raise SemanticError(
+                            "POLICY_NOT_SUPPORTED_ON_ENGINE",
+                            {
+                                "dataset": dataset,
+                                "policy": rule.name,
+                                "reason": "engine_unsupported",
+                            },
+                        )
+                    writer.parameters = []
+                    conditions = (
+                        " AND ".join(writer.condition_sql(c, target, "#x") for c in node.conditions)
+                        or "TRUE"
+                    )
+                    table = ".".join(quote(part) for part in node.table.split("."))
+                    column = (
+                        f"{quote('#m')}.{quote(node.column)}"
+                        if isinstance(node, g.InSelect)
+                        else "1"
+                    )
+                    text = f"SELECT {column} AS {quote('value')} FROM {table} AS {quote('#m')}"
+                    found[id(node)] = MappingQuery(
+                        id(node),
+                        rule.name,
+                        dataset,
+                        node.table,
+                        f"{text} WHERE {conditions}"
+                        + (" LIMIT 1" if isinstance(node, g.Exists) else ""),
+                        tuple(writer.parameters),
+                        isinstance(node, g.Exists),
+                    )
+
+            walk(rule.predicate)
+            registration = rule.registration
+            if registration is not None and id(rule) not in found:
+                writer.parameters = []
+                key = str(registration.get("attribute", "user_id"))
+                value = writer.attribute_value(key, ("text", "integer"), "String")
+                table = str(registration["table"])
+                column = f"{quote('#g')}.{quote(str(registration['key']))}"
+                found[id(rule)] = MappingQuery(
+                    id(rule),
+                    rule.name,
+                    dataset_label(plan.compiled, source.dataset),
+                    table,
+                    f"SELECT 1 AS {quote('value')} FROM "
+                    f"{'.'.join(quote(part) for part in table.split('.'))} AS {quote('#g')} "
+                    f"WHERE CAST({column} AS VARCHAR) = {value} LIMIT 1",
+                    tuple(writer.parameters),
+                    True,
+                )
+    return list(found.values())
 
 
 # Evidence checks (P2-26): one read-only statement per piece of evidence, on one snapshot.

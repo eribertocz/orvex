@@ -1442,6 +1442,10 @@
         },
         "retained": {
           "type": "boolean"
+        },
+        "connection": {
+          "description": "The connection a live read went through (P2-29). An external snapshot names its connection inside `snapshot`.",
+          "$ref": "#/$defs/Label"
         }
       },
       "allOf": [
@@ -1479,6 +1483,23 @@
           "then": {
             "required": [
               "snapshot"
+            ],
+            "properties": {
+              "connection": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "route": {
+                "const": "live"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "connection"
             ]
           }
         }

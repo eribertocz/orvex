@@ -154,4 +154,8 @@ export interface Limits {
 	 * The cap on values bound for another engine (ADR-0027 §6).
 	 */
 	policy_values?: number;
+	/**
+	 * The cap on the total encoded size, in bytes, of the values bound for another engine (ADR-0027 §6; P2-29). Above it, as above `policy_values`, the question is refused with `POLICY_NOT_SUPPORTED_ON_ENGINE` and no size is revealed.
+	 */
+	policy_value_bytes?: number;
 }

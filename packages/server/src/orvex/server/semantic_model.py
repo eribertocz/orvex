@@ -21,6 +21,7 @@ import yaml
 from orvex.contracts.store.v1 import TablesRequest, TablesResult
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
+from orvex.semantic.engines import ALL_MANAGED, EngineCatalog, Routing, route_model
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies import PolicyModel, read_policies
@@ -40,6 +41,7 @@ class SemanticModel:
     policies: PolicyModel | None  # none without `security.yaml`
     snapshot: int  # the one snapshot its tables and columns were read at
     file: str  # project-relative
+    routing: Routing = ALL_MANAGED  # every dataset's engine (P2-29)
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +128,13 @@ def _named_groups(text: bytes) -> set[str]:
     return found
 
 
+def engine_catalog(connections: Collection[str]) -> EngineCatalog:
+    """The project's Direct Query engines, from `connections.yaml` (P2-29): every connection
+    kind this release knows is a Route A source, extracted into the managed lake, so the
+    catalog lists none, and a dataset naming any connection is a problem of the model."""
+    return EngineCatalog({}, frozenset(connections))
+
+
 def load_semantic(
     folder: Path,
     lake: Lake,
@@ -135,11 +144,13 @@ def load_semantic(
     audience: Audience,
     groups: Collection[str] | None = None,
     experimental: bool = False,
+    connections: Collection[str] = (),
 ) -> Loaded:
     """The project's semantic model compiled against `lake` as of `snapshot`, or its problems,
     written for `audience`. `groups`: the project's groups as `access` knows them; none in local
     mode (Owner decision on #358), where the groups `security.yaml` names are taken as they
-    are and nobody belongs to any, so no exemption ever applies (fail closed)."""
+    are and nobody belongs to any, so no exemption ever applies (fail closed). `connections`:
+    the names in `connections.yaml`, which a dataset's `connection` must be one of (P2-29)."""
     files = model_files(folder)
     if not files:
         return Loaded(None)
@@ -178,6 +189,10 @@ def load_semantic(
         compiled = compile_model(model, catalog, vendor_names, experimental=experimental)
     except SemanticError as error:
         return Loaded(None, tuple(_problems(error, file, audience)))
+    try:
+        routing = route_model(compiled, engine_catalog(connections), file)
+    except SemanticError as error:
+        return Loaded(None, tuple(_problems(error, file, audience)))
     policies: PolicyModel | None = None
     if rules is not None:
         managed = {f"{t.schema_}.{t.table}": [c.name for c in t.columns] for t in tables.tables}
@@ -191,4 +206,4 @@ def load_semantic(
             )
         except SemanticError as error:
             return Loaded(None, tuple(_problems(error, POLICIES, audience)))
-    return Loaded(SemanticModel(compiled, policies, snapshot, file))
+    return Loaded(SemanticModel(compiled, policies, snapshot, file, routing))

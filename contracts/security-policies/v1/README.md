@@ -21,6 +21,7 @@ A quoted scalar is text. A plain `true` or `false` is a boolean, a plain decimal
 | `column_policies` | whether a field or metric is `visible`, `masked` or `hidden` for a caller |
 | `aggregate_thresholds` | minimum group sizes (#238 rule 10), representable now, executed later |
 | `limits.policy_values` | the cap on values bound for another engine (ADR-0027 §6), default 1,000 |
+| `limits.policy_value_bytes` | the cap on their total size as text, in bytes (P2-29), default 65,536; above either cap the question is refused with `POLICY_NOT_SUPPORTED_ON_ENGINE`, no size is revealed and the policy is never skipped |
 
 ### Row policies
 - **Members:** `name` (unique; `^[a-z][a-z0-9_]{0,62}$`), `dataset`, `kind` and:

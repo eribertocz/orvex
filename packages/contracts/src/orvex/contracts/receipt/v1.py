@@ -496,6 +496,10 @@ class DataRead(BaseModel):
     snapshot: Snapshot | None = None
     read_at: Instant | None = None
     retained: bool
+    connection: Label | None = None
+    """
+    The connection a live read went through (P2-29). An external snapshot names its connection inside `snapshot`.
+    """
 
 
 class Figures(BaseModel):
