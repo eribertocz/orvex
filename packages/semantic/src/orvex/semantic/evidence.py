@@ -542,16 +542,23 @@ class Ledger:
         record = self.records.get(key)
         return record is not None and record.status == "verified"
 
-    def uses(self, relied: Iterable[tuple[str, str, str]]) -> list[EvidenceUse]:
+    def uses(
+        self, relied: Iterable[tuple[str, str, str]], *, raise_violated: bool = True
+    ) -> list[EvidenceUse]:
         """The receipt's `evidence[]` for what a plan relies on, or `EVIDENCE_VIOLATED` for the
         first violated one, before anything is read. Evidence the model does not declare is
-        not evidence, and is not listed."""
+        not evidence, and is not listed. With `raise_violated` false (an explanation, #364),
+        a violated one is listed `violated` instead, and the caller decides."""
         found: dict[tuple[str, ...], EvidenceUse] = {}
         for key in relied:
             declaration = self.declared.get(key)
             if declaration is None:
                 continue
             record = self.records.get(key)
+            if record is not None and record.status == "violated" and not raise_violated:
+                use = EvidenceUse(declaration.dataset, declaration.kind, "violated")
+                found[(use.dataset, use.kind, use.status, "")] = use
+                continue
             if record is not None and record.status == "violated":
                 raise SemanticError(
                     "EVIDENCE_VIOLATED",

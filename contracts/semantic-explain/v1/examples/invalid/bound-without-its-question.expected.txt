@@ -1,0 +1,1 @@
+'query_fingerprint' is a required property

@@ -1,0 +1,126 @@
+{
+  "aggregate": {
+    "path": "/api/v1/semantic/query",
+    "body": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "total_kwh"
+        },
+        {
+          "metric": "total_readings"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "energy.period"
+        },
+        {
+          "member": "energy.tariff"
+        }
+      ],
+      "order": [
+        {
+          "by": "energy.period"
+        },
+        {
+          "by": "energy.tariff"
+        }
+      ]
+    },
+    "reference": "SELECT period, tariff, sum(kwh) AS total_kwh, sum(readings) AS total_readings FROM marts.zone_monthly_energy GROUP BY ALL ORDER BY period, tariff"
+  },
+  "aggregate_filtered": {
+    "path": "/api/v1/semantic/query",
+    "body": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "aggregate",
+      "metrics": [
+        {
+          "metric": "total_kwh"
+        }
+      ],
+      "group_by": [
+        {
+          "member": "energy.zone_id"
+        }
+      ],
+      "filters": [
+        {
+          "scope": "visual",
+          "member": "energy.tariff",
+          "predicate": {
+            "op": "in",
+            "values": [
+              {
+                "type": "text",
+                "value": "residential"
+              }
+            ]
+          }
+        }
+      ],
+      "order": [
+        {
+          "by": "energy.zone_id"
+        }
+      ]
+    },
+    "reference": "SELECT zone_id, sum(kwh) AS total_kwh FROM marts.zone_monthly_energy WHERE tariff = 'residential' GROUP BY ALL ORDER BY zone_id"
+  },
+  "detail_first_page": {
+    "path": "/api/v1/semantic/query",
+    "body": {
+      "kind": "semantic_query",
+      "version": 1,
+      "mode": "detail",
+      "fields": [
+        {
+          "member": "energy.zone_id"
+        },
+        {
+          "member": "energy.tariff"
+        },
+        {
+          "member": "energy.period"
+        },
+        {
+          "member": "energy.kwh"
+        }
+      ],
+      "order": [
+        {
+          "by": "energy.zone_id",
+          "direction": "asc"
+        },
+        {
+          "by": "energy.tariff",
+          "direction": "asc"
+        },
+        {
+          "by": "energy.period",
+          "direction": "asc"
+        }
+      ],
+      "page": {
+        "size": "1000"
+      }
+    },
+    "reference": "SELECT zone_id, tariff, period, kwh FROM marts.zone_monthly_energy ORDER BY zone_id, tariff, period LIMIT 1000"
+  },
+  "detail_next_page": {
+    "path": "/api/v1/semantic/query",
+    "next_page_of": "detail_first_page",
+    "reference": "SELECT zone_id, tariff, period, kwh FROM marts.zone_monthly_energy ORDER BY zone_id, tariff, period LIMIT 1000 OFFSET 1000"
+  },
+  "catalog": {
+    "path": "/api/v1/semantic/catalog"
+  },
+  "explain": {
+    "path": "/api/v1/semantic/explain",
+    "explains": "aggregate"
+  }
+}

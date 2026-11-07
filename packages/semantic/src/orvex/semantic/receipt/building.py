@@ -625,6 +625,38 @@ def _plan(plan: Mapping[str, Any], viewer: object) -> dict[str, Any]:
     return shown
 
 
+def explanation_view(
+    *,
+    question_document: Mapping[str, Any] | None,
+    obligations: Sequence[Obligation] | None,
+    plan_fingerprint: str | None,
+    evidence: Sequence[EvidenceUse] | None,
+    viewer: object,
+) -> dict[str, Any]:
+    """The parts of an explanation (#364) a receipt also has, built and restricted exactly as
+    `ReceiptRecord.view` builds and restricts them: the question for every viewer; the plan
+    and the evidence for a builder only, each entry the viewer may see. A part the explanation
+    did not reach is None and left out. `evidence` may hold `violated` entries, which only an
+    explanation lists."""
+    shown: dict[str, Any] = {}
+    if question_document is not None:
+        shown["question"] = question(question_document, viewer)
+    if not _is_builder(viewer):
+        return shown
+    if obligations is not None:
+        record = {"obligations": _unordered(_plain(list(obligations)))} | (
+            {"plan_fingerprint": plan_fingerprint} if plan_fingerprint else {}
+        )
+        shown["plan"] = _plan(record, viewer)
+    if evidence is not None:
+        shown["evidence"] = [
+            e
+            for e in _unordered(_plain(list(evidence)))
+            if _asks(viewer, "sees_dataset", e["dataset"])
+        ]
+    return shown
+
+
 def build_receipt(
     *,
     query_canonical: Mapping[str, Any],

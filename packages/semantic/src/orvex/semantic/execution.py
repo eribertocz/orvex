@@ -24,7 +24,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -121,17 +121,21 @@ def _instant(moment: datetime) -> str:
     return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-def _label(report: CorrectnessReport, key: Any) -> str:  # noqa: ANN401
+def _label(compiled: CompiledModel, key: Any) -> str:  # noqa: ANN401
     kind, dataset, name = key
     member = MemberId("field" if kind == "field" else "metric", dataset or None, name)
-    compiled: CompiledModel = report.compiled
     return compiled.require(member).parsed.label
 
 
 def receipt_question(report: CorrectnessReport) -> dict[str, Any]:
-    """The bound query as the receipt records it: members by their model labels, values in
-    the query's own form (`receipt/v1` `Question`)."""
-    canonical = report.bound.canonical
+    """The bound query as the receipt records it (`receipt/v1` `Question`)."""
+    return question_of(report.bound, report.compiled)
+
+
+def question_of(bound: BoundQuery, compiled: CompiledModel) -> dict[str, Any]:
+    """The bound query with members by their model labels and values in the query's own form,
+    as the receipt records it; an explanation shows it from the binding on (#364)."""
+    canonical = bound.canonical
 
     def value(entry: Any) -> dict[str, object]:  # noqa: ANN401
         kind, raw = entry
@@ -151,12 +155,12 @@ def receipt_question(report: CorrectnessReport) -> dict[str, Any]:
 
     roles = {
         sql.normalize(str(r["name"])): str(r["name"])
-        for r in report.compiled.ossie.document.get("relationships", ())
+        for r in cast(Sequence[Mapping[str, Any]], compiled.ossie.document.get("relationships", ()))
     }
     question: dict[str, Any] = {"mode": canonical["mode"]}
     if canonical["mode"] == "detail":  # the fields shown and the page asked (P2-24)
         question["fields"] = [
-            {"member": _label(report, m)} | ({"role": roles[role]} if role else {})
+            {"member": _label(compiled, m)} | ({"role": roles[role]} if role else {})
             for m, role in canonical["fields"]
         ]
         page = canonical["page"]
@@ -164,10 +168,10 @@ def receipt_question(report: CorrectnessReport) -> dict[str, Any]:
             {"after": page["after"]} if page.get("after") is not None else {}
         )
     else:
-        question["metrics"] = [{"metric": _label(report, m)} for m, _, _ in canonical["metrics"]]
+        question["metrics"] = [{"metric": _label(compiled, m)} for m, _, _ in canonical["metrics"]]
     group_by = []
     for member, role, bucket in canonical.get("group_by", ()):
-        entry: dict[str, Any] = {"member": _label(report, member)}
+        entry: dict[str, Any] = {"member": _label(compiled, member)}
         if role:
             entry["role"] = roles[role]
         if bucket:
@@ -177,7 +181,7 @@ def receipt_question(report: CorrectnessReport) -> dict[str, Any]:
         question["group_by"] = group_by
     filters = []
     for found in canonical["filters"]:
-        entry = {"scope": SCOPES[found["scope"]], "member": _label(report, found["member"])}
+        entry = {"scope": SCOPES[found["scope"]], "member": _label(compiled, found["member"])}
         if found["role"]:
             entry["role"] = roles[found["role"]]
         entry["predicate"] = predicate(found["predicate"])
@@ -185,7 +189,7 @@ def receipt_question(report: CorrectnessReport) -> dict[str, Any]:
     if filters:
         question["filters"] = filters
     order = [
-        {"by": _label(report, m), "direction": direction, "nulls": nulls}
+        {"by": _label(compiled, m), "direction": direction, "nulls": nulls}
         for m, direction, nulls in canonical["order"]
     ]
     if order:
@@ -525,16 +529,46 @@ def _written(compiled: CompiledModel, dataset: str) -> str:
     return dataset
 
 
-def answer(
+@dataclass(frozen=True)
+class Prepared:
+    """Everything decided before the one read: the bound question, its analysis, the plan,
+    its statement, the evidence relied on, and the engine on the snapshot read."""
+
+    report: CorrectnessReport
+    plan: SemanticPlan
+    physical: PhysicalQuery
+    evidence: Mapping[str, str]
+    uses: list[EvidenceUse]
+    engine: Engine
+    binding: CursorBinding | None
+
+
+@dataclass
+class Progress:
+    """How far a preparation went: what `explain` reports when it stops (#364)."""
+
+    stage: str = "received"
+    bound: BoundQuery | None = None
+    report: CorrectnessReport | None = None
+    engine: Engine | None = None
+    ledger: Ledger | None = None
+
+
+def prepare(
     query: str | bytes,
     compiled: CompiledModel,
     policies: PolicyModel,
     context: Mapping[str, Any],
     engine: Engine,
-) -> Answer:
-    """The answer to `query` for the caller `context` describes, or a `SemanticError`. Policies
-    come first, by the same calls every path uses (P2-08 to P2-11); a refused question reads
-    nothing."""
+    progress: Progress | None = None,
+    *,
+    raise_violated: bool = True,
+) -> Prepared:
+    """Every step before the read, with no data read: binding, `analyze`, the cursor's
+    snapshot, `plan`, the adapter, discharge (C9) and the evidence relied on. Policies come
+    first, by the same calls every path uses (P2-08 to P2-11). `progress`, when given, records
+    each stage reached; `raise_violated` false lists violated evidence instead of refusing."""
+    progress = progress if progress is not None else Progress()
     caller = read_caller(context)
 
     def hidden(member: MemberId) -> bool:
@@ -543,7 +577,9 @@ def answer(
     bound: BoundQuery = bind_query(
         compiled, query, instant=engine.instant, limits=engine.limits, hidden=hidden
     )
+    progress.stage, progress.bound = "bound", bound
     report = analyze(bound, compiled, policies, context)
+    progress.stage, progress.report = "analyzed", report
     binding: CursorBinding | None = None
     start: tuple[Any, ...] | None = None
     if bound.canonical["mode"] == "detail":
@@ -565,6 +601,7 @@ def answer(
             engine = replace(engine, snapshot=pinned)
             # A float as its shortest exact text: bound as text and cast back, never rounded.
             start = tuple(repr(v) if isinstance(v, float) else v for v in state.position)
+    progress.engine = engine
     snapshot = engine.snapshot.get("id")
     ledger = Ledger(  # the records of the snapshot read, for the declarations as they are
         compiled,
@@ -572,6 +609,7 @@ def answer(
         snapshot if isinstance(snapshot, int) and not isinstance(snapshot, bool) else -1,
         engine.unchanged,
     )
+    progress.ledger = ledger
     rollup = next(  # the first proven table verified consistent on this snapshot (C8)
         (
             c.name
@@ -583,5 +621,29 @@ def answer(
     logical = plan(report, start, rollup)
     physical = compile_plan(logical)
     evidence = verify_physical(logical, physical)  # checked again, and in the statement (C9)
-    uses = ledger.uses(relied(logical))  # violated evidence: refused before any read (P2-26)
-    return _execute(physical, engine, report, logical, context, evidence, binding, uses)
+    # Violated evidence: refused before any read (P2-26), or listed for an explanation.
+    uses = ledger.uses(relied(logical), raise_violated=raise_violated)
+    progress.stage = "planned"
+    return Prepared(report, logical, physical, evidence, uses, engine, binding)
+
+
+def answer(
+    query: str | bytes,
+    compiled: CompiledModel,
+    policies: PolicyModel,
+    context: Mapping[str, Any],
+    engine: Engine,
+) -> Answer:
+    """The answer to `query` for the caller `context` describes, or a `SemanticError`. Every
+    step before the read is `prepare`'s; a refused question reads nothing."""
+    ready = prepare(query, compiled, policies, context, engine)
+    return _execute(
+        ready.physical,
+        ready.engine,
+        ready.report,
+        ready.plan,
+        context,
+        ready.evidence,
+        ready.binding,
+        ready.uses,
+    )

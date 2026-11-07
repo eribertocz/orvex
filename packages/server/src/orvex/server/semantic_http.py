@@ -34,6 +34,7 @@ from orvex.access.local import LocalContextProvider, LocalRequest
 from orvex.semantic.catalog.building import catalog_for_context
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import Answer, Engine, answer
+from orvex.semantic.explanation import explain
 from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.semantic.query.binding import Limits as QueryLimits
 from orvex.semantic.receipt import Key
@@ -247,44 +248,87 @@ def _canonical(document: Mapping[str, Any]) -> bytes:
     return canonicalize(dict(document))
 
 
+def _no_read(request: object) -> pa.RecordBatchReader:
+    """An explanation's read: never called, and failing if it ever were (#364)."""
+    raise ExplanationRead
+
+
+class ExplanationRead(RuntimeError):
+    """An explanation tried to read data: a defect, answered as an internal error."""
+
+
+@dataclass(frozen=True)
+class _Question:
+    """One request's lake, snapshot, model, policies, caller and engine."""
+
+    model: semantic_model.SemanticModel
+    policies: PolicyModel
+    context: dict[str, Any]
+    engine: Engine
+
+
+def _question(
+    semantic: Semantic,
+    lake: Lake,
+    body: bytes,
+    request: LocalRequest,
+    read: Callable[[Any], pa.RecordBatchReader],
+) -> _Question:
+    """Everything a question needs on the one snapshot it uses: the current one, or the one
+    a next page's cursor pins (Owner precision 2)."""
+    settings = semantic.settings
+    snapshot = _read_snapshot(lake, settings, _after(body))
+    model = _loaded(semantic, lake, snapshot)
+    policies = _policies(model)
+    context = dict(semantic.context(request, policies, snapshot))
+    pinned = _snapshot_document(lake, snapshot)
+    if pinned is None:  # expired between the two calls: never another snapshot
+        raise SemanticError("PAGE_CURSOR_INVALID", {"reason": "expired"})
+    evidence, unchanged = evidence_records.engine_evidence(lake)
+
+    def kept(data_version: str) -> Mapping[str, object] | None:
+        # Only the snapshot this request compiled at: a cursor of any other is refused.
+        if data_version != str(snapshot):
+            return None
+        return _snapshot_document(lake, snapshot)
+
+    engine = Engine(
+        read=read,
+        encoder=arrow_to_json,
+        snapshot=pinned,
+        engine_version=settings.engine_version,
+        result_key=settings.result_key,
+        seal_key=settings.seal_key,
+        instant=settings.now(),
+        limits=settings.limits,
+        timeout_ms=settings.timeout_ms,
+        cursors=settings.cursors,
+        pinned=kept,
+        evidence=evidence,
+        unchanged=unchanged,
+        statistics=lake.statistics,
+    )
+    return _Question(model, policies, context, engine)
+
+
 def ask(semantic: Semantic, body: bytes, request: LocalRequest) -> Asked:
     """The answer to the `semantic-query` v1 document `body` for the caller of `request`."""
-    settings = semantic.settings
     with semantic.source.session() as lake:
-        snapshot = _read_snapshot(lake, settings, _after(body))
-        model = _loaded(semantic, lake, snapshot)
-        policies = _policies(model)
-        context = dict(semantic.context(request, policies, snapshot))
-        pinned = _snapshot_document(lake, snapshot)
-        if pinned is None:  # expired between the two calls: never another snapshot
-            raise SemanticError("PAGE_CURSOR_INVALID", {"reason": "expired"})
-        evidence, unchanged = evidence_records.engine_evidence(lake)
-
-        def kept(data_version: str) -> Mapping[str, object] | None:
-            # Only the snapshot this request compiled at: a cursor of any other is refused.
-            if data_version != str(snapshot):
-                return None
-            return _snapshot_document(lake, snapshot)
-
-        engine = Engine(
-            read=lake.read,
-            encoder=arrow_to_json,
-            snapshot=pinned,
-            engine_version=settings.engine_version,
-            result_key=settings.result_key,
-            seal_key=settings.seal_key,
-            instant=settings.now(),
-            limits=settings.limits,
-            timeout_ms=settings.timeout_ms,
-            cursors=settings.cursors,
-            pinned=kept,
-            evidence=evidence,
-            unchanged=unchanged,
-            statistics=lake.statistics,
-        )
-        found = answer(body, model.compiled, policies, context, engine)
-        viewer = CallerViewer(model.compiled, policies, context)
+        question = _question(semantic, lake, body, request, lake.read)
+        compiled = question.model.compiled
+        found = answer(body, compiled, question.policies, question.context, question.engine)
+        viewer = CallerViewer(compiled, question.policies, question.context)
         return Asked(found, found.receipt.view(viewer))
+
+
+def explanation(semantic: Semantic, body: bytes, request: LocalRequest) -> dict[str, Any]:
+    """The `semantic-explain` v1 document of `body` for the caller of `request` (#364): the
+    same snapshot, model, policies and caller as `ask`, and a read that is never called."""
+    with semantic.source.session() as lake:
+        question = _question(semantic, lake, body, request, _no_read)
+        compiled = question.model.compiled
+        viewer = CallerViewer(compiled, question.policies, question.context)
+        return explain(body, compiled, question.policies, question.context, question.engine, viewer)
 
 
 def catalog(semantic: Semantic, request: LocalRequest) -> dict[str, Any]:

@@ -1,0 +1,16 @@
+{
+  "kind": "semantic_explain",
+  "version": 1,
+  "model_fingerprint": "sha256:4bc1b6e00959fa8f037c2ce1e3df1c60c1dae13825d0f29f0f0c3d81f159fa3d",
+  "snapshot": {
+    "id": 3,
+    "committed_at": "2026-11-07T15:48:37.723031Z"
+  },
+  "stage": "planned",
+  "query_fingerprint": "sha256:f7d0b9bbe9a436e06e76e007aabb7e1abe48510b365f3770423655cbcb028da9",
+  "question": {
+    "mode": "aggregate",
+    "withheld": true
+  },
+  "outcome": "planned"
+}

@@ -84,6 +84,7 @@ def unchanged(lake: Lake) -> Callable[[EvidenceRecord, int], bool]:
                         "tables": list(record.tables),
                         "since": record.snapshot,
                         "snapshot": snapshot,
+                        "count_removed": False,  # the catalog alone: no row is read (#364)
                     }
                 )
             )

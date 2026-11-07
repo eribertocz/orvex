@@ -1,0 +1,73 @@
+{
+  "kind": "semantic_explain",
+  "version": 1,
+  "model_fingerprint": "sha256:ac7bbb95db746398612591b63d4baf515655e4ab60eafb83aa803f6124233428",
+  "snapshot": {
+    "id": 3,
+    "committed_at": "2026-11-07T15:48:40.482437Z"
+  },
+  "stage": "planned",
+  "query_fingerprint": "sha256:cf901419fd05abe91c6ae69b97dec641c8990f03ea0c96760d4bbed8ac5f2942",
+  "question": {
+    "mode": "detail",
+    "page": {
+      "size": "10"
+    },
+    "fields": [
+      {
+        "member": "readings.reading_id"
+      },
+      {
+        "member": "readings.kwh"
+      }
+    ],
+    "order": [
+      {
+        "by": "readings.reading_id",
+        "direction": "asc",
+        "nulls": "last"
+      }
+    ]
+  },
+  "plan": {
+    "plan_fingerprint": "sha256:08db59538eea70240574091c20380f11bae8c755f321a1cb8bf37cd49a49ae5c",
+    "obligations": [
+      {
+        "rule": "C1",
+        "obligation": "C1.rows:readings",
+        "evidence": "rows:readings"
+      }
+    ]
+  },
+  "evidence": [
+    {
+      "dataset": "readings",
+      "kind": "unique",
+      "status": "broken"
+    }
+  ],
+  "materialization": {
+    "reason": "no_eligible_table"
+  },
+  "estimate": {
+    "rows_scanned": 5
+  },
+  "outcome": "refused",
+  "refusal": {
+    "kind": "semantic_error",
+    "code": "EVIDENCE_VIOLATED",
+    "severity": "error",
+    "category": "correctness",
+    "audience": "builder",
+    "message": "Los datos de readings no cumplen lo declarado (unique) en readings.reading_id: 1 casos.",
+    "locale": "es",
+    "details": {
+      "dataset": "readings",
+      "evidence": "unique",
+      "fields": [
+        "readings.reading_id"
+      ],
+      "violations": "1"
+    }
+  }
+}

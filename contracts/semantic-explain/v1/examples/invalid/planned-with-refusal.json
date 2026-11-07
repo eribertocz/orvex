@@ -1,0 +1,52 @@
+{
+  "kind": "semantic_explain",
+  "version": 1,
+  "model_fingerprint": "sha256:4bc1b6e00959fa8f037c2ce1e3df1c60c1dae13825d0f29f0f0c3d81f159fa3d",
+  "snapshot": {
+    "id": 3,
+    "committed_at": "2026-11-07T15:48:37.723031Z"
+  },
+  "stage": "planned",
+  "query_fingerprint": "sha256:f7d0b9bbe9a436e06e76e007aabb7e1abe48510b365f3770423655cbcb028da9",
+  "question": {
+    "mode": "aggregate",
+    "metrics": [
+      {
+        "metric": "total_kwh"
+      }
+    ],
+    "group_by": [
+      {
+        "member": "readings.tariff"
+      }
+    ]
+  },
+  "plan": {
+    "plan_fingerprint": "sha256:4206f4251413af4ffb845a4f426623b1975297060a76317c38d9f3b99f48750b",
+    "obligations": [
+      {
+        "rule": "C1",
+        "obligation": "C1.aggregate:total_kwh",
+        "evidence": "aggregate:readings"
+      }
+    ]
+  },
+  "evidence": [],
+  "materialization": {
+    "reason": "no_eligible_table"
+  },
+  "outcome": "planned",
+  "refusal": {
+    "kind": "semantic_error",
+    "code": "QUERY_BUDGET_EXCEEDED",
+    "severity": "error",
+    "category": "budget",
+    "audience": "builder",
+    "message": "La consulta supera el límite result_rows (10000); agregue un filtro o un nivel más general.",
+    "locale": "es",
+    "details": {
+      "budget": "result_rows",
+      "limit": "10000"
+    }
+  }
+}

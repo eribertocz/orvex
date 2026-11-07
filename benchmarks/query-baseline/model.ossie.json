@@ -1,0 +1,61 @@
+{
+  "version": "0.2.0.dev0",
+  "name": "query_baseline",
+  "datasets": [
+    {
+      "name": "energy",
+      "source": "marts.zone_monthly_energy",
+      "primary_key": [
+        "zone_id",
+        "tariff",
+        "period"
+      ],
+      "fields": [
+        {
+          "name": "zone_id",
+          "expression": {
+            "sql": "zone_id"
+          }
+        },
+        {
+          "name": "tariff",
+          "expression": {
+            "sql": "tariff"
+          }
+        },
+        {
+          "name": "period",
+          "expression": {
+            "sql": "period"
+          }
+        },
+        {
+          "name": "kwh",
+          "expression": {
+            "sql": "kwh"
+          }
+        },
+        {
+          "name": "readings",
+          "expression": {
+            "sql": "readings"
+          }
+        }
+      ]
+    }
+  ],
+  "metrics": [
+    {
+      "name": "total_kwh",
+      "expression": {
+        "sql": "SUM(energy.kwh)"
+      }
+    },
+    {
+      "name": "total_readings",
+      "expression": {
+        "sql": "SUM(energy.readings)"
+      }
+    }
+  ]
+}

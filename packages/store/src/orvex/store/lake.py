@@ -2237,8 +2237,9 @@ class Lake:
                         "`since` is after `snapshot`.",
                         {"since": str(request.since), "snapshot": str(request.snapshot)},
                     )
+                count = request.count_removed is not False
                 tables = [
-                    self._table_changes(name.root, request.since, request.snapshot, cursor)
+                    self._table_changes(name.root, request.since, request.snapshot, cursor, count)
                     for name in request.tables
                 ]
             except duckdb.Error as error:
@@ -2289,13 +2290,19 @@ class Lake:
         return str(row[0]).split(chr(31)) if row is not None and row[0] is not None else []
 
     def _table_changes(
-        self, name: str, since: int, snapshot: int, cursor: duckdb.DuckDBPyConnection
+        self,
+        name: str,
+        since: int,
+        snapshot: int,
+        cursor: duckdb.DuckDBPyConnection,
+        count: bool = True,
     ) -> dict[str, Any]:
         """`changed` from the change history (rows, columns, the table's identity); and
         `removed_rows` by value: the rows of the table at `since`, as a multiset, less the rows
         it has at `snapshot`, read by DuckDB at both versions. Exact whatever happened between:
         a merge's unchanged rows, a row added then deleted, a table rebuilt with every row it
-        had. Absent when a column it had at `since` is gone at `snapshot`."""
+        had. Absent when a column it had at `since` is gone at `snapshot`. Without `count`, the
+        catalog alone is read: `changed` only, and no row of the table (#364)."""
         schema, _, table = name.rpartition(".")
         schema = schema or "main"
         before = self._table_id(schema, table, since, cursor)
@@ -2306,6 +2313,17 @@ class Lake:
                 f"{name!r} is not a lake table at snapshot {since} or {snapshot}.",
                 {"table": name, "snapshot": str(snapshot)},
             )
+        if not count:
+            changed = (
+                before is None
+                or after is None
+                or before != after
+                or (
+                    since != snapshot
+                    and self._touched(schema, table, after, since, snapshot, cursor)
+                )
+            )
+            return {"table": name, "changed": changed}
         if before is None:  # created since: it had no rows to remove
             return {"table": name, "changed": True, "removed_rows": 0}
         relation = f"{LAKE}.{_identifier(schema)}.{_identifier(table)}"
