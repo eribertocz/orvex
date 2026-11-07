@@ -36,7 +36,7 @@ from orvex.server.instance import (
     instance_directory,
     open_project,
 )
-from orvex.server.local_access import CODE_PARAMETER, new_access, serving
+from orvex.server.local_access import new_access, serving
 from orvex.server.logs import configure_logging
 from orvex.server.maintenance import history, maintain
 from orvex.server.scheduler import STOP_GRACE_SECONDS, schedule
@@ -285,13 +285,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         server = uvicorn.Server(server_config(port, versions, web_build_directory(), local))
         serve_folder = instance_directory(identity) / "serve"
         with serving(serve_folder, port, access, url) as private, stopping(server) as received:
-            print(f"{identity.name}: {project.path} -> {url}", flush=True)
-            print(f"API token (Authorization: Bearer): {private.token}", flush=True)
-            if arguments.no_browser:
-                print(f"One-time browser link: {private.link}", flush=True)
-            else:
-                link = f"{url}?{CODE_PARAMETER}={access.code}"
-                threading.Timer(1.0, webbrowser.open, args=(link,)).start()
+            # One write: a reader that stops after the first line does not break the server.
+            print(
+                f"{identity.name}: {project.path} -> {url}\n"
+                f"  open in the browser (once): {private.launcher}\n"
+                f"  API token for scripts (Authorization: Bearer): {private.token}",
+                flush=True,
+            )
+            if not arguments.no_browser:
+                # A file path, never the code itself: other users can read a command line.
+                launcher = private.launcher.as_uri()
+                threading.Timer(1.0, webbrowser.open, args=(launcher,)).start()
             server.run()
     # The in-memory project folder is gone; now end as the signal asked, as uvicorn would.
     if received:

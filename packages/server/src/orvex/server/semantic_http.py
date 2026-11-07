@@ -38,6 +38,7 @@ from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.semantic.query.binding import Limits as QueryLimits
 from orvex.semantic.receipt import Key
 from orvex.semantic.receipt.viewer import CallerViewer
+from orvex.semantic.result import SemanticResult
 from orvex.semantic.result.cursors import SealedForm
 from orvex.server import evidence_records, lake_place, semantic_model
 from orvex.server.identity import Identity
@@ -227,14 +228,17 @@ class Asked:
         return {"result": result, "receipt": self.receipt}
 
     def arrow_table(self) -> pa.Table:
-        """The result's Arrow form, with the JSON envelope and the receipt view added to the
-        schema metadata: the same bytes the JSON answer holds, rows apart."""
-        table = self.found.result.arrow()
-        envelope = self.found.result.envelope()
-        metadata = dict(table.schema.metadata or {})
-        metadata[ENVELOPE_KEY] = _canonical(envelope)
-        metadata[RECEIPT_KEY] = _canonical(self.receipt)
-        return table.replace_schema_metadata(metadata)
+        return arrow_answer(self.found.result, self.receipt)
+
+
+def arrow_answer(result: SemanticResult, receipt: Mapping[str, Any]) -> pa.Table:
+    """The result's Arrow form, with the JSON envelope and the receipt view added to the schema
+    metadata: the same bytes the JSON answer holds, rows apart."""
+    table = result.arrow()
+    metadata = dict(table.schema.metadata or {})
+    metadata[ENVELOPE_KEY] = _canonical(result.envelope())
+    metadata[RECEIPT_KEY] = _canonical(receipt)
+    return table.replace_schema_metadata(metadata)
 
 
 def _canonical(document: Mapping[str, Any]) -> bytes:

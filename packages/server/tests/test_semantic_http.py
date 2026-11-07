@@ -249,16 +249,17 @@ def test_every_credential_is_revoked_and_its_files_removed_when_the_server_stops
 ) -> None:
     access = new_access(SLUG, PORT)
     with serving(tmp_path / "serve", PORT, access, f"{BASE}/") as files:
-        for path in (files.token, files.link):
+        for path in (files.token, files.launcher):
             assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
         assert files.token.read_text() == access.bearer
-        link = files.link.read_text().strip()
-        assert link == f"{BASE}/?code={access.code}"
+        page = files.launcher.read_text()
+        assert f"{BASE}/?code={access.code}" in page
+        assert 'content="no-referrer"' in page
         session = access.exchange(access.code)
         assert session is not None
         assert access.accepts({}, {access.cookie: session})
     assert not files.token.exists()
-    assert not files.link.exists()
+    assert not files.launcher.exists()
     assert not access.accepts({}, {access.cookie: session})
     assert not access.accepts({"authorization": f"Bearer {access.bearer}"}, {})
 
@@ -653,3 +654,83 @@ def test_no_http_path_reaches_the_cli_s_builder_grant() -> None:
         for name in ("commands.evidence", "_check_semantic", "_evidence_after_run", "validate("):
             assert name not in source, (module.__name__, name)
     assert "LocalContextProvider" in inspect.getsource(semantic_http)
+
+
+def test_the_exchange_never_redirects_to_another_host() -> None:
+    semantic, http = gated()
+    response = http.get(f"//evil.example/?code={semantic.access.code}", follow_redirects=False)
+    if response.status_code == 303:
+        assert response.headers["location"].startswith("/")
+        assert not response.headers["location"].startswith("//")
+
+
+def test_a_store_failure_is_a_500_with_a_request_id_only() -> None:
+    from orvex.store.errors import StoreError
+
+    class Failing:
+        def session(self) -> Any:  # noqa: ANN401
+            raise StoreError("STORE_IO", "disk /secret/path is gone", {"path": "/secret/path"})
+
+        def model(self, lake: Any, snapshot: int) -> Any:  # noqa: ANN401
+            raise AssertionError
+
+    semantic = LocalSemantic(
+        "project-1",
+        new_access(SLUG, PORT),
+        semantic_http.Semantic(
+            Failing(), semantic_http.local_context, semantic_http.session_settings()
+        ),
+    )
+    http = client(semantic)
+    for response in (
+        ask(http, semantic, aggregate()),
+        http.get("/api/v1/semantic/catalog", headers=bearer(semantic)),
+    ):
+        assert response.status_code == 500
+        error = response.json()["error"]
+        assert error["code"] == "INTERNAL_ERROR"
+        assert error["details"] == []
+        assert "secret" not in response.text
+        assert error["request_id"] == response.headers["x-request-id"]
+
+
+def test_cell_states_and_the_others_row_are_the_same_in_arrow_and_json() -> None:
+    """Owner precision 3 on a result with an "Others" row, a state in a column that also holds
+    a real `NULL`, and a state elsewhere."""
+    from orvex.semantic.result.building import CellState
+
+    from conformance.runners.corpus_http import equivalent
+    from tests.support.semantic_results import aggregate as built
+    from tests.support.semantic_results import decimal, spec, table, text
+
+    data = table(
+        {
+            "region": pa.array(["north", None, None]),
+            "revenue": pa.array([1250, None, 310], pa.decimal128(18, 2)),
+            "growth": pa.array([0.5, None, None], pa.float64()),
+        }
+    )
+    columns = [
+        text("region", role="dimension"),
+        decimal("revenue", 18, 2, role="metric", member={"name": "revenue"}),
+        spec("growth", "DOUBLE", {"family": "Float"}, role="metric", member={"name": "growth"}),
+    ]
+    states = [CellState(2, 0, "others"), CellState(2, 2, "undefined_at_total")]
+    result = built(data, columns, states=states, others_row=2)
+    receipt = {"kind": "receipt"}
+    document = {"result": json.loads(result.wire(arrow_to_json)), "receipt": receipt}
+    sink = pa.BufferOutputStream()
+    answer = semantic_http.arrow_answer(result, receipt)
+    with pa.ipc.new_stream(sink, answer.schema) as writer:
+        writer.write_table(answer)
+    arrived = pa.ipc.open_stream(sink.getvalue()).read_all()
+    equivalent(document, arrived)
+    assert_equivalent(document, arrived)
+    rows = document["result"]["rows"]
+    assert rows[1] == [None, None, None]  # real NULLs, no state
+    assert rows[2][0] == {"state": "others"}
+    assert rows[2][2] == {"state": "undefined_at_total"}
+    assert arrived.column("region").to_pylist()[2] is None
+    assert document["result"]["others_row"] == 2
+    assert json.loads(arrived.schema.metadata[semantic_http.ENVELOPE_KEY])["others_row"] == 2
+    assert str(arrived.schema.field("revenue").type) == "decimal128(18, 2)"

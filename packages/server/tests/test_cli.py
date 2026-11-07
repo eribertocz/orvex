@@ -354,3 +354,45 @@ def test_the_stop_grace_bounds_are_accepted(
     monkeypatch.setattr(cli, "schedule", schedule)
     assert main(["schedule", str(tmp_path), f"--stop-grace={value}"]) == 0
     assert seen == [float(value)]
+
+
+def test_the_browser_gets_the_launcher_s_path_never_the_bootstrap_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """P2-27a (#363): another user can read a command line (`ps`), so the browser is started
+    with the owner-only launcher's path; the code is only inside that file, and nothing secret
+    is printed."""
+    import uvicorn
+
+    monkeypatch.setenv(home_variable(IDENTITY), str(tmp_path / "instance"))
+    opened: list[object] = []
+    seen: dict[str, str] = {}
+
+    class Timer:
+        def __init__(self, delay: float, function: object, args: tuple[object, ...]) -> None:
+            opened.extend(args)
+
+        def start(self) -> None:
+            pass
+
+    def run(server: uvicorn.Server) -> None:  # while serving: the launcher and its code exist
+        (target,) = opened
+        launcher = Path(str(target).removeprefix("file://"))
+        seen["page"] = launcher.read_text()
+        seen["mode"] = oct(launcher.stat().st_mode & 0o777)
+
+    monkeypatch.setattr(threading, "Timer", Timer)
+    monkeypatch.setattr(uvicorn.Server, "run", run)
+    folder = tmp_path / "p"
+    folder.mkdir()
+    assert main([str(folder), "--port", str(free_port(17_000))]) == 0
+    (target,) = opened
+    assert isinstance(target, str)
+    assert target.startswith("file://")
+    assert "code=" not in target
+    assert "code=" in seen["page"]
+    assert seen["mode"] == "0o600"
+    printed = capsys.readouterr().out
+    code = seen["page"].split("code=", 1)[1][:20]
+    assert code not in printed
+    assert not Path(target.removeprefix("file://")).exists()  # removed at shutdown

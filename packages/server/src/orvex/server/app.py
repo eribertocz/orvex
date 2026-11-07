@@ -240,7 +240,9 @@ def create_app(
             )
         else:
             kept = [(k, v) for k, v in request.query_params.multi_items() if k != CODE_PARAMETER]
-            response = RedirectResponse(path + ("?" + urlencode(kept) if kept else ""), 303)
+            # Always a path of this server: `//host/...` would name another one.
+            local_path = "/" + path.lstrip("/")
+            response = RedirectResponse(local_path + ("?" + urlencode(kept) if kept else ""), 303)
             response.set_cookie(
                 local.access.cookie, session, httponly=True, samesite="strict", path="/"
             )
