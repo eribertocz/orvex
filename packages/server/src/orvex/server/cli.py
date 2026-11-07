@@ -285,11 +285,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         server = uvicorn.Server(server_config(port, versions, web_build_directory(), local))
         serve_folder = instance_directory(identity) / "serve"
         with serving(serve_folder, port, access, url) as private, stopping(server) as received:
-            # One write: a reader that stops after the first line does not break the server.
+            # One write, its newline included: a reader that closes after the first line must not
+            # break the server with a later write (BrokenPipeError).
             print(
                 f"{identity.name}: {project.path} -> {url}\n"
                 f"  open in the browser (once): {private.launcher}\n"
-                f"  API token for scripts (Authorization: Bearer): {private.token}",
+                f"  API token for scripts (Authorization: Bearer): {private.token}\n",
+                end="",
                 flush=True,
             )
             if not arguments.no_browser:

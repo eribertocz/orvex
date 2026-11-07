@@ -657,11 +657,38 @@ def test_no_http_path_reaches_the_cli_s_builder_grant() -> None:
 
 
 def test_the_exchange_never_redirects_to_another_host() -> None:
-    semantic, http = gated()
-    response = http.get(f"//evil.example/?code={semantic.access.code}", follow_redirects=False)
-    if response.status_code == 303:
-        assert response.headers["location"].startswith("/")
-        assert not response.headers["location"].startswith("//")
+    """A raw request whose path is `//evil.example/` (a test client would read it as a host)."""
+    import asyncio
+    from collections.abc import MutableMapping
+
+    semantic, _ = gated()
+    app = create_app(VERSIONS, None, PORT, semantic)
+    sent: list[MutableMapping[str, Any]] = []
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "//evil.example/",
+        "raw_path": b"//evil.example/",
+        "query_string": f"code={semantic.access.code}".encode(),
+        "headers": [(b"host", f"127.0.0.1:{PORT}".encode())],
+        "client": ("127.0.0.1", 50000),
+        "server": ("127.0.0.1", PORT),
+    }
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: MutableMapping[str, Any]) -> None:
+        sent.append(message)
+
+    asyncio.run(app(scope, receive, send))
+    start = sent[0]
+    assert start["status"] == 303
+    location = dict(start["headers"])[b"location"].decode()
+    assert location == "/evil.example/"
 
 
 def test_a_store_failure_is_a_500_with_a_request_id_only() -> None:
