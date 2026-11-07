@@ -10,7 +10,7 @@ from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -81,7 +81,8 @@ def table(
     }
 
 
-def model(*tables: Document) -> CompiledModel:
+def model(*tables: Document, schema: str | None = None) -> CompiledModel:
+    """The model; with `schema`, every dataset's source in that lake schema (#359)."""
     ratio = {
         "element": "metric",
         "additivity": "recomputable",
@@ -123,8 +124,15 @@ def model(*tables: Document) -> CompiledModel:
         ],
         "custom_extensions": [extension({"element": "model", "default_time_zone": "UTC"})],
     }
+
+    def placed(name: str) -> str:
+        return name if schema is None else f"{schema}.{name}"
+
+    document["datasets"] = [  # copies: a shared table stays as written
+        d | {"source": placed(str(d["source"]))} for d in cast(list[Document], document["datasets"])
+    ]
     loaded = read(json.dumps(document).encode(), "semantic/rollups.ossie.json", VENDORS)
-    catalog = {t: CATALOG[t] for t in ["sales", *(d["name"] for d in tables)]}
+    catalog = {placed(t): CATALOG[t] for t in ["sales", *(d["name"] for d in tables)]}
     return compile_model(loaded, catalog, VENDORS)
 
 
@@ -203,6 +211,7 @@ def run(
     verified: bool = True,
     catalog: dict[str, dict[str, SourceColumn]] | None = None,
     mappings: dict[str, list[tuple[str, ...]]] | None = None,
+    schema: str | None = None,
     **more: Any,  # noqa: ANN401
 ) -> Any:  # noqa: ANN401
     tables = catalog or CATALOG
@@ -219,21 +228,22 @@ def run(
             ]
             path.write_text("\n".join(lines) + "\n", "utf-8")
             paths.append(path)
-        with ce.case_lake(paths, {n: tables[n] for n in names}) as lake:
+        placed = {(n if schema is None else f"{schema}.{n}"): tables[n] for n in names}
+        with ce.case_lake(paths, placed, schema) as lake:
             for table_name, values in (mappings or {}).items():
                 with lake.transaction() as transaction:
-                    schema, name_ = table_name.split(".")
+                    mapping_schema, name_ = table_name.split(".")
                     transaction.execute(
                         StatementRequest(
                             kind="statement",
-                            sql=f'CREATE SCHEMA IF NOT EXISTS "{schema}"',
+                            sql=f'CREATE SCHEMA IF NOT EXISTS "{mapping_schema}"',
                             parameters=[],
                         )
                     )
                     transaction.execute(
                         StatementRequest(
                             kind="statement",
-                            sql=f'CREATE TABLE "{schema}"."{name_}" '
+                            sql=f'CREATE TABLE "{mapping_schema}"."{name_}" '
                             '("user_id" VARCHAR, "category" VARCHAR)',
                             parameters=[],
                         )
@@ -243,7 +253,7 @@ def run(
                         transaction.execute(
                             StatementRequest(
                                 kind="statement",
-                                sql=f'INSERT INTO "{schema}"."{name_}" VALUES ({written})',
+                                sql=f'INSERT INTO "{mapping_schema}"."{name_}" VALUES ({written})',
                                 parameters=[],
                             )
                         )

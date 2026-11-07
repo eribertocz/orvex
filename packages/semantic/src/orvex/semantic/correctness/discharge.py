@@ -579,7 +579,7 @@ def _table_reads(text: str) -> list[Read]:
         alias = tokens[k + 1] if k + 1 < len(tokens) and tokens[k].upper() == "AS" else None
         condition = tokens[k + 3 : k + 5] if k + 4 < len(tokens) else []
         restricted = (
-            len(parts) == 1
+            len(parts) in (1, 2)  # `table` or `schema.table` (#359)
             and upper == "FROM"
             and at >= 3
             and tokens[at - 3 : at] == ["(", "SELECT", "*"]
@@ -638,6 +638,31 @@ def _quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def _parts(source: str) -> tuple[str, ...]:
+    """A source table's name parts, as DuckDB resolves them (#359): schema `main` when the
+    source names none, case aside."""
+    parts = tuple(part.casefold() for part in source.split("."))
+    return parts if len(parts) == 2 else ("main", *parts)
+
+
+def _unquoted(found: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(part[1:-1].replace('""', '"').casefold() for part in found)
+
+
+def _names(found: tuple[str, ...], source: tuple[str, ...]) -> bool:
+    """Whether a read (quoted name parts) is exactly the source table, the schema written or
+    not: what "the aggregate table is read" needs."""
+    read = _unquoted(found)
+    return read[-len(source) :] == source or (len(read) == 1 and read[0] == source[-1])
+
+
+def _may_name(found: tuple[str, ...], source: tuple[str, ...]) -> bool:
+    """Whether a read may be the source table: its table name, whatever qualifies it. DuckDB
+    reads a two-part name as `catalog.table` as well as `schema.table`, so a read is never
+    cleared by its qualifier: what a restriction or "never the base" needs (fail closed)."""
+    return _unquoted(found)[-1] == source[-1]
+
+
 def verify_physical(plan: Any, physical: Any) -> Evidence:  # noqa: ANN401
     """The plan's evidence, checked again, and the statement holding what it promised, or
     `DischargeError`:
@@ -676,20 +701,21 @@ def verify_physical(plan: Any, physical: Any) -> Evidence:  # noqa: ANN401
         if sorted(sets) != wanted:
             raise DischargeError("the statement's grouping sets are not the question's levels")
     rollup = plan.rollup
+    reads = _table_reads(physical.sql)
     if rollup is not None:  # the aggregate table is read, never its base (C8)
-        tables = {r[0][-1] for r in _table_reads(physical.sql)}
-        if _quote(_table(plan, rollup.dataset)) not in tables:
+        stored = _parts(_table(plan, rollup.dataset))
+        if not any(_names(r[0], stored) for r in reads):
             raise DischargeError("the aggregate table is not read")
-        if any(_quote(s.table) in tables for s in plan.sources if s.dataset == rollup.base):
+        bases = [_parts(s.table) for s in plan.sources if s.dataset == rollup.base]
+        if any(_may_name(r[0], base) for r in reads for base in bases):
             raise DischargeError("the base is read with its aggregate table")
     restricted = {
-        _quote(_table(plan, rollup.dataset) if rollup and s.dataset == rollup.base else s.table)
+        _parts(_table(plan, rollup.dataset) if rollup and s.dataset == rollup.base else s.table)
         for s in plan.sources
         if s.policies
     }
-    reads = _table_reads(physical.sql)
     for table in restricted:
-        mine = [r for r in reads if r[0][-1] == table]
+        mine = [r for r in reads if _may_name(r[0], table)]
         if not any(is_restricted for _, _, is_restricted, _ in mine):
             raise DischargeError("a restricted dataset is not read through its restrictions")
         for _, alias, is_restricted, inside in mine:

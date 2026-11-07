@@ -69,32 +69,51 @@ def _quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def catalog_of(model_path: Path) -> dict[str, dict[str, SourceColumn]]:
+def catalog_of(model_path: Path, schema: str | None = None) -> dict[str, dict[str, SourceColumn]]:
+    """The case's source catalog; with `schema`, every table in that lake schema (#359)."""
     written = yaml.safe_load(model_path.with_name(f"{model_path.stem}.catalog.yaml").read_text())
     return {
-        source: {column: SourceColumn(*shape) for column, shape in columns.items()}
+        (source if schema is None else f"{schema}.{source}"): {
+            column: SourceColumn(*shape) for column, shape in columns.items()
+        }
         for source, columns in adapter.translate_catalog(written).items()
     }
 
 
-def compiled_case(model_path: Path) -> CompiledModel:
+def compiled_case(model_path: Path, schema: str | None = None) -> CompiledModel:
+    """The case's model; with `schema`, every dataset's source in that lake schema (#359)."""
     vendors = VENDORS
     translated, _ = adapter.translate(
         cast(dict[str, Any], adapter.load_yaml(model_path)), vendors[0]
     )
+    if schema is not None:
+        for dataset in translated.get("datasets", ()):
+            dataset["source"] = f"{schema}.{dataset.get('source', dataset['name'])}"
     loaded = read(
         json.dumps(translated).encode(), f"semantic/{model_path.stem}.ossie.json", vendors
     )
-    return compile_model(loaded, catalog_of(model_path), vendors)
+    return compile_model(loaded, catalog_of(model_path, schema), vendors)
 
 
 def load_tables(
-    lake: Lake, inputs: Sequence[Path], catalog: Mapping[str, Mapping[str, SourceColumn]]
+    lake: Lake,
+    inputs: Sequence[Path],
+    catalog: Mapping[str, Mapping[str, SourceColumn]],
+    schema: str | None = None,
 ) -> None:
-    """Each `input/<table>.csv` as the lake table `<table>`, typed by the case's catalog."""
+    """Each `input/<table>.csv` as the lake table `<table>`, or `<schema>.<table>`, typed by
+    the case's catalog."""
     with lake.transaction() as transaction:
+        if schema is not None:
+            transaction.execute(
+                StatementRequest(
+                    kind="statement", sql=f"CREATE SCHEMA {_quote(schema)}", parameters=[]
+                )
+            )
         for path in inputs:
-            columns = catalog[path.stem]
+            name = path.stem if schema is None else f"{schema}.{path.stem}"
+            target = ".".join(_quote(part) for part in name.split("."))
+            columns = catalog[name]
             definition = ", ".join(
                 f"{_quote(name)} {_TYPES.get(c.type, c.type)}{'' if c.nullable else ' NOT NULL'}"
                 for name, c in columns.items()
@@ -102,7 +121,7 @@ def load_tables(
             transaction.execute(
                 StatementRequest(
                     kind="statement",
-                    sql=f"CREATE TABLE {_quote(path.stem)} ({definition})",
+                    sql=f"CREATE TABLE {target} ({definition})",
                     parameters=[],
                 )
             )
@@ -115,7 +134,7 @@ def load_tables(
                 transaction.execute(
                     StatementRequest(
                         kind="statement",
-                        sql=f"INSERT INTO {_quote(path.stem)} "
+                        sql=f"INSERT INTO {target} "
                         f"({', '.join(_quote(n) for n in names)}) VALUES ({values})",
                         parameters=[
                             Parameter(
@@ -139,13 +158,15 @@ def _month_start(value: str | None, kind: str) -> str | None:
 
 @contextmanager
 def case_lake(
-    inputs: Sequence[Path], catalog: Mapping[str, Mapping[str, SourceColumn]]
+    inputs: Sequence[Path],
+    catalog: Mapping[str, Mapping[str, SourceColumn]],
+    schema: str | None = None,
 ) -> Iterator[Lake]:
     with tempfile.TemporaryDirectory() as folder:
         location = LocalLakeLocation(kind="lake_location", catalog="local", path=folder)
         lake = open_lake(location, Limits("1GB", 2, 2, 0, 600_000))
         try:
-            load_tables(lake, inputs, catalog)
+            load_tables(lake, inputs, catalog, schema)
             yield lake
         finally:
             lake.close()
@@ -265,13 +286,14 @@ def run_case(
     folder: Path,
     model_path: Path,
     expected_code: str | None,
+    schema: str | None = None,
 ) -> CaseRun:
     """`pass` only on an exact match (or the exact expected code); a refusal for a capability
     not yet implemented is `not-run`, naming it; anything else is `fail`."""
     if case in NOT_YET:
         return CaseRun("not-run", NOT_YET[case])
     try:
-        compiled = compiled_case(model_path)
+        compiled = compiled_case(model_path, schema)
     except SemanticError as error:
         return _refused(error, expected_code)
     policies: PolicyModel = read_policies(
@@ -289,7 +311,7 @@ def run_case(
     }
     datasets = cast(Sequence[Mapping[str, Any]], compiled.ossie.document.get("datasets", ()))
     read_tables = {
-        str(d.get("source", d["name"]))
+        str(d.get("source", d["name"])).rsplit(".", 1)[-1]
         for at, d in enumerate(datasets)
         if "aggregate_table" not in payloads.get(f"/datasets/{at}", {})
     }
@@ -300,7 +322,7 @@ def run_case(
     except SemanticError as error:
         return _refused(error, expected_code)
     try:
-        with case_lake(inputs, catalog_of(model_path)) as lake:
+        with case_lake(inputs, catalog_of(model_path, schema), schema) as lake:
             context = viewer_context(attributes=CALLERS.get(case, {}))
             found = answer(query, compiled, policies, context, engine_for(lake))
     except SemanticError as error:

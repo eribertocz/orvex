@@ -54,14 +54,19 @@ MANAGED = {
 }
 
 
-def model() -> CompiledModel:
+def model(schema: str | None = None) -> CompiledModel:
+    """The model; with `schema`, every dataset's source in that lake schema (#359)."""
+
+    def placed(name: str) -> str:
+        return name if schema is None else f"{schema}.{name}"
+
     document = {
         "version": "0.2.0.dev0",
         "name": "tenants",
         "datasets": [
             {
                 "name": t,
-                "source": t,
+                "source": placed(t),
                 "primary_key": [next(iter(columns))],
                 "fields": [{"name": c, "expression": {"sql": c}} for c in columns],
             }
@@ -80,7 +85,7 @@ def model() -> CompiledModel:
         "custom_extensions": [extension({"element": "model", "default_time_zone": "UTC"})],
     }
     loaded = read(json.dumps(document).encode(), "semantic/tenants.ossie.json", VENDORS)
-    return compile_model(loaded, CATALOG, VENDORS)
+    return compile_model(loaded, {placed(t): c for t, c in CATALOG.items()}, VENDORS)
 
 
 COMPILED = model()
@@ -123,7 +128,9 @@ MAPPINGS = {
 
 @contextmanager
 def lake_of(
-    data: dict[str, list[list[str]]] = DATA, mappings: dict[str, Any] = MAPPINGS
+    data: dict[str, list[list[str]]] = DATA,
+    mappings: dict[str, Any] = MAPPINGS,
+    schema: str | None = None,
 ) -> Iterator[Lake]:
     with TemporaryDirectory() as folder:
         paths = []
@@ -132,7 +139,8 @@ def lake_of(
             lines = [",".join(CATALOG[table])] + [",".join(r) for r in rows]
             path.write_text("\n".join(lines) + "\n", "utf-8")
             paths.append(path)
-        with ce.case_lake(paths, CATALOG) as lake:
+        placed = {(t if schema is None else f"{schema}.{t}"): c for t, c in CATALOG.items()}
+        with ce.case_lake(paths, placed, schema) as lake:
             with lake.transaction() as transaction:
                 transaction.execute(
                     StatementRequest(kind="statement", sql="CREATE SCHEMA security", parameters=[])
