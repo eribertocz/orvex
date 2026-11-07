@@ -2078,6 +2078,13 @@ class Lake:
         """(schema, table) of every table of the lake now, lower-cased."""
         return self._tables_at(self.current_snapshot().id)
 
+    def snapshot(self, snapshot_id: int) -> Snapshot | None:
+        """The snapshot `snapshot_id` while the lake keeps it; None once it expired or when it
+        never existed."""
+        if isinstance(snapshot_id, bool) or not isinstance(snapshot_id, int) or snapshot_id < 0:
+            return None
+        return self._snapshot(snapshot_id)
+
     def current_snapshot(self) -> Snapshot:
         snapshot = self._snapshot(None)
         if snapshot is None:

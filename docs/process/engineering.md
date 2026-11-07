@@ -109,7 +109,7 @@ A check becomes **required** (blocks merging) from the issue that creates it; fr
 | Import boundaries and materialization | standard-library `ast` checker: cross-module imports; `fetchall`/`fetchone`/`fetchmany`/`.df()`/`.pl()`/`to_pandas` outside the allow-list (ADR-0025) | P0-04 | P0 |
 | Product-name check | §1 rule | P0-04 | P0 |
 | Contracts | JSON Schema and OpenAPI validation; generated types current | P0-05 | P0 |
-| Semantic corpus | corpus runner, reporting per case | P0-11 | Reported from P0; **gate 21/21 from P2-27** |
+| Semantic corpus | corpus runner, reporting per case; from P2-27a the `semantic-corpus` job runs `python -m conformance.runners.semantic_corpus --through both` (library and HTTP API, JSON and Arrow), failing on any failed case, any difference between the two ways, or any finding | P0-11 | Reported from P0; **gate 21/21 from P2-27** |
 | Security conformance | scenarios runner | P3-13 | P3 |
 | End-to-end | browser tests on main flows, both runtime modes on Linux | P6-21 | P6 |
 | Accessibility | automated checks on every route | P6-21 | P6 |

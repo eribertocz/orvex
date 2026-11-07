@@ -14,7 +14,7 @@ import json
 import re
 import tempfile
 import tomllib
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -281,15 +281,43 @@ def prepare(
     compile_plan(plan(analyze(bound, compiled, policies, context)))
 
 
+@dataclass(frozen=True, slots=True)
+class Answered:
+    """What a case compares: the result's envelope and its rows as `store/v1` JSON text."""
+
+    envelope: Mapping[str, Any]
+    rows: list[list[str | None]]
+
+
+Asker = Callable[[str, CompiledModel, PolicyModel, Mapping[str, Any], Lake], Answered]
+
+
+def library(
+    query: str,
+    compiled: CompiledModel,
+    policies: PolicyModel,
+    context: Mapping[str, Any],
+    lake: Lake,
+) -> Answered:
+    """The library's answer (`orvex.semantic.execution.answer`)."""
+    found = answer(query, compiled, policies, context, engine_for(lake))
+    return Answered(found.result.envelope(), rows_of(found))
+
+
 def run_case(
     case: str,
     folder: Path,
     model_path: Path,
     expected_code: str | None,
     schema: str | None = None,
+    ask: Asker = library,
+    *,
+    check_first: bool = True,
 ) -> CaseRun:
     """`pass` only on an exact match (or the exact expected code); a refusal for a capability
-    not yet implemented is `not-run`, naming it; anything else is `fail`."""
+    not yet implemented is `not-run`, naming it; anything else is `fail`. `ask` answers: the
+    library by default, or the HTTP API (`corpus_http`, P2-27a). Without `check_first`, a
+    refusal comes from `ask` itself, as the HTTP API sends it."""
     if case in NOT_YET:
         return CaseRun("not-run", NOT_YET[case])
     try:
@@ -318,13 +346,14 @@ def run_case(
     inputs = sorted(p for p in (folder / "input").glob("*.csv") if p.stem in read_tables)
     query = json.dumps(QUERIES[case])
     try:  # every refusal comes before any data exists: a refused case loads nothing
-        prepare(query, compiled, policies, viewer_context(attributes=CALLERS.get(case, {})))
+        if check_first:
+            prepare(query, compiled, policies, viewer_context(attributes=CALLERS.get(case, {})))
     except SemanticError as error:
         return _refused(error, expected_code)
     try:
         with case_lake(inputs, catalog_of(model_path, schema), schema) as lake:
             context = viewer_context(attributes=CALLERS.get(case, {}))
-            found = answer(query, compiled, policies, context, engine_for(lake))
+            found = ask(query, compiled, policies, context, lake)
     except SemanticError as error:
         return _refused(error, expected_code)
     except StoreError as error:
@@ -333,7 +362,7 @@ def run_case(
         return CaseRun("fail", f"answered, but {expected_code} was expected")
     expected = adapter.read_csv(folder / "expected" / "result.csv")
     wanted = [list(row.values()) for row in expected]
-    columns = found.result.envelope()["columns"]
+    columns = found.envelope["columns"]
     names = [c["name"] for c in columns]
     # The corpus names a bucketed column after its bucket ("month"), and a dimension after its
     # declared conformed dimension ("campaign"); the engine after its member.
@@ -354,8 +383,8 @@ def run_case(
     header = list(expected[0]) if expected else []
     if len(header) != len(names) or any(h not in a for h, a in zip(header, accepted, strict=True)):
         return CaseRun("fail", f"columns {names}")
-    got = rows_of(found)
-    dates = [c["encoding"] == "DATE" for c in found.result.envelope()["columns"]]
+    got = found.rows
+    dates = [c["encoding"] == "DATE" for c in columns]
     return CaseRun("pass", "") if same(got, wanted, dates) else CaseRun("fail", f"rows {got}")
 
 

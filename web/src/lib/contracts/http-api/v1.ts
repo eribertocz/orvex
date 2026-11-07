@@ -59,6 +59,30 @@ export interface ErrorBody {
 	message: string;
 	details: ErrorDetail[];
 	request_id: string;
+	/**
+	 * The engine's whole `semantic-error` v1 message, for an engine error.
+	 */
+	semantic?: {
+		[k: string]: unknown;
+	};
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "SemanticAnswer".
+ */
+export interface SemanticAnswer {
+	/**
+	 * The result's JSON form.
+	 */
+	result: {
+		[k: string]: unknown;
+	};
+	/**
+	 * The caller's view of its receipt.
+	 */
+	receipt: {
+		[k: string]: unknown;
+	};
 }
 /**
  * This interface was referenced by `HttpApiV1`'s JSON-Schema

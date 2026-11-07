@@ -98,6 +98,10 @@
           {
             "context": "contracts",
             "integration_id": 15368
+          },
+          {
+            "context": "semantic-corpus",
+            "integration_id": 15368
           }
         ]
       }

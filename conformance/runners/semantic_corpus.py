@@ -1,10 +1,12 @@
 """Semantic corpus runner (P0-11).
 
-    python -m conformance.runners.semantic_corpus [--json <file>]
+    python -m conformance.runners.semantic_corpus [--through library|http|both] [--json <file>]
 
 Loads every imported case, checks that it is complete and unchanged, validates its Ossie model
 against the pinned specification, and reports it. Until the engine executes queries (P2-12) every
-case is `not-run` with the reason ENGINE_NOT_AVAILABLE. Exit status 0 when every case loads.
+case is `not-run` with the reason ENGINE_NOT_AVAILABLE. Since P2-27a (#363) every case is also
+asked through the HTTP API, and the run is the required `semantic-corpus` check: exit status 0
+only when every case loads, none fails, and both ways give the same outcome.
 """
 
 from __future__ import annotations
@@ -123,6 +125,7 @@ def load_case(
     entry: dict[str, str],
     validator: jsonschema.Draft202012Validator,
     execute: bool = True,
+    through: str = "library",
 ) -> tuple[CaseReport | None, list[Finding]]:
     case = entry["id"]
     folder = corpus / "corpus" / "cases" / case
@@ -169,7 +172,10 @@ def load_case(
             model = "valid"
     status, reason = "not-run", "MODEL_INVALID" if model != "valid" else "NOT_EXECUTED"
     if model == "valid" and execute:
-        from conformance.runners.corpus_execution import run_case
+        if through == "http":
+            from conformance.runners.corpus_http import run_case
+        else:
+            from conformance.runners.corpus_execution import run_case
 
         outcome = run_case(case, folder, model_path, code)
         status, reason = outcome.status, outcome.reason
@@ -185,8 +191,11 @@ def load_case(
     return report, findings
 
 
-def run(root: Path = ROOT, execute: bool = True) -> tuple[list[CaseReport], list[Finding]]:
-    """Every case checked, and run for real unless `execute` is false (P2-12)."""
+def run(
+    root: Path = ROOT, execute: bool = True, through: str = "library"
+) -> tuple[list[CaseReport], list[Finding]]:
+    """Every case checked, and run for real unless `execute` is false (P2-12), through the
+    library or the HTTP API (`through`, P2-27a)."""
     corpus = root / CORPUS
     findings = check_sources(corpus) + check_vendored(root / OSSIE)
     try:
@@ -200,11 +209,28 @@ def run(root: Path = ROOT, execute: bool = True) -> tuple[list[CaseReport], list
     for entry in manifest["cases"]:
         if not (corpus / "corpus" / "cases" / entry["id"]).is_dir():
             continue
-        report, case_findings = load_case(corpus, entry, validator, execute)
+        report, case_findings = load_case(corpus, entry, validator, execute, through)
         findings.extend(case_findings)
         if report is not None:
             reports.append(report)
     return reports, findings
+
+
+def compare(library: list[CaseReport], http: list[CaseReport]) -> list[Finding]:
+    """A finding for every case that fails either way, or whose outcome differs between the
+    library and the HTTP API."""
+    findings = []
+    by_case = {report.case: report for report in http}
+    for report in library:
+        other = by_case.get(report.case)
+        for way, found in (("library", report), ("http", other)):
+            if found is not None and found.status == "fail":
+                findings.append(Finding("CORPUS_CASE_FAILED", found.case, f"{way}: {found.reason}"))
+        if other is None or (other.status, other.reason) != (report.status, report.reason):
+            seen = "missing" if other is None else f"{other.status} ({other.reason})"
+            message = f"library {report.status} ({report.reason}), http {seen}"
+            findings.append(Finding("CORPUS_WAYS_DIFFER", report.case, message))
+    return findings
 
 
 def main() -> int:
@@ -213,13 +239,33 @@ def main() -> int:
     )
     parser.add_argument("--json", type=Path, help="write the deterministic report to this file")
     parser.add_argument("--root", type=Path, default=ROOT, help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--through",
+        choices=("library", "http", "both"),
+        default="library",
+        help="ask through the library, the HTTP API, or both and compare them",
+    )
     arguments = parser.parse_args()
-    reports, findings = run(arguments.root)
-    for report in reports:
-        print(
-            f"{report.case} {report.status} ({report.reason}) "
-            f"expected={report.expected} model={report.model}"
-        )
+    ways = ("library", "http") if arguments.through == "both" else (arguments.through,)
+    runs = {way: run(arguments.root, through=way) for way in ways}
+    reports, findings = runs[ways[0]]
+    if arguments.through == "both":
+        findings = [*findings, *compare(reports, runs["http"][0])]
+    else:
+        findings = [
+            *findings,
+            *(
+                Finding("CORPUS_CASE_FAILED", r.case, f"{ways[0]}: {r.reason}")
+                for r in reports
+                if r.status == "fail"
+            ),
+        ]
+    for way in ways:
+        for report in runs[way][0]:
+            print(
+                f"{report.case} {report.status} ({report.reason}) "
+                f"expected={report.expected} model={report.model} through={way}"
+            )
     for finding in findings:
         print(finding)
     print(f"semantic-corpus: {len(reports)} case(s), {len(findings)} finding(s)")

@@ -94,14 +94,20 @@ def test_unexpected_failure_is_an_internal_error_envelope() -> None:
 
 
 def test_every_code_the_server_sends_is_registered() -> None:
+    """Every code a server source passes to `error_response` or `Refused` is in the registry;
+    the engine's own codes are `semantic-error` v1's (README, "Semantic routes")."""
+    import re
+
+    from orvex.server import app as app_module
+    from orvex.server import semantic_http
+
+    pattern = re.compile(r'(?:error_response|Refused)\(\s*\d+,\s*"([A-Z][A-Z0-9_]*)"')
     sent = {
-        "NOT_FOUND",
-        "METHOD_NOT_ALLOWED",
-        "HOST_NOT_ALLOWED",
-        "ORIGIN_NOT_ALLOWED",
-        "VALIDATION_FAILED",
-        "INTERNAL_ERROR",
+        code
+        for module in (app_module, semantic_http)
+        for code in pattern.findall(Path(str(module.__file__)).read_text("utf-8"))
     }
+    assert {"NOT_FOUND", "UNAUTHENTICATED", "PROJECT_BUSY", "SEMANTIC_MODEL_INVALID"} <= sent
     assert sent <= set(DOCUMENT["components"]["x-error-codes"])
 
 

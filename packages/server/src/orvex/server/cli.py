@@ -16,8 +16,17 @@ from pathlib import Path
 from types import FrameType
 
 import uvicorn
-from orvex.server.app import create_app
-from orvex.server.commands import evidence, run, runs, validate
+from orvex.server.app import LocalSemantic, create_app
+from orvex.server.commands import (
+    ProjectLocked,
+    evidence,
+    lake_location,
+    open_existing,
+    project_lock,
+    run,
+    runs,
+    validate,
+)
 from orvex.server.identity import Identity, load_identity
 from orvex.server.instance import (
     Project,
@@ -27,9 +36,17 @@ from orvex.server.instance import (
     instance_directory,
     open_project,
 )
+from orvex.server.local_access import new_access, serving
 from orvex.server.logs import configure_logging
 from orvex.server.maintenance import history, maintain
 from orvex.server.scheduler import STOP_GRACE_SECONDS, schedule
+from orvex.server.semantic_http import (
+    ProjectSource,
+    Semantic,
+    local_context,
+    project_source,
+    session_settings,
+)
 from orvex.server.versions import (
     ContractVersionIncompatible,
     Versions,
@@ -107,10 +124,23 @@ def describe_versions(identity: Identity, versions: Versions) -> str:
     return "\n".join(lines)
 
 
-def server_config(port: int, versions: Versions, web_build: Path | None) -> uvicorn.Config:
+def served_project(folder: Path, identity: Identity) -> ProjectSource:
+    """The opened project for the HTTP API, with the lake's opening and the project lock."""
+    return project_source(
+        folder,
+        identity,
+        lambda project, home: open_existing(home, lake_location(project, home)),
+        project_lock,
+        ProjectLocked,
+    )
+
+
+def server_config(
+    port: int, versions: Versions, web_build: Path | None, local: LocalSemantic | None = None
+) -> uvicorn.Config:
     """Local mode binds to the loopback interface only, never to 0.0.0.0."""
     return uvicorn.Config(
-        create_app(versions, web_build, port),
+        create_app(versions, web_build, port, local),
         host=LOCAL_HOST,
         port=port,
         log_config=None,
@@ -246,11 +276,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"{error}; choose another --port", file=sys.stderr)
             return 1
         url = f"http://{LOCAL_HOST}:{port}/"
-        server = uvicorn.Server(server_config(port, versions, web_build_directory()))
-        with stopping(server) as received:
-            print(f"{identity.name}: {project.path} -> {url}", flush=True)
+        access = new_access(identity.slug, port)
+        local = LocalSemantic(
+            project.id,
+            access,
+            Semantic(served_project(project.path, identity), local_context, session_settings()),
+        )
+        server = uvicorn.Server(server_config(port, versions, web_build_directory(), local))
+        serve_folder = instance_directory(identity) / "serve"
+        with serving(serve_folder, port, access, url) as private, stopping(server) as received:
+            # One write, its newline included: a reader that closes after the first line must not
+            # break the server with a later write (BrokenPipeError).
+            print(
+                f"{identity.name}: {project.path} -> {url}\n"
+                f"  open in the browser (once): {private.launcher}\n"
+                f"  API token for scripts (Authorization: Bearer): {private.token}\n",
+                end="",
+                flush=True,
+            )
             if not arguments.no_browser:
-                threading.Timer(1.0, webbrowser.open, args=(url,)).start()
+                # A file path, never the code itself: other users can read a command line.
+                launcher = private.launcher.as_uri()
+                threading.Timer(1.0, webbrowser.open, args=(launcher,)).start()
             server.run()
     # The in-memory project folder is gone; now end as the signal asked, as uvicorn would.
     if received:

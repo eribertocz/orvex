@@ -423,3 +423,16 @@ kind = "automation"
 # Publishes a release for a product tag only (its `if` is unchanged by #267).
 permissions = { contents = "write" }
 setup = []
+
+[[job]]
+workflow = "semantic-corpus.yml"
+job = "semantic-corpus"
+kind = "check"
+required = true
+contexts = ["semantic-corpus"]
+digest = "359ba0125927ae59"
+setup = ["python -m pip install --quiet pip==26.2.2"]
+[[job.check]]
+name = "semantic-corpus"
+run = "python -m conformance.runners.semantic_corpus --through both"
+local = true

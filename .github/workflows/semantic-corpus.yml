@@ -1,0 +1,32 @@
+# The semantic corpus as a gate (P2-27a, #363): every case through the library and through the
+# HTTP API, as JSON and as Arrow. Fails when any case fails, when the two ways disagree, or on any
+# finding (engineering.md §8: required from P2-27).
+name: semantic-corpus
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  semantic-corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Install from the lock file and the workspace packages
+        run: |
+          python -m pip install --quiet pip==26.2.2
+          python -m pip install --quiet -r pylock.toml
+          for package in packages/*/; do
+            python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
+          done
+      - run: python -m conformance.runners.semantic_corpus --through both
