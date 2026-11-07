@@ -93,6 +93,12 @@ def quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def table(source: str) -> str:
+    """A dataset's source table as SQL: `table` (schema `main`) or `schema.table`, each part an
+    identifier of its own (#359), as the store resolves it and the compiler admits it."""
+    return ".".join(quote(part) for part in source.split("."))
+
+
 def _unsupported() -> SemanticError:
     return SemanticError("UNSUPPORTED_OPERATION", {"operation": "expression"})
 
@@ -409,12 +415,12 @@ class _Writer:
         # whose fields it keeps as the grain it groups by: each group wholly in or out.
         read = rollup.dataset if rollup is not None and dataset == rollup.base else dataset
         self.reads.append((self.tables[read], dataset if read == dataset else None))
-        table = quote(self.tables[read])
+        relation = table(self.tables[read])
         restrictions = self.placement.of(dataset) if self.placement else ()
         if not restrictions:
-            return table
+            return relation
         conditions = [self.restriction(r, dataset, "#p") for r in restrictions]
-        return f"(SELECT * FROM {table} AS {quote('#p')} WHERE {' AND '.join(conditions)})"
+        return f"(SELECT * FROM {relation} AS {quote('#p')} WHERE {' AND '.join(conditions)})"
 
     def restriction(self, restriction: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
         """One policy on one dataset's row `alias`: its predicate on its own dataset, or, along
@@ -434,7 +440,7 @@ class _Writer:
                 own, other, target = related["to_columns"], related["from_columns"], related["from"]
             target = sql.normalize(str(target))
             self.reads.append((self.tables[target], None))
-            tables.append(f"{quote(self.tables[target])} AS {quote(here)}")
+            tables.append(f"{table(self.tables[target])} AS {quote(here)}")
             links += [
                 f"{self.field(MemberId('field', current, sql.normalize(str(a))), at)}"
                 f" = {self.field(MemberId('field', target, sql.normalize(str(b))), here)}"

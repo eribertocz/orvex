@@ -379,6 +379,9 @@ def test_every_answered_case_s_statement_holds_its_evidence() -> None:
         ("CASE-015", {"sql": "add a bare read named like a chain"}),
         ("CASE-015", {"sql": "restrict by nothing"}),
         ("CASE-015", {"sql": "read it qualified"}),
+        ("CASE-015", {"sql": "read it through the catalog"}),  # `lake.sales` is `main.sales`
+        ("CASE-015", {"sql": "read it in another case"}),
+        ("CASE-015", {"sql": "read it fully qualified"}),
         ("CASE-015", {"sql": "unbalance the parentheses"}),
     ],
 )
@@ -407,6 +410,12 @@ def test_a_statement_without_its_evidence_is_refused_before_any_read(
         change = {"sql": written.sql.replace(whole, '(SELECT * FROM "sales" AS "#p" WHERE TRUE)')}
     elif change.get("sql") == "read it qualified":
         change = {"sql": f'{written.sql} UNION ALL SELECT * FROM "main"."sales" AS "x"'}
+    elif change.get("sql") == "read it through the catalog":
+        change = {"sql": f'{written.sql} UNION ALL SELECT * FROM "lake"."sales" AS "x"'}
+    elif change.get("sql") == "read it in another case":
+        change = {"sql": f'{written.sql} UNION ALL SELECT * FROM "Main"."SALES" AS "x"'}
+    elif change.get("sql") == "read it fully qualified":
+        change = {"sql": f'{written.sql} UNION ALL SELECT * FROM "lake"."main"."sales" AS "x"'}
     elif change.get("sql") == "unbalance the parentheses":
         change = {"sql": written.sql + ")"}
     broken = replace(written, **change)

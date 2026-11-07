@@ -1248,6 +1248,12 @@ class _Model:
             sql.normalize(str(d["name"])): str(d.get("source", d["name"]))
             for d in _items(model.document, "datasets")
         }
+        for at, dataset in enumerate(_items(model.document, "datasets")):
+            # `table` (schema `main`) or `schema.table`: each part an identifier of its own,
+            # never written into SQL in any other shape (#359)
+            parts = str(dataset.get("source", dataset["name"])).split(".")
+            if len(parts) > 2 or not all(p.strip() and p == p.strip() for p in parts):
+                self.problems.add(f"/datasets/{at}/source", "reference")
         _, model_payload = self.payloads.get("", ("", MappingProxyType({})))
         self.default_zone = model_payload.get("default_time_zone")
         if self.default_zone is not None and not is_zone(str(self.default_zone)):
