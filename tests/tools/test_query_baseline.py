@@ -57,3 +57,11 @@ def test_the_catalog_check_compares_the_members_and_a_network_error_is_counted()
     assert check(200, json.dumps(whole).encode()) == ""
     assert check(200, json.dumps(short).encode()) == "wrong catalog"
     assert check(0, b"TimeoutError") == "network TimeoutError"
+
+
+def test_the_answer_hash_covers_the_rows_alone() -> None:
+    one = {"result": {"rows": [["a", "1.50"]]}, "receipt": {"duration_ms": 3}}
+    two = {"result": {"rows": [["a", "1.50"]]}, "receipt": {"duration_ms": 9}}
+    other = {"result": {"rows": [["a", "1.5"]]}, "receipt": {"duration_ms": 3}}
+    assert qb.rows_sha256(json.dumps(one).encode()) == qb.rows_sha256(json.dumps(two).encode())
+    assert qb.rows_sha256(json.dumps(one).encode()) != qb.rows_sha256(json.dumps(other).encode())

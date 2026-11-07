@@ -255,6 +255,13 @@ class Server:
         return status, content, (time.perf_counter() - started) * 1000
 
 
+def rows_sha256(content: bytes) -> str:
+    """The hash of an answer's rows alone, canonical: the receipt's times vary per request."""
+    rows = json.loads(content)["result"]["rows"]
+    text = json.dumps(rows, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
 def catalog_members(document: object) -> set[str]:
     """Every member a `catalog` v1 document lists: metrics, and `dataset.field`."""
     if not isinstance(document, dict):
@@ -344,9 +351,7 @@ def measure_round(
                     errors[problem] += 1
                 else:
                     found.sequential_ms.append(round(elapsed, 3))
-                    found.answer_sha256 = (
-                        hashlib.sha256(content).hexdigest() if "reference" in spec else ""
-                    )
+                    found.answer_sha256 = rows_sha256(content) if "reference" in spec else ""
 
             def one(
                 _: int,
