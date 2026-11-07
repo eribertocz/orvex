@@ -1,0 +1,35 @@
+# Nightly property exploration (P2-28, #367; Owner correction 5): the same properties as CI,
+# with many random examples. It opens nothing; a failure shows here and the counterexample is
+# in the log, shrunk, to be committed as a permanent regression.
+name: property-nightly
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 7 * * *"  # 07:23 UTC, outside the busy CI hours
+
+permissions:
+  contents: read
+
+jobs:
+  property-nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Install from the lock file and the workspace packages
+        run: |
+          python -m pip install --quiet pip==26.2.2
+          python -m pip install --quiet -r pylock.toml
+          for package in packages/*/; do
+            python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
+          done
+      - name: Explore
+        env:
+          PROPERTY_PROFILE: nightly
+        run: python -m pytest -q tests/properties

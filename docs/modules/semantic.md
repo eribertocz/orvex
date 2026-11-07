@@ -15,6 +15,7 @@
 | P2 parity | `architecture/semantic-engine.md` | §5, §6, §7, §8 ("Query budgets and cost estimation"), §14 |
 | P2 detail pages | `architecture/semantic-engine.md` | §8 ("Query budgets and cost estimation", detail pages: the estimate, the refusal rule, the behavior without statistics), §9 (detail-row queries) |
 | P2 evidence | `architecture/semantic-engine.md` | §6 (the checks, records bound to a snapshot and a declaration, what a question relies on); ADR-0027 §7 |
+| P2 properties | `tests/properties/` (P2-28, #367) | generated questions against a pure-Python `Decimal` oracle and plain DuckDB SQL; deterministic in CI, wide in the nightly workflow |
 | P2 parity | `conformance/semantic-corpus/README.md` | all |
 | P3 security | `architecture/semantic-engine.md` | §7, §10 |
 | P3 security | `architecture/security.md` | §3.3, §6 |
