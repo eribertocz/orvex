@@ -41,6 +41,7 @@ from zoneinfo import ZoneInfo
 from orvex.server import commands, heartbeat, lake_place, maintenance
 from orvex.server.commands import Checked, Selection, project_lock
 from orvex.server.identity import Identity
+from orvex.server.problems import Problem
 from orvex.server.project import ProjectLoadError
 from orvex.store.errors import StoreError
 from orvex.transform.run_records import last_run_request, model_history_request
@@ -174,7 +175,7 @@ def schedule(
         beat = heartbeat.read(home)
         pid = str(beat.pid) if beat is not None else "unknown"
         print(
-            commands.Problem(
+            Problem(
                 "SCHEDULER_ALREADY_RUNNING",
                 f".{identity.slug}/{SCHEDULER_LOCK}",
                 None,

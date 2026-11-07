@@ -57,6 +57,8 @@ from orvex.contracts.store.v1 import (
     StatementRequest,
     StatisticsRequest,
     StatisticsResult,
+    TablesRequest,
+    TablesResult,
     TableStatistics,
 )
 from orvex.store.errors import StoreError, register_secret
@@ -2205,6 +2207,74 @@ class Lake:
         finally:
             self._admission.release()
         return StatisticsResult(kind="statistics_result", snapshot=request.snapshot, tables=tables)
+
+    def table_columns(self, request: TablesRequest) -> TablesResult:
+        """Every lake table alive at `request.snapshot`, with its columns as of that snapshot
+        (#358): the names and nullability from the lake's own catalog, the DuckDB types as
+        DuckDB binds the table at that version. Nothing of any other version is read."""
+        deadline = time.monotonic() + self._timeout_ms(None) / 1000
+        self._admission.acquire(deadline)
+        try:
+            cursor = self._cursor()
+            guard = Guard(cursor, deadline)
+            try:
+                if self._snapshot(request.snapshot, cursor) is None:
+                    raise self._missing_snapshot(request.snapshot, cursor)
+                tables = self._tables_with_columns(request.snapshot, cursor)
+            except duckdb.Error as error:
+                raise guard.error(error) from error
+            finally:
+                guard.stop()
+                cursor.close()
+        finally:
+            self._admission.release()
+        return TablesResult.model_validate(
+            {"kind": "tables_result", "snapshot": request.snapshot, "tables": tables}
+        )
+
+    def _tables_with_columns(
+        self, snapshot: int, cursor: duckdb.DuckDBPyConnection
+    ) -> list[dict[str, Any]]:
+        meta = self._metadata
+        alive = "{0}.begin_snapshot <= $n AND ({0}.end_snapshot IS NULL OR {0}.end_snapshot > $n)"
+        row = self._one(
+            "SELECT CAST(to_json(list({'schema': s.schema_name, 'table': t.table_name, "
+            "'nullable': (SELECT list({'name': c.column_name, 'nullable': c.nulls_allowed} "
+            f"ORDER BY c.column_order) FROM {meta}.ducklake_column AS c "
+            f"WHERE c.table_id = t.table_id AND c.parent_column IS NULL AND {alive.format('c')})}} "
+            "ORDER BY s.schema_name, t.table_name)) AS VARCHAR) "
+            f"FROM {meta}.ducklake_table AS t JOIN {meta}.ducklake_schema AS s USING (schema_id) "
+            f"WHERE {alive.format('t')} AND {alive.format('s')}",
+            {"n": snapshot},
+            cursor,
+        )
+        found = json.loads(str(row[0])) if row is not None and row[0] is not None else []
+        tables = []
+        for entry in found:
+            # The table bound at that version: its types as DuckDB reads it there. Names come
+            # from the catalog and are quoted as identifiers; the version is an integer.
+            relation = cursor.sql(
+                f"SELECT * FROM {LAKE}.{_identifier(entry['schema'])}."
+                f"{_identifier(entry['table'])} AT (VERSION => {int(snapshot)}) LIMIT 0"
+            )
+            nullable = {
+                str(c["name"]).casefold(): bool(c["nullable"]) for c in entry["nullable"] or ()
+            }
+            tables.append(
+                {
+                    "schema": entry["schema"],
+                    "table": entry["table"],
+                    "columns": [
+                        {
+                            "name": str(name),
+                            "type": str(kind),
+                            "nullable": nullable.get(str(name).casefold(), True),
+                        }
+                        for name, kind in zip(relation.columns, relation.types, strict=True)
+                    ],
+                }
+            )
+        return tables
 
     def _table_statistics(
         self, name: str, snapshot: int, cursor: duckdb.DuckDBPyConnection

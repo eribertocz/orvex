@@ -32,8 +32,9 @@ from orvex.contracts.store.v1 import (
     StatementRequest,
 )
 from orvex.server import commands, lake_place
-from orvex.server.commands import LOCK_FILE, Problem, project_lock
+from orvex.server.commands import LOCK_FILE, project_lock
 from orvex.server.identity import Identity
+from orvex.server.problems import Problem
 from orvex.server.project import Project, ProjectLoadError, load_project
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake
