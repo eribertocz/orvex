@@ -125,18 +125,28 @@ def verify_cursor(
 
 
 class SealedForm:
-    """The sealed cursor form (P2-24): AES-256-GCM under a key derived from the instance's
-    cursor secret, a fresh 96-bit nonce per cursor, and every binding as authenticated data.
-    The cursor holds the data version and the position, compressed then encrypted: it reveals
-    nothing, and any change to it or to a binding makes it fail to open."""
+    """The sealed cursor form (P2-24, #363): AES-256-GCM under keys derived from the instance's
+    cursor secret, in two layers, each with a fresh 96-bit nonce.
+
+    - The **inner** layer holds the data version and the position, compressed then encrypted,
+      with every binding as authenticated data: any change to it or to a binding makes it fail
+      to open.
+    - The **outer** layer encrypts the data version and the inner layer under a second key. It
+      lets the server learn a genuine cursor's snapshot before it compiles the model there
+      (`data_version`), without the bindings, which depend on that model. The inner layer
+      repeats the version, and opening requires both to agree.
+
+    Either way the cursor reveals nothing to a client, and two cursors for one position
+    differ."""
 
     DOMAIN = b"orvex-semantic page cursor v1"
+    OUTER = b"orvex-semantic page cursor version v1"
 
     def __init__(self, secret: bytes) -> None:
         if not isinstance(secret, bytes) or len(secret) < 32:
             raise ValueError("a cursor secret has 32 bytes or more")
-        derived = hmac.new(secret, self.DOMAIN, hashlib.sha256).digest()
-        self._aead = AESGCM(derived)
+        self._aead = AESGCM(hmac.new(secret, self.DOMAIN, hashlib.sha256).digest())
+        self._outer = AESGCM(hmac.new(secret, self.OUTER, hashlib.sha256).digest())
 
     @staticmethod
     def _bound(binding: CursorBinding) -> bytes:
@@ -151,26 +161,59 @@ class SealedForm:
         ).encode()
 
     def issue(self, binding: CursorBinding, state: CursorState) -> str:
+        version = state.data_version.encode()
+        if len(version) > 255:
+            raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "cursor_size"})
         plain = json.dumps(
             [state.data_version, list(state.position)], separators=(",", ":"), allow_nan=False
         ).encode()
         nonce = secrets.token_bytes(12)
-        sealed = nonce + self._aead.encrypt(nonce, zlib.compress(plain, 9), self._bound(binding))
-        cursor = base64.urlsafe_b64encode(sealed).rstrip(b"=").decode("ascii")
+        inner = nonce + self._aead.encrypt(nonce, zlib.compress(plain, 9), self._bound(binding))
+        outer_nonce = secrets.token_bytes(12)
+        outer = self._outer.encrypt(outer_nonce, bytes([len(version)]) + version + inner, None)
+        cursor = base64.urlsafe_b64encode(outer_nonce + outer).rstrip(b"=").decode("ascii")
         if len(cursor) > 1024:
             raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "cursor_size"})
         return cursor
 
-    def open(self, cursor: str, binding: CursorBinding) -> CursorState | None:
+    def _unwrap(self, cursor: str) -> tuple[str, bytes] | None:
+        """The data version and the inner layer of a genuine cursor of this instance."""
         try:
             sealed = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+            plain = self._outer.decrypt(sealed[:12], sealed[12:], None)
+            size = plain[0]
+            version = plain[1 : 1 + size].decode()
+        except ValueError, InvalidTag, IndexError, TypeError:
+            return None
+        if len(plain) < 1 + size:
+            return None
+        return version, plain[1 + size :]
+
+    def data_version(self, cursor: object) -> str | None:
+        """The data version a genuine cursor of this instance pins, or None. It authenticates
+        the cursor but checks no binding: `verify_cursor` still does, on every page."""
+        if not isinstance(cursor, str) or not CURSOR.fullmatch(cursor):
+            return None
+        unwrapped = self._unwrap(cursor)
+        return None if unwrapped is None else unwrapped[0]
+
+    def open(self, cursor: str, binding: CursorBinding) -> CursorState | None:
+        unwrapped = self._unwrap(cursor)
+        if unwrapped is None:
+            return None
+        outer_version, inner = unwrapped
+        try:
             plain = zlib.decompress(
-                self._aead.decrypt(sealed[:12], sealed[12:], self._bound(binding))
+                self._aead.decrypt(inner[:12], inner[12:], self._bound(binding))
             )
             version, position = json.loads(plain)
         except ValueError, InvalidTag, zlib.error, TypeError:
             return None
-        if not isinstance(version, str) or not isinstance(position, list):
+        if (
+            not isinstance(version, str)
+            or not isinstance(position, list)
+            or version != outer_version
+        ):
             return None
         if not all(v is None or isinstance(v, str | int | float | bool) for v in position):
             return None

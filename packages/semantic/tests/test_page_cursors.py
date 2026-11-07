@@ -26,6 +26,7 @@ from orvex.semantic.result import (
     issue_cursor,
     verify_cursor,
 )
+from orvex.semantic.result.cursors import SealedForm
 
 
 def _b64(data: bytes) -> str:
@@ -105,9 +106,17 @@ class ServerSideTestForm:
         return kept[1]
 
 
+class ProductForm(SealedForm):
+    """The form `server` uses, with a fresh key each time it is made."""
+
+    def __init__(self) -> None:
+        super().__init__(secrets.token_bytes(32))
+
+
 FORMS: dict[str, Callable[[], CursorForm]] = {
     "sealed": SealedTestForm,
     "server-side": ServerSideTestForm,
+    "product": ProductForm,
 }
 
 CANARY = "c4n4ry"
@@ -257,3 +266,19 @@ def test_bindings_are_fingerprints_and_a_positive_page_size() -> None:
     for size in (0, -1, True):
         with pytest.raises(ValueError, match="page_size"):
             replace(BINDING, page_size=size)
+
+
+def test_the_sealed_form_names_a_genuine_cursor_s_snapshot_to_the_server_only() -> None:
+    """P2-27a (#363): the server learns the snapshot a next page pins before compiling the
+    model there; any change to the cursor, or another key, names none."""
+    form = SealedForm(b"k" * 32)
+    cursor = issue_cursor(form, BINDING, STATE)
+    assert form.data_version(cursor) == STATE.data_version
+    assert "snapshot-41" not in cursor
+    assert SealedForm(b"j" * 32).data_version(cursor) is None
+    flipped = cursor[:-1] + ("A" if cursor[-1] != "A" else "B")
+    for wrong in (flipped, cursor[:-4], "", "x" * 60, None, 41):
+        assert form.data_version(wrong) is None
+    assert verify_cursor(form, cursor, BINDING, AVAILABLE) == STATE
+    with pytest.raises(SemanticError):
+        verify_cursor(form, cursor, replace(BINDING, page_size=51), AVAILABLE)

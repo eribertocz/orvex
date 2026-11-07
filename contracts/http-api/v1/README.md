@@ -26,3 +26,31 @@ The registry is `components.x-error-codes` in `openapi.yaml`; a test checks that
 - `ErrorDetail.value` is a string. Richer values would be a breaking change for typed clients.
 - `Health.status` is the constant `ok`. Reporting degraded states later is a breaking change, so it would come as a new field or in v2.
 - `modules`, `contracts` and `details` are arrays of name/value objects, not maps, because every object in a contract is closed (`additionalProperties: false`).
+
+## Semantic routes (P2-27a)
+
+`POST /api/v1/semantic/query` and `GET /api/v1/semantic/catalog` exist only in local mode.
+
+- **Credentials.** Each serve session has three, all revoked when the server stops:
+  - a one-time bootstrap code, valid for a few minutes, exchanged at `/?code=…` for a session cookie and a redirect without the code;
+  - the session cookie (`HttpOnly`, `SameSite=Strict`, its name carries the port);
+  - a bearer token for scripts, in a file only its owner can read.
+- **Requests.** A semantic request is refused before any project work when:
+  - its `Host` is not `127.0.0.1:<port>` or `localhost:<port>`;
+  - its `Origin` is not the server's own (`null` included), or its `Sec-Fetch-Site` is not `same-origin` or `none`;
+  - a `POST` body is not `application/json`;
+  - it carries no live credential.
+- **Engine errors.** Every `semantic-error` v1 code is also an error code of this API. `error.code` is the engine's code; `error.semantic` is its whole message, with the builder audience in local mode; `details` repeats its details as name/value text.
+- **Status codes:**
+
+  | Status | When |
+  |---|---|
+  | 400 | category `query` |
+  | 403 | category `security` |
+  | 404 | `MEMBER_NOT_FOUND` |
+  | 409 | `EVIDENCE_VIOLATED` |
+  | 413 | `MATRIX_TOO_WIDE`, and a size budget |
+  | 422 | categories `model`, `correctness` and `engine` |
+  | 429 | the time budget (`budget: time_ms`) |
+  | 503 | `ENGINE_VERSION_UNTESTED` |
+- **Arrow.** The Arrow answer is the result's Arrow form. Its schema metadata also holds `semantic.envelope` and `semantic.receipt`, the RFC 8785 bytes of the JSON answer's envelope and receipt view.

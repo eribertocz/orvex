@@ -56,6 +56,18 @@ PASSING = {
 }
 
 
+def test_the_http_api_gives_every_case_the_library_s_outcome() -> None:
+    """P2-27a (#363): every case asked through `POST /api/v1/semantic/query`, as JSON and as
+    Arrow, ends exactly as through the library; nothing fails either way."""
+    from conformance.runners.semantic_corpus import compare
+
+    library, _ = run()
+    http, findings = run(through="http")
+    assert findings == []
+    assert compare(library, http) == []
+    assert {r.case for r in http if r.status == "pass"} == PASSING
+
+
 def test_every_case_is_answered_or_not_run_with_its_capability() -> None:
     """P2-12 (#311): real results for what the engine supports; every other case is `not-run`
     and names what it waits for. None fails, and a later rule moves cases into `PASSING`."""

@@ -35,7 +35,62 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Version" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/semantic/query:
+    post:
+      operationId: postSemanticQuery
+      summary: Answer a semantic question for the caller (local mode, P2-27a).
+      description: >-
+        The body is a `semantic-query` v1 document. The caller is authenticated by the serve
+        session (a session cookie or `Authorization: Bearer`; see `README.md`). A next detail
+        page is answered on the snapshot its cursor pins, never on the current one. With
+        `Accept: application/vnd.apache.arrow.stream` the answer is the result's Arrow form
+        (`semantic-result` v1), whose schema metadata also holds `semantic.envelope` (the JSON
+        form's envelope) and `semantic.receipt` (the receipt view), both as RFC 8785 bytes
+        equal to the JSON answer's.
+      security: [{ session: [] }, { bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, description: "A semantic-query v1 document." }
+      responses:
+        "200":
+          description: The result and the caller's view of its receipt.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SemanticAnswer" }
+            application/vnd.apache.arrow.stream:
+              schema: { type: string, format: binary }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/semantic/catalog:
+    get:
+      operationId: getSemanticCatalog
+      summary: The members the caller may see (local mode, P2-27a).
+      security: [{ session: [] }, { bearer: [] }]
+      responses:
+        "200":
+          description: The caller's `catalog` v1 document; hidden members are never listed.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { type: object, description: "A catalog v1 document." }
+        default: { $ref: "#/components/responses/Error" }
 components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: "<slug>_session_<port>"
+      description: >-
+        A session cookie issued by exchanging the serve session's one-time bootstrap code
+        (`/?code=…`); `HttpOnly`, `SameSite=Strict`.
+    bearer:
+      type: http
+      scheme: bearer
+      description: The serve session's token for scripts, read from its owner-only token file.
   x-error-codes:
     # Registry of the codes the server sends in ErrorEnvelope.error.code. Adding a code is a
     # compatible change; removing one or changing its meaning requires v2 and an ADR.
@@ -50,6 +105,17 @@ components:
       A browser sent the request from another site: its `Origin` is not this server's own.
     VALIDATION_FAILED: The request does not match the contract; `details` names each problem.
     INTERNAL_ERROR: An unexpected server failure; the request id identifies it in the server log.
+    UNAUTHENTICATED: >-
+      A semantic route was asked without a live session cookie or the session's bearer token,
+      or a bootstrap code that is spent, expired or wrong was presented.
+    UNSUPPORTED_MEDIA_TYPE: A semantic `POST` whose body is not `application/json`.
+    PROJECT_BUSY: >-
+      A run holds the project's lake; the `Retry-After` header says when to try again.
+    PROJECT_INVALID: The project's settings (`project.yaml`) have problems.
+    LAKE_NOT_FOUND: The project has no lake yet; it has never been run.
+    SEMANTIC_MODEL_NOT_FOUND: The project has no semantic model.
+    SEMANTIC_MODEL_INVALID: >-
+      The project's semantic model or its policies have problems; `details` names each one.
   headers:
     RequestId:
       description: >-
@@ -119,6 +185,16 @@ components:
         message: { type: string, minLength: 1 }
         details: { type: array, items: { $ref: "#/components/schemas/ErrorDetail" } }
         request_id: { type: string, minLength: 1 }
+        semantic:
+          description: The engine's whole `semantic-error` v1 message, for an engine error.
+          type: object
+    SemanticAnswer:
+      type: object
+      additionalProperties: false
+      required: [result, receipt]
+      properties:
+        result: { type: object, description: "The semantic-result v1 JSON form." }
+        receipt: { type: object, description: "The caller's receipt v1 view of the result." }
     ErrorEnvelope:
       type: object
       additionalProperties: false

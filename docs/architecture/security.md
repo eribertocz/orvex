@@ -16,6 +16,14 @@ Rank 3 in the precedence order (`docs/README.md`). Changes require Owner approva
 | Local | No login. A single implicit Builder bound to the local machine (loopback only) |
 | Server | Local users (password hashed with `hashlib.scrypt`) and/or OIDC single sign-on (Authorization Code flow with PKCE and `response_mode=query`) |
 
+- **Local mode's serve session (P2-27a, #363).** Loopback alone is not enough. Each serve session has three separate credentials, each random (256 bits), compared in constant time, kept only in the server's memory, never logged, and revoked when the server stops:
+  - a **bootstrap code** for the browser, single-use and valid for a few minutes. It is exchanged at `/?code=…` for a session cookie and a redirect without the code, under `Referrer-Policy: no-referrer`;
+  - a **session cookie** with its own value: `HttpOnly`, `SameSite=Strict`, and a name that carries the port;
+  - a **bearer token** for scripts, in a file only its owner can read, removed at shutdown.
+
+  The `Host`, `Origin` and `Sec-Fetch-Site` checks and the `application/json` body requirement refuse DNS rebinding and cross-site requests before any project work. The local Builder's context comes from `access` (`LocalContextProvider`), and only for an authenticated request; the CLI's local builder grant never reaches HTTP.
+
+  **Limit:** the files' permissions protect against other users of the machine. They do not isolate the server from a malicious process of the same user, which can read that user's files and memory; only isolation by the operating system (another user, a container, a sandbox) does.
 - Users are global to the instance. Users are identified by an internal id; with OIDC, by issuer + subject, never by email.
 - Sessions are server-side, in `HttpOnly`, `Secure` (HTTPS), `SameSite=Strict` cookies; mutating requests validate `Origin`.
 - The OIDC flow uses a separate short-lived binding cookie (`state`, `nonce`, PKCE verifier; at most 10 minutes) with `SameSite=Lax`, because the identity provider's redirect back is a cross-site navigation. It is deleted when the session cookie is issued and is never accepted as a session.
