@@ -1,0 +1,14 @@
+{
+  "kind": "tables_result",
+  "snapshot": 12,
+  "tables": [
+    {
+      "schema": "main",
+      "table": "sales",
+      "columns": [
+        { "name": "sale_id", "type": "BIGINT", "nullable": false },
+        { "name": "amount", "type": "DECIMAL(18,2)", "nullable": true }
+      ]
+    }
+  ]
+}

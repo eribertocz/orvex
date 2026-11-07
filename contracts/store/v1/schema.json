@@ -36,6 +36,12 @@
     },
     {
       "$ref": "#/$defs/StatisticsResult"
+    },
+    {
+      "$ref": "#/$defs/TablesRequest"
+    },
+    {
+      "$ref": "#/$defs/TablesResult"
     }
   ],
   "$defs": {
@@ -915,6 +921,98 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/TableStatistics"
+          }
+        }
+      }
+    },
+    "TablesRequest": {
+      "description": "Every lake table alive at one snapshot, with its columns as of that snapshot, read from the lake's own catalog on the store's connection (#358): the schema a semantic model compiles against. Never a path, a file or any other catalog detail.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "snapshot"
+      ],
+      "properties": {
+        "kind": {
+          "const": "tables"
+        },
+        "snapshot": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "TableColumn": {
+      "description": "One column as of the snapshot: its name, its DuckDB type, and whether the lake allows NULL in it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type",
+        "nullable"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nullable": {
+          "type": "boolean"
+        }
+      }
+    },
+    "LakeTable": {
+      "description": "One lake table as of the snapshot, its columns in order.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "table",
+        "columns"
+      ],
+      "properties": {
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "table": {
+          "type": "string",
+          "minLength": 1
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TableColumn"
+          }
+        }
+      }
+    },
+    "TablesResult": {
+      "description": "The answer to one `TablesRequest`: every table alive at the snapshot, ordered by schema and table.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "snapshot",
+        "tables"
+      ],
+      "properties": {
+        "kind": {
+          "const": "tables_result"
+        },
+        "snapshot": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LakeTable"
           }
         }
       }

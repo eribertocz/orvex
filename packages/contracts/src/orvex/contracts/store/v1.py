@@ -359,6 +359,57 @@ class StatisticsResult(BaseModel):
     tables: list[TableStatistics]
 
 
+class TablesRequest(BaseModel):
+    """
+    Every lake table alive at one snapshot, with its columns as of that snapshot, read from the lake's own catalog on the store's connection (#358): the schema a semantic model compiles against. Never a path, a file or any other catalog detail.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["tables"]
+    snapshot: Annotated[int, Field(ge=0)]
+
+
+class TableColumn(BaseModel):
+    """
+    One column as of the snapshot: its name, its DuckDB type, and whether the lake allows NULL in it.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    name: Annotated[str, Field(min_length=1)]
+    type: Annotated[str, Field(min_length=1)]
+    nullable: bool
+
+
+class LakeTable(BaseModel):
+    """
+    One lake table as of the snapshot, its columns in order.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    schema_: Annotated[str, Field(alias="schema", min_length=1)]
+    table: Annotated[str, Field(min_length=1)]
+    columns: list[TableColumn]
+
+
+class TablesResult(BaseModel):
+    """
+    The answer to one `TablesRequest`: every table alive at the snapshot, ordered by schema and table.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["tables_result"]
+    snapshot: Annotated[int, Field(ge=0)]
+    tables: list[LakeTable]
+
+
 class Parameter(BaseModel):
     """
     A named parameter bound to `$name` in the SQL. The value is text converted to the declared DuckDB type; exact values are never JSON numbers.
@@ -513,6 +564,8 @@ class StoreMessage(
         | SourceAttachment
         | StatisticsRequest
         | StatisticsResult
+        | TablesRequest
+        | TablesResult
     ]
 ):
     root: Annotated[
@@ -526,7 +579,9 @@ class StoreMessage(
         | ResultJson
         | SourceAttachment
         | StatisticsRequest
-        | StatisticsResult,
+        | StatisticsResult
+        | TablesRequest
+        | TablesResult,
         Field(title="StoreMessage"),
     ]
     """

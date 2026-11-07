@@ -44,9 +44,10 @@ from orvex.contracts.store.v1 import (
     ReadRequest,
     StatementRequest,
 )
-from orvex.server import heartbeat, lake_place
+from orvex.server import heartbeat, lake_place, semantic_model
 from orvex.server.identity import Identity, load_identity
 from orvex.server.lake_place import Place
+from orvex.server.problems import Problem
 from orvex.server.project import (
     Project,
     ProjectLoadError,
@@ -91,18 +92,6 @@ LOCK_FILE = "lake.lock"
 DEFAULT_MEMORY = "4GB"
 DEFAULT_TIMEOUT_MS = 3_600_000
 GIT_TIMEOUT_S = 10
-
-
-@dataclass(frozen=True, slots=True)
-class Problem:
-    code: str
-    file: str
-    line: int | None
-    message: str
-
-    def __str__(self) -> str:
-        where = self.file if self.line is None else f"{self.file}:{self.line}"
-        return f"{self.code} {where} {self.message}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -549,13 +538,53 @@ def project_lock(folder: Path, name: str = LOCK_FILE) -> Iterator[None]:
         handle.close()  # closing releases the lock
 
 
+def _check_semantic(checked: Checked, out: IO[str]) -> bool:
+    """The project's semantic model compiled against its lake's current snapshot (#358),
+    reported after every transform problem; True when it has problems. Without a lake or a
+    snapshot yet, or while a run holds the project, it is not checked, and says so."""
+    project = checked.project
+    if project is None or checked.place is None or not semantic_model.model_files(project.folder):
+        return False
+    identity = load_identity()
+    home = project.folder / f".{identity.slug}"
+    if not lake_place.exists(home):
+        print("semantic model not checked: the lake has no snapshot yet", file=out)
+        return False
+    try:
+        with project_lock(home):
+            lake = open_existing(home, checked.place)
+            try:
+                loaded = semantic_model.load_semantic(
+                    project.folder,
+                    lake,
+                    lake.current_snapshot().id,
+                    (identity.ossie_vendor_name, *identity.previous_vendor_names),
+                    audience="builder",  # local mode: whoever opens the project builds it
+                )
+            finally:
+                lake.close()
+    except ProjectLocked:
+        print("semantic model not checked: a run is in progress", file=out)
+        return False
+    except ProjectLoadError as error:
+        print(_load_problem(error), file=out)
+        return True
+    except StoreError as error:
+        print(_store_problem(error, ".", "semantic model"), file=out)
+        return True
+    for problem in loaded.problems:
+        print(problem, file=out)
+    return bool(loaded.problems)
+
+
 def validate(folder: Path, out: IO[str], show_sql: str | None = None) -> int:
     """Check a project; `show_sql`: also print the SQL that runs for that model (views inlined,
     the automatic incremental filter placed)."""
     checked = check_project(folder)
     for problem in checked.problems:
         print(problem, file=out)
-    if checked.problems:
+    semantic = _check_semantic(checked, out)
+    if checked.problems or semantic:
         return 1
     if show_sql is not None:
         by_name = {model.name: model for model in checked.discovery.models}

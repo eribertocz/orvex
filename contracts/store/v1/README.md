@@ -19,6 +19,8 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 | `ResultJson` | A read result as JSON: `columns` (`name`, DuckDB `type`) and positional `rows`, encoded exactly (below) |
 | `StatisticsRequest` | The file statistics of lake tables as of one `snapshot`, for read-cost upper bounds only (below) |
 | `StatisticsResult` | One `TableStatistics` per table asked, in order |
+| `TablesRequest` | Every lake table alive at one `snapshot`, with its columns as of that snapshot (below) |
+| `TablesResult` | One `LakeTable` (`schema`, `table`, `columns` with `name`, DuckDB `type`, `nullable`) per table, ordered by schema and table |
 | `SourceAttachment` | A source given to `open_lake` — files (`parquet`, `csv`, `duckdb`) or databases (`sqlite`, `postgres`); readable by name inside write transactions only (below) |
 
 ## File statistics (`StatisticsRequest`, #352)
@@ -34,6 +36,13 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 - **`complete`:** false when a file of the snapshot has no row count. Then no upper bound exists.
 - **What is never returned:** a path or any other catalog detail. The request runs under an admission slot and the lake's default time limit, like a read.
 - **What statistics prove:** an upper bound only. They are never a lower bound of what a read scans: filters, `LIMIT` and DuckDB's own pruning stop reads early.
+
+## Tables at a snapshot (`TablesRequest`, #358)
+
+`Lake.table_columns(request)` lists every lake table alive at `request.snapshot`, the schema a semantic model compiles against:
+- **What is read:** names and nullability come from the lake's own catalog as of that snapshot. Types are those DuckDB binds for the table at that version (`AT (VERSION => n)`). Nothing of any other version is read, the newest one included.
+- **What is never returned:** a path, a file or any other catalog detail.
+- **Errors:** a snapshot that does not exist is refused as for a read. The request runs under an admission slot and the lake's default time limit.
 
 ## File sources (`SourceAttachment`)
 

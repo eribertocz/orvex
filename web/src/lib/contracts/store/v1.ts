@@ -13,7 +13,9 @@ export type StoreMessage =
 	| ResultJson
 	| SourceAttachment
 	| StatisticsRequest
-	| StatisticsResult;
+	| StatisticsResult
+	| TablesRequest
+	| TablesResult;
 /**
  * Where the lake is.
  */
@@ -328,4 +330,35 @@ export interface ColumnStatistics {
 	min?: string;
 	max?: string;
 	nulls?: number;
+}
+/**
+ * Every lake table alive at one snapshot, with its columns as of that snapshot, read from the lake's own catalog on the store's connection (#358): the schema a semantic model compiles against. Never a path, a file or any other catalog detail.
+ */
+export interface TablesRequest {
+	kind: 'tables';
+	snapshot: number;
+}
+/**
+ * The answer to one `TablesRequest`: every table alive at the snapshot, ordered by schema and table.
+ */
+export interface TablesResult {
+	kind: 'tables_result';
+	snapshot: number;
+	tables: LakeTable[];
+}
+/**
+ * One lake table as of the snapshot, its columns in order.
+ */
+export interface LakeTable {
+	schema: string;
+	table: string;
+	columns: TableColumn[];
+}
+/**
+ * One column as of the snapshot: its name, its DuckDB type, and whether the lake allows NULL in it.
+ */
+export interface TableColumn {
+	name: string;
+	type: string;
+	nullable: boolean;
 }
