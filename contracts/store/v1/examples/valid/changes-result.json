@@ -1,0 +1,9 @@
+{
+  "kind": "changes_result",
+  "since": 10,
+  "snapshot": 12,
+  "tables": [
+    { "table": "marts.sales", "changed": true, "removed_rows": 2 },
+    { "table": "dropped", "changed": true }
+  ]
+}

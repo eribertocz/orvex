@@ -93,3 +93,8 @@ reason = "With totals, the result's level column: one small integer per result r
 file = "packages/semantic/src/orvex/semantic/evidence.py"
 call = "as_py"
 reason = "Evidence checks (P2-26): one row of BIGINT violation counts per statement, never data rows"
+
+[[allow]]
+file = "packages/server/src/orvex/server/evidence_runs.py"
+call = "to_pylist"
+reason = "Evidence records (semantic module state, not analytical data): one row per declaration, or one per dataset"

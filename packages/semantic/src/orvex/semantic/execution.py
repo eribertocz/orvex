@@ -90,6 +90,9 @@ class Engine:
     # every piece of evidence is `declared`, and no aggregate table is read in place of its
     # base, since none is verified consistent (C8).
     evidence: Callable[[Mapping[str, object]], Iterable[EvidenceRecord]] | None = None
+    # The store's proof that no table a record's check read changed after the record's
+    # snapshot up to the one read (#355): a record of an earlier snapshot then holds.
+    unchanged: Callable[[EvidenceRecord, int], bool] | None = None
     # Read-cost estimates (#352): the snapshot's file statistics (`store/v1`), none when the
     # store gives none; supplied by `server`. None: no estimate, which decides nothing anyway.
     statistics: Callable[[StatisticsRequest], StatisticsResult | None] | None = None
@@ -567,6 +570,7 @@ def answer(
         compiled,
         engine.evidence(engine.snapshot) if engine.evidence is not None else (),
         snapshot if isinstance(snapshot, int) and not isinstance(snapshot, bool) else -1,
+        engine.unchanged,
     )
     rollup = next(  # the first proven table verified consistent on this snapshot (C8)
         (

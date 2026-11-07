@@ -38,6 +38,8 @@ import duckdb
 import pyarrow as pa
 from orvex.contracts.store.v1 import (
     AzureStorage,
+    ChangesRequest,
+    ChangesResult,
     CommitResult,
     FileSourceAttachment,
     GcsStorage,
@@ -2207,6 +2209,157 @@ class Lake:
         finally:
             self._admission.release()
         return StatisticsResult(kind="statistics_result", snapshot=request.snapshot, tables=tables)
+
+    def changes(self, request: ChangesRequest) -> ChangesResult:
+        """What changed in lake tables after `request.since` up to `request.snapshot` (#355),
+        from the lake's own change history, counted by DuckDB: whether each table changed at
+        all, and how many rows it had at `since` were deleted or updated. Counts only. A name
+        that is a lake table at neither snapshot is refused, as is `since` after `snapshot`."""
+        deadline = time.monotonic() + self._timeout_ms(None) / 1000
+        self._admission.acquire(deadline)
+        try:
+            cursor = self._cursor()
+            guard = Guard(cursor, deadline)
+            try:
+                for snapshot in (request.since, request.snapshot):
+                    if self._snapshot(snapshot, cursor) is None:
+                        raise self._missing_snapshot(snapshot, cursor)
+                if request.since > request.snapshot:
+                    raise StoreError(
+                        "STORE_STATEMENT_INVALID",
+                        "`since` is after `snapshot`.",
+                        {"since": str(request.since), "snapshot": str(request.snapshot)},
+                    )
+                tables = [
+                    self._table_changes(name.root, request.since, request.snapshot, cursor)
+                    for name in request.tables
+                ]
+            except duckdb.Error as error:
+                raise guard.error(error) from error
+            finally:
+                guard.stop()
+                cursor.close()
+        finally:
+            self._admission.release()
+        return ChangesResult.model_validate(
+            {
+                "kind": "changes_result",
+                "since": request.since,
+                "snapshot": request.snapshot,
+                "tables": tables,
+            }
+        )
+
+    def _table_id(
+        self, schema: str, table: str, snapshot: int, cursor: duckdb.DuckDBPyConnection
+    ) -> int | None:
+        meta = self._metadata
+        alive = "{0}.begin_snapshot <= $n AND ({0}.end_snapshot IS NULL OR {0}.end_snapshot > $n)"
+        row = self._one(
+            f"SELECT min(t.table_id), count(*) FROM {meta}.ducklake_table AS t "
+            f"JOIN {meta}.ducklake_schema AS s USING (schema_id) "
+            "WHERE lower(s.schema_name) = lower($schema) AND lower(t.table_name) = lower($table) "
+            f"AND {alive.format('t')} AND {alive.format('s')}",
+            {"schema": schema, "table": table, "n": snapshot},
+            cursor,
+        )
+        if row is None or row[1] != 1:
+            return None
+        return int(str(row[0]))
+
+    def _columns_of(
+        self, table_id: int, snapshot: int, cursor: duckdb.DuckDBPyConnection
+    ) -> list[str]:
+        meta = self._metadata
+        alive = "{0}.begin_snapshot <= $n AND ({0}.end_snapshot IS NULL OR {0}.end_snapshot > $n)"
+        row = self._one(
+            "SELECT string_agg(c.column_name, chr(31) ORDER BY c.column_order) "
+            f"FROM {meta}.ducklake_column AS c WHERE c.table_id = $id "
+            f"AND c.parent_column IS NULL AND {alive.format('c')}",
+            {"id": table_id, "n": snapshot},
+            cursor,
+        )
+        return str(row[0]).split(chr(31)) if row is not None and row[0] is not None else []
+
+    def _table_changes(
+        self, name: str, since: int, snapshot: int, cursor: duckdb.DuckDBPyConnection
+    ) -> dict[str, Any]:
+        """`changed` from the change history (rows, columns, the table's identity); and
+        `removed_rows` by value: the rows of the table at `since`, as a multiset, less the rows
+        it has at `snapshot`, read by DuckDB at both versions. Exact whatever happened between:
+        a merge's unchanged rows, a row added then deleted, a table rebuilt with every row it
+        had. Absent when a column it had at `since` is gone at `snapshot`."""
+        schema, _, table = name.rpartition(".")
+        schema = schema or "main"
+        before = self._table_id(schema, table, since, cursor)
+        after = self._table_id(schema, table, snapshot, cursor)
+        if before is None and after is None:
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                f"{name!r} is not a lake table at snapshot {since} or {snapshot}.",
+                {"table": name, "snapshot": str(snapshot)},
+            )
+        if before is None:  # created since: it had no rows to remove
+            return {"table": name, "changed": True, "removed_rows": 0}
+        relation = f"{LAKE}.{_identifier(schema)}.{_identifier(table)}"
+        if after is None:  # dropped since: every row it had is gone
+            gone = self._one(
+                f"SELECT count(*) FROM {relation} AT (VERSION => {int(since)})", {}, cursor
+            )
+            return {
+                "table": name,
+                "changed": True,
+                "removed_rows": int(str(gone[0])) if gone else 0,
+            }
+        changed = before != after or (
+            since != snapshot and self._touched(schema, table, after, since, snapshot, cursor)
+        )
+        if not changed:
+            return {"table": name, "changed": False, "removed_rows": 0}
+        had = self._columns_of(before, since, cursor)
+        has = {c.casefold() for c in self._columns_of(after, snapshot, cursor)}
+        if not had or any(c.casefold() not in has for c in had):
+            return {"table": name, "changed": True}
+        listed = ", ".join(_identifier(c) for c in had)  # the catalog's own column names
+        removed = self._one(
+            f"SELECT count(*) FROM (SELECT {listed} FROM {relation} AT (VERSION => {int(since)}) "
+            f"EXCEPT ALL SELECT {listed} FROM {relation} AT (VERSION => {int(snapshot)}))",
+            {},
+            cursor,
+        )
+        return {
+            "table": name,
+            "changed": True,
+            "removed_rows": int(str(removed[0])) if removed is not None else 0,
+        }
+
+    def _touched(
+        self,
+        schema: str,
+        table: str,
+        table_id: int,
+        since: int,
+        snapshot: int,
+        cursor: duckdb.DuckDBPyConnection,
+    ) -> bool:
+        """Any row (DuckLake's change feed) or column (its catalog) of one table changed after
+        `since` up to `snapshot`."""
+        moved = (
+            "({0}.begin_snapshot > $since AND {0}.begin_snapshot <= $n) "
+            "OR ({0}.end_snapshot > $since AND {0}.end_snapshot <= $n)"
+        )
+        rows = self._one(
+            "SELECT count(*) FROM ducklake_table_changes($lake, $schema, $table, $since + 1, $n)",
+            {"lake": LAKE, "schema": schema, "table": table, "since": since, "n": snapshot},
+            cursor,
+        )
+        columns = self._one(
+            f"SELECT count(*) FROM {self._metadata}.ducklake_column AS c "
+            f"WHERE c.table_id = $id AND ({moved.format('c')})",
+            {"id": table_id, "since": since, "n": snapshot},
+            cursor,
+        )
+        return any(int(str(found[0])) > 0 for found in (rows, columns) if found is not None)
 
     def table_columns(self, request: TablesRequest) -> TablesResult:
         """Every lake table alive at `request.snapshot`, with its columns as of that snapshot

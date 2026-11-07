@@ -15,7 +15,9 @@ export type StoreMessage =
 	| StatisticsRequest
 	| StatisticsResult
 	| TablesRequest
-	| TablesResult;
+	| TablesResult
+	| ChangesRequest
+	| ChangesResult;
 /**
  * Where the lake is.
  */
@@ -361,4 +363,34 @@ export interface TableColumn {
 	name: string;
 	type: string;
 	nullable: boolean;
+}
+/**
+ * What changed in lake tables between two snapshots (#355): whether each table changed at all (rows or columns) after `since` up to `snapshot`, from the lake's own change history, and how many of the rows it had at `since` it no longer has, compared by value by DuckDB reading the table at both versions. Counts only, never a value.
+ */
+export interface ChangesRequest {
+	kind: 'changes';
+	/**
+	 * @minItems 1
+	 * @maxItems 256
+	 */
+	tables: [TableName, ...TableName[]];
+	since: number;
+	snapshot: number;
+}
+/**
+ * The answer to one `ChangesRequest`, one entry per table asked, in order.
+ */
+export interface ChangesResult {
+	kind: 'changes_result';
+	since: number;
+	snapshot: number;
+	tables: TableChanges[];
+}
+/**
+ * One table between `since` and `snapshot`. `changed`: any row or column changed, or the table was created, dropped or replaced. `removed_rows`: rows present at `since` and missing at `snapshot`, by value as a multiset (a dropped table lost every row; one created since had none); absent when a column it had at `since` is gone.
+ */
+export interface TableChanges {
+	table: TableName;
+	changed: boolean;
+	removed_rows?: number;
 }

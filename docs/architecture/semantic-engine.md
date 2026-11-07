@@ -118,11 +118,15 @@ Every relationship cardinality, dataset uniqueness, temporal non-overlap and bri
 | `cardinality` | a relationship | `to` key values more than one row shares that a `from` row refers to, and the reverse for `one_to_one`; for a temporal relationship, overlapping versions of a referenced key |
 | `referential_integrity` | a relationship | distinct `from` keys, none `NULL`, with no `to` row |
 | `consistent` | an `aggregate_table` with `base_dataset` (implied, not listed) | groups the table is missing, groups it has in addition, and groups whose stored measure differs exactly from the base metric (a `NULL` against a value included), by a full outer join on the grain where `NULL` matches `NULL` |
-| `append_only` | a dataset | not checked: it compares two snapshots, and one statement reads one. It stays `declared`. |
+| `append_only` | a dataset | rows the dataset had on its previous checked snapshot that it no longer has, compared by value as a multiset (a row written back unchanged, or a table rebuilt with every row it had, remains), counted by DuckDB reading the table at both versions (`store/v1` `ChangesRequest`, #355). A dropped table has lost every row. With no earlier checked snapshot, or a column of the earlier one gone, it stays `declared`. |
 
-**Records.**
-- A record holds for one snapshot and for one declaration: a fingerprint of the model elements the check reads (the element, the datasets it reads, and every metric for `consistent`). On any other snapshot, or once the declaration changed, the evidence is `declared` again.
-- A check that does not finish within the verification budget leaves the evidence `declared`; builders are told. Any other failure of a check is an error, never a verification.
+**Records (#355).**
+- A record holds for one snapshot and for one declaration: a fingerprint of the model elements the check reads (the element, the datasets it reads, and every metric for `consistent`). Once the declaration changes, the evidence is `declared` again.
+- A record of snapshot R also holds on a later snapshot S only when the store proves that no table its check read changed after R up to S (`ChangesRequest`): the same rows, so the same outcome. Anything else is `declared` again.
+- Records are `semantic` state kept in the lake's `_meta` schema (`evidence_records`, and `evidence_checked` for the snapshots each dataset was checked on), next to the run records and never among the datasets. Writing them commits a snapshot that changes no dataset, so the run's records hold there.
+- **When checks run:** after every successful run, for the datasets the run wrote and the relationships touching them, and on demand by a builder (the CLI's `evidence` command only; the HTTP API checks roles through `access`, P2-27). A failed run commits nothing and checks nothing. For an existing DuckLake (ADR-0027 §7), the check before a new snapshot is served comes with Direct Query (P2-30).
+- A check that does not finish within the verification budget leaves the evidence `declared`, and builders are told. Any other failure of a check is reported, never a verification.
+- Evidence status never changes a result's reproducibility class: the receipt marks it in `evidence[]` only (Owner decision on PR #356).
 
 **What a question relies on** comes from its plan, and is only what its answer depends on:
 - the `cardinality` of every relationship it joins through, as-of joins included: a repeated key among the rows it refers to multiplies them or matches an event twice;

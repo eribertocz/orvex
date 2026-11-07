@@ -1263,6 +1263,7 @@ class EvidenceCheck:
     sql: str
     parameters: tuple[Mapping[str, str | None], ...]  # `store/v1` `Parameter`s
     counts: tuple[str, ...]  # one BIGINT column each, in order: the violations by kind
+    tables: tuple[str, ...] = ()  # every lake table it reads, as the model names it (#355)
 
 
 Pair = tuple[MemberId, MemberId]
@@ -1275,7 +1276,8 @@ class _Checks(_Writer):
         self.dataset_alias.update({f"#{k}": v for k, v in aliases.items()})
 
     def done(self, statement: str, counts: tuple[str, ...]) -> EvidenceCheck:
-        return EvidenceCheck(statement, tuple(self.parameters), counts)
+        tables = tuple(dict.fromkeys(table for table, _ in self.reads))
+        return EvidenceCheck(statement, tuple(self.parameters), counts, tables)
 
     def keys(self, fields: tuple[MemberId, ...], alias: str) -> list[str]:
         return [self.field(f, alias) for f in fields]
