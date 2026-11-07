@@ -584,7 +584,8 @@ class ReceiptRecord:
             if visible:
                 shown = _version(DataRead(**{k: v for k, v in read.items() if k != "table"}))
                 shown["retained"] = read["retained"]
-                data.append(shown)
+                if shown not in data:  # a policy's tables, one version: named once, by it
+                    data.append(shown)
         view.update(
             model={
                 k: record["model"][k]

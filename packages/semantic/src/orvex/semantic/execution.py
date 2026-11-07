@@ -415,9 +415,11 @@ def _execute(
     clock = engine.clock()
     run: Run | None = None
     resolved: list[MappingQuery] = []
-    if external is not None:  # the version is fixed once, when the question is read
-        external = replace(external, version=external.adapter.pin())
+    if external is not None:
+        # The policies' values first, on the managed lake: a refusal asks nothing of the other
+        # engine. Then its version, fixed once for every read of the question.
         values, resolved = _resolve(external.queries, engine, external.policies)
+        external = replace(external, version=external.adapter.pin())
         physical = external.adapter.compile(plan_, values)
         evidence = verify_physical(plan_, physical)  # the bound statement, checked again (C9)
         run = external.runner()
@@ -485,7 +487,10 @@ def _execute(
         if external is None
     ]
     if external is not None:
-        data = [external.read(_written(compiled, s.dataset)) for s in plan_.sources]
+        data = [
+            external.read(_written(compiled, s.dataset), engine.routing.of(s.dataset))
+            for s in plan_.sources
+        ]
         data += [  # every policy whose mapping values were read, at the managed snapshot
             DataRead(
                 name=name,
@@ -504,7 +509,9 @@ def _execute(
         query_fingerprint=report.query_fingerprint,
         model=ModelUse(compiled.model_fingerprint, compiled.reader),
         permission_fingerprint=str(context["permission_fingerprint"]),
-        data=list({(d.for_policy, d.name): d for d in data}.values()),
+        # One read per dataset; per policy, one per managed table it read (a mapping, and its
+        # registration), which the record keeps and a view names by the policy alone.
+        data=list({(d.for_policy, d.name, d.table): d for d in data}.values()),
         execution=ExecutionUse(
             engine=external.adapter.engine if external is not None else "duckdb",
             engine_version=external.adapter.engine_version
@@ -557,16 +564,18 @@ class External:
 
         return run
 
-    def read(self, name: str) -> DataRead:
-        """The dataset's data version on this engine: a snapshot, or a live read instant."""
+    def read(self, name: str, entry: EngineEntry | None) -> DataRead:
+        """The dataset's data version on this engine, through its own connection (two names
+        may share one environment): a snapshot, or a live read instant."""
         version = self.version
+        connection = (entry or self.entry).connection
         if self.entry.route == "live":
             return DataRead(
                 name=name,
                 route="live",
                 retained=False,
                 read_at=_instant(datetime.fromisoformat(str(version["read_at"]))),
-                connection=self.entry.connection,
+                connection=connection,
             )
         return DataRead(
             name=name,
@@ -575,7 +584,7 @@ class External:
             snapshot_id=int(str(version["id"])),
             committed_at=_instant(datetime.fromisoformat(str(version["committed_at"]))),
             project=str(version["project"]),
-            connection=self.entry.connection,
+            connection=connection,
         )
 
 
@@ -616,7 +625,7 @@ def _resolve(
         found: list[str | None] = []
         for batch in run(statement, query.parameters):
             for value in batch.column("#value").to_pylist():
-                counted += 1
+                counted += 0 if query.exists else 1  # whether a row matched: one bound flag
                 sized += len(value.encode()) if value is not None else 0
                 if counted > count_cap or sized > byte_cap:
                     raise refused(query, "value_cap")
@@ -743,10 +752,17 @@ def prepare(
             # A float as its shortest exact text: bound as text and cast back, never rounded.
             start = tuple(repr(v) if isinstance(v, float) else v for v in state.position)
     progress.engine = engine
+    routes = {d: engine.routing.route(d) for d, e in engine.routing.datasets.items() if e}
+    # The engine first, on the plan that will run there: another engine reads no aggregate
+    # table of the managed lake, and the managed lake's evidence records say nothing of its
+    # data, so its evidence stays declared (nothing unverified is shown as verified).
+    unrolled = plan(report, start, None, routes)
+    external = _external(unrolled, report.compiled, policies, engine)
     snapshot = engine.snapshot.get("id")
+    consulted = engine.evidence is not None and external is None
     ledger = Ledger(  # the records of the snapshot read, for the declarations as they are
         compiled,
-        engine.evidence(engine.snapshot) if engine.evidence is not None else (),
+        engine.evidence(engine.snapshot) if consulted and engine.evidence else (),
         snapshot if isinstance(snapshot, int) and not isinstance(snapshot, bool) else -1,
         engine.unchanged,
     )
@@ -759,11 +775,7 @@ def prepare(
         ),
         None,
     )
-    routes = {d: engine.routing.route(d) for d, e in engine.routing.datasets.items() if e}
-    logical = plan(report, start, rollup, routes)
-    external = _external(logical, report.compiled, policies, engine)
-    if external is not None and rollup is not None:  # an aggregate table is the managed lake's
-        logical = plan(report, start, None, routes)
+    logical = unrolled if rollup is None else plan(report, start, rollup, routes)
     # Another engine's statement binds its policies' mapping values, read only when it runs:
     # here, its shape with every subquery empty is what is checked (C9), and nothing is read.
     physical = (

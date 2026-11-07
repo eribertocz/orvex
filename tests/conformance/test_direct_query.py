@@ -328,6 +328,7 @@ def test_more_values_than_the_caps_refuse_without_revealing_sizes(limits: dict[s
         "reason": "value_cap",
     }
     assert adapter.statements == []  # the policy is never skipped: nothing is read there
+    assert adapter.pins == 0  # nor is the other engine asked anything
 
 
 def test_values_at_the_caps_are_answered() -> None:
@@ -537,3 +538,59 @@ def test_a_mapping_type_without_exact_text_is_refused_before_the_other_engine_re
         "reason": "engine_unsupported",
     }
     assert adapter.statements == []
+
+
+def test_a_deny_list_at_the_count_cap_with_its_registration_is_answered() -> None:
+    """A registration or an `EXISTS` is one bound flag: it never counts as a value."""
+    policy = rp.policies(rp.DENY, limits={"policy_values": 1})
+    context = rp.caller(user_id="u-1")
+    with lakes() as (managed, other):
+        expected = ce.rows_of(ask(rp.query(), rp.COMPILED, managed, policy=policy, context=context))
+        found = ask_on(managed, Simulated(other), policy, context)
+    assert ce.rows_of(found) == expected == [["South", "50.00"]]
+
+
+def test_every_managed_table_a_policy_read_is_kept_and_named_once() -> None:
+    policy = rp.policies(rp.DENY)
+    with lakes() as (managed, other):
+        found = ask_on(managed, Simulated(other), policy, rp.caller(user_id="u-1"))
+    record = found.receipt.document()["data"]
+    tables = sorted(r["table"] for r in record if r["for_policy"])
+    assert tables == ["security.registered", "security.user_zone"]
+    view = builder_view(found, policy)
+    assert [r["name"] for r in view["data"] if r["for"] == "policy"] == ["not_blocked_zone"]
+
+
+def test_each_dataset_names_its_own_connection_when_two_share_an_environment() -> None:
+    twin = EngineEntry("twin", ENTRY.kind, ENTRY.route, ENTRY.environment, ENTRY.capabilities)
+    policy = rp.policies()
+    with lakes() as (managed, other):
+        found = ask_on(
+            managed,
+            Simulated(other),
+            policy,
+            rp.caller(),
+            rp.query(("customers.country",)),
+            routing=routed(("sales", ENTRY), ("customers", twin)),
+        )
+    view = builder_view(found, policy)
+    connections = {r["name"]: r["snapshot"]["connection"] for r in view["data"]}
+    assert connections == {"sales": "warehouse", "customers": "twin"}
+
+
+def test_managed_lake_evidence_never_verifies_another_engine_s_data() -> None:
+    """The managed lake's records say nothing of another engine's tables: their evidence stays
+    declared, even when a table of the same name in the managed lake was verified."""
+    from orvex.semantic.evidence import EvidenceRecord
+
+    calls: list[object] = []
+
+    def records(snapshot: Mapping[str, object]) -> list[EvidenceRecord]:
+        calls.append(snapshot)
+        return []
+
+    with lakes() as (managed, other):
+        found = ask_on(managed, Simulated(other), rp.policies(), rp.caller(), evidence=records)
+    assert calls == []
+    view = builder_view(found, rp.policies())
+    assert all(e["status"] != "verified" for e in view["evidence"])
