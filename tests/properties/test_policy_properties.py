@@ -109,3 +109,32 @@ def test_a_caller_without_the_policy_s_attribute_sees_zero_rows() -> None:
     assert ce.rows_of(found) == []
     notices = found.result.envelope().get("notices", [])
     assert any(notice["code"] == "POLICY_ATTRIBUTE_MISSING" for notice in notices)
+
+
+MASKED = policies(
+    {
+        "version": 1,
+        "column_policies": [{"member": "sales.channel", "default": "masked", "mask": "***"}],
+    }
+)
+
+
+@PROFILE
+@example(EDGE, PAGED)
+@given(worlds(), detail_queries())
+def test_a_masked_field_never_shows_a_value(world: World, query: Document) -> None:
+    """Correction 3: every cell of a masked field is its mask, never a value or NULL, on every
+    page; the other columns still equal the oracle."""
+    asked = {
+        **query,
+        "fields": [{"member": "sales.sale_id"}, {"member": "sales.channel"}],
+        "filters": [f for f in query.get("filters", []) if f["member"] != "sales.channel"],
+    }
+    if not asked["filters"]:
+        del asked["filters"]
+    with lake_of(world) as lake:
+        rows = pages(asked, lake, policy=MASKED)
+    assert all(row[1] == "***" for row in rows)
+    expected = oracle.expected(world.customers, world.sales, asked)
+    ids = sorted(int(str(row[0])) for row in expected)
+    assert [int(str(row[0])) for row in rows] == ids

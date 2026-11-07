@@ -3,7 +3,7 @@
 `expected` is a reference evaluator in pure Python with `Decimal`: it takes the generated
 world, query and caller as plain data and computes the answer by direct evaluation — joins by
 dictionary lookups, aggregation by `Decimal` sums, the ratio recomputed per group, policies as
-row filters. It imports nothing from `orvex`: it shares no binder, planner, compiled model or
+row filters. It imports nothing from the product: it shares no binder, planner, compiled model or
 SQL with the engine.
 
 `duckdb_expected` is the second oracle: plain SQL written here, independent of the engine's
@@ -318,6 +318,6 @@ def _as_oracle(value: object) -> object:
     """DuckDB's Python values in the oracle's own forms, so `_text` writes them alike."""
     if isinstance(value, float):
         raise AssertionError("an exact column came back as a float")
-    if isinstance(value, datetime):
-        return value.date() if value.time() == datetime.min.time() else value
+    if isinstance(value, datetime):  # the oracle never selects an instant raw
+        raise AssertionError("an unexpected instant came back from the DuckDB oracle")
     return value

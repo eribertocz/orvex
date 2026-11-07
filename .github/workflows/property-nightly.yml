@@ -31,5 +31,5 @@ jobs:
           done
       - name: Explore
         env:
-          HYPOTHESIS_PROFILE: nightly
+          PROPERTY_PROFILE: nightly
         run: python -m pytest -q tests/properties

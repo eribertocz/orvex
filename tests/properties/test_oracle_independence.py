@@ -28,6 +28,8 @@ def test_the_oracle_imports_nothing_from_the_product() -> None:
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
     assert imported <= ALLOWED, imported - ALLOWED
-    assert "orvex" not in imported
-    assert "conformance" not in imported
-    assert "tests" not in imported
+    product = Path(__file__).parents[2].joinpath("packages").iterdir()
+    namespaces = {"conformance", "tests"} | {
+        next(iter(sorted(p.glob("src/*"))), p).name for p in product if (p / "src").is_dir()
+    }
+    assert not imported & namespaces, imported & namespaces

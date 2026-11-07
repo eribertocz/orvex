@@ -37,8 +37,8 @@ ZONE = "America/Santiago"
 
 # The run's profile (Owner correction 5): deterministic and small in CI and locally, so a pull
 # request's run is stable and inside the budget; wide and random in the nightly workflow, which
-# sets HYPOTHESIS_PROFILE=nightly. Applied per test, so nothing outside this package changes.
-NIGHTLY = os.environ.get("HYPOTHESIS_PROFILE") == "nightly"
+# sets PROPERTY_PROFILE=nightly. Applied per test, so nothing outside this package changes.
+NIGHTLY = os.environ.get("PROPERTY_PROFILE") == "nightly"
 PROFILE = settings(
     max_examples=400 if NIGHTLY else 10,
     derandomize=not NIGHTLY,

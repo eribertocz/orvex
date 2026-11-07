@@ -46,7 +46,7 @@ EDGE = World(
             "amount": "0.05",
             "qty": "2.00",
             "sold_on": "2026-01-31",
-            "sold_at": "2026-04-05 02:59:00+00",
+            "sold_at": "2026-02-01 02:59:00+00",  # January in Santiago, February in UTC
             "channel": "web",
         },
         {
