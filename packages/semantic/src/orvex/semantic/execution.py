@@ -52,11 +52,11 @@ from orvex.semantic.engines import (
     refuse_mixed,
     refuse_unable,
 )
-from orvex.semantic.errors import SemanticError
+from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.estimates import estimate
 from orvex.semantic.evidence import CONSISTENT, EvidenceRecord, Ledger, relied
 from orvex.semantic.ossie import sql
-from orvex.semantic.planning import PlanError, SemanticPlan, plan
+from orvex.semantic.planning import SemanticPlan, plan
 from orvex.semantic.policies import PolicyModel, read_caller
 from orvex.semantic.query.binding import SCOPES, BoundQuery, Limits, bind_query
 from orvex.semantic.receipt import (

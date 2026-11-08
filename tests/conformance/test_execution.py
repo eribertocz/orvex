@@ -17,10 +17,10 @@ from orvex.contracts.store.v1 import StatementRequest
 from orvex.semantic.adapters import duckdb as adapter_module
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
-from orvex.semantic.errors import SemanticError
+from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.execution import Answer, answer
 from orvex.semantic.ossie.reader import read
-from orvex.semantic.planning import PlanError, SemanticPlan, plan
+from orvex.semantic.planning import SemanticPlan, plan
 from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.store.errors import StoreError
 from orvex.store.json_encoding import arrow_to_json

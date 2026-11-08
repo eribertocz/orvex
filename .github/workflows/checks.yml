@@ -40,3 +40,5 @@ jobs:
       - run: python -m tools.checks.boundaries
       # Every contract error code the product raises has a test (#241).
       - run: python -m tools.checks.error_codes
+      # File sizes (a warning), import cycles and façade imports (#246).
+      - run: python -m tools.checks.structure

@@ -23,8 +23,8 @@ from orvex.semantic.correctness.discharge import (
     verify_plan,
 )
 from orvex.semantic.correctness.report import Obligation
-from orvex.semantic.errors import SemanticError
-from orvex.semantic.planning import Division, PlanError, SemanticPlan, plan
+from orvex.semantic.errors import PlanError, SemanticError
+from orvex.semantic.planning import Division, SemanticPlan, plan
 from orvex.semantic.policies import read_policies
 from orvex.semantic.query.binding import Limits, bind_query
 

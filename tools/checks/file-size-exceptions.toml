@@ -1,0 +1,16 @@
+# Exceptions to tools/checks/structure.py (#246), each with its one-line reason. An entry that no
+# longer applies is reported (a warning for sizes, a failure for cycles and façade imports).
+
+[size]
+"packages/contracts/src/orvex/contracts/semantic_error/v1.py" = "generated from contracts/semantic-error/v1: never edited by hand"
+"packages/store/src/orvex/store/lake.py" = "split by responsibility in #246 PR 2"
+"packages/server/src/orvex/server/commands.py" = "split by command in #246 PR 3"
+
+[cycle]
+"orvex.store.lake -> orvex.store.source_worker" = "the worker reuses the guard, binding and exact-read helpers; they move out of lake.py in #246 PR 2"
+
+[facade]
+"orvex.server.cli" = "the CLI calls the commands; they move to their own modules in #246 PR 3"
+"orvex.server.maintenance" = "#246 PR 3"
+"orvex.server.scheduler" = "#246 PR 3"
+"orvex.store.source_worker" = "#246 PR 2"

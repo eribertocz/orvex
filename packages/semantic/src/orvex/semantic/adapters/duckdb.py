@@ -29,9 +29,9 @@ from orvex.semantic.compiler.catalog import LogicalType
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.engines import dataset_label
-from orvex.semantic.errors import SemanticError
+from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.ossie import sql
-from orvex.semantic.planning import ISSUED_PLAN, PlanError, SemanticPlan
+from orvex.semantic.planning import ISSUED_PLAN, SemanticPlan
 from orvex.semantic.policies import predicate as policy_grammar
 from orvex.semantic.policies.placement import datatype as field_datatype
 from orvex.semantic.result import ColumnSpec

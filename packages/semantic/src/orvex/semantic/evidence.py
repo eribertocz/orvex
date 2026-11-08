@@ -54,9 +54,8 @@ from orvex.semantic.adapters.duckdb import (
 from orvex.semantic.canonical import fingerprint
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
-from orvex.semantic.errors import SemanticError
+from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.ossie import sql
-from orvex.semantic.planning import PlanError
 from orvex.semantic.receipt.building import EvidenceUse
 
 DATASET_KINDS = ("unique", "non_overlap", "append_only")

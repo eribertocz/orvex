@@ -82,7 +82,7 @@ job = "boundaries"
 kind = "check"
 required = true
 contexts = ["boundaries"]
-digest = "f3490b264b7670a5"
+digest = "d1f6ce772bd7d472"
 setup = []
 [[job.check]]
 name = "boundaries"
@@ -92,6 +92,11 @@ local = true
 # Every contract error code the product raises has a test (#241).
 name = "error-codes"
 run = "python -m tools.checks.error_codes"
+local = true
+[[job.check]]
+# File sizes (a warning), import cycles and façade imports (#246).
+name = "structure"
+run = "python -m tools.checks.structure"
 local = true
 
 [[job]]
