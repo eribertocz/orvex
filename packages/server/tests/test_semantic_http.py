@@ -617,3 +617,29 @@ def test_cell_states_and_the_others_row_are_the_same_in_arrow_and_json() -> None
     assert document["result"]["others_row"] == 2
     assert json.loads(arrived.schema.metadata[semantic_http.ENVELOPE_KEY])["others_row"] == 2
     assert str(arrived.schema.field("revenue").type) == "decimal128(18, 2)"
+
+
+@pytest.mark.parametrize(
+    ("code", "details", "status"),
+    [
+        ("MEMBER_NOT_FOUND", {"member": "sales.x"}, 404),
+        (
+            "EVIDENCE_VIOLATED",
+            {"dataset": "sales", "evidence": "unique", "fields": ["id"], "violations": "1"},
+            409,
+        ),
+        ("MATRIX_TOO_WIDE", {"limit": "columns", "maximum": "100", "requested": "101"}, 413),
+        (
+            "ENGINE_VERSION_UNTESTED",
+            {"engine": "duckdb", "found": "9.0.0", "tested": ["2.0.0"]},
+            503,
+        ),
+    ],
+)
+def test_each_code_with_its_own_status_is_answered_with_it(
+    code: str, details: dict[str, object], status: int
+) -> None:
+    # #241: every error code the server maps is tested, the codes P7 and P9 raise included.
+    from orvex.semantic.errors import SemanticError
+
+    assert semantic_http.status_of(SemanticError(code, details)) == status

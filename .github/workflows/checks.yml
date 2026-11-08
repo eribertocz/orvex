@@ -37,3 +37,5 @@ jobs:
         with:
           python-version: "3.15"
       - run: python -m tools.checks.boundaries
+      # Every contract error code the product raises has a test (#241).
+      - run: python -m tools.checks.error_codes
