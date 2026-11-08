@@ -202,7 +202,7 @@ contexts = [
   "python-tests-3.14-part-8",
   "python-tests-3.14-part-9",
 ]
-digest = "8cdde7a905228b17"
+digest = "d7f247d226b9c0a1"
 pythons = ["3.15", "3.14"]
 setup = [
   "python -m pip install --quiet pip==26.2.2",

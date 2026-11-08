@@ -31,13 +31,13 @@ import pyarrow as pa
 import pyarrow.compute as pc
 from orvex.contracts.store.v1 import StatisticsRequest, StatisticsResult
 from orvex.semantic import zonedata
+from orvex.semantic.adapters.dialect import quote
 from orvex.semantic.adapters.duckdb import (
     MappingQuery,
     PhysicalQuery,
     PolicyValues,
     compile_plan,
     mapping_queries,
-    quote,
 )
 from orvex.semantic.canonical import fingerprint
 from orvex.semantic.compiler.compiled import CompiledModel

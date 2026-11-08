@@ -10,7 +10,7 @@
 "packages/server/src/orvex/server/commands.py" = { most = 1771, reason = "#246: split by command and purpose (project check, lock, validate, run, lake open, run metadata, lineage, evidence, run history)" }
 "packages/transform/src/orvex/transform/incremental.py" = { most = 1659, reason = "#246: split by purpose (since bound, append safety, watermarks, schema change, rules)" }
 "packages/semantic/src/orvex/semantic/compiler/typecheck.py" = { most = 1622, reason = "#246: split by purpose (types, expression types, scalar functions, unit inference)" }
-"packages/semantic/src/orvex/semantic/adapters/duckdb.py" = { most = 1599, reason = "#246: split into plan SQL, policy mappings and evidence checks" }
+"packages/semantic/src/orvex/semantic/adapters/duckdb.py" = { most = 1542, reason = "#246: split into plan SQL, policy mappings and evidence checks" }
 "packages/semantic/src/orvex/semantic/correctness/analysis.py" = { most = 1563, reason = "#246: one purpose, split by rule family for size" }
 "packages/semantic/src/orvex/semantic/query/binding.py" = { most = 1031, reason = "#246: split into decoding, binding, relative periods and canonical form" }
 "packages/server/src/orvex/server/lake_place.py" = { most = 853, reason = "#246: split into lake place, object storage and the lake record" }

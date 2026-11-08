@@ -14,6 +14,7 @@ import pyarrow as pa
 import pytest
 import yaml
 from orvex.contracts.store.v1 import StatementRequest
+from orvex.semantic.adapters import clickhouse
 from orvex.semantic.adapters import duckdb as adapter_module
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
@@ -505,6 +506,8 @@ SQL_OR_DATA = {
     "orvex.semantic.planning": {"plan"},
     # `mapping_queries` (P2-29): a plan's mapping subqueries, for the managed lake.
     "orvex.semantic.adapters.duckdb": {"compile_plan", "mapping_queries"},
+    # The ClickHouse dialect (P2-31, #225): only a plan the planner issued.
+    "orvex.semantic.adapters.clickhouse.writer": {"compile_plan"},
 }
 
 
@@ -558,6 +561,8 @@ def test_every_public_path_to_sql_or_data_needs_the_policies_and_the_caller() ->
             adapter_module.compile_plan(forged_plan)
         with pytest.raises(PlanError):
             adapter_module.mapping_queries(forged_plan)
+        with pytest.raises(PlanError):
+            clickhouse.compile_plan(forged_plan, {"sales": ["region", "amount"]}, {})
 
 
 def test_two_spellings_of_one_member_give_one_answer() -> None:
