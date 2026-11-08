@@ -1,12 +1,15 @@
 """Semantic corpus runner (P0-11).
 
-    python -m conformance.runners.semantic_corpus [--through library|http|both] [--json <file>]
+    python -m conformance.runners.semantic_corpus [--through library|http|both|existing-ducklake]
+        [--switch-on] [--json <file>]
 
 Loads every imported case, checks that it is complete and unchanged, validates its Ossie model
 against the pinned specification, and reports it. Until the engine executes queries (P2-12) every
 case is `not-run` with the reason ENGINE_NOT_AVAILABLE. Since P2-27a (#363) every case is also
 asked through the HTTP API, and the run is the required `semantic-corpus` check: exit status 0
-only when every case loads, none fails, and both ways give the same outcome.
+only when every case loads, none fails, and both ways give the same outcome. Since P2-30 (#399),
+`--through existing-ducklake` also asks every case on an existing DuckLake with a PostgreSQL
+catalog (`corpus_existing_ducklake`) and compares it with the library: the corpus parity.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 import sys
 import tomllib
 from dataclasses import asdict, dataclass
@@ -174,6 +178,8 @@ def load_case(
     if model == "valid" and execute:
         if through == "http":
             from conformance.runners.corpus_http import run_case
+        elif through == "existing-ducklake":
+            from conformance.runners.corpus_existing_ducklake import run_case
         else:
             from conformance.runners.corpus_execution import run_case
 
@@ -195,7 +201,7 @@ def run(
     root: Path = ROOT, execute: bool = True, through: str = "library"
 ) -> tuple[list[CaseReport], list[Finding]]:
     """Every case checked, and run for real unless `execute` is false (P2-12), through the
-    library or the HTTP API (`through`, P2-27a)."""
+    library, the HTTP API (`through`, P2-27a) or on an existing DuckLake (P2-30)."""
     corpus = root / CORPUS
     findings = check_sources(corpus) + check_vendored(root / OSSIE)
     try:
@@ -216,19 +222,21 @@ def run(
     return reports, findings
 
 
-def compare(library: list[CaseReport], http: list[CaseReport]) -> list[Finding]:
+def compare(
+    library: list[CaseReport], other_way: list[CaseReport], name: str = "http"
+) -> list[Finding]:
     """A finding for every case that fails either way, or whose outcome differs between the
-    library and the HTTP API."""
+    library and the other way `name` (the HTTP API, or an existing DuckLake)."""
     findings = []
-    by_case = {report.case: report for report in http}
+    by_case = {report.case: report for report in other_way}
     for report in library:
         other = by_case.get(report.case)
-        for way, found in (("library", report), ("http", other)):
+        for way, found in (("library", report), (name, other)):
             if found is not None and found.status == "fail":
                 findings.append(Finding("CORPUS_CASE_FAILED", found.case, f"{way}: {found.reason}"))
         if other is None or (other.status, other.reason) != (report.status, report.reason):
             seen = "missing" if other is None else f"{other.status} ({other.reason})"
-            message = f"library {report.status} ({report.reason}), http {seen}"
+            message = f"library {report.status} ({report.reason}), {name} {seen}"
             findings.append(Finding("CORPUS_WAYS_DIFFER", report.case, message))
     return findings
 
@@ -241,16 +249,31 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=ROOT, help=argparse.SUPPRESS)
     parser.add_argument(
         "--through",
-        choices=("library", "http", "both"),
+        choices=("library", "http", "both", "existing-ducklake"),
         default="library",
-        help="ask through the library, the HTTP API, or both and compare them",
+        help="ask through the library, the HTTP API, or both and compare them; or through the "
+        "library and on an existing DuckLake, and compare them",
+    )
+    parser.add_argument(
+        "--switch-on",
+        action="store_true",
+        help="turn the existing-DuckLake development switch on for this run (its variable "
+        "named from identity.toml)",
     )
     arguments = parser.parse_args()
-    ways = ("library", "http") if arguments.through == "both" else (arguments.through,)
+    if arguments.switch_on:
+        from orvex.server import development_switch
+        from orvex.server.identity import load_identity
+
+        os.environ[development_switch.variable(load_identity())] = "1"
+    ways = {
+        "both": ("library", "http"),
+        "existing-ducklake": ("library", "existing-ducklake"),
+    }.get(arguments.through, (arguments.through,))
     runs = {way: run(arguments.root, through=way) for way in ways}
     reports, findings = runs[ways[0]]
-    if arguments.through == "both":
-        findings = [*findings, *compare(reports, runs["http"][0])]
+    if len(ways) == 2:
+        findings = [*findings, *compare(reports, runs[ways[1]][0], ways[1])]
     else:
         findings = [
             *findings,

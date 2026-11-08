@@ -12,6 +12,7 @@ checked through `access`), and one never carries over to the other.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,7 +22,13 @@ import yaml
 from orvex.contracts.store.v1 import TablesRequest, TablesResult
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
-from orvex.semantic.engines import ALL_MANAGED, Routing, dataset_connections, route_model
+from orvex.semantic.engines import (
+    ALL_MANAGED,
+    ExternalAdapter,
+    Routing,
+    dataset_connections,
+    route_model,
+)
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.ossie.reader import read
@@ -45,6 +52,9 @@ class SemanticModel:
     snapshot: int  # the one snapshot its tables and columns were read at
     file: str  # project-relative
     routing: Routing = ALL_MANAGED  # every dataset's engine (P2-29)
+    # The adapter of each existing lake the model was compiled on, pinned at the snapshot its
+    # tables were read at, so a question reads exactly what it was compiled against (#399).
+    adapters: Mapping[str, ExternalAdapter] = dataclasses.field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +70,7 @@ class ExternalTables:
 
     tables: TablesResult
     views: frozenset[str]  # `schema.view`, lower-cased: no dataset may read one
+    adapter: ExternalAdapter | None = None  # its reads, pinned at the snapshot of `tables`
 
 
 def model_files(folder: Path) -> list[Path]:
@@ -193,7 +204,7 @@ def load_semantic(
     groups: Collection[str] | None = None,
     experimental: bool = False,
     connections: Mapping[str, object] | Collection[str] = (),
-    external: Mapping[str, ExternalTables] | None = None,
+    external: Mapping[str, ExternalTables | StoreError] | None = None,
 ) -> Loaded:
     """The project's semantic model compiled against `lake` as of `snapshot`, or its problems,
     written for `audience`. `groups`: the project's groups as `access` knows them; none in local
@@ -202,7 +213,8 @@ def load_semantic(
     the names in `connections.yaml`, which a dataset's `connection` must be one of (P2-29).
     `external`: the tables of each existing lake whose engine is enabled in this process (P2-30
     PR 3); a dataset on an existing lake whose engine is not is `UNSUPPORTED_OPERATION`
-    (`operation: route`), and the model is not compiled."""
+    (`operation: route`), and the model is not compiled. A lake given as the `StoreError` that
+    kept its tables from being read (no verified snapshot to serve) is that error's problem."""
     files = model_files(folder)
     if not files:
         return Loaded(None)
@@ -240,8 +252,14 @@ def load_semantic(
     except StoreError as error:
         return Loaded(None, (Problem(error.code, file, None, error.message),))
     catalog, problems = _catalog(model.document, tables, file, lambda d: d not in on)
+    adapters: dict[str, ExternalAdapter] = {}
     for connection in sorted(set(on.values())):
         given = (external or {})[connection]
+        if isinstance(given, StoreError):
+            problems.append(Problem(given.code, file, None, given.message))
+            continue
+        if given.adapter is not None:
+            adapters[connection] = given.adapter
         found, more = _catalog(model.document, given.tables, file, _on(on, connection), given.views)
         problems += more
         problems += [_two_engines(file, source) for source in sorted(set(found) & set(catalog))]
@@ -269,4 +287,4 @@ def load_semantic(
             )
         except SemanticError as error:
             return Loaded(None, tuple(_problems(error, POLICIES, audience)))
-    return Loaded(SemanticModel(compiled, policies, snapshot, file, routing))
+    return Loaded(SemanticModel(compiled, policies, snapshot, file, routing, adapters))

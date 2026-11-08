@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -66,6 +67,60 @@ def test_the_http_api_gives_every_case_the_library_s_outcome() -> None:
     assert findings == []
     assert compare(library, http) == []
     assert {r.case for r in http if r.status == "pass"} == PASSING
+
+
+def existing_ducklake_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The existing lake's PostgreSQL server: `CORPUS_POSTGRES`, or the store tests' one."""
+    from conformance.runners import corpus_existing_ducklake as existing
+
+    for name, fallback in (
+        (existing.SERVER, "STORE_TEST_POSTGRES"),
+        (existing.PASSWORD, "STORE_TEST_POSTGRES_PASSWORD"),
+    ):
+        if not os.environ.get(name) and os.environ.get(fallback):
+            monkeypatch.setenv(name, os.environ[fallback])
+    if not (os.environ.get(existing.SERVER) and os.environ.get(existing.PASSWORD)):
+        if os.environ.get("CI"):
+            pytest.fail("CI needs a PostgreSQL server for the existing lake's catalog")
+        pytest.skip("no PostgreSQL configured for this run")
+
+
+def switch(monkeypatch: pytest.MonkeyPatch, on: bool) -> None:
+    from orvex.server import development_switch
+    from orvex.server.identity import load_identity
+
+    if on:
+        monkeypatch.setenv(development_switch.variable(load_identity()), "1")
+    else:
+        monkeypatch.delenv(development_switch.variable(load_identity()), raising=False)
+
+
+def test_on_an_existing_ducklake_every_case_ends_as_through_the_library(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P2-30 (#399): with the development switch on, every case asked on an existing DuckLake
+    with a PostgreSQL catalog ends exactly as through the library: the corpus parity."""
+    from conformance.runners.semantic_corpus import compare
+
+    existing_ducklake_server(monkeypatch)
+    switch(monkeypatch, on=True)
+    library, _ = run()
+    existing, findings = run(through="existing-ducklake")
+    assert findings == []
+    assert compare(library, existing, "existing-ducklake") == []
+    assert {r.case for r in existing if r.status == "pass"} == PASSING
+
+
+def test_with_the_switch_off_a_case_on_an_existing_ducklake_is_refused_for_its_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from conformance.runners.corpus_existing_ducklake import run_case
+
+    existing_ducklake_server(monkeypatch)
+    switch(monkeypatch, on=False)
+    folder = case_folder(ROOT, "CASE-001")
+    found = run_case("CASE-001", folder, ROOT / CORPUS / "models" / "CASE-001.yaml", None)
+    assert (found.status, found.reason) == ("not-run", "route (another data route, P2-29)")
 
 
 def test_every_case_is_answered_or_not_run_with_its_capability() -> None:

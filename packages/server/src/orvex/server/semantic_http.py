@@ -44,6 +44,8 @@ from orvex.semantic.result.cursors import SealedForm
 from orvex.server import evidence_records, lake_place, semantic_model
 from orvex.server.identity import Identity
 from orvex.server.project import Project, ProjectLoadError, load_project
+from orvex.server.semantic_model import ExternalTables
+from orvex.store.errors import StoreError
 from orvex.store.json_encoding import arrow_to_json
 from orvex.store.lake import Lake
 
@@ -307,7 +309,9 @@ def _question(
         evidence=evidence,
         unchanged=unchanged,
         statistics=lake.statistics,
-        routing=model.routing,  # no adapter is supplied: no other engine is enabled (P2-29)
+        routing=model.routing,
+        # The existing lakes the model was compiled on, read at those same snapshots (#399).
+        adapters=model.adapters,
     )
     return _Question(model, policies, context, engine)
 
@@ -362,6 +366,9 @@ class ProjectSource:
     locked: type[Exception]  # what `lock` raises while a run holds the lake
     vendor_names: tuple[str, ...]
     turn: threading.Lock = field(default_factory=threading.Lock)
+    # The enabled existing lakes, each at its served snapshot (`existing_lakes`, #399); none
+    # when the development switch is off.
+    existing: Callable[[], Mapping[str, ExternalTables | StoreError]] | None = None
 
     @contextmanager
     def session(self) -> Iterator[Lake]:
@@ -379,7 +386,16 @@ class ProjectSource:
         finally:
             self.turn.release()
 
-    def model(self, lake: Lake, snapshot: int) -> semantic_model.Loaded:
+    def model(
+        self,
+        lake: Lake,
+        snapshot: int,
+        external: Mapping[str, ExternalTables | StoreError] | None = None,
+    ) -> semantic_model.Loaded:
+        """The model at `snapshot`, each existing lake as `external` gives it (a check of a new
+        snapshot) or as served now."""
+        if external is None and self.existing is not None:
+            external = self.existing()
         try:
             connections = load_project(self.folder).connections
         except ProjectLoadError as error:
@@ -391,6 +407,7 @@ class ProjectSource:
             self.vendor_names,
             audience="builder",
             connections=connections,
+            external=external,
         )
 
 
@@ -406,11 +423,12 @@ def project_source(
     opener: Opener,
     lock: Callable[[Path], AbstractContextManager[None]],
     locked: type[Exception],
+    existing: Callable[[], Mapping[str, ExternalTables | StoreError]] | None = None,
 ) -> ProjectSource:
     """The project folder the server opened. Its settings are read again for every request, so
     the lake is always the one `project.yaml` names now. `opener`, `lock` and `locked` are the
     lake's own opening and the project lock, which `cli` passes in: the HTTP code imports no
-    command module."""
+    command module. `existing`: the enabled existing lakes at their served snapshots."""
     home = folder / f".{identity.slug}"
 
     def lake() -> Lake:
@@ -432,4 +450,5 @@ def project_source(
         lock=held,
         locked=locked,
         vendor_names=(identity.ossie_vendor_name, *identity.previous_vendor_names),
+        existing=existing,
     )
