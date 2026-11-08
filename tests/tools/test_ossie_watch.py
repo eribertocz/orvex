@@ -4,7 +4,9 @@ is a local Git repository built by the test, and each proposal answer is a fixtu
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
+import os
 import re
 import subprocess
 import urllib.error
@@ -240,6 +242,63 @@ def test_an_unreadable_schema_is_potentially_incompatible() -> None:
     assert found.kind == "potentially incompatible"
 
 
+@pytest.mark.parametrize(
+    ("path", "kind"),
+    [
+        ("compliance/examples/case.yaml", "critical review"),
+        ("compliance/query/docs/expect.md", "critical review"),
+        ("compliance/query/cases/a01/expected.sql", "critical review"),
+        ("compliance/README.md", "informational"),
+        ("compliance/query/README.md", "informational"),
+    ],
+)
+def test_every_compliance_file_but_a_readme_is_a_critical_review(path: str, kind: str) -> None:
+    assert watch.classify(path, b"a\n", b"b\n").kind == kind
+
+
+SECTIONED = "# Spec\n\n## Goals\n\n{block}\n\n## Metrics\n\nA metric.\n"
+
+
+@pytest.mark.parametrize(
+    ("block", "kind"),
+    [
+        ("    ## Metrics\nchanged line", "potentially incompatible"),
+        ("\t## Metrics\nchanged line", "potentially incompatible"),
+        ("   ## Metrics\nchanged line", "critical review"),
+        ("## Metrics ##\nchanged line", "critical review"),
+        ("```\n~~~\n## Metrics\nchanged line\n```", "potentially incompatible"),
+        ("~~~\n```\n## Metrics\nchanged line\n~~~", "potentially incompatible"),
+        ("````\n```\n## Metrics\nchanged line\n````", "potentially incompatible"),
+        ("```\nx\n```\n## Metrics\nchanged line", "critical review"),
+    ],
+    ids=[
+        "indented-code",
+        "tab-indented-code",
+        "three-spaces-heading",
+        "closing-hashes",
+        "tilde-inside-backticks",
+        "backticks-inside-tildes",
+        "shorter-fence-inside",
+        "closed-fence",
+    ],
+)
+def test_headings_and_fences_are_read_as_commonmark_reads_them(block: str, kind: str) -> None:
+    before = SECTIONED.format(block=block).encode()
+    after = before.replace(b"changed line", b"edited line")
+    assert watch.classify("core-spec/spec.md", before, after).kind == kind
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [b'{"properties": []}', b'{"properties": {"version": "0.2.0"}}'],
+    ids=["properties", "version"],
+)
+def test_a_schema_member_that_is_not_an_object_cannot_be_compared(schema: bytes) -> None:
+    before = FILES["core-spec/ossie-schema.json"].encode()
+    with pytest.raises(watch.WatchError, match="not an object"):
+        watch.classify("core-spec/ossie-schema.json", before, schema)
+
+
 # --- Vendored files and commits ----------------------------------------------------------------
 
 
@@ -279,6 +338,57 @@ def test_a_commit_touching_only_unwatched_paths_is_not_reported(
     assert [commit.sha for commit in report.commits] == [watched]
     assert report.commits[0].paths == ["core-spec/README.md"]
     assert report.commits[0].kind == "informational"
+
+
+def test_a_subject_with_any_separator_is_kept_whole(tmp_path: Path, upstream: Upstream) -> None:
+    subject = "docs: a \x1f unit and a \x1e record separator"
+    upstream.commit(subject, {"core-spec/README.md": "# Core 2\n"})
+    (commit,) = report_of(tmp_path, upstream).commits
+    assert commit.subject == subject
+
+
+def test_a_name_that_is_not_utf8_is_reported(
+    tmp_path: Path,
+    upstream: Upstream,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    upstream.commit("odd name", {os.fsdecode(b"core-spec/caf\xe9.md"): "# x\n"})
+    watch_list, pin = write_inputs(tmp_path, upstream)
+    summary, artifact = tmp_path / "summary.md", tmp_path / "report.json"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    arguments = ["--watch", str(watch_list), "--pin", str(pin), "--json", str(artifact)]
+    assert watch.main(arguments, fetch=no_proposal) == 0
+    (change,) = json.loads(artifact.read_text(encoding="utf-8"))["changes"]
+    assert os.fsencode(change["path"]) == b"core-spec/caf\xe9.md"
+    assert "caf\\xe9.md" in summary.read_text(encoding="utf-8")
+    assert "::error::" not in capsys.readouterr().out
+
+
+def test_a_commit_without_parents_is_compared_with_the_empty_tree(
+    tmp_path: Path, upstream: Upstream
+) -> None:
+    # Unrelated history merged upstream: its root commit is in the range and has no parent.
+    git(upstream.root, "checkout", "--quiet", "--orphan", "other")
+    git(upstream.root, "rm", "--quiet", "-r", "--cached", ".")
+    for path in FILES:
+        (upstream.root / path).unlink()
+    root = upstream.commit("root", {"core-spec/expression_language.md": "# Other\n"})
+    git(upstream.root, "checkout", "--quiet", "--force", "main")
+    git(
+        upstream.root,
+        "merge",
+        "--quiet",
+        "--allow-unrelated-histories",
+        "-X",
+        "theirs",
+        "-m",
+        "join",
+        "other",
+    )
+    commits = {commit.sha: commit for commit in report_of(tmp_path, upstream).commits}
+    assert commits[root].paths == ["core-spec/expression_language.md"]
+    assert commits[root].kind == "critical review"
 
 
 def test_a_commit_takes_the_highest_class_of_its_files(tmp_path: Path, upstream: Upstream) -> None:
@@ -413,9 +523,66 @@ def test_an_unreachable_api_fails(
     def refuse(request: urllib.request.Request, timeout: float) -> None:
         raise urllib.error.URLError("no network")
 
-    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(watch.OPENER, "open", refuse)
     watch_list, pin = write_inputs(tmp_path, upstream, {587: "open"})
     assert watch.main(["--watch", str(watch_list), "--pin", str(pin)]) == 1
+
+
+def test_an_incomplete_api_answer_fails(
+    tmp_path: Path, upstream: Upstream, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Truncated:
+        def __enter__(self) -> Truncated:
+            return self
+
+        def __exit__(self, *exception: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            raise http.client.IncompleteRead(b"{")
+
+    monkeypatch.setattr(watch.OPENER, "open", lambda request, timeout: Truncated())
+    watch_list, pin = write_inputs(tmp_path, upstream, {587: "open"})
+    assert watch.main(["--watch", str(watch_list), "--pin", str(pin)]) == 1
+
+
+def test_an_unexpected_error_fails_visibly(
+    tmp_path: Path, upstream: Upstream, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def broken(number: int) -> dict[str, Any]:
+        raise RuntimeError("unexpected")
+
+    watch_list, pin = write_inputs(tmp_path, upstream, {587: "open"})
+    assert watch.main(["--watch", str(watch_list), "--pin", str(pin)], fetch=broken) == 1
+    assert capsys.readouterr().out.startswith("::error::")
+
+
+def redirected(url: str) -> urllib.request.Request | None:
+    request = urllib.request.Request(
+        "https://api.github.com/repos/apache/ossie/issues/1",
+        headers={"Authorization": "Bearer fixture-token", "Accept": "application/json"},
+    )
+    return watch.SameHostRedirect().redirect_request(request, None, 302, "Found", {}, url)
+
+
+def test_a_redirect_to_another_host_drops_the_token() -> None:
+    elsewhere = redirected("https://elsewhere.example/issues/1")
+    assert elsewhere is not None
+    assert not elsewhere.has_header("Authorization")
+    assert elsewhere.has_header("Accept")
+    for url in ("http://api.github.com/x", "https://api.github.com:8443/x"):
+        moved = redirected(url)
+        assert moved is not None
+        assert not moved.has_header("Authorization"), url
+    same = redirected("https://api.github.com/repositories/2/issues/1")
+    assert same is not None
+    assert same.get_header("Authorization") == "Bearer fixture-token"
+
+
+def test_the_api_is_read_through_the_redirect_guard() -> None:
+    handlers: list[urllib.request.BaseHandler] = getattr(watch.OPENER, "handlers")  # noqa: B009
+    assert any(isinstance(handler, watch.SameHostRedirect) for handler in handlers)
+    assert not any(type(handler) is urllib.request.HTTPRedirectHandler for handler in handlers)
 
 
 def test_the_repository_watch_list_and_pin_load() -> None:
@@ -481,7 +648,7 @@ def test_it_only_reads_the_api(
         requests.append(request)
         return Answer(json.dumps(ANSWERS[587]).encode())
 
-    monkeypatch.setattr(urllib.request, "urlopen", record)
+    monkeypatch.setattr(watch.OPENER, "open", record)
     monkeypatch.setenv("GITHUB_TOKEN", "fixture-token")
     watch_list, pin = write_inputs(tmp_path, upstream, {587: "open"})
     assert watch.main(["--watch", str(watch_list), "--pin", str(pin)]) == 0

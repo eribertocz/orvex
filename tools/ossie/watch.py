@@ -22,13 +22,16 @@ from __future__ import annotations
 import argparse
 import difflib
 import hashlib
+import http.client
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -60,6 +63,8 @@ CRITICAL_SECTIONS = ("metric", "relationship", "null", "aggregat", "extension")
 NON_NORMATIVE_SECTIONS = ("example", "version history")
 NON_NORMATIVE_FOLDERS = frozenset({"examples", "docs"})
 CATALOGS = frozenset({"extensions/dialects.md", "extensions/vendors.md"})
+# A heading's optional closing sequence: hashes after a space, then only spaces.
+_CLOSING_HASHES = re.compile(r"(^|[ \t]+)#+[ \t]*$")
 # Git's empty tree: the base of a commit without parents.
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -297,7 +302,8 @@ def _read(git_dir: Path, revision: str, path: str) -> bytes | None:
 
 
 def _names(output: bytes) -> list[str]:
-    return [name.decode("utf-8") for name in output.split(b"\0") if name]
+    # A name that is not UTF-8 keeps its bytes, so it can be passed back to Git unchanged.
+    return [name.decode("utf-8", errors="surrogateescape") for name in output.split(b"\0") if name]
 
 
 # --- Classification ----------------------------------------------------------------------------
@@ -308,14 +314,17 @@ def classify(path: str, before: bytes | None, after: bytes | None) -> Classifica
     name = path.rsplit("/", 1)[-1]
     if path in CRITICAL_FILES:
         return Classification(CRITICAL_REVIEW, "expression language or relational semantics")
+    if path.startswith("compliance/"):
+        # Every compliance file is an expectation, whatever folder holds it; a README is not.
+        if name.upper().startswith("README"):
+            return Classification(INFORMATIONAL, "non-normative text")
+        return Classification(CRITICAL_REVIEW, "a compliance expectation")
     if (
         name.upper().startswith("README")
         or path == "ROADMAP.md"
         or NON_NORMATIVE_FOLDERS & set(path.split("/")[:-1])
     ):
         return Classification(INFORMATIONAL, "non-normative text")
-    if path.startswith("compliance/"):
-        return Classification(CRITICAL_REVIEW, "a compliance expectation")
     if path == SPECIFICATION:
         return _specification(before, after)
     if before is None or after is None:
@@ -337,8 +346,13 @@ def _lines(content: bytes) -> list[str]:
 def _schema_version(schema: object) -> object:
     if not isinstance(schema, dict):
         return None
-    version = schema.get("properties", {}).get("version", {})
-    return version.get("const") if isinstance(version, dict) else None
+    properties = schema.get("properties", {})
+    if not isinstance(properties, dict):
+        raise WatchError("a schema's `properties` is not an object")
+    version = properties.get("version", {})
+    if not isinstance(version, dict):
+        raise WatchError("a schema's `properties.version` is not an object")
+    return version.get("const")
 
 
 def _schema(before: bytes, after: bytes) -> Classification:
@@ -366,20 +380,30 @@ def _catalog(before: bytes, after: bytes) -> Classification:
 
 
 def _sections(lines: Sequence[str]) -> list[tuple[str, ...]]:
-    """For each line, the chain of Markdown headings it is under (code blocks are skipped)."""
+    """For each line, the chain of Markdown headings it is under, as CommonMark reads them: a
+    heading or a fence is indented by at most three spaces (four or more is an indented code
+    block), and a fence closes only with its own character, at least as long as it opened."""
     stack: list[tuple[int, str]] = []
-    fenced = False
+    fence: tuple[str, int] | None = None
     chains: list[tuple[str, ...]] = []
     for line in lines:
-        stripped = line.strip()
-        if stripped.startswith(("```", "~~~")):
-            fenced = not fenced
-        elif not fenced and stripped.startswith("#"):
-            marks = len(stripped) - len(stripped.lstrip("#"))
-            if marks <= 6 and stripped[marks : marks + 1] == " ":
+        expanded = line.expandtabs(4)
+        body = expanded.lstrip(" ")
+        indented = len(expanded) - len(body) > 3
+        if not indented and body[:3] in ("```", "~~~"):
+            mark = body[0]
+            length = len(body) - len(body.lstrip(mark))
+            if fence is None:
+                fence = (mark, length)
+            elif mark == fence[0] and length >= fence[1] and not body[length:].strip():
+                fence = None
+        elif fence is None and not indented and body.startswith("#"):
+            marks = len(body) - len(body.lstrip("#"))
+            if marks <= 6 and body[marks : marks + 1] in ("", " ", "\t"):
+                title = _CLOSING_HASHES.sub("", body[marks:]).strip()
                 while stack and stack[-1][0] >= marks:
                     stack.pop()
-                stack.append((marks, stripped[marks:].strip()))
+                stack.append((marks, title))
         chains.append(tuple(title for _, title in stack))
     return chains
 
@@ -421,6 +445,33 @@ def _state(number: int, answer: Mapping[str, Any]) -> str:
     return "merged" if isinstance(pull, Mapping) and pull.get("merged_at") else str(state)
 
 
+class SameHostRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect, but never carry the token to another host."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,  # noqa: ANN401
+        code: int,
+        msg: str,
+        headers: Any,  # noqa: ANN401
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None:
+            before, after = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+            if (before.scheme, before.hostname, before.port) != (
+                after.scheme,
+                after.hostname,
+                after.port,
+            ):
+                new.remove_header("Authorization")
+        return new
+
+
+OPENER = urllib.request.build_opener(SameHostRedirect())
+
+
 def api_reader(api: str) -> Fetch:
     """Read one issue or pull request from the public API: GET only, with the default token."""
 
@@ -435,9 +486,9 @@ def api_reader(api: str) -> Fetch:
             headers["Authorization"] = f"Bearer {token}"
         request = urllib.request.Request(f"{api}/issues/{number}", headers=headers, method="GET")
         try:
-            with urllib.request.urlopen(request, timeout=30) as answer:
+            with OPENER.open(request, timeout=30) as answer:
                 data = json.loads(answer.read())
-        except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as error:
             raise WatchError(f"proposal #{number} cannot be read: {error}") from error
         if not isinstance(data, dict):
             raise WatchError(f"proposal #{number}: the API answer is not an object")
@@ -490,21 +541,22 @@ def _compare(git_dir: Path, watch_list: WatchList, pin: Pin, fetch: Fetch) -> Re
         git_dir,
         "log",
         "--reverse",
-        "--format=%H%x1f%P%x1f%cs%x1f%s%x1e",
+        "-z",
+        "--format=%H%x1f%P%x1f%cs%x1f%s",
         f"{pin.commit}..{upstream}",
         "--",
         *paths,
     )
-    for record in listing.decode("utf-8", errors="replace").split("\x1e"):
-        if not record.strip():
+    # One NUL-separated record per commit; the subject, which may hold any other character, is
+    # the last field.
+    for record in listing.decode("utf-8", errors="replace").split("\0"):
+        if not record:
             continue
-        sha, parents, date, subject = record.strip("\n").split("\x1f")
+        sha, parents, date, subject = record.split("\x1f", 3)
         base = parents.split()[0] if parents else EMPTY_TREE
         touched = _names(
             _git(git_dir, "diff", "--no-renames", "--name-only", "-z", base, sha, "--", *paths)
         )
-        if not touched:
-            continue
         kinds = [
             classify(path, _read(git_dir, base, path), _read(git_dir, sha, path)).kind
             for path in touched
@@ -531,20 +583,30 @@ def main(argv: Sequence[str] | None = None, fetch: Fetch | None = None) -> int:
         summary = os.environ.get("GITHUB_STEP_SUMMARY")
         if summary:
             with Path(summary).open("a", encoding="utf-8") as output:
-                output.write(report.markdown())
+                output.write(_printable(report.markdown()))
         else:
-            print(report.markdown())
+            print(_printable(report.markdown()))
         if arguments.json:
             arguments.json.parent.mkdir(parents=True, exist_ok=True)
             arguments.json.write_text(
                 json.dumps(report.to_json(), indent=2) + "\n", encoding="utf-8"
             )
-    except (WatchError, OSError) as error:
-        print(f"::error::{_escape(f'the Ossie upstream watch cannot run: {error}')}")
-        return 1
-    for annotation in report.annotations():
-        print(annotation)
+        for annotation in report.annotations():
+            print(_printable(annotation))
+    except Exception as error:  # noqa: BLE001 - a WatchError, or any unexpected error, fails visibly
+        return _cannot_run(error)
     return 0
+
+
+def _cannot_run(error: BaseException) -> int:
+    message = f"the Ossie upstream watch cannot run: {type(error).__name__}: {error}"
+    print(f"::error::{_printable(_escape(message))}")
+    return 1
+
+
+def _printable(text: str) -> str:
+    """`text` with any byte kept from a non-UTF-8 name shown as an escape."""
+    return text.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="backslashreplace")
 
 
 if __name__ == "__main__":
