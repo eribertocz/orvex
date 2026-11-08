@@ -33,11 +33,14 @@ from decimal import Decimal
 from typing import Any
 from urllib.parse import urlencode
 
+import duckdb
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.ipc
+from duckdb.sqltypes import DuckDBPyType
 from orvex.contracts.store.v1 import Parameter
 from orvex.store.errors import StoreError, register_secret
+from orvex.store.nested_types import refuse_nested_uhugeint
 
 # Server versions tested (major.minor): the current LTS and the latest stable (ADR-0022).
 TESTED_VERSIONS = ("26.8", "26.9")
@@ -417,6 +420,7 @@ class ClickHouse:
         `UUID` columns are returned by the statement as text (Arrow has no exact 128-bit
         integer); every other column in its own type.
         """
+        refuse_nested_uhugeint([name for name, _ in columns], [_parsed(k) for _, k in columns])
         values = _bound(sql, parameters)
         timeout = min(timeout_ms or self._budget.timeout_ms, self._budget.timeout_ms) / 1000
         deadline = time.monotonic() + timeout
@@ -518,6 +522,15 @@ def _broken(error: Exception, deadline: float) -> StoreError:
     return StoreError(
         "STORE_QUERY_FAILED", f"The ClickHouse result could not be read: {error}.", {}
     )
+
+
+def _parsed(kind: str) -> DuckDBPyType:
+    try:
+        return DuckDBPyType(kind)
+    except duckdb.Error:
+        raise StoreError(
+            "UNSUPPORTED_SOURCE_TYPE", f"{kind} has no ClickHouse result form.", {"type": kind}
+        ) from None
 
 
 def _arrow(kind: str) -> pa.DataType:

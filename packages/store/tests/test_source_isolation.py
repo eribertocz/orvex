@@ -231,6 +231,32 @@ def test_a_sqlite_view_never_reaches_the_lake(lake_folder: Path, tmp_path: Path)
         lake.close()
 
 
+def test_the_lake_connection_cannot_read_a_sqlite_copy(lake_folder: Path, tmp_path: Path) -> None:
+    """#410: the lake's copy of a SQLite source lives outside every folder the lake's
+    connection may open, so even a raw cursor (no SQL guard) cannot read it; the worker can."""
+    path = tmp_path / "ventas.sqlite"
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TABLE base (id INTEGER)")
+    connection.execute("INSERT INTO base VALUES (1)")
+    connection.commit()
+    connection.close()
+    lake = opened(lake_folder, sqlite_source(path))
+    try:
+        attached = lake._databases["ventas"][0]
+        assert isinstance(attached, SqliteSourceAttachment)
+        copy = Path(attached.path)
+        assert copy.is_file()
+        cursor = lake._cursor()
+        ((allowed,),) = cursor.sql("SELECT current_setting('allowed_directories')").fetchall()
+        assert not any(copy.is_relative_to(folder) for folder in allowed)
+        with pytest.raises(duckdb.PermissionException):
+            cursor.sql(f"SELECT size FROM read_blob('{copy.as_posix()}')").fetchall()
+        land(lake, "SELECT * FROM ventas.base")
+        assert rows(lake, "SELECT id FROM landed") == [{"id": 1}]
+    finally:
+        lake.close()
+
+
 def test_the_model_sql_itself_cannot_reach_the_lake(lake_folder: Path, tmp_path: Path) -> None:
     source = file_with(tmp_path / "ventas.duckdb")
     lake = opened(lake_folder, duckdb_source(source))
@@ -303,6 +329,56 @@ def test_every_type_lands_exactly(lake_folder: Path, tmp_path: Path) -> None:
         ]
         expected = reference.sql(f"SELECT CAST(COLUMNS(*) AS VARCHAR) FROM ({TYPES})").fetchall()
     assert [kind for _, kind in described] == expected_types
+    assert [tuple(row.values()) for row in landed] == expected
+
+
+UHUGE_MAX = "340282366920938463463374607431768211455"
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        f"[{UHUGE_MAX}::UHUGEINT]",
+        f"{{'a': {UHUGE_MAX}::UHUGEINT}}",
+        f"MAP {{'k': {UHUGE_MAX}::UHUGEINT}}",
+        f"union_value(u := {UHUGE_MAX}::UHUGEINT)::UNION(u UHUGEINT, i INTEGER)",
+    ],
+    ids=["list", "struct", "map", "union"],
+)
+def test_a_nested_uhugeint_is_refused_by_the_worker(
+    lake_folder: Path, tmp_path: Path, expression: str
+) -> None:
+    """#410: the worker's stream runs the same check as a lake read; nothing is landed."""
+    source = file_with(
+        tmp_path / "ventas.duckdb", f"CREATE VIEW nested AS SELECT 1 AS ok, {expression} AS v"
+    )
+    lake = opened(lake_folder, duckdb_source(source))
+    try:
+        with pytest.raises(StoreError) as refused:
+            land(lake, "SELECT * FROM ventas.nested")
+        assert refused.value.code == "STORE_TYPE_UNSUPPORTED"
+        assert refused.value.details["column"] == "v"
+        assert ("main", "landed") not in lake.tables()
+    finally:
+        lake.close()
+
+
+def test_nested_exact_types_land_exactly(lake_folder: Path, tmp_path: Path) -> None:
+    nested = (
+        "SELECT [170141183460469231731687303715884105727::HUGEINT] AS h, "
+        "{'d': 1234567890123456789012345678.1234567890::DECIMAL(38,10)} AS d, "
+        "MAP {'k': '-9223372036854775808'::BIGINT} AS b, "
+        "[18446744073709551615::UBIGINT] AS u"
+    )
+    source = file_with(tmp_path / "ventas.duckdb", f"CREATE VIEW nested AS {nested}")
+    lake = opened(lake_folder, duckdb_source(source))
+    try:
+        land(lake, "SELECT * FROM ventas.nested")
+        landed = rows(lake, "SELECT CAST(COLUMNS(*) AS VARCHAR) FROM landed")
+    finally:
+        lake.close()
+    with duckdb.connect() as reference:
+        expected = reference.sql(f"SELECT CAST(COLUMNS(*) AS VARCHAR) FROM ({nested})").fetchall()
     assert [tuple(row.values()) for row in landed] == expected
 
 

@@ -547,3 +547,26 @@ def test_the_engine_is_described_without_a_secret() -> None:
         "port": 8443,
         "database": "sales",
     }
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["UHUGEINT[]", "UHUGEINT[2]", "STRUCT(a UHUGEINT)", "MAP(VARCHAR, UHUGEINT)"],
+    ids=["list", "array", "struct", "map"],
+)
+def test_a_nested_uhugeint_is_refused_before_the_query_is_sent(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """#410: the same check as every other Arrow export, before anything reaches the server."""
+    monkeypatch.setenv("STORE_TEST_NESTED_PASSWORD", "unused")
+    target = ClickHouseTarget("localhost", 8123, "sales", "reader", "STORE_TEST_NESTED_PASSWORD")
+    engine = ClickHouse(target, Budget(timeout_ms=1_000, memory_bytes=1 << 30, result_rows=10))
+
+    def sent(*_: object, **__: object) -> object:
+        raise AssertionError("the statement was sent")
+
+    monkeypatch.setattr(engine, "_send", sent)
+    with pytest.raises(StoreError) as refused:
+        engine.read("SELECT 1 AS ok, [1] AS v", [], [("ok", "BIGINT"), ("v", kind)])
+    assert refused.value.code == "STORE_TYPE_UNSUPPORTED"
+    assert refused.value.details["column"] == "v"

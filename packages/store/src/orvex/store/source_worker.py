@@ -46,6 +46,7 @@ from orvex.contracts.store.v1 import (
 )
 from orvex.store.errors import StoreError, register_secret
 from orvex.store.locations import POSTGRES_CONNECT_TIMEOUT_S
+from orvex.store.nested_types import refuse_nested_uhugeint
 from orvex.store.sql_text import identifier as _identifier
 from orvex.store.sql_text import literal as _quote
 
@@ -581,6 +582,7 @@ def _run(request: Mapping[str, Any], out: IO[bytes]) -> None:
                 )
             relation = connection.sql(typed, params=bound)
             names = list(relation.columns)
+            refuse_nested_uhugeint(names, relation.types)
             kinds = [str(kind) for kind in relation.types]
             if request.get("describe"):
                 relation = connection.sql(f"SELECT * FROM ({typed}) LIMIT 0", params=bound)
