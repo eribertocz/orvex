@@ -7,6 +7,7 @@ import json
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import pyarrow as pa
@@ -751,3 +752,50 @@ def test_a_pattern_too_broad_to_check_is_refused_through_the_lake(
         assert reads.folders * FOLDER_COST + reads.entries <= budget
         assert time.monotonic() - started < SAFETY_NET
     assert lake.current_snapshot().id == before
+
+
+# --- #255: the snapshot a transaction committed, even when another writer follows at once ------
+
+
+def test_the_result_names_the_transaction_s_own_snapshot_when_another_commits_right_after(
+    lake: Lake, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import orvex.store.lake as store_lake
+
+    real = store_lake._commit
+
+    def commit_then_another_writer(cursor: Any) -> None:  # noqa: ANN401
+        real(cursor)
+        # Another clone of the project commits to the shared lake before this one looks.
+        other = lake._cursor()
+        other.execute("CREATE TABLE lake.main.other_writer AS SELECT 1 AS x")
+        other.close()
+
+    monkeypatch.setattr(store_lake, "_commit", commit_then_another_writer)
+    mine = write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(3)"))
+    latest = lake.current_snapshot().id
+    assert mine is not None
+    assert latest == mine + 1  # the other writer's snapshot, not this transaction's
+    assert read(lake, "SELECT count(*) AS n FROM m", mine).column("n").to_pylist() == [3]
+    with pytest.raises(StoreError):  # this snapshot does not hold the other writer's table
+        read(lake, "SELECT * FROM other_writer", mine)
+
+
+def test_a_transaction_that_changes_nothing_still_reports_no_snapshot(lake: Lake) -> None:
+    write(lake, statement("CREATE TABLE m AS SELECT 1 AS a"))
+    assert write(lake, statement("DELETE FROM m WHERE a < 0")) is None  # no row deleted
+
+
+def test_the_commit_tag_holds_only_a_random_token(lake: Lake) -> None:
+    mine = write(lake, statement("CREATE TABLE m AS SELECT 1 AS a"))
+    cursor = lake._cursor()
+    author, message, extra = cursor.execute(
+        "SELECT author, commit_message, commit_extra_info FROM ducklake_snapshots('lake') "
+        "WHERE snapshot_id = $id",
+        {"id": mine},
+    ).fetchone() or (None, None, None)
+    cursor.close()
+    assert (author, message) == ("", "transaction")
+    assert extra is not None
+    assert len(extra) == 32
+    assert int(extra, 16) >= 0  # hexadecimal: a random token, nothing else

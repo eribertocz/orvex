@@ -7,6 +7,7 @@ import datetime as dt
 import json
 import re
 import subprocess
+import types
 import zoneinfo
 from collections.abc import Iterator
 from pathlib import Path
@@ -252,6 +253,8 @@ def test_password_never_reaches_a_record(
 class FakeTransaction:
     def __init__(self, lake: FakeLake) -> None:
         self.lake = lake
+        self.result: object = None  # a commit that changed nothing
+        self.started = types.SimpleNamespace(id=1)  # the snapshot it read
 
     def execute(self, request: object) -> None:
         self.lake.executed.append(request)
@@ -279,11 +282,11 @@ class FakeLake:
         return set()  # no leftovers (#88)
 
     def current_snapshot(self) -> object:
-        if self.fail == "count":
-            raise StoreError("STORE_TIMEOUT", "The statement exceeded its time limit.", {})
-        raise AssertionError("not reached in these tests")
+        raise AssertionError("the latest snapshot is never read after a run's commit (#255)")
 
     def read(self, request: object) -> object:
+        if self.fail == "count":
+            raise StoreError("STORE_TIMEOUT", "The statement exceeded its time limit.", {})
         raise AssertionError("not reached in these tests")
 
     def close(self) -> None:
@@ -340,3 +343,56 @@ def test_a_committed_run_is_recorded_even_if_counting_fails(
 def test_runs_limit_must_be_positive(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     project(tmp_path, MODELS)
     assert main(["runs", str(tmp_path), "--limit", "0"]) == 2
+
+
+def test_the_record_names_the_run_s_own_snapshot_when_another_writer_commits_right_after(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #255: two clones sharing one lake; the other commits between this run's commit and its
+    # records. The records name the run's snapshot, and rows are counted on it.
+    import orvex.store.lake as store_lake
+
+    project(tmp_path, MODELS)
+    real = store_lake._commit
+    injected: list[int] = []
+
+    def commit_then_another_writer(cursor: duckdb.DuckDBPyConnection) -> None:
+        real(cursor)
+        if not injected:
+            injected.append(1)
+            cursor.execute("CREATE TABLE lake.main.other_clone AS SELECT 1 AS x")  # own commit
+
+    monkeypatch.setattr(store_lake, "_commit", commit_then_another_writer)
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    printed = re.search(r"^snapshot (\d+)$", out, re.MULTILINE)
+    assert printed
+    recorded = int(printed.group(1))
+    rows = [r for r in records(tmp_path) if r["outcome"] == "success"]
+    assert {r["snapshot_id"] for r in rows} == {recorded}
+    assert {r["rows_written"] for r in rows if r["model"] == "s.a"} == {"5"}
+    reader = duckdb.connect()
+    reader.execute("LOAD ducklake")
+    catalog = tmp_path / f".{SLUG}" / "lake" / "catalog.ducklake"
+    reader.execute(f"ATTACH 'ducklake:{catalog}' AS lake (READ_ONLY)")
+    changes = dict(
+        reader.execute("SELECT snapshot_id, changes FROM ducklake_snapshots('lake')").fetchall()
+    )
+    reader.close()
+    assert changes[recorded]["tables_created"] == ["s.a", "s.b", "s.c"]  # the run's commit
+    assert changes[recorded + 1]["tables_created"] == ["main.other_clone"]  # the other writer
+
+
+def test_a_run_that_changes_nothing_names_the_snapshot_it_read_not_the_latest(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Reviewer (#393): a run with no new rows commits nothing (`result.snapshot` is None). It is
+    # recorded on the snapshot its transaction read; the latest one, possibly another clone's,
+    # is never asked for (the fake fails if it is).
+    project(tmp_path, MODELS)
+    lake = FakeLake("count")
+    monkeypatch.setattr(commands, "open_lake", lambda *args, **kwargs: lake)
+    exit_code, out = command(capsys, "run", str(tmp_path))
+    assert exit_code == 0, out
+    assert "snapshot 1" in out.splitlines()
+    assert {r["p_snapshot_id"] for r in recorded(lake)} == {"1"}
