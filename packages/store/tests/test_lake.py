@@ -14,7 +14,9 @@ import pytest
 from orvex.contracts.store.v1 import LocalLakeLocation, Parameter, ReadRequest, StatementRequest
 from orvex.store.errors import StoreError
 from orvex.store.json_encoding import arrow_to_json
-from orvex.store.lake import Lake, Limits, open_lake
+from orvex.store.lake import FOLDER_COST, PATTERN_BUDGET, Lake, Limits, open_lake
+
+from tests.support.bounds import SAFETY_NET, FolderReads
 
 # The shared contract tests run on every catalog, SQLite included (#120).
 EVERY_CATALOG = True
@@ -730,15 +732,22 @@ def test_a_read_that_binds_sql_text_is_refused_by_the_tree_too(
 
 
 @pytest.mark.parametrize("pattern", ["/**/zz_none*", "/usr/**/zz_none*"])
-def test_a_pattern_too_broad_to_check_is_refused_through_the_lake(lake: Lake, pattern: str) -> None:
-    # #178: through `execute` and `read`, quickly, with the guard's own error.
+def test_a_pattern_too_broad_to_check_is_refused_through_the_lake(
+    lake: Lake, pattern: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #178: through `execute` and `read`, within the walk's budget (#329: counted, not timed),
+    # with the guard's own error.
     write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(3)"))
     before = lake.current_snapshot().id
-    started = time.monotonic()
-    assert code_of(lambda: read(lake, f"SELECT '{pattern}' AS p")) == "STORE_STATEMENT_INVALID"
-    assert time.monotonic() - started < 1.0  # each in under 1 s (#178)
-    sql = f"CREATE TABLE x AS SELECT '{pattern}' AS p"
-    started = time.monotonic()
-    assert code_of(lambda: write(lake, statement(sql))) == "STORE_STATEMENT_INVALID"
-    assert time.monotonic() - started < 1.0
+    budget = PATTERN_BUDGET + FOLDER_COST  # the folder that overran it is the last one read
+    reads = FolderReads().install(monkeypatch)
+    for run in (
+        lambda: read(lake, f"SELECT '{pattern}' AS p"),
+        lambda: write(lake, statement(f"CREATE TABLE x AS SELECT '{pattern}' AS p")),
+    ):
+        reads.folders = reads.entries = 0
+        started = time.monotonic()
+        assert code_of(run) == "STORE_STATEMENT_INVALID"
+        assert reads.folders * FOLDER_COST + reads.entries <= budget
+        assert time.monotonic() - started < SAFETY_NET
     assert lake.current_snapshot().id == before

@@ -15,7 +15,9 @@ import pytest
 from orvex.contracts.store.v1 import Parameter, ParameterType
 from orvex.store.errors import StoreError
 from orvex.store.lake import (
+    FOLDER_COST,
     PARSER_SPACES,
+    PATTERN_BUDGET,
     SHARED_HARMLESS_FUNCTIONS,
     TABLE_FUNCTIONS_SQL,
     _created_kind_allowed,
@@ -25,6 +27,14 @@ from orvex.store.lake import (
     _tokens,
     _typed,
 )
+
+from tests.support.bounds import FACTOR, SAFETY_NET, FolderReads, linear
+
+
+def within_budget(reads: FolderReads) -> None:
+    """The walk read no more than #178's budget: `FOLDER_COST` per folder, one per entry (the
+    folder that overran it is the last one read)."""
+    assert reads.folders * FOLDER_COST + reads.entries <= PATTERN_BUDGET + FOLDER_COST
 
 
 def table_functions() -> frozenset[str]:
@@ -427,20 +437,25 @@ def test_the_statement_checks_take_time_in_proportion_to_the_statement() -> None
 # --- #178: the checks cost a bounded amount --------------------------------------------------
 
 
-def test_many_e_strings_are_checked_quickly() -> None:
-    sql = "SELECT " + ", ".join(f"E'v\\x{index % 10}a' AS c{index}" for index in range(2000))
-    started = time.monotonic()
-    _guarded(sql, table_functions())
-    assert time.monotonic() - started < 1.0
+def test_many_e_strings_are_checked_in_linear_time() -> None:
+    def check(count: int) -> None:
+        sql = "SELECT " + ", ".join(f"E'v\\x{index % 10}a' AS c{index}" for index in range(count))
+        _guarded(sql, table_functions())
+
+    linear(check, 2000)
 
 
 @pytest.mark.parametrize("pattern", ["/**/zz_none*", "/usr/**/zz_none*"])
-def test_a_pattern_too_broad_to_check_is_refused_quickly(pattern: str) -> None:
+def test_a_pattern_too_broad_to_check_is_refused_within_its_budget(
+    pattern: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads = FolderReads().install(monkeypatch)
     started = time.monotonic()
     with pytest.raises(StoreError) as raised:
         _guarded(f"SELECT '{pattern}' AS p", table_functions())
     assert raised.value.code == "STORE_STATEMENT_INVALID"
-    assert time.monotonic() - started < 1.0
+    within_budget(reads)
+    assert time.monotonic() - started < SAFETY_NET
     # #193: `/**` may meet a folder the user cannot list before the budget runs out (the CI
     # runner does); `/usr` holds none.
     reasons = (
@@ -451,18 +466,23 @@ def test_a_pattern_too_broad_to_check_is_refused_quickly(pattern: str) -> None:
     assert raised.value.details["reason"] in reasons
 
 
-def test_many_strings_over_one_large_folder_are_bounded(tmp_path: Path) -> None:
+def test_many_strings_over_one_large_folder_are_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # #193 Reviewer pass 1: 34,000 'big/zz*' over a kept listing of 9,000 names took 104 s.
     big = tmp_path / "big"
     big.mkdir()
     for index in range(9000):
         (big / f"f{index}").write_text("")
     sql = "SELECT " + ", ".join(f"'{big}/zz*' AS c{index}" for index in range(34000))
+    reads = FolderReads().install(monkeypatch)
     started = time.monotonic()
     with pytest.raises(StoreError) as raised:
         _guarded(sql, table_functions())
-    assert time.monotonic() - started < 1.0
     assert raised.value.details == {"reason": "pattern_too_broad"}
+    assert reads.folders == 1  # the big folder is read once; its listing is kept
+    within_budget(reads)
+    assert time.monotonic() - started < SAFETY_NET
 
 
 def test_a_pattern_in_a_small_folder_is_checked_as_before(tmp_path: Path) -> None:
@@ -499,12 +519,12 @@ def test_one_budget_covers_the_whole_statement(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "shape",
+    ("prefix", "unit", "suffix", "count"),
     [
-        "{folder}/" + "**/" * 900 + "zz",
-        "/" * 3000 + "zz*",
-        "/u*" + "/" * 3000 + "x",
-        "/zz_none/" + "**/" * 2000 + "x",
+        ("{folder}/", "**/", "zz", 900),
+        ("", "/", "zz*", 3000),
+        ("/u*", "/", "x", 3000),
+        ("/zz_none/", "**/", "x", 2000),
     ],
     ids=[
         "many-double-stars",
@@ -513,14 +533,18 @@ def test_one_budget_covers_the_whole_statement(tmp_path: Path) -> None:
         "double-stars-below-nothing",
     ],
 )
-def test_a_long_pattern_is_checked_quickly_without_error(tmp_path: Path, shape: str) -> None:
+def test_a_long_pattern_is_checked_in_linear_time_without_error(
+    tmp_path: Path, prefix: str, unit: str, suffix: str, count: int
+) -> None:
     # #178 Reviewer pass 1: these took seconds, or raised RecursionError.
     for index in range(10):
         (tmp_path / f"s{index}").mkdir()
-    sql = "SELECT '" + shape.format(folder=tmp_path) + "' AS p"
-    started = time.monotonic()
-    _guarded(sql, table_functions())  # nothing matches: allowed, and no other error
-    assert time.monotonic() - started < 1.0
+
+    def check(repeats: int) -> None:
+        sql = "SELECT '" + prefix.format(folder=tmp_path) + unit * repeats + suffix + "' AS p"
+        _guarded(sql, table_functions())  # nothing matches: allowed, and no other error
+
+    linear(check, count // FACTOR)
 
 
 def test_each_folder_read_costs_more_than_an_entry(tmp_path: Path) -> None:
@@ -554,9 +578,9 @@ def test_text_that_lists_the_working_folder_reads_it_once(
     texts = [f"'Is it paid? Yes {index}.'" for index in range(1000)]
     texts += [f"'v1.{index}*'" for index in range(1000)]
     sql = "SELECT " + ", ".join(f"{text} AS c{index}" for index, text in enumerate(texts))
-    started = time.monotonic()
+    reads = FolderReads().install(monkeypatch)
     _guarded(sql, table_functions())
-    assert time.monotonic() - started < 1.0
+    assert reads.folders == 1  # the working folder, read once for all 2,000 strings
 
 
 def test_a_named_file_and_an_unchecked_pattern_have_their_own_reason(tmp_path: Path) -> None:
@@ -786,11 +810,12 @@ def test_the_last_two_bytes_are_left_as_duckdb_leaves_them() -> None:
 def test_a_long_dollar_quoted_string_is_rewritten_in_linear_time() -> None:
     # Reviewer pass 2 on #214: comparing the closing tag by slicing copied it at every `$`, so a
     # 1.6 MB statement took about 5 s; DuckDB parses it in a fraction of a second.
-    size = 400_000
-    sql = "SELECT \u00a0$" + "a" * size + "$" + "$" * (2 * size) + "$" + "a" * size + "$"
-    started = time.monotonic()
-    _plain(sql)
-    assert time.monotonic() - started < 1.0
+    size = 100_000  # the large run is the 400,000 of the regression
+
+    def rewrite(size: int) -> None:
+        _plain("SELECT \u00a0$" + "a" * size + "$" + "$" * (2 * size) + "$" + "a" * size + "$")
+
+    linear(rewrite, size)
 
 
 def test_a_lone_surrogate_is_a_parse_failure() -> None:

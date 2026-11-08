@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 from pathlib import Path
 
 import pytest
@@ -17,6 +16,8 @@ from orvex.contracts.project.v1 import (
 )
 from orvex.server.cli import main
 from orvex.server.project import ProjectLoadError, load_project, resolve_secret
+
+from tests.support.bounds import linear
 
 PROJECT = """\
 version: 1
@@ -496,16 +497,17 @@ def test_an_impossible_date_is_named_with_its_line(tmp_path: Path) -> None:
     assert "2024-02-30" not in error.error.message
 
 
-def test_an_oversized_project_file_is_refused_quickly(tmp_path: Path) -> None:
-    settings = BASE + "".join(f"k{index}: 1\n" for index in range(60000))
-    folder = project(tmp_path, settings)
-    started = time.monotonic()
-    error = failure(folder)
-    elapsed = time.monotonic() - started
-    assert error.code == "PROJECT_SCHEMA_INVALID"
-    assert "Unknown key 'k0'" in error.error.message
-    assert (error.error.details.line, error.error.details.path) == (4, "/k0")
-    assert elapsed < 0.5, elapsed
+def test_an_oversized_project_file_is_refused_in_linear_time(tmp_path: Path) -> None:
+    def refuse(keys: int) -> None:
+        settings = BASE + "".join(f"k{index}: 1\n" for index in range(keys))
+        folder = tmp_path / f"p{keys}"
+        folder.mkdir(exist_ok=True)
+        error = failure(project(folder, settings))
+        assert error.code == "PROJECT_SCHEMA_INVALID"
+        assert "Unknown key 'k0'" in error.error.message
+        assert (error.error.details.line, error.error.details.path) == (4, "/k0")
+
+    linear(refuse, 15000)  # the large run is the 60,000 keys of the regression
 
 
 @pytest.mark.parametrize("key", ["null", "1", "true"])
