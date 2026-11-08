@@ -1,0 +1,173 @@
+{
+  "internal": [
+    "_bound",
+    "_bounded",
+    "_check_source_names",
+    "_data_path",
+    "_plain",
+    "_postgres_password",
+    "_quote",
+    "_read_tree",
+    "_require_limits",
+    "_single_statement",
+    "_snapshot_of",
+    "_source_not_found",
+    "_source_password",
+    "_storage_credentials",
+    "_typed"
+  ],
+  "public": {
+    "Admission": {
+      "class": {
+        "__init__": "(self, capacity: 'int', queue_size: 'int') -> 'None'",
+        "acquire": "(self, deadline: 'float') -> 'None'",
+        "release": "(self) -> 'None'"
+      },
+      "fields": []
+    },
+    "AnySource": {
+      "alias": "orvex.contracts.store.v1.SourceAttachment | orvex.contracts.store.v1.FileSourceAttachment | orvex.contracts.store.v1.SqliteSourceAttachment | orvex.contracts.store.v1.PostgresSourceAttachment"
+    },
+    "DUCKLAKE_TABLE_MACROS": {
+      "value": "{'current_snapshot', 'last_committed_snapshot', 'merge_adjacent_files', 'options', 'set_commit_message', 'set_option', 'settings', 'snapshots', 'table_changes', 'table_deletions', 'table_info', 'table_insertions'}"
+    },
+    "ENGINE_NAMES_ALLOWED": {
+      "value": "{'current_database', 'information_schema'}"
+    },
+    "EXTENSIONS": {
+      "value": "('icu', 'ducklake')"
+    },
+    "FOLDER_COST": {
+      "value": "50"
+    },
+    "Guard": {
+      "class": {
+        "__init__": "(self, cursor: 'duckdb.DuckDBPyConnection', deadline: 'float') -> 'None'",
+        "cancel": "(self) -> 'None'",
+        "error": "(self, cause: 'Exception | None' = None) -> 'StoreError'",
+        "stop": "(self) -> 'None'"
+      },
+      "fields": []
+    },
+    "INTEGER_RANGES": {
+      "value": "{'TINYINT': (-128, 127), 'SMALLINT': (-32768, 32767), 'INTEGER': (-2147483648, 2147483647), 'BIGINT': (-9223372036854775808, 9223372036854775807), 'HUGEINT': (-170141183460469231731687303715884105728, 170141183460469231731687303715884105727), 'UTINYINT': (0, 255), 'USMALLINT': (0, 65535), 'UINTEGER': (0, 4294967295), 'UBIGINT': (0, 18446744073709551615), 'UHUGEINT': (0, 340282366920938463463374607431768211455)}"
+    },
+    "INTERRUPT_REPEAT_SECONDS": {
+      "value": "0.05"
+    },
+    "Inexact": {
+      "class": {},
+      "fields": [
+        "column",
+        "label",
+        "schema",
+        "source",
+        "table"
+      ]
+    },
+    "JsonTree": {
+      "alias": "dict[str, object]"
+    },
+    "LAKE": {
+      "value": "'lake'"
+    },
+    "LAND_BATCH_SIZE": {
+      "value": "65536"
+    },
+    "Lake": {
+      "class": {
+        "__init__": "(self, location: 'LakeLocation | AnyLakeLocation', limits: 'Limits', sources: 'Sequence[AnySource]' = ()) -> 'None'",
+        "changes": "(self, request: 'ChangesRequest') -> 'ChangesResult'",
+        "close": "(self) -> 'None'",
+        "current_snapshot": "(self) -> 'Snapshot'",
+        "describe": "(self, sql: 'str', parameters: 'Sequence[Parameter]' = ()) -> 'list[tuple[str, str]]'",
+        "describe_source": "(self, name: 'str', sql: 'str', parameters: 'Sequence[Parameter]' = ()) -> 'list[tuple[str, str]]'",
+        "maintain": "(self, expire_before: 'dt.datetime', orphans_before: 'dt.datetime') -> 'MaintenanceReport'",
+        "read": "(self, request: 'ReadRequest') -> 'pa.RecordBatchReader'",
+        "snapshot": "(self, snapshot_id: 'int') -> 'Snapshot | None'",
+        "start_read": "(self, request: 'ReadRequest') -> 'ReadHandle'",
+        "statistics": "(self, request: 'StatisticsRequest') -> 'StatisticsResult'",
+        "table_columns": "(self, request: 'TablesRequest') -> 'TablesResult'",
+        "tables": "(self) -> 'set[tuple[str, str]]'",
+        "transaction": "(self) -> 'Iterator[Transaction]'"
+      },
+      "fields": []
+    },
+    "Limits": {
+      "class": {
+        "__init__": "(self, memory_limit: 'str | None', threads: 'int | None', max_concurrent: 'int | None' = None, queue_size: 'int | None' = None, default_timeout_ms: 'int | None' = None) -> None"
+      },
+      "fields": [
+        "default_timeout_ms",
+        "max_concurrent",
+        "memory_limit",
+        "queue_size",
+        "threads"
+      ]
+    },
+    "MAX_TIMEOUT_MS": {
+      "value": "3600000"
+    },
+    "METADATA": {
+      "value": "'__ducklake_metadata_lake'"
+    },
+    "METADATA_PREFIX": {
+      "value": "'__ducklake_metadata'"
+    },
+    "PARSER_SPACES": {
+      "value": "'\\xa0\\u2000\\u2001\\u2002\\u2003\\u2004\\u2005\\u2006\\u2007\\u2008\\u2009\\u200a\\u200b\\u202f\\u205f\\u2060\\u3000\\ufeff'"
+    },
+    "PATTERN_BUDGET": {
+      "value": "10000"
+    },
+    "READ_TABLE_FUNCTIONS": {
+      "value": "{'generate_series', 'range', 'unnest'}"
+    },
+    "RESERVED_SOURCE_NAMES": {
+      "value": "{'lake', 'main', 'memory', 'system', 'temp'}"
+    },
+    "ReadHandle": {
+      "class": {
+        "__init__": "(self, reader: 'pa.RecordBatchReader', _guard: 'Guard') -> None",
+        "cancel": "(self) -> 'None'"
+      },
+      "fields": [
+        "_guard",
+        "reader"
+      ]
+    },
+    "SHARED_HARMLESS_FUNCTIONS": {
+      "value": "{'repeat', 'version'}"
+    },
+    "STEP_BUDGET": {
+      "value": "100000"
+    },
+    "TABLE_FUNCTIONS_SQL": {
+      "value": "\"SELECT string_agg(DISTINCT lower(function_name), '|') FROM duckdb_functions() WHERE function_type IN ('table', 'table_macro', 'pragma')\""
+    },
+    "Transaction": {
+      "class": {
+        "__init__": "(self, cursor: 'duckdb.DuckDBPyConnection', table_functions: 'frozenset[str]', timeout_ms: 'Callable[[int | None], int]', deadline: 'float' = inf, land: 'Callable[..., source_worker.SourceStream] | None' = None) -> 'None'",
+        "bounded": "(self, work: 'Callable[[], T]') -> 'T'",
+        "cancel": "(self) -> 'None'",
+        "execute": "(self, request: 'StatementRequest') -> 'None'",
+        "land": "(self, source: 'str', sql: 'str', parameters: 'Sequence[Parameter]', schema: 'str', table: 'str', timeout_ms: 'int | None' = None) -> 'int'",
+        "load_arrow": "(self, schema: 'str', table: 'str', reader: 'pa.RecordBatchReader', columns: 'Sequence[tuple[str, str]]', on_interrupt: 'Callable[[], None] | None' = None, timeout_ms: 'int | None' = None) -> 'int'",
+        "value": "(self, request: 'StatementRequest') -> 'str | None'"
+      },
+      "fields": []
+    },
+    "WRITE_STATEMENTS": {
+      "value": "{StatementType.ALTER, StatementType.CREATE, StatementType.DELETE, StatementType.DROP, StatementType.INSERT, StatementType.MERGE_INTO, StatementType.UPDATE}"
+    },
+    "exact_select": {
+      "function": "(sql: 'str', names: 'list[str]', types: 'list[str]') -> 'str | None'"
+    },
+    "open_lake": {
+      "function": "(location: 'LakeLocation | AnyLakeLocation', limits: 'Limits', sources: 'Sequence[AnySource]' = ()) -> 'Lake'"
+    },
+    "postgres_inexact_sql": {
+      "function": "(scope: 'str') -> 'str'"
+    }
+  }
+}

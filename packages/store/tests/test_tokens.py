@@ -14,19 +14,16 @@ import duckdb
 import pytest
 from orvex.contracts.store.v1 import Parameter, ParameterType
 from orvex.store.errors import StoreError
-from orvex.store.lake import (
-    FOLDER_COST,
-    PARSER_SPACES,
-    PATTERN_BUDGET,
+from orvex.store.file_names import FOLDER_COST, PATTERN_BUDGET
+from orvex.store.parameters import _typed
+from orvex.store.sql_guard import (
     SHARED_HARMLESS_FUNCTIONS,
     TABLE_FUNCTIONS_SQL,
     _created_kind_allowed,
     _guarded,
-    _plain,
     _single_statement,
-    _tokens,
-    _typed,
 )
+from orvex.store.sql_parser import PARSER_SPACES, _plain, _tokens
 
 from tests.support.bounds import FACTOR, SAFETY_NET, FolderReads, linear
 

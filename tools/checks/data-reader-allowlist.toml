@@ -10,14 +10,14 @@
 # test = "packages/<module>/tests/test_<x>.py::test_<name>"
 
 [[allow]]
-file = "packages/store/src/orvex/store/source_worker.py"
+file = "packages/store/src/orvex/store/sqlite_copy.py"
 reader = "sqlite3"
 function = "sqlite_backup"
 reason = "The SQLite snapshot copy (#83): the backup API copies the file page by page, running no statement on it; DuckDB reads every row from the copy, in the source's worker (#372)"
 test = "packages/store/tests/test_database_sources.py::test_the_sqlite_copy_reads_only_schema_names_in_python"
 
 [[allow]]
-file = "packages/store/src/orvex/store/source_worker.py"
+file = "packages/store/src/orvex/store/sqlite_copy.py"
 reader = "sqlite3"
 function = "_sqlite_copy"
 reason = "In the source's worker (#372): Python reads only schema names (tables, column types) of the copy, to find inexact columns; DuckDB reads every row"

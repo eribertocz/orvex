@@ -263,7 +263,7 @@ def test_limits_are_required(tmp_path: Path, limits: Limits) -> None:
 
 
 def test_missing_extension_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("orvex.store.lake.EXTENSIONS", ("no_such_extension_xyz",))
+    monkeypatch.setattr("orvex.store.isolation.EXTENSIONS", ("no_such_extension_xyz",))
     location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(tmp_path))
     with pytest.raises(StoreError) as raised:
         open_lake(location, LIMITS)
@@ -701,10 +701,10 @@ def test_a_read_with_summarize_is_refused_by_the_tree_too(
 ) -> None:
     # #153, second layer of the read path: with the token rule switched off, the serialized
     # tree's SHOW_REF still refuses the read (it would be unpinned).
-    import orvex.store.lake as store_lake
+    import orvex.store.sql_guard as store_guard
 
     write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(3)"))
-    monkeypatch.setattr(store_lake, "_refuse_show_statements", lambda *arguments: None)
+    monkeypatch.setattr(store_guard, "_refuse_show_statements", lambda *arguments: None)
     sql = "SELECT * FROM m UNION ALL BY NAME SUMMARIZE m"
     assert code_of(lambda: read(lake, sql)) == "STORE_STATEMENT_INVALID"
 
@@ -714,20 +714,20 @@ def test_a_read_that_binds_sql_text_is_refused_by_the_tree_too(
 ) -> None:
     # #136 Reviewer pass 9: with the statement check's function list emptied, the read's tree
     # check still refuses json_serialize_plan, which would bind its text on the lake.
-    import orvex.store.lake as store_lake
+    import orvex.store.sql_guard as store_guard
 
     write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(3)"))
     assert code_of(lambda: read(lake, "SELECT json_serialize_plan('SELECT 1') AS p")) == (
         "STORE_STATEMENT_INVALID"
     )
-    guarded = store_lake._guarded
+    guarded = store_guard._guarded
 
     def without_the_function_rule(sql: str, table_functions: frozenset[str]) -> None:
         with monkeypatch.context() as patched:
-            patched.setattr(store_lake, "_EXTERNAL_SQL_FUNCTIONS", frozenset())
+            patched.setattr(store_guard, "_EXTERNAL_SQL_FUNCTIONS", frozenset())
             guarded(sql, table_functions)
 
-    monkeypatch.setattr(store_lake, "_guarded", without_the_function_rule)
+    monkeypatch.setattr(store_guard, "_guarded", without_the_function_rule)
     sql = "SELECT a, json_serialize_plan('SELECT 1') AS p FROM m"
     assert code_of(lambda: read(lake, sql)) == "STORE_STATEMENT_INVALID"
 
@@ -760,9 +760,9 @@ def test_a_pattern_too_broad_to_check_is_refused_through_the_lake(
 def test_the_result_names_the_transaction_s_own_snapshot_when_another_commits_right_after(
     lake: Lake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import orvex.store.lake as store_lake
+    import orvex.store.transaction as store_transaction
 
-    real = store_lake._commit
+    real = store_transaction._commit
 
     def commit_then_another_writer(cursor: Any) -> None:  # noqa: ANN401
         real(cursor)
@@ -771,7 +771,7 @@ def test_the_result_names_the_transaction_s_own_snapshot_when_another_commits_ri
         other.execute("CREATE TABLE lake.main.other_writer AS SELECT 1 AS x")
         other.close()
 
-    monkeypatch.setattr(store_lake, "_commit", commit_then_another_writer)
+    monkeypatch.setattr(store_transaction, "_commit", commit_then_another_writer)
     mine = write(lake, statement("CREATE TABLE m AS SELECT range AS a FROM range(3)"))
     latest = lake.current_snapshot().id
     assert mine is not None
@@ -836,8 +836,8 @@ def test_a_lake_column_or_table_with_an_ordinary_name_is_still_read(lake: Lake) 
 
 def test_every_engine_view_and_setting_function_is_refused() -> None:
     # Measured on the pinned DuckDB: a new internal view, catalog function or setting reader in
-    # an upgrade fails here until it is refused too (`lake._ENGINE_NAMES`).
-    import orvex.store.lake as store_lake
+    # an upgrade fails here until it is refused too (`sql_guard._ENGINE_NAMES`).
+    import orvex.store.sql_guard as store_guard
 
     connection = duckdb.connect()
     connection.execute("INSTALL ducklake")
@@ -857,8 +857,8 @@ def test_every_engine_view_and_setting_function_is_refused() -> None:
         ).fetchall()
     }
     connection.close()
-    allowed = store_lake.ENGINE_NAMES_ALLOWED
-    assert not views - store_lake._ENGINE_NAMES - allowed
-    assert not functions - store_lake._ENGINE_NAMES - allowed
-    assert "pg_catalog" in store_lake._ENGINE_NAMES
-    assert not store_lake._ENGINE_NAMES & allowed
+    allowed = store_guard.ENGINE_NAMES_ALLOWED
+    assert not views - store_guard._ENGINE_NAMES - allowed
+    assert not functions - store_guard._ENGINE_NAMES - allowed
+    assert "pg_catalog" in store_guard._ENGINE_NAMES
+    assert not store_guard._ENGINE_NAMES & allowed
