@@ -8,6 +8,7 @@ from typing import Any, ClassVar
 
 from github_api import GitHubApiError
 from governance import (
+    BASELINE_FILES,
     CRITICAL_HEADING,
     UNCOUNTED_HEADING,
     ChangedFile,
@@ -198,6 +199,21 @@ class BodyTests(unittest.TestCase):
     def test_a_missing_body_fails_like_an_empty_one(self) -> None:
         files = [ChangedFile("packages/store/src/x.py", None, 500)]
         self.assertEqual(self.findings("", files), ["CASE_MATRIX_MISSING", "SIZE_NOT_JUSTIFIED"])
+
+    def test_a_changed_test_duration_baseline_needs_its_reason(self) -> None:
+        # #377: the recorded durations are the baseline the trends are read against.
+        for path in BASELINE_FILES:
+            with self.subTest(path=path):
+                files = [ChangedFile(path, None, 10)]
+                self.assertEqual(self.findings("", files), ["BASELINE_NOT_EXPLAINED"])
+                self.assertEqual(
+                    self.findings("## Baseline\nNone.\n", files), ["BASELINE_NOT_EXPLAINED"]
+                )
+                reason = "## Baseline\nShared lake fixtures (#376) lowered the setup time.\n"
+                self.assertEqual(self.findings(reason, files), [])
+        renamed = [ChangedFile("benchmarks/old.md", BASELINE_FILES[0], 1)]
+        self.assertEqual(self.findings("", renamed), ["BASELINE_NOT_EXPLAINED"])
+        self.assertEqual(self.findings("", [ChangedFile("benchmarks/other.md", None, 1)]), [])
 
 
 class FilledRowTests(unittest.TestCase):

@@ -31,6 +31,12 @@
 #   before a merge, and the local run for a tier A pull request before it is marked ready;
 # - `nightly`: the extensive runs, on a schedule (`property-nightly.yml`); never blocks a merge.
 # The critical sets run in `pr` and `full` whatever a change touches.
+#
+# A failing nightly run opens or updates one tracking issue (`property-nightly.yml`, #377),
+# triaged in the next session. A security, exactness, contract or corpus failure is fixed for
+# its class, and its shrunk counterexample is committed as a regression test (`@example` on the
+# property, or a plain test) in a file listed in `regressions`: each of those files is in a
+# critical set, so `pr` and `full` run it, never only `nightly` (tests/tools/test_verify.py).
 [profiles]
 critical_checks = ["semantic-corpus", "contracts-validate", "governance-scripts", "boundaries", "product-name"]
 critical_tests = [
@@ -48,6 +54,13 @@ critical_tests = [
   "tests/properties",
   # Contracts and their examples.
   "tests/contracts",
+]
+# The files that hold committed nightly counterexamples (`@example`).
+regressions = [
+  "tests/properties/test_binder_properties.py",
+  "tests/properties/test_engine_oracle.py",
+  "tests/properties/test_multifact_materialization.py",
+  "tests/properties/test_policy_properties.py",
 ]
 
 [[job]]

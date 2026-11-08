@@ -5,9 +5,11 @@
    at least one filled row.
 3. A pull request of more than `SIZE_GUIDE` changed lines, not counting the files listed under
    "Not counted in a pull request's size", needs a `## Size` section that justifies it.
+4. A pull request that changes the test-duration baseline (`BASELINE_FILES`, #377) needs a
+   `## Baseline` section that gives its reason: the trends are read against that baseline.
 
-Every path list is read from the rules document. The check fails closed: if a list, the changed
-files, their line counts or the description cannot be read, it fails.
+Every path list but `BASELINE_FILES` is read from the rules document. The check fails closed:
+if a list, the changed files, their line counts or the description cannot be read, it fails.
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ SECTION_HEADING = "### Governed paths"
 CRITICAL_HEADING = "### Critical paths (tier A)"
 UNCOUNTED_HEADING = "### Not counted in a pull request's size"
 SIZE_GUIDE = 400
+# The measured test durations the trends and the shard balance are read against (#375, #377).
+BASELINE_FILES = ("benchmarks/test-durations.md", "tools/ci/test-durations.json")
 MAX_LISTED_FILES = 3000
 # Text that says the size needs no justification: it does not justify a larger pull request.
 NO_JUSTIFICATION = ("under the guide", "none", "n/a")
@@ -176,6 +180,16 @@ def body_findings(
                     "SIZE_NOT_JUSTIFIED",
                     f"this pull request changes {counted} counted lines (guide: {SIZE_GUIDE}): "
                     "its description needs a '## Size' section that says why it is not split",
+                )
+            )
+    if any(path in BASELINE_FILES for file in files for path in file.paths()):
+        baseline = section(body, "baseline") or ""
+        if not baseline or baseline.lower().rstrip(".") in NO_JUSTIFICATION:
+            findings.append(
+                (
+                    "BASELINE_NOT_EXPLAINED",
+                    "this pull request changes the test-duration baseline: its description "
+                    "needs a '## Baseline' section that gives the reason",
                 )
             )
     return findings

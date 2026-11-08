@@ -1,0 +1,79 @@
+# Test-time trends and the visibility report (#377, #373 §6): after every `python` (profile
+# `full`) and `property-nightly` run on main, one entry is appended to the history kept as this
+# workflow's `test-trends` artifact, and the report (latest full and nightly results, skipped
+# tests by reason, tests in no profile, sustained rises) goes to the run's summary. It never
+# blocks a merge: a sustained rise is a warning for the next session (tools/ci/trends.py).
+name: test-trends
+
+on:
+  workflow_run:
+    workflows: [python, property-nightly]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+# One update at a time, so two runs finishing together do not both extend the same history.
+concurrency:
+  group: test-trends
+  cancel-in-progress: false
+
+jobs:
+  trends:
+    # Only main's own builds: a fork's pull request from a branch named `main` matches the
+    # branch filter too, and its logs must never enter the history (Reviewer, #380).
+    if: >-
+      github.event.workflow_run.event != 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+          cache: pip
+          cache-dependency-path: pylock.toml
+      - name: Install from the lock file
+        run: |
+          python -m pip install --quiet pip==26.2.2
+          python -m pip install --quiet -r pylock.toml
+      - name: Fetch the run's job logs and the previous history
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.event.workflow_run.id }}
+        run: |
+          mkdir -p logs previous
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN/jobs" --paginate \
+            --jq '.jobs[] | select(.conclusion != "skipped") | "\(.id) \(.name)"' |
+            while read -r id name; do
+              gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs" > "logs/$name.txt"
+            done
+          last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow test-trends.yml --branch main \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -n "$last" ]; then
+            gh run download "$last" --repo "$GITHUB_REPOSITORY" --name test-trends --dir previous
+          else
+            echo "::notice::no earlier history: this run starts it"
+          fi
+      - name: Record the run and report
+        env:
+          RUN: ${{ github.event.workflow_run.id }}
+          WORKFLOW: ${{ github.event.workflow_run.name }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          DATE: ${{ github.event.workflow_run.run_started_at }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          python -m tools.ci.trends --history previous/test-trends.json --logs logs \
+            --run "$RUN" --workflow "$WORKFLOW" --sha "$SHA" --date "$DATE" \
+            --conclusion "$CONCLUSION" --url "$URL" --summary "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-trends
+          path: previous/test-trends.json
+          retention-days: 90
+          if-no-files-found: error

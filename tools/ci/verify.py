@@ -363,12 +363,13 @@ def fast(
 
 
 def profiles(root: Path) -> dict[str, list[str]]:
-    """The critical checks and tests (`checks.toml`, `[profiles]`)."""
+    """The critical checks and tests, and the nightly regressions (`checks.toml`, `[profiles]`)."""
     document = tomllib.loads((root / checks.LIST).read_text(encoding="utf-8"))
     found = document.get("profiles", {})
     return {
         "checks": [str(name) for name in found.get("critical_checks", [])],
         "tests": [str(path) for path in found.get("critical_tests", [])],
+        "regressions": [str(path) for path in found.get("regressions", [])],
     }
 
 

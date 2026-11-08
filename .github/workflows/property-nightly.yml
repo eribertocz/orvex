@@ -1,6 +1,7 @@
 # Nightly property exploration (P2-28, #367; Owner correction 5): the same properties as CI,
-# with many random examples. It opens nothing; a failure shows here and the counterexample is
-# in the log, shrunk, to be committed as a permanent regression.
+# with many random examples. A failure opens or updates one tracking issue (#377); the
+# counterexample is in the log, shrunk, to be committed as a regression test in the `pr` and
+# `full` profiles (tools/ci/checks.toml `[profiles]`). test-trends.yml records each run.
 name: property-nightly
 
 on:
@@ -32,4 +33,27 @@ jobs:
       - name: Explore
         env:
           PROPERTY_PROFILE: nightly
-        run: python -m pytest -q tests/properties
+        run: |
+          python -m pytest -q -p tools.ci.timing --junitxml=junit.xml tests/properties
+          # Each test's time to this log (#375): what test-trends.yml reads back.
+          python -m tools.ci.durations emit junit.xml
+
+  alert:
+    # One tracking issue for failing nightly runs, assigned to the Agent (#377).
+    needs: property-nightly
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Open or update the nightly tracking issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # The Agent works through the Owner's account (AGENTS.md §1).
+          ASSIGNEE: ${{ github.repository_owner }}
+        run: python3 .github/workflows/scripts/nightly_alert.py
