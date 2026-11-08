@@ -113,3 +113,8 @@ reason = "Evidence records (semantic module state, not analytical data): one row
 file = "packages/store/src/orvex/store/existing_lake.py"
 call = "fetchone"
 reason = "An existing lake's checks (#399): one row of session settings, one list of privilege kinds, one catalog version, one list of database names, one snapshot; never data rows"
+
+[[allow]]
+file = "packages/store/src/orvex/store/existing_lake.py"
+call = "fetchall"
+reason = "An existing lake's snapshot verification (#399, PR 2): the tables a snapshot lists and the paths of the data and delete files it references, catalog metadata checked one path at a time; never data rows"

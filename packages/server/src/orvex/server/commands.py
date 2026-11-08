@@ -45,7 +45,7 @@ from orvex.contracts.store.v1 import (
     StatementRequest,
 )
 from orvex.semantic.ossie import sql
-from orvex.server import evidence_runs, heartbeat, lake_place, semantic_model
+from orvex.server import evidence_runs, heartbeat, lake_place, lake_separation, semantic_model
 from orvex.server.identity import Identity, load_identity
 from orvex.server.lake_place import Place
 from orvex.server.problems import Problem
@@ -145,19 +145,28 @@ def lake_location(project: Project, home: Path) -> Place:
     return chosen
 
 
-def check_project(folder: Path, identity: Identity | None = None) -> Checked:
-    """Load the project, discover its models and order them; every problem, nothing written."""
+def check_project(
+    folder: Path, identity: Identity | None = None, *, instance: Path | None = None
+) -> Checked:
+    """Load the project, discover its models and order them; every problem, nothing written.
+    With the `instance` folder, existing lakes are also checked apart from every registered
+    project's files, both ways (P2-30 PR 2)."""
     try:
         project = load_project(folder)
     except ProjectLoadError as error:
         return Checked(None, Discovery((), ()), None, (_load_problem(error),))
-    home = project.folder / f".{(identity or load_identity()).slug}"
+    slug = (identity or load_identity()).slug
+    home = project.folder / f".{slug}"
     place: Place | None = None
     problems: list[Problem] = []
     try:
         place = lake_location(project, home)
     except ProjectLoadError as error:
         problems.append(_load_problem(error))
+    if instance is not None:
+        folders = lake_separation.registered(instance, project.folder)
+        found = lake_separation.instance(instance, folders, slug)
+        problems += lake_separation.problems(found, project.folder)
     discovery = discover_models(project.folder, project.sources)
     sources = set(project.sources)
     graph = build_graph(discovery.models, sources, databases(project), project.direct)

@@ -1,4 +1,4 @@
-"""An existing DuckLake, attached read-only and isolated (P2-30 PR 1, #399; ADR-0027 §3).
+"""An existing DuckLake, attached read-only and isolated (P2-30 PRs 1 and 2, #399; ADR-0027 §3).
 
 Another system owns and writes the lake, so its catalog and its files are untrusted. Each lake is
 attached in a DuckDB instance of its own, holding that lake, its secrets and nothing else. The
@@ -31,6 +31,15 @@ guard it pass:
    only under the data location and the instance's spill folder, and the SQLite catalog file
    with its companions (DuckDB 2.0.0 resolves symbolic links before it checks the list).
    `allowed_configs` is never set: after the lock, no setting changes.
+
+Before the attach, and again each time a snapshot is verified, the lake must be apart from the
+instance's protected set: no overlapping location, and no shared file system for a local data
+location or a SQLite catalog (`separation`). `verify` shows whether a snapshot may be served:
+every file it references lies under the data location, reached without a link, and is none of
+the protected files. The PostgreSQL role check also covers large objects and, while `dblink` or
+`postgres_fdw` is installed, the cluster's other databases, and refuses `CREATE` on the database
+and the monitoring roles. On object storage the lake's credential must be its own
+(`separation.check_credentials`): there DuckDB's allow-list does not hold at read.
 """
 
 from __future__ import annotations
@@ -47,15 +56,16 @@ from pathlib import Path
 
 import duckdb
 from orvex.contracts.store.v1 import (
+    AzureStorage,
+    CredentialsInUseItem,
     ExistingLakeAttachment,
     PostgresLakeLocation,
-    ProtectedFile,
     RolesInUseItem,
     Snapshot,
     SqliteLakeLocation,
 )
-from orvex.store import locations
-from orvex.store.errors import StoreError
+from orvex.store import locations, separation
+from orvex.store.errors import StoreError, register_secret
 from orvex.store.sql_text import literal as _quote
 
 LAKE = "lake"
@@ -76,6 +86,12 @@ PRIVILEGED_ROLES = (
     "pg_read_server_files",
     "pg_execute_server_program",
     "pg_write_all_data",
+    # What the server and its other sessions are doing: other databases' statements, settings
+    # and file paths (PR 2, Reviewer pass 1 finding 7).
+    "pg_monitor",
+    "pg_read_all_settings",
+    "pg_read_all_stats",
+    "pg_stat_scan_tables",
 )
 SQLITE_COMPANIONS = ("-wal", "-shm", "-journal")
 # A protected catalog's companion files: SQLite's, and a DuckDB-file catalog's write-ahead log.
@@ -83,6 +99,7 @@ PROTECTED_COMPANIONS = (*SQLITE_COMPANIONS, ".wal")
 SQLITE_HEADER = b"SQLite format 3\x00"
 SQLITE_WAL_FORMAT = 2  # header bytes 18 and 19: the write and read format versions
 _EXPECTED_DATABASES = frozenset({LAKE, "memory", "system", "temp"})
+_EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.UTC)
 
 _SESSION_SQL = (
     "SELECT pg_catalog.current_setting('default_transaction_read_only') AS d, "
@@ -97,7 +114,10 @@ _RELATIONS = "ARRAY['r', 'p', 'v', 'm', 'f']::pg_catalog.\"char\"[]"
 def privileges_sql(schema: str) -> str:
     """PostgreSQL SQL naming each kind of thing the session's login role can use beyond reading
     the catalog schema: superuser, a privileged built-in role, any privilege on a schema, table,
-    view, sequence, function or foreign server elsewhere, or any write in the catalog schema.
+    view, sequence, function or foreign server elsewhere, any large object (or
+    `lo_compat_privileges`, which opens them all), `CONNECT` to another database of the cluster
+    while an extension that opens connections (`dblink`, `postgres_fdw`) is installed, or any
+    write in the catalog schema or database.
     Every role the login role (`session_user`) is a member of counts: code running with it can
     `SET ROLE` to any of them, or reset the role. `PUBLIC` counts too (`has_*_privilege`
     includes it). System catalogs (`pg_catalog`, `information_schema`, TOAST and temporary
@@ -139,6 +159,20 @@ def privileges_sql(schema: str) -> str:
         "WHERE pg_catalog.has_function_privilege(m.oid, p.oid, 'EXECUTE') "
         "UNION ALL SELECT 'foreign server' FROM pg_catalog.pg_foreign_server AS s, member AS m "
         "WHERE pg_catalog.has_server_privilege(m.oid, s.oid, 'USAGE') "
+        "UNION ALL SELECT 'database' FROM pg_catalog.pg_database AS d, member AS m "
+        f"WHERE NOT d.datname {_EQ} pg_catalog.current_database() AND d.datallowconn "
+        "AND pg_catalog.has_database_privilege(m.oid, d.oid, 'CONNECT') "
+        "AND EXISTS (SELECT FROM pg_catalog.pg_extension AS e "
+        f"WHERE e.extname {_EQ} ANY (ARRAY['dblink', 'postgres_fdw']::pg_catalog.name[])) "
+        "UNION ALL SELECT 'write in the catalog database' FROM member AS m "
+        "WHERE pg_catalog.has_database_privilege(m.oid, "
+        "pg_catalog.current_database()::pg_catalog.text, 'CREATE') "
+        "UNION ALL SELECT 'large object' FROM pg_catalog.pg_largeobject_metadata AS l, "
+        f"member AS m WHERE l.lomowner {_EQ} m.oid OR EXISTS (SELECT FROM "
+        "pg_catalog.aclexplode(l.lomacl) AS a "
+        f"WHERE a.grantee {_EQ} m.oid OR a.grantee {_EQ} 0::pg_catalog.oid) "
+        "UNION ALL SELECT 'large object' "
+        f"WHERE pg_catalog.current_setting('lo_compat_privileges') {_EQ} 'on'::pg_catalog.text "
         "UNION ALL SELECT 'write in the catalog schema' FROM inside AS i, member AS m "
         "WHERE pg_catalog.has_schema_privilege(m.oid, i.oid, 'CREATE') "
         "UNION ALL SELECT 'write in the catalog schema' "
@@ -172,20 +206,31 @@ class ExistingLake:
             raise StoreError(
                 "STORE_LIMITS_REQUIRED", "The lake needs a memory limit and a thread count.", {}
             )
+        if attachment.protected_locations is None:
+            raise separation.refused(self.name, "the instance's protected locations were not given")
         # Location checks first, and every secret registered, before anything is opened.
         password = ""
         if isinstance(location, PostgresLakeLocation):
             password = locations._postgres_password(location)
             self._schema = location.metadata_schema or DEFAULT_SCHEMA
             self._connection_text = self._catalog_connection(location, attachment.roles_in_use)
+            self._metadata = f'{METADATA}."{self._schema}"'
         data_path = _with_slash(location.data_path)
         storage = locations._storage_credentials(location.storage, data_path)
+        if storage is not None:
+            self._check_credentials(storage, attachment.credentials_in_use)
+        self._data_path = data_path
+        self._protected_locations = [item.root for item in attachment.protected_locations]
+        self._protected_files = [item.root for item in attachment.protected_files]
+        self._folder: tuple[int, int] | None = None
         self._descriptors: list[int] = []
         self._catalog_identity: tuple[int, int] | None = None
-        self._protected: frozenset[tuple[int, int]] = frozenset()
+        self._catalog: str | None = None  # a SQLite catalog's path
+        self._protected = _protected_identities(self.name, self._protected_files)
         if isinstance(location, SqliteLakeLocation):
             self._catalog_path = self._sqlite_path(location)
-            self._protected = _protected_identities(self.name, attachment.protected_files)
+            self._catalog = self._catalog_path
+            self._metadata = f"{METADATA}.main"
         self._spill = tempfile.mkdtemp(prefix="existing-lake-spill-")
         try:
             self._connection = duckdb.connect(
@@ -214,6 +259,7 @@ class ExistingLake:
             if storage is not None:
                 self._storage_secret(storage, data_path)
             if isinstance(location, PostgresLakeLocation):
+                self._check_apart()
                 self._check_postgres(password)
                 options.append(f"METADATA_SCHEMA {_quote(self._schema)}")
                 self._attach(f"ducklake:postgres:{self._connection_text}", options)
@@ -221,9 +267,11 @@ class ExistingLake:
                 files: list[str] = []
             else:
                 self._check_sqlite()
+                self._check_apart()
                 self._attach(f"ducklake:sqlite:{self._catalog_path}", options)
                 self._check_sqlite_files(after_attach=True)
-                files = [self._catalog_path, *(self._catalog_path + s for s in SQLITE_COMPANIONS)]
+                catalog = self._catalog_path
+                files = [catalog, *(catalog + suffix for suffix in SQLITE_COMPANIONS)]
             self._lock(locations._sandbox_folder(data_path), files)
         except BaseException:
             self.close()
@@ -400,19 +448,28 @@ class ExistingLake:
         found = row[0] if row is not None and isinstance(row[0], list) else []
         self._require_version([str(value) for value in found])
 
-    def _check_sqlite_files(self, *, after_attach: bool) -> None:
+    def _check_sqlite_files(self, *, after_attach: bool, keep: bool = True) -> None:
         """The catalog and each `-wal`, `-shm` and `-journal` file that exists, opened without
         following a link: regular files, distinct from each other, none a protected file. Kept
-        open while the lake is open; after the attach the catalog must still be the same file."""
+        open while the lake is open (`keep`); after the attach the catalog must still be the
+        same file."""
         opened = [_open_no_follow(self.name, self._catalog_path)]
         if opened[0] is None:
             raise self._sqlite_invalid("the file does not exist")
         opened += [_open_no_follow(self.name, self._catalog_path + s) for s in SQLITE_COMPANIONS]
+        held = [descriptor for descriptor in opened if descriptor is not None]
+        if keep:
+            self._descriptors += held
+        try:
+            self._compare_sqlite_files(held, after_attach=after_attach)
+        finally:
+            if not keep:
+                for descriptor in held:
+                    os.close(descriptor)
+
+    def _compare_sqlite_files(self, held: list[int], *, after_attach: bool) -> None:
         identities: list[tuple[int, int]] = []
-        for descriptor in opened:
-            if descriptor is None:
-                continue
-            self._descriptors.append(descriptor)
+        for descriptor in held:
             status = os.fstat(descriptor)
             if not stat.S_ISREG(status.st_mode):
                 raise self._sqlite_invalid("a catalog file is not a regular file")
@@ -432,6 +489,93 @@ class ExistingLake:
             f"Connection {self.name}: the SQLite catalog cannot be used: {reason}.",
             {"connection": self.name, "reason": reason},
         )
+
+    # --- apart from the protected set (PR 2) ---------------------------------------------------
+
+    def _check_credentials(
+        self, storage: locations._Storage, in_use: Sequence[CredentialsInUseItem] | None
+    ) -> None:
+        """Object storage: the credential is the lake's own (`separation.check_credentials`);
+        the other connections' values are read to compare and registered as secrets."""
+        settings = storage.settings
+        own = (
+            {settings.connection_string_env: storage.key_id}
+            if isinstance(settings, AzureStorage)
+            else {settings.key_id_env: storage.key_id, settings.secret_env: storage.secret}
+        )
+        names = None if in_use is None else [item.root for item in in_use]
+        values: dict[str, str] = {}
+        for variable in names or []:
+            value = os.environ.get(variable, "")
+            if value:
+                register_secret(value)
+                values[variable] = value
+        separation.check_credentials(self.name, own, names, values)
+
+    def _check_apart(self) -> None:
+        """The lake's data location and SQLite catalog apart from the protected set as it stands
+        now (`separation`, rules 1 and 2); the data folder's identity is recorded the first time."""
+        separation.check_apart(
+            self.name,
+            self._data_path,
+            self._catalog,
+            self._protected_locations,
+            self._protected_files,
+        )
+        folder = separation.folder_identity(self.name, self._data_path)
+        if self._folder is None:
+            self._folder = folder
+        elif folder != self._folder:
+            raise separation.refused(
+                self.name, "its data folder was replaced after it was attached"
+            )
+
+    def verify(self, snapshot: Snapshot) -> Snapshot:
+        """`snapshot`, once shown fit to be served: the catalog still lists it with the same
+        commit time; the lake is still apart from the protected set as it stands now, its SQLite
+        catalog files still pass their checks; and every data and delete file the snapshot
+        references passes the file rule (`separation`, rule 3). Otherwise `STORE_SOURCE_INVALID`
+        (`details.reason`), and the snapshot must not be served."""
+        self._check_apart()
+        if self._catalog is not None:
+            self._check_sqlite_files(after_attach=True, keep=False)
+        protected = _protected_identities(self.name, self._protected_files)
+        since_epoch = (snapshot.committed_at - _EPOCH) // dt.timedelta(microseconds=1)
+        try:
+            found = self._connection.execute(
+                f"SELECT epoch_us(snapshot_time) FROM ducklake_snapshots({_quote(LAKE)}) "
+                "WHERE snapshot_id = $id",
+                {"id": snapshot.id},
+            ).fetchone()
+            if found is None or int(found[0]) != since_epoch:
+                raise separation.refused(
+                    self.name, "the catalog no longer lists the snapshot with its commit time"
+                )
+            tables = self._connection.execute(
+                f"SELECT s.schema_name, t.table_name FROM {self._metadata}.ducklake_table AS t "
+                f"JOIN {self._metadata}.ducklake_schema AS s ON s.schema_id = t.schema_id "
+                "WHERE t.begin_snapshot <= $id "
+                "AND (t.end_snapshot IS NULL OR t.end_snapshot > $id) "
+                "AND s.begin_snapshot <= $id "
+                "AND (s.end_snapshot IS NULL OR s.end_snapshot > $id)",
+                {"id": snapshot.id},
+            ).fetchall()
+            paths: list[str] = []
+            for schema, table in tables:
+                rows = self._connection.execute(
+                    "SELECT data_file, delete_file FROM ducklake_list_files($lake, $table, "
+                    "schema => $schema, snapshot_version => $id)",
+                    {"lake": LAKE, "table": table, "schema": schema, "id": snapshot.id},
+                ).fetchall()
+                paths += [str(path) for row in rows for path in row if path is not None]
+        except duckdb.Error as error:
+            raise StoreError(
+                "STORE_SOURCE_INVALID",
+                f"Connection {self.name}: the snapshot's files could not be listed.",
+                {"connection": self.name, "reason": "unlisted", "duckdb": str(error)},
+            ) from None
+        separation.check_files(self.name, self._data_path, paths, self._folder, protected)
+        return snapshot
 
     # --- the instance --------------------------------------------------------------------------
 
@@ -523,7 +667,8 @@ class ExistingLake:
             self._connection.execute(statement)
 
     def latest_snapshot(self) -> Snapshot:
-        """The lake's latest snapshot, as its catalog lists it now (verification is PR 2)."""
+        """The lake's latest snapshot, as its catalog lists it now; `verify` shows whether it may
+        be served."""
         row = self._connection.execute(
             f"SELECT snapshot_id, epoch_us(snapshot_time) FROM ducklake_snapshots({_quote(LAKE)}) "
             "ORDER BY snapshot_id DESC LIMIT 1"
@@ -532,7 +677,7 @@ class ExistingLake:
             raise StoreError(
                 "STORE_SOURCE_INVALID", f"Connection {self.name}: the lake has no snapshot.", {}
             )
-        committed = dt.datetime(1970, 1, 1, tzinfo=dt.UTC) + dt.timedelta(microseconds=int(row[1]))
+        committed = _EPOCH + dt.timedelta(microseconds=int(row[1]))
         return Snapshot(kind="snapshot", id=int(row[0]), committed_at=committed)
 
     def close(self) -> None:
@@ -578,12 +723,11 @@ def _open_no_follow(name: str, path: str) -> int | None:
         ) from None
 
 
-def _protected_identities(name: str, files: Sequence[ProtectedFile]) -> frozenset[tuple[int, int]]:
+def _protected_identities(name: str, files: Sequence[str]) -> frozenset[tuple[int, int]]:
     """The device and inode of every protected file and of its companion files that exist. One
     that exists but cannot be examined fails closed."""
     found: set[tuple[int, int]] = set()
-    for item in files:
-        base = item.root
+    for base in files:
         for path in (base, *(base + suffix for suffix in PROTECTED_COMPANIONS)):
             try:
                 status = os.stat(path)

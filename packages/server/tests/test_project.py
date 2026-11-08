@@ -754,8 +754,20 @@ def test_ducklake_object_storage_over_plain_http_to_another_machine_is_refused(
             "s3://lakes/../billing/",
             "    s3:\n      region: us-east-1\n      key_id: ${env:K}\n      secret: ${env:S}\n",
         ),
+        (
+            # The container's account-qualified spelling (#399, PR 2): the same container.
+            "az://acct.blob.core.windows.net/lakes/billing/",
+            "    azure:\n      connection_string: ${env:AZ}\n",
+        ),
     ],
-    ids=["s3-without-settings", "settings-without-s3", "other-kind", "web-url", "dot-dot"],
+    ids=[
+        "s3-without-settings",
+        "settings-without-s3",
+        "other-kind",
+        "web-url",
+        "dot-dot",
+        "azure-account-form",
+    ],
 )
 def test_a_ducklake_data_path_must_match_its_storage_settings(
     tmp_path: Path, data_path: str, extra: str

@@ -21,6 +21,7 @@ from orvex.contracts.store.v1 import (
     ExistingLakeAttachment,
     PostgresLakeLocation,
     ProtectedFile,
+    ProtectedLocation,
     RolesInUseItem,
     SqliteLakeLocation,
 )
@@ -85,6 +86,7 @@ def sqlite_attachment(
         ),
         roles_in_use=[],
         protected_files=[ProtectedFile(path) for path in protected or []],
+        protected_locations=[ProtectedLocation(path) for path in protected or []],
     )
 
 
@@ -224,10 +226,12 @@ def test_a_catalog_whose_companion_is_a_link_to_itself_is_refused(
 
 
 def test_an_unrelated_protected_file_does_not_refuse_the_catalog(
-    sqlite_lake: tuple[Path, Path], tmp_path: Path
+    sqlite_lake: tuple[Path, Path], other_device: Path
 ) -> None:
+    # Unrelated: another file, on another file system (PR 2: a file system that holds a
+    # protected file is refused, `test_existing_lake_files`).
     catalog, data = sqlite_lake
-    other = tmp_path / "managed.sqlite"
+    other = other_device / "managed.sqlite"
     other.write_bytes(b"x")
     ExistingLake(
         sqlite_attachment(catalog, data, protected=[str(other)]), memory_limit=MEMORY, threads=1
@@ -449,6 +453,7 @@ class Catalog:
             ),
             roles_in_use=[RolesInUseItem(role) for role in roles_in_use],
             protected_files=[],
+            protected_locations=[],
         )
 
     def close(self) -> None:
@@ -527,12 +532,31 @@ def test_a_role_in_use_elsewhere_is_refused(catalog: Catalog) -> None:
             ],
             "table",
         ),
+        # PR 2 (Reviewer pass 1 on #405, finding 5): large objects, and the cluster's other
+        # databases while an extension can open a connection to them.
+        (
+            ["SELECT lo_create(424242)", "ALTER LARGE OBJECT 424242 OWNER TO {reader}"],
+            "large object",
+        ),
+        (
+            ["SELECT lo_create(424243)", "GRANT SELECT ON LARGE OBJECT 424243 TO PUBLIC"],
+            "large object",
+        ),
+        (["ALTER DATABASE {database} SET lo_compat_privileges = on"], "large object"),
+        (["CREATE EXTENSION dblink SCHEMA cat"], "database"),
+        (["CREATE EXTENSION postgres_fdw SCHEMA cat"], "database"),
+        (["GRANT CREATE ON DATABASE {database} TO {reader}"], "write in the catalog database"),
+        (["GRANT pg_monitor TO {reader}"], "role pg_monitor"),
+        (["GRANT pg_read_all_stats TO {reader}"], "role pg_read_all_stats"),
+        (["GRANT pg_read_all_settings TO {reader}"], "role pg_read_all_settings"),
     ],
 )
 def test_a_role_that_can_use_anything_beyond_the_catalog_schema_is_refused(
     catalog: Catalog, grants: list[str], kind: str
 ) -> None:
-    catalog.execute(*(grant.format(reader=catalog.reader) for grant in grants))
+    catalog.execute(
+        *(grant.format(reader=catalog.reader, database=catalog.database) for grant in grants)
+    )
     try:
         error = refused(catalog.attachment())
     finally:
@@ -667,3 +691,22 @@ def test_a_catalog_connection_cannot_set_its_own_options(catalog: Catalog) -> No
     )
     error = refused(attachment.model_copy(update={"location": changed}))
     assert error.code == "STORE_LOCATION_INVALID"
+
+
+def test_a_postgres_lake_snapshot_is_verified_and_a_file_outside_is_not_served(
+    catalog: Catalog, tmp_path: Path
+) -> None:
+    # The snapshot's tables are read from the catalog schema itself (PR 2).
+    outside = tmp_path / "outside.parquet"
+    duckdb.connect().execute(f"COPY (SELECT 1::BIGINT AS reading_id) TO '{outside}'")
+    with ExistingLake(catalog.attachment(), memory_limit=MEMORY, threads=1) as lake:
+        snapshot = lake.latest_snapshot()
+        assert lake.verify(snapshot) == snapshot
+        catalog.execute(
+            "INSERT INTO cat.ducklake_data_file (data_file_id, table_id, begin_snapshot, path, "
+            "path_is_relative, file_format, record_count, file_size_bytes, footer_size, "
+            f"row_id_start) SELECT 999, table_id, 0, '{outside}', false, 'parquet', 1, 1, 1, 0 "
+            "FROM cat.ducklake_table"
+        )
+        with pytest.raises(StoreError, match="outside its data location"):
+            lake.verify(snapshot)

@@ -71,3 +71,17 @@ reader = "os.open"
 function = "_open_no_follow"
 reason = "An existing lake's SQLite catalog files (ADR-0027 §3), opened with O_NOFOLLOW for their device and inode and the header's journal mode only; no row is read. DuckDB attaches the catalog"
 test = "packages/store/tests/test_existing_lake.py::test_a_catalog_that_is_a_symbolic_link_is_refused"
+
+[[allow]]
+file = "packages/store/src/orvex/store/separation.py"
+reader = "os.open"
+function = "_open"
+reason = "An existing lake's snapshot files (ADR-0027 §3, #399 PR 2), opened from the data folder one component at a time with O_NOFOLLOW for their type, device and inode only; no byte is read. DuckDB reads the files"
+test = "packages/store/tests/test_existing_lake_files.py::test_a_snapshot_reaching_a_file_through_a_symbolic_link_is_not_served"
+
+[[allow]]
+file = "packages/store/src/orvex/store/separation.py"
+reader = "read_text"
+function = "_mounts"
+reason = "Linux's mount table (/proc/self/mountinfo), for the devices under a protected location (ADR-0027 §3, #399 PR 2); not a source"
+test = "packages/store/tests/test_existing_lake_files.py::test_a_local_data_location_on_a_file_system_holding_a_protected_location_is_refused"

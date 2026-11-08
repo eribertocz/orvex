@@ -397,6 +397,14 @@ def _existing_lake(
                 "segments.",
                 f"{pointer}/data_path",
             )
+        if scheme == "az://" and "." in text[len(scheme) :].split("/", 1)[0]:
+            # `az://<account>.blob.core.windows.net/<container>/` is the container
+            # `az://<container>/`: one spelling, or two locations could hide one overlap.
+            raise document.schema_error(
+                f"Connection '{name}': an az:// data_path starts with its container, whose name "
+                "has no dot; the account comes from the connection string.",
+                f"{pointer}/data_path",
+            )
         data_path = text
     elif _URL.match(text) or given:
         raise document.schema_error(
