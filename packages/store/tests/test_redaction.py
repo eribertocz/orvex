@@ -19,9 +19,11 @@ SECRET = "pa'ss\"wo\\rd ü&="
         SECRET.replace('"', '""'),  # in an SQL identifier
         SECRET.replace("\\", "\\\\").replace("'", "\\'"),  # in a libpq connection string
         json.dumps(SECRET)[1:-1],  # in JSON
+        json.dumps(SECRET, ensure_ascii=False)[1:-1],  # in JSON, letters kept
         urllib.parse.quote(SECRET, safe=""),  # in a URL
+        urllib.parse.quote_plus(SECRET, safe=""),  # in a form-encoded URL
     ],
-    ids=["raw", "sql-string", "sql-identifier", "libpq", "json", "url"],
+    ids=["raw", "sql-string", "sql-identifier", "libpq", "json", "json-unicode", "url", "url-plus"],
 )
 def test_every_escaped_form_of_a_secret_is_redacted(form: str) -> None:
     register_secret(SECRET)

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import threading
 import urllib.parse
 
 from orvex.contracts.store.v1 import ErrorCode, ErrorDetail
 from orvex.contracts.store.v1 import StoreError as StoreErrorMessage
 
 _SECRETS: set[str] = set()
+_LOCK = threading.Lock()  # registration and redaction may run in several threads
 
 
 def register_secret(value: str) -> None:
@@ -17,7 +19,8 @@ def register_secret(value: str) -> None:
     doubled) or identifier (`"` doubled), in a libpq connection string (`\\` and `\'`), in JSON
     and in a URL."""
     if value:
-        _SECRETS.update(_forms(value))
+        with _LOCK:
+            _SECRETS.update(_forms(value))
 
 
 def _forms(value: str) -> set[str]:
@@ -27,13 +30,17 @@ def _forms(value: str) -> set[str]:
         value.replace('"', '""'),
         value.replace("\\", "\\\\").replace("'", "\\'"),
         json.dumps(value)[1:-1],
+        json.dumps(value, ensure_ascii=False)[1:-1],
         urllib.parse.quote(value, safe=""),
+        urllib.parse.quote_plus(value, safe=""),
     }
 
 
 def redact(text: str) -> str:
     # The longest form first, so a form inside another never leaves part of a secret behind.
-    for secret in sorted(_SECRETS, key=len, reverse=True):  # sorted copies the set at once
+    with _LOCK:
+        secrets = sorted(_SECRETS, key=len, reverse=True)
+    for secret in secrets:
         text = text.replace(secret, "***")
     return text
 
