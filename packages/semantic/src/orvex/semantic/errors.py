@@ -146,3 +146,8 @@ class SemanticError(Exception):
             mode="json", by_alias=True, exclude_none=True
         )
         return json.dumps(message, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+class PlanError(RuntimeError):
+    """An internal error: the plan cannot be trusted, and never runs. Defined here, apart from
+    `planning`, so the discharge checker that `planning` calls never imports `planning` (#246)."""

@@ -42,3 +42,14 @@ def test_folder_reads_count_folders_read_and_their_entries(
     with pytest.raises(FileNotFoundError):
         os.scandir(tmp_path / "missing")
     assert (reads.folders, reads.entries) == (1, 3)
+
+
+def test_the_garbage_collector_never_runs_inside_a_timed_run() -> None:
+    # Its cost follows the whole process's heap (other tests' objects), not the input (#403).
+    import gc
+
+    seen: list[bool] = []
+    bounds.linear(lambda size: seen.append(gc.isenabled()), 1000)
+    assert seen
+    assert not any(seen)
+    assert gc.isenabled()

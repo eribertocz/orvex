@@ -36,15 +36,12 @@ from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.correctness import CorrectnessReport
 from orvex.semantic.correctness.graph import Graph
 from orvex.semantic.correctness.report import ISSUED
+from orvex.semantic.errors import PlanError
 from orvex.semantic.ossie import sql
 
 PLAN_FORMAT = 1
 ROUTES = frozenset({"managed", "existing_ducklake", "live"})  # ADR-0027
 ISSUED_PLAN = object()
-
-
-class PlanError(RuntimeError):
-    """An internal error: the plan cannot be trusted, and never runs."""
 
 
 @dataclass(frozen=True, slots=True)
