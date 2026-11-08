@@ -9,6 +9,8 @@ skipped when they are missing.
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -89,3 +91,17 @@ def lake(location: AnyLocation) -> Iterator[Lake]:
     opened = open_lake(location, LIMITS)
     yield opened
     opened.close()
+
+
+@pytest.fixture
+def other_device(tmp_path: Path) -> Iterator[Path]:
+    """A folder on another file system than `tmp_path` (`/dev/shm`): an existing lake shares no
+    file system with a protected location (#399, PR 2)."""
+    shared = Path("/dev/shm")
+    if not shared.is_dir() or shared.stat().st_dev == tmp_path.stat().st_dev:
+        if os.environ.get("CI"):
+            pytest.fail("CI needs /dev/shm on a file system of its own")
+        pytest.skip("no second file system here")
+    folder = Path(tempfile.mkdtemp(dir=shared, prefix="store-test-"))
+    yield folder
+    shutil.rmtree(folder, ignore_errors=True)

@@ -424,4 +424,8 @@ export interface ExistingLakeAttachment {
 	 * Absolute paths of the files no SQLite catalog may be a hard link to (the protected set). Each one's -wal, -shm, -journal and .wal files are protected with it.
 	 */
 	protected_files: string[];
+	/**
+	 * Every location of the protected set across the instance (P2-30 PR 2): the instance folders; each registered project's folder, managed lake data location and catalog file, file sources' paths (a glob by its folder), and the locations and catalog files of its existing lakes other than this lake. An absolute local path, or an s3://, gs:// or az:// prefix. The lake's data location and SQLite catalog must neither equal, contain nor lie inside one, and a local one must be on a file system that holds none of them. Optional in the schema (new in P2-30 PR 2, compatible), required by the store: an attachment without it is refused, since the lake cannot be shown apart from the protected set.
+	 */
+	protected_locations?: string[];
 }

@@ -471,6 +471,17 @@ class ProtectedFile(RootModel[str]):
     root: Annotated[str, Field(max_length=4096, min_length=2, pattern="^(/|[A-Za-z]:[\\\\/])")]
 
 
+class ProtectedLocation(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            max_length=4096,
+            min_length=2,
+            pattern="^(/|[A-Za-z]:[\\\\/]|s3://|gs://|az://)",
+        ),
+    ]
+
+
 class Parameter(BaseModel):
     """
     A named parameter bound to `$name` in the SQL. The value is text converted to the declared DuckDB type; exact values are never JSON numbers.
@@ -636,6 +647,10 @@ class ExistingLakeAttachment(BaseModel):
     protected_files: list[ProtectedFile]
     """
     Absolute paths of the files no SQLite catalog may be a hard link to (the protected set). Each one's -wal, -shm, -journal and .wal files are protected with it.
+    """
+    protected_locations: list[ProtectedLocation] | None = None
+    """
+    Every location of the protected set across the instance (P2-30 PR 2): the instance folders; each registered project's folder, managed lake data location and catalog file, file sources' paths (a glob by its folder), and the locations and catalog files of its existing lakes other than this lake. An absolute local path, or an s3://, gs:// or az:// prefix. The lake's data location and SQLite catalog must neither equal, contain nor lie inside one, and a local one must be on a file system that holds none of them. Optional in the schema (new in P2-30 PR 2, compatible), required by the store: an attachment without it is refused, since the lake cannot be shown apart from the protected set.
     """
 
 
