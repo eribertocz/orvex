@@ -486,9 +486,9 @@ def _column(values: pa.Array, got: pa.Field, want: pa.Field) -> pa.Array:
             source = values.type
         if pa.types.is_string(source) and source == target:
             values.validate(full=True)  # valid UTF-8 only
-            if kind == "UHUGEINT" and pc.all(
-                pc.match_substring_regex(values, r"^[0-9]{1,39}$"), skip_nulls=True
-            ).as_py() not in (True, None):
+            digits = pc.match_substring_regex(values, r"^[0-9]{1,39}$")
+            # One Arrow scalar for the whole column, compared in Arrow: no value becomes Python.
+            if kind == "UHUGEINT" and pc.any(pc.invert(digits)).equals(pa.scalar(True)):
                 raise pa.ArrowInvalid("a value is not unsigned decimal digits")
             return values
         if pa.types.is_timestamp(target) and pa.types.is_timestamp(source):
