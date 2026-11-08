@@ -439,12 +439,20 @@ def _first_link(p: _Plan, dataset: str, path: tuple[str, ...]) -> tuple[str, ...
     """`dataset`'s columns in the first step of a policy's path from it (the step written
     last), from the model's own relationships."""
     found = p.compiled.ossie.document.get("relationships", ())
-    for related in found if isinstance(found, tuple) else ():
-        if path and sql.normalize(str(related["name"])) == sql.normalize(path[-1]):
-            if sql.normalize(str(related["from"])) == dataset:
-                return tuple(str(c) for c in related["from_columns"])
-            if sql.normalize(str(related["to"])) == dataset:
-                return tuple(str(c) for c in related["to_columns"])
+    by_name = {
+        sql.normalize(str(r["name"])): r for r in (found if isinstance(found, tuple) else ())
+    }
+    steps = [by_name.get(sql.normalize(name)) for name in path]
+    if not steps or any(step is None for step in steps):
+        raise DischargeError("a propagated policy's path is not in the model")
+    ends = [{sql.normalize(str(s["from"])), sql.normalize(str(s["to"]))} for s in steps if s]
+    if any(dataset in pair for pair in ends[:-1]) or len(ends[-1]) == 1:
+        raise DischargeError("a propagated policy reads the base beyond its first link")
+    related = by_name[sql.normalize(path[-1])]
+    if sql.normalize(str(related["from"])) == dataset:
+        return tuple(str(c) for c in related["from_columns"])
+    if sql.normalize(str(related["to"])) == dataset:
+        return tuple(str(c) for c in related["to_columns"])
     raise DischargeError("a propagated policy's path is not in the model")
 
 

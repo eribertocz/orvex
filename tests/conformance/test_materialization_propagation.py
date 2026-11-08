@@ -252,3 +252,60 @@ def test_a_plan_whose_table_does_not_keep_the_link_never_runs() -> None:
     )
     with pytest.raises(DischargeError, match="link of a propagated policy"):
         verify_plan(replace(plan, rollup=narrowed, report=report))
+
+
+# --- after review: a path back to the base ------------------------------------------------------
+
+BY_TENANT_GRAIN = {"tenant": SourceColumn("VARCHAR", False)} | m.ROLLUP
+
+
+@pytest.mark.parametrize("to", ["category", "customer"])
+def test_a_path_that_reads_the_base_again_keeps_the_table_unused(
+    to: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A self-relationship (`sales.tenant` to another sales column) propagates a policy on
+    `sales` back onto `sales`: its later step reads the base's rows, which the table does not
+    replace, so the table is not eligible and the question is answered from the base."""
+    monkeypatch.setitem(m.CATALOG, "rollup3", BY_TENANT_GRAIN)
+    rollup = m.table("rollup3", ["month", "category", "tenant"], [("r", "SUM(revenue)", "revenue")])
+    document = m.plain(m.model(rollup).ossie.document)
+    for field in document["datasets"][0]["fields"]:
+        if field["name"] == "tenant":
+            field.update(m.conformed("tenant", "tenant"))
+    document["relationships"] = [
+        {
+            "name": "parent",
+            "from": "sales",
+            "to": "sales",
+            "from_columns": ["tenant"],
+            "to_columns": [to],
+        }
+    ]
+    loaded = read(json.dumps(document).encode(), "semantic/rollups.ossie.json", VENDORS)
+    compiled = compile_model(loaded, {"sales": m.SALES, "rollup3": BY_TENANT_GRAIN}, VENDORS)
+    original = m.lake_rows
+
+    def with_tenants(sales: list[Sale]) -> dict[str, list[dict[str, str | None]]]:
+        sums: dict[tuple[str, str, str], Decimal] = {}
+        for month, category, tenant, _, cents, _ in sales:
+            key = (month, category, tenant)
+            sums[key] = sums.get(key, Decimal(0)) + Decimal(cents) / 100
+        rows: list[dict[str, str | None]] = [
+            {"month": k[0], "category": k[1], "tenant": k[2], "revenue": f"{v:.2f}"}
+            for k, v in sorted(sums.items())
+        ]
+        return original(sales) | {"rollup3": rows}
+
+    monkeypatch.setattr(m, "lake_rows", with_tenants)
+    policy = _policies(compiled, m.BY_CATEGORY_POLICY)
+    context = ce.viewer_context((), {"category": {"type": "text", "value": "A"}})
+    found = m.run(
+        m.query("revenue"),
+        m.SAMPLE,
+        compiled=compiled,
+        catalog={"sales": m.SALES, "rollup3": BY_TENANT_GRAIN},
+        policy=policy,
+        context=context,
+    )
+    assert m.receipt_reads(found) == ["sales"]
+    assert m.evidence(found)["C8.equivalent:rollup3"] == "base:sales; not eligible: policy"

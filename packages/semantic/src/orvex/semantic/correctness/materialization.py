@@ -312,8 +312,17 @@ def link_columns(compiled: Any, dataset: str, path: tuple[str, ...]) -> tuple[st
     relationships = {
         sql.normalize(str(r["name"])): r for r in (found if isinstance(found, tuple) else ())
     }
-    related = relationships.get(sql.normalize(path[-1])) if path else None
-    if related is None:
+    steps = [relationships.get(sql.normalize(name)) for name in path]
+    related = steps[-1] if steps else None
+    if related is None or any(step is None for step in steps):
+        raise _No("policy")
+    # Only the first link may read the base: a later step through it (a path back to the base,
+    # or a self-relationship) would read the base's rows inside the table's relation (#354).
+    if any(
+        dataset in {sql.normalize(str(step["from"])), sql.normalize(str(step["to"]))}
+        for step in steps[:-1]
+        if step is not None
+    ) or sql.normalize(str(related["from"])) == sql.normalize(str(related["to"])):
         raise _No("policy")
     if sql.normalize(str(related["from"])) == dataset:
         return tuple(str(c) for c in related["from_columns"])
