@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
@@ -40,6 +41,65 @@ def test_the_parts_are_disjoint_and_cover_every_test(
     assert sorted(seen) == every
 
 
+def _round_robin(index: int, total: int, count: int) -> list[str]:
+    return [i.nodeid for position, i in enumerate(_items(count)) if position % total == index]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "{not json",
+        "[]",
+        '"tests/test_x.py::test_3"',
+        '{"tests/test_x.py::test_3": "slow"}',
+        '{"tests/test_x.py::test_3": -1}',
+        '{"tests/test_x.py::test_3": NaN}',
+        '{"tests/test_x.py::test_3": Infinity}',
+        '{"tests/test_x.py::test_3": true}',
+        '{"tests/test_x.py::test_3": null}',
+        b"\xff\xfe".decode("latin-1"),
+    ],
+    ids=[
+        "syntax",
+        "list",
+        "string",
+        "text",
+        "negative",
+        "nan",
+        "infinite",
+        "bool",
+        "null",
+        "bytes",
+    ],
+)
+def test_a_corrupt_record_falls_back_to_round_robin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, text: str
+) -> None:
+    # #261: a corrupt history never breaks the split nor loses a test.
+    record = tmp_path / "test-durations.json"
+    record.write_text(text, encoding="latin-1")
+    read = shard_module.durations
+    assert read(record) == {}
+    monkeypatch.setattr(shard_module, "durations", lambda: read(record))
+    for index in range(7):
+        kept, _ = _split(monkeypatch, f"{index}/7", 100)
+        assert kept == _round_robin(index, 7, 100)
+
+
+def test_a_stale_record_falls_back_to_round_robin(monkeypatch: pytest.MonkeyPatch) -> None:
+    # #261: a record that knows none of the collected tests says nothing about them.
+    stale = {"tests/test_gone.py::test_a": 40.0, "tests/test_gone.py::test_b": 1.0}
+    monkeypatch.setattr(shard_module, "durations", lambda: stale)
+    every = sorted(i.nodeid for i in _items(100))
+    seen: list[str] = []
+    for index in range(7):
+        kept, left = _split(monkeypatch, f"{index}/7", 100)
+        assert kept == _round_robin(index, 7, 100)
+        assert sorted(kept + left) == every
+        seen += kept
+    assert sorted(seen) == every
+
+
 def test_the_parts_are_balanced_by_measured_time() -> None:
     """Longest first into the lightest part: the slow tests are spread, not stacked."""
     tests = [f"t{n}" for n in range(8)]
@@ -55,6 +115,7 @@ def test_the_parts_are_balanced_by_measured_time() -> None:
 
 def test_the_committed_record_is_valid() -> None:
     record = shard_module.durations()
+    assert record  # a corrupt record reads as empty: the committed one must not
     assert all("::" in test and seconds >= 0 for test, seconds in record.items())
 
 
