@@ -156,6 +156,20 @@ def test_a_changed_character_is_refused(form: CursorForm) -> None:
         }
 
 
+ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+
+def test_only_the_canonical_text_of_a_cursor_is_accepted(form: CursorForm) -> None:
+    # #385: Base64 ignores the unused low bits of the last character, so a cursor changed only
+    # there decoded to the same bytes and was accepted. Every other last character is refused.
+    cursor = issue_cursor(form, BINDING, STATE)
+    for other in ALPHABET.replace(cursor[-1], ""):
+        changed = cursor[:-1] + other
+        assert refusal(partial(verify_cursor, form, changed, BINDING, AVAILABLE)) == {
+            "reason": "invalid"
+        }
+
+
 @pytest.mark.parametrize(
     "malformed",
     [lambda c: c[:-1], lambda c: c[: len(c) // 2], lambda c: c + "A", lambda c: "A" * 1025,

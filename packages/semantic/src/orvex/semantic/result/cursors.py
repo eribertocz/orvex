@@ -180,6 +180,10 @@ class SealedForm:
         """The data version and the inner layer of a genuine cursor of this instance."""
         try:
             sealed = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+            # Only the canonical text: Base64 ignores the last character's unused bits, so a
+            # cursor changed there would decode to the same bytes (#385).
+            if base64.urlsafe_b64encode(sealed).rstrip(b"=").decode("ascii") != cursor:
+                return None
             plain = self._outer.decrypt(sealed[:12], sealed[12:], None)
             size = plain[0]
             version = plain[1 : 1 + size].decode()
