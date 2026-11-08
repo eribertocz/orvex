@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-from orvex.semantic.adapters.duckdb import _unsupported
+from orvex.semantic.adapters.dialect import _unsupported
 
 _TYPES = {
     "BOOLEAN": "Bool",

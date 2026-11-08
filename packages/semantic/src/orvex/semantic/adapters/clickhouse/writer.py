@@ -52,16 +52,14 @@ from orvex.semantic.adapters.clickhouse.exact import (
     wide,
 )
 from orvex.semantic.adapters.clickhouse.names import quote_name
+from orvex.semantic.adapters.dialect import _rounded, _unsupported, quote
 from orvex.semantic.adapters.duckdb import (
     LEVEL,
     PhysicalQuery,
     PolicyValues,
-    _rounded,
-    _unsupported,
     _Writer,
     encoding,
     number_parameter,
-    quote,
 )
 from orvex.semantic.catalog.building import _logical
 from orvex.semantic.compiler.catalog import LogicalType, column_key
