@@ -74,6 +74,7 @@ from orvex.store.locations import (
     _storage_credentials,
     _with_root_cert,
 )
+from orvex.store.nested_types import refuse_nested_uhugeint
 from orvex.store.source_worker import DatabaseSource
 from orvex.store.sql_text import identifier as _identifier
 from orvex.store.sql_text import literal as _quote
@@ -1278,6 +1279,9 @@ class Lake:
         # The source workers' folders (#372): apart from the spill folder, which no worker may
         # learn of; removed with the lake.
         self._workers = tempfile.mkdtemp(prefix="lake-workers-")
+        # The lake's copies of SQLite sources (#410): outside every folder the lake's connection
+        # may open, so only a worker reads them; removed with the lake.
+        self._copies = tempfile.mkdtemp(prefix="lake-sources-")
         self._local = threading.local()
         try:
             self._load_extensions()
@@ -1320,9 +1324,7 @@ class Lake:
                     if isinstance(source, SqliteSourceAttachment):
                         # One consistent copy per open lake, WAL included (#126): every read of
                         # this lake sees the file as it was now. Pages only: no SQL is parsed.
-                        folder = Path(self._spill) / "sources"
-                        folder.mkdir(exist_ok=True)
-                        copy = folder / f"{source.name}.sqlite"
+                        copy = Path(self._copies) / f"{source.name}.sqlite"
                         source_worker.sqlite_backup(source, copy)
                         source = source.model_copy(update={"path": copy.as_posix()})
                     self._databases[source.name] = (source, passwords.get(source.name, ""))
@@ -1334,6 +1336,7 @@ class Lake:
             self._connection.close()
             shutil.rmtree(self._spill, ignore_errors=True)
             shutil.rmtree(self._workers, ignore_errors=True)
+            shutil.rmtree(self._copies, ignore_errors=True)
             raise
 
     def _names_of_table_functions(self) -> frozenset[str]:
@@ -1547,6 +1550,7 @@ class Lake:
         self._connection.close()
         shutil.rmtree(self._spill, ignore_errors=True)
         shutil.rmtree(self._workers, ignore_errors=True)
+        shutil.rmtree(self._copies, ignore_errors=True)
 
     def _cursor(self) -> duckdb.DuckDBPyConnection:
         cursor = self._connection.cursor()
@@ -2352,6 +2356,7 @@ class Lake:
             # read of the stream, where a timeout or a cancel can still interrupt it.
             relation = cursor.sql(sql, params=parameters)
             names = list(relation.columns)
+            refuse_nested_uhugeint(names, relation.types)
             types = [str(kind) for kind in relation.types]
             exact = exact_select(sql, names, types)
             if exact is not None:

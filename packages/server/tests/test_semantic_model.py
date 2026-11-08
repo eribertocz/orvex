@@ -6,6 +6,8 @@ from __future__ import annotations
 import inspect
 import io
 import json
+import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -306,6 +308,49 @@ def test_compiling_takes_no_caller_and_grants_nothing() -> None:
     ]
     assert "semantic_model" not in inspect.getsource(app)
     assert semantic_model.__name__ == "orvex.server.semantic_model"
+
+
+def test_without_a_policy_file_the_model_has_no_policies(tmp_path: Path) -> None:
+    ran(tmp_path, **{"semantic/m.ossie.json": model()})
+    found = loaded(tmp_path)
+    assert found.problems == ()
+    assert found.model is not None
+    assert found.model.policies is None
+
+
+def _symlink_to_valid(path: Path) -> None:
+    target = path.parent / "elsewhere.yaml"
+    target.write_text(POLICY, encoding="utf-8")
+    path.symlink_to(target)
+
+
+def _unreadable(path: Path) -> None:
+    path.write_text(POLICY, encoding="utf-8")
+    path.chmod(0)
+
+
+NOT_REGULAR = {
+    "symlink-valid": _symlink_to_valid,
+    "symlink-broken": lambda path: path.symlink_to(path.parent / "missing.yaml"),
+    "directory": lambda path: path.mkdir(),
+    "fifo": lambda path: os.mkfifo(path),
+    "unreadable": _unreadable,
+}
+
+
+@pytest.mark.parametrize("make", NOT_REGULAR.values(), ids=NOT_REGULAR.keys())
+def test_a_policy_file_that_is_not_a_readable_regular_file_returns_no_model(
+    tmp_path: Path, request: pytest.FixtureRequest, make: Callable[[Path], None]
+) -> None:
+    """#410: anything at `security.yaml` but a regular file is POLICY_INVALID, never "no
+    policies" (fail closed); a FIFO does not block the load."""
+    if request.node.callspec.id == "unreadable" and os.geteuid() == 0:
+        pytest.skip("root reads any file")
+    ran(tmp_path, **{"semantic/m.ossie.json": model()})
+    make(tmp_path / "security.yaml")
+    found = loaded(tmp_path)
+    assert found.model is None
+    assert codes(found) == [("POLICY_INVALID", "security.yaml")]
 
 
 def test_groups_named_in_local_mode_are_accepted_and_nobody_belongs(tmp_path: Path) -> None:

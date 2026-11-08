@@ -26,6 +26,7 @@ from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.server.problems import Problem
+from orvex.server.regular_file import read_regular_file
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake
 
@@ -170,7 +171,7 @@ def load_semantic(
             None, (Problem("OSSIE_INVALID", file, None, f"unreadable: {error.strerror}"),)
         )
     try:
-        rules = security.read_bytes() if security.is_file() else None
+        rules = read_regular_file(security)
     except OSError as error:
         why = f"unreadable: {error.strerror}"
         return Loaded(None, (Problem("POLICY_INVALID", POLICIES, None, why),))
