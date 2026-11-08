@@ -1,6 +1,5 @@
 """The managed lake connection's isolation, set once when it opens: the extensions it loads, the
-lake and file sources it attaches, its storage secret, and its file sandbox and locked
-configuration.
+lake and file sources it attaches, its storage secret, and its file sandbox.
 """
 
 from __future__ import annotations
@@ -131,22 +130,14 @@ class Isolation:
         readable: Sequence[str] = (),
     ) -> None:
         """Limit file access to the lake's own folders, its catalog file and the declared source
-        files, for good (DuckDB cannot undo it), then lock the configuration: no setting of the
-        connection or of any of its cursors changes afterwards, by any path (#246).
-
-        What every cursor needs is set for the whole database before the lock, as for an
-        existing lake (`existing_lake`): TIMESTAMPTZ values reach Arrow as instants in UTC
-        whatever the machine's zone, and a name in FROM never resolves to a Python object."""
+        files, for good (DuckDB cannot undo it)."""
         folders, files = _sandbox_entries(location, self._spill, readable)
         listed = ", ".join(_quote(folder.rstrip("/") + "/") for folder in folders)
-        self._connection.sql("SET GLOBAL TimeZone = 'UTC'")
-        self._connection.sql("SET GLOBAL python_enable_replacements = false")
         self._connection.sql(f"SET temp_directory = {_quote(self._spill)}")
         self._connection.sql(f"SET allowed_directories = [{listed}]")
         if files:
             self._connection.sql(f"SET allowed_paths = [{', '.join(map(_quote, files))}]")
         self._connection.sql("SET enable_external_access = false")
-        self._connection.sql("SET lock_configuration = true")
 
     def load_extensions(self) -> None:
         for extension in EXTENSIONS:

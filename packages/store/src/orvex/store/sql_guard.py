@@ -11,7 +11,7 @@ import duckdb
 from orvex.store.errors import StoreError
 from orvex.store.file_names import _refuse_file_names
 from orvex.store.lake_names import METADATA_PREFIX
-from orvex.store.sql_parser import _plain, _statements, _tokens
+from orvex.store.sql_parser import _plain, _tokens
 
 # The engine's own catalog, logs and settings, reachable by name from any SQL (#256, measured on
 # the pinned DuckDB; a test fails when an upgrade adds one): the views of `pg_catalog` and the
@@ -358,7 +358,7 @@ def _single_statement(sql: str, table_functions: frozenset[str]) -> duckdb.State
     # Parsed first: SQL DuckDB cannot parse fails with the parser's own message, whatever the
     # checks would say (#158). Parsing runs nothing.
     try:
-        statements = _statements(sql)
+        statements = duckdb.extract_statements(sql)
     except duckdb.Error as error:
         raise StoreError(
             "STORE_QUERY_FAILED", "The SQL could not be parsed.", {"duckdb": str(error)}

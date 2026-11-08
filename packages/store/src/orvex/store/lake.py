@@ -219,7 +219,6 @@ class Lake:
                 elif isinstance(source, FileSourceAttachment):
                     readable += setup.attach_file_source(source)
             self._table_functions = self._names_of_table_functions()
-            # Last: the sandbox, then the configuration locked for good (#246).
             setup.sandbox(location, readable)
         except BaseException:
             self._connection.close()
@@ -240,8 +239,11 @@ class Lake:
     def _cursor(self) -> duckdb.DuckDBPyConnection:
         cursor = self._connection.cursor()
         cursor.sql(f"USE {LAKE}")
-        # UTC and no Python replacement scans hold for every cursor: set for the whole database
-        # before its configuration was locked (`isolation.sandbox`).
+        # TIMESTAMPTZ values reach Arrow as instants in UTC whatever the machine's zone;
+        # presenting them in a local zone is a later, explicit step.
+        cursor.sql("SET TimeZone = 'UTC'")
+        # A name in FROM must never resolve to a Python object in scope.
+        cursor.sql("SET python_enable_replacements = false")
         return cursor
 
     def _one(

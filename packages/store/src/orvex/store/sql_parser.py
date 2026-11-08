@@ -179,13 +179,3 @@ def _parser() -> duckdb.DuckDBPyConnection:
             database.execute("SET autoload_known_extensions = false")
             _PARSER_DATABASE.append(database)
         return _PARSER_DATABASE[0].cursor()
-
-
-def _statements(sql: str) -> list[duckdb.Statement]:
-    """The statements of `sql`, split by DuckDB's parser on the store's parser database (no
-    lake, no external access, no extension loading); parsing runs nothing."""
-    parser = _parser()
-    try:
-        return parser.extract_statements(sql)
-    finally:
-        parser.close()
