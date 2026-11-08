@@ -59,3 +59,22 @@ def test_the_choice_is_written_for_the_next_steps(tmp_path: Path) -> None:
         "PYTEST_PATHS=",
         "PYTEST_SKIP=false",
     ]
+
+
+def test_the_newest_python_is_the_matrix_s_first_and_the_one_fetched_shallow() -> None:
+    # A new Python in the matrix must move WHOLE too, or no Python would run the whole suite.
+    import yaml
+
+    from tools.repository import REPOSITORY_ROOT
+
+    workflow = (REPOSITORY_ROOT / ".github/workflows/python.yml").read_text("utf-8")
+    job = yaml.safe_load(workflow)["jobs"]["python-tests-part"]
+    assert job["strategy"]["matrix"]["python"][0] == select.WHOLE
+    assert f"matrix.python != '{select.WHOLE}'" in workflow
+
+
+def test_a_part_without_history_runs_its_share_of_the_whole_suite(tmp_path: Path) -> None:
+    output = tmp_path / "env"
+    environment = {"PYTHON": "3.14", "PART": "4", "GITHUB_ENV": str(output)}
+    assert select._whole(environment) == 0
+    assert output.read_text("utf-8").splitlines()[0] == "PYTEST_SHARD=4/10"

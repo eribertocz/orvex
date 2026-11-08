@@ -2,7 +2,7 @@
 
     python -m tools.ci.select    # in CI, with PART, PYTHON and GITHUB_EVENT_NAME set
 
-- On `main`, on schedules and on manual runs, every Python runs the whole suite in `PARTS` parts.
+- On `main` (every push), every Python runs the whole suite in `PARTS` parts.
 - On a pull request, the newest Python (`WHOLE`) runs the whole suite. The other runs what `pr`
   runs locally (`tools/ci/verify.py`): the critical tests and those the change can affect, in
   `FEW` parts, and its other parts run nothing. When the impact is uncertain, it runs the whole
@@ -76,9 +76,19 @@ def main(environment: Mapping[str, str] | None = None) -> int:
     return 0
 
 
+def _whole(environment: Mapping[str, str]) -> int:
+    """No history to compare with: this part runs its share of the whole suite."""
+    choice = choose("push", environment.get("PYTHON", ""), int(environment.get("PART", "0")), None)
+    output = environment.get("GITHUB_ENV")
+    if output:
+        with open(output, "a", encoding="utf-8") as file:
+            file.write("\n".join(lines(choice)) + "\n")
+    return 0
+
+
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except subprocess.CalledProcessError as error:  # no history to compare: run everything
+    except subprocess.CalledProcessError as error:
         print(f"select: {error}; the whole suite")
-        sys.exit(0)
+        sys.exit(_whole(os.environ))
