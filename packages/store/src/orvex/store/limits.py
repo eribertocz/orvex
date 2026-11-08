@@ -53,7 +53,7 @@ def _require_limits(limits: Limits) -> tuple[str, int, int, int]:
             "size and a default timeout.",
             {},
         )
-    return limits.memory_limit, limits.threads, limits.max_concurrent, limits.queue_size
+    return str(limits.memory_limit), int(limits.threads), limits.max_concurrent, limits.queue_size
 
 
 class Admission:

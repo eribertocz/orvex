@@ -657,6 +657,17 @@ def normalized(text: str, work: Path, folder: Path, endpoint: str | None) -> str
 # --- the orchestrator --------------------------------------------------------------------------
 
 
+def store_location(python: str) -> str:
+    """The folder of the `orvex.store` that `python` loads, so each side's version is on record."""
+    found = subprocess.run(
+        [python, "-I", "-c", "import orvex.store as s, os; print(os.path.dirname(s.__file__))"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return found.stdout.strip()
+
+
 def run(python: str, folder: Path, work: Path, out: Path) -> None:
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -699,6 +710,9 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--keep", type=Path, help="folder for both observations (JSON)")
     arguments = parser.parse_args()
+    loaded = {side: store_location(getattr(arguments, side)) for side in ("baseline", "candidate")}
+    if loaded["baseline"] == loaded["candidate"]:
+        parser.error(f"both interpreters load the same store: {loaded['baseline']}")
     with tempfile.TemporaryDirectory(prefix="store-equivalence-") as temporary:
         root = Path(temporary)
         folder = prepare(root / "data", arguments.seed)
@@ -716,6 +730,7 @@ def main() -> int:
         json.dumps(
             {
                 "locations": sorted(observed["candidate"]),
+                "stores": loaded,
                 "steps": steps,
                 "store_errors": errors,
                 "differences": len(found),
