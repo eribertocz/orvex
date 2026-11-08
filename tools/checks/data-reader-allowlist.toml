@@ -57,3 +57,10 @@ reader = "os.fdopen"
 function = "__init__"
 reason = "The descriptor `os.open` returned in the same function, read with the 1 MiB bound"
 test = "packages/transform/tests/test_config_file.py::test_a_config_file_reader_reads_only_a_bounded_regular_file"
+
+[[allow]]
+file = "packages/store/src/orvex/store/clickhouse.py"
+reader = "pyarrow.ipc.open_stream"
+function = "read"
+reason = "ClickHouse Direct Query (ADR-0027 §8, ADR-0028 §3): the result of a statement ClickHouse ran, in its own Arrow stream; Arrow carries it as transport, each batch is cast column by column, and no row becomes a Python object. No source row is extracted into the lake"
+test = "packages/store/tests/test_clickhouse.py::test_no_row_becomes_a_python_object_in_the_read"

@@ -267,7 +267,67 @@ Preconditions:
 | `STORE_SOURCE_INVALID` | A source the lake cannot attach safely: two sources with the same name, a file that is not a readable database, a view that needs a capability the worker refuses; `details` names the source |
 | `STORE_SOURCE_FAILED` | The worker reading a database source ended early: it died, hung or sent a malformed stream (ADR-0031); nothing was kept |
 | `STORE_CONNECTION_FAILED` | A database source (PostgreSQL) cannot be reached or refuses the credentials when it is read; `details` names the source, the password redacted |
-| `UNSUPPORTED_SOURCE_TYPE` | A write reads a source column DuckDB cannot carry exactly (see "Exact types" above); the message names `<source>.<table>.<column>` |
+| `UNSUPPORTED_SOURCE_TYPE` | A write reads a source column DuckDB cannot carry exactly (see "Exact types" above); the message names `<source>.<table>.<column>`. On ClickHouse: a table column with no exact type, or a result value its type cannot carry (below) |
+| `SOURCE_NOT_READ_ONLY` | A ClickHouse user whose profile does not set `readonly = 1` |
+| `ENGINE_VERSION_UNTESTED` | A ClickHouse server whose version is not one of the tested versions; `details.version` |
+| `ENGINE_SETTING_REQUIRED` | A ClickHouse profile setting that decides a result's meaning, or a limit, without the required value; `details` names the setting, the value expected and the value found |
+
+## ClickHouse Direct Query (P2-31, #225; ADR-0028 §3)
+
+`orvex.store.clickhouse.ClickHouse` runs the semantic adapter's statements on one ClickHouse database, over its HTTP interface. `store` never writes SQL from a plan; it verifies the connection, binds the values and returns Arrow in the types above.
+
+**At connection**, before anything is read:
+
+- **TLS.** A host other than `localhost`, `127.0.0.1` or `::1` is reached only over TLS that checks the server's certificate and name (`STORE_TLS_REQUIRED`). The operating system's authorities are used unless a CA file is named.
+- **Password.** It comes from the environment variable `password_env` (`STORE_SECRET_MISSING`), is sent as a header, and is redacted from every error.
+- **Version.** It must be a tested version, by major and minor: `26.8` (LTS) and `26.9` (`ENGINE_VERSION_UNTESTED`).
+- **Read-only profile.** `readonly = 1`, so the session can neither write nor change its own settings (`SOURCE_NOT_READ_ONLY`).
+- **Settings that decide a result's meaning,** each with exactly this value (`ENGINE_SETTING_REQUIRED`):
+
+  | Setting | Value |
+  |---|---|
+  | `join_use_nulls` | `1` |
+  | `group_by_use_nulls` | `1` |
+  | `transform_null_in` | `0` |
+  | `count_distinct_implementation` | `uniqExact` |
+  | `cast_keep_nullable` | `1` |
+  | `aggregate_functions_null_for_empty` | `0` |
+  | `cancel_http_readonly_queries_on_client_close` | `1` |
+
+- **Limits.** `max_execution_time`, `max_memory_usage` and `max_result_rows` must each be set, and must not exceed the caller's budget (`ENGINE_SETTING_REQUIRED`).
+
+**Tables.** A table's columns are read from `system.columns` and mapped exactly; an unmapped column is `UNSUPPORTED_SOURCE_TYPE`, naming it. A table this user cannot see is `SOURCE_NOT_FOUND`. `Nullable(T)`, `LowCardinality(T)` and `LowCardinality(Nullable(T))` map as `T`.
+
+| ClickHouse | DuckDB |
+|---|---|
+| `Int8`, `Int16`, `Int32`, `Int64`, `Int128` | `TINYINT`, `SMALLINT`, `INTEGER`, `BIGINT`, `HUGEINT` |
+| `UInt8`, `UInt16`, `UInt32`, `UInt64`, `UInt128` | `UTINYINT`, `USMALLINT`, `UINTEGER`, `UBIGINT`, `UHUGEINT` |
+| `Decimal(P,S)` with P ≤ 38, `Decimal32/64/128(S)` | `DECIMAL(P,S)` |
+| `Float32`, `Float64` | `FLOAT`, `DOUBLE` |
+| `String` | `VARCHAR` (valid UTF-8 only) |
+| `UUID` | `UUID` |
+| `Bool` | `BOOLEAN` |
+| `Date`, `Date32` | `DATE` |
+| `DateTime`, `DateTime('zone')`, `DateTime64(p[, 'zone'])` with p ≤ 6 | `TIMESTAMPTZ` |
+
+Everything else has no exact type: `Int256`, `UInt256`, `Decimal` with P > 38, `DateTime64` with p > 6, `FixedString`, `Enum`, `Array`, `Map`, `Tuple`, `JSON`, `Dynamic`, `Variant`, `IPv4`/`IPv6`, `Nothing`, `AggregateFunction`, and others.
+
+**Reads.**
+
+- **The statement.**
+  - It is one `SELECT` or `WITH`, without `SETTINGS`, `FORMAT` or `INTO OUTFILE` (`STORE_STATEMENT_INVALID`). The store appends `FORMAT ArrowStream`.
+  - Values are bound as `{name:Type}` placeholders, where `Type` is the ClickHouse type of the parameter's DuckDB type, or `Nullable(Type)`: `Bool`, `Int8`–`Int128`, `UInt8`–`UInt128`, `Float64`, `String`, `Date32`, `DateTime64(6, 'UTC')`, `Decimal(P, S)`.
+  - A placeholder without a parameter, a parameter without a placeholder, a type that differs, or a `NULL` bound to a non-`Nullable` placeholder is `STORE_PARAMETER_INVALID`. So is a `TIMESTAMPTZ` value without an offset, or a `TIMESTAMP` (no ClickHouse type is a local time).
+- **The result.**
+  - The caller names each result column's DuckDB type. Every batch is cast to the Arrow type above, with an Arrow cast and never value by value.
+  - A `HUGEINT`, `UHUGEINT` or `UUID` column arrives as decimal or canonical text; ClickHouse's Arrow form of them is not exact.
+  - A column in any other form, or a value its type cannot carry (a `HUGEINT` beyond 38 digits, or invalid UTF-8), is `UNSUPPORTED_SOURCE_TYPE`.
+- **Time.**
+  - The read's time limit is the smaller of the request's and the budget's.
+  - When it passes, the store closes the connection, which cancels the query on the server, and raises `STORE_TIMEOUT`. The server's own `max_execution_time` gives the same code.
+- **Failures.** Any other ClickHouse error is `STORE_QUERY_FAILED`, with `details.engine_code`.
+
+`now()` is the server's clock (`now64(6, 'UTC')`): the read instant a live engine's receipt names (ADR-0027 §5).
 
 ## Compatibility
 

@@ -81,6 +81,9 @@ class ErrorCode(
             "STORE_SOURCE_FAILED",
             "STORE_CONNECTION_FAILED",
             "UNSUPPORTED_SOURCE_TYPE",
+            "SOURCE_NOT_READ_ONLY",
+            "ENGINE_VERSION_UNTESTED",
+            "ENGINE_SETTING_REQUIRED",
         ]
     ]
 ):
@@ -107,6 +110,9 @@ class ErrorCode(
         "STORE_SOURCE_FAILED",
         "STORE_CONNECTION_FAILED",
         "UNSUPPORTED_SOURCE_TYPE",
+        "SOURCE_NOT_READ_ONLY",
+        "ENGINE_VERSION_UNTESTED",
+        "ENGINE_SETTING_REQUIRED",
     ]
 
 

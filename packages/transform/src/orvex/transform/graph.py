@@ -93,11 +93,16 @@ def _line(sql: str, location: object) -> int | None:
 
 
 def build_graph(
-    models: Sequence[Model], sources: set[str], databases: frozenset[str] = frozenset()
+    models: Sequence[Model],
+    sources: set[str],
+    databases: frozenset[str] = frozenset(),
+    direct: frozenset[str] = frozenset(),
 ) -> Graph:
     """Dependencies of every model; unknown references and cycles are problems. `databases`:
     the sources that carry SQL of their own (DuckDB, SQLite, PostgreSQL), which a model reads
-    alone (`SOURCE_MODEL_MIXED`), and only into a stored table (`SOURCE_MODEL_VIEW`), #372."""
+    alone (`SOURCE_MODEL_MIXED`), and only into a stored table (`SOURCE_MODEL_VIEW`), #372.
+    `direct`: connections queried in place by the semantic engine (ClickHouse, ADR-0028),
+    which no model reads."""
     by_name = {model.name: model for model in models}
     dependencies: dict[str, tuple[str, ...]] = {}
     used_sources: dict[str, tuple[str, ...]] = {}
@@ -124,6 +129,19 @@ def build_graph(
                 name = ".".join(parts)
                 if len(parts) == 2 and name in by_name:
                     needs.add(name)
+                    continue
+                if len(parts) >= 2 and parts[0] in direct:
+                    problems.append(
+                        problem(
+                            "MODEL_REFERENCE_UNKNOWN",
+                            f"{model.sql_file}: '{parts[0]}' is a Direct Query connection: the "
+                            "semantic model's datasets read it in place, and no model copies "
+                            "it into the lake (ADR-0028).",
+                            model.sql_file,
+                            model=model.name,
+                            line=_line(model.sql, node.get("query_location")),
+                        )
+                    )
                     continue
                 problems.append(
                     problem(
