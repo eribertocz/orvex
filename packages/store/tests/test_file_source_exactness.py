@@ -25,6 +25,7 @@ from orvex.store.errors import StoreError
 from orvex.store.file_sources import view_query
 
 from tests.support.fixtures import frozen
+from tests.support.parquet_footer import without_converted_decimals
 
 D = decimal.Decimal
 UTC = dt.UTC
@@ -590,3 +591,66 @@ def test_a_headerless_csv_is_read_with_one_header_decision(
     ).fetchall()
     served = connection.execute("SELECT * FROM data").fetchall()
     assert [tuple(None if v is None else str(v) for v in row) for row in served] == expected
+
+
+# --- #260: a decimal with only the logical annotation ---------------------------------------------
+
+
+def _logical_only(tmp_path: Path, integers: bool) -> Path:
+    cents = [decimal.Decimal("1.10"), None]
+    table = pa.table(
+        {
+            "small": pa.array(cents, pa.decimal128(9, 2)),
+            "wide": pa.array(cents, pa.decimal128(18, 2)),
+            "nested": pa.StructArray.from_arrays([pa.array(cents, pa.decimal128(10, 2))], ["v"]),
+            "listed": pa.array([[cents[0]], []], pa.list_(pa.decimal128(12, 2))),
+            "k": pa.array([1, 2]),
+        }
+    )
+    path = tmp_path / "f.parquet"
+    pq.write_table(table, path, store_decimal_as_integer=integers)
+    without_converted_decimals(path)
+    return path
+
+
+@pytest.mark.parametrize("integers", [False, True], ids=["fixed-bytes", "int32-int64"])
+def test_a_decimal_duckdb_does_not_read_as_one_is_refused_at_any_depth(
+    tmp_path: Path, integers: bool
+) -> None:
+    # DuckDB v2.0.0 reads a logical-only decimal as BLOB on fixed bytes, and as the unscaled
+    # integer on INT32/INT64 (1.10 as 110): never a value a model may read.
+    path = _logical_only(tmp_path, integers)
+    connection = duckdb.connect()
+    _view(connection, "parquet", [path])
+    for column in ("small", "wide", "nested", "listed"):
+        with pytest.raises(duckdb.Error, match=f"UNSUPPORTED_SOURCE_TYPE: column {column} "):
+            connection.execute(f"SELECT {column} FROM data").fetchall()
+    assert connection.execute("SELECT k FROM data ORDER BY k").fetchall() == [(1,), (2,)]
+
+
+def test_the_rewritten_file_keeps_its_values_and_loses_only_the_converted_annotation(
+    tmp_path: Path,
+) -> None:
+    path = _logical_only(tmp_path, integers=False)
+    read = pq.read_table(path).to_pylist()
+    assert read[0]["small"] == decimal.Decimal("1.10")
+    assert read[0]["nested"] == {"v": decimal.Decimal("1.10")}
+    rows = (
+        duckdb.connect()
+        .execute(
+            f"SELECT name, converted_type, logical_type FROM parquet_schema('{path}') "
+            "WHERE logical_type LIKE 'DecimalType(%'"
+        )
+        .fetchall()
+    )
+    assert len(rows) == 4
+    assert all(converted is None for _, converted, _ in rows)
+
+
+def test_a_decimal_with_both_annotations_still_reads_exactly(tmp_path: Path) -> None:
+    path = tmp_path / "f.parquet"
+    table = pa.table({"small": pa.array([decimal.Decimal("1.10")], pa.decimal128(9, 2))})
+    pq.write_table(table, path, store_decimal_as_integer=True)
+    connection = duckdb.connect()
+    _view(connection, "parquet", [path])
+    assert connection.execute("SELECT small FROM data").fetchall() == [(decimal.Decimal("1.10"),)]

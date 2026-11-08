@@ -7,7 +7,8 @@ the source is attached, and its view expression checks it again on every read, s
 rewritten later fails instead of changing a value:
 
 - **Parquet.** A column holding, at any depth, a DECIMAL wider than 38 digits is refused (DuckDB
-  reads it as DOUBLE); so is a column whose types in different files unite (`union_by_name`)
+  reads it as DOUBLE), and so is one holding a DECIMAL DuckDB does not read as one (only the
+  logical annotation, #260); so is a column whose types in different files unite (`union_by_name`)
   into a type that cannot hold every file's values. Every other column is pinned to the type it
   had when attached.
 - **CSV.** Every value is read as its text. A column keeps a detected type (BOOLEAN, BIGINT,
@@ -76,7 +77,7 @@ def _parquet_view(
     def reader_of(extra: str) -> str:
         return f"read_parquet([{listed}], union_by_name = true{extra})"
 
-    widest, kinds, duplicated, int96 = _parquet_schema(connection, listed)
+    widest, kinds, duplicated, int96, undecoded = _parquet_schema(connection, listed)
     in_files = {key: name for key, (name, _) in kinds.items()}
     messages, forced, shared, folder_guard = _folders(
         connection, source, reader_of, files, in_files, parquet=listed
@@ -104,6 +105,12 @@ def _parquet_view(
             key,
             f"UNSUPPORTED_SOURCE_TYPE: column {name} of source {source} holds a DECIMAL with "
             f"{digits} digits, which cannot be read exactly.",
+        )
+    for key, name in undecoded.items():  # after the wide DECIMAL, whose message is precise
+        messages.setdefault(
+            key,
+            f"UNSUPPORTED_SOURCE_TYPE: column {name} of source {source} holds a DECIMAL with only "
+            "the logical annotation, which DuckDB does not read as a decimal.",
         )
     for key, (name, types) in kinds.items():
         target = union.get(key, "")
@@ -141,11 +148,19 @@ def _parquet_view(
 
 def _parquet_schema(
     connection: duckdb.DuckDBPyConnection, listed: str
-) -> tuple[dict[str, tuple[str, int]], dict[str, tuple[str, set[str]]], set[str], dict[str, str]]:
+) -> tuple[
+    dict[str, tuple[str, int]],
+    dict[str, tuple[str, set[str]]],
+    set[str],
+    dict[str, str],
+    dict[str, str],
+]:
     """Per top-level column (by folded name): the widest DECIMAL wider than 38 digits at any
     depth (struct field, list element, map key or value), and its type in each file; the
-    folded names two top-level columns of one file share (or that are empty); and the columns
-    holding an INT96 timestamp at any depth.
+    folded names two top-level columns of one file share (or that are empty); the columns
+    holding an INT96 timestamp at any depth; and those holding, at any depth, a node annotated
+    as a decimal that DuckDB does not read as one (a logical-only annotation: DuckDB v2.0.0
+    reads it as BLOB, or as the unscaled integer on INT32/INT64, #260).
 
     From DuckDB's `parquet_schema`, the schema its reader uses (decimal annotations, converted
     or logical: the precision of a logical-only one is read from `logical_type`, as `precision`
@@ -166,6 +181,7 @@ def _parquet_schema(
     kinds: dict[str, tuple[str, set[str]]] = {}
     duplicated: set[str] = set()
     int96: dict[str, str] = {}
+    undecoded: dict[str, str] = {}
     for nodes in row[0] if row and isinstance(row[0], list) else []:
         remaining = [int(nodes[0][1])]  # children still to visit, per open group (root first)
         top = ""
@@ -181,12 +197,14 @@ def _parquet_schema(
                 widest[fold(top)] = (top, int(digits))
             if physical == "INT96":
                 int96[fold(top)] = top
+            if is_decimal == "true" and not str(kind).startswith("DECIMAL"):
+                undecoded[fold(top)] = top
             remaining[-1] -= 1
             if int(children) > 0:
                 remaining.append(int(children))
             while remaining and remaining[-1] == 0:
                 remaining.pop()
-    return widest, kinds, duplicated, int96
+    return widest, kinds, duplicated, int96, undecoded
 
 
 def _csv_view(
