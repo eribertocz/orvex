@@ -160,14 +160,24 @@ ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
 
 def test_only_the_canonical_text_of_a_cursor_is_accepted(form: CursorForm) -> None:
-    # #385: Base64 ignores the unused low bits of the last character, so a cursor changed only
-    # there decoded to the same bytes and was accepted. Every other last character is refused.
-    cursor = issue_cursor(form, BINDING, STATE)
-    for other in ALPHABET.replace(cursor[-1], ""):
-        changed = cursor[:-1] + other
-        assert refusal(partial(verify_cursor, form, changed, BINDING, AVAILABLE)) == {
-            "reason": "invalid"
-        }
+    # #385: Base64 ignores the unused low bits of the last character (4 when the length leaves
+    # 2 over, 2 when it leaves 3), so a cursor changed only there decoded to the same bytes and
+    # was accepted. Every other last character is refused, at every length remainder.
+    remainders = set()
+    for size in range(12):  # versions of growing length: every remainder of the cursor length
+        state = CursorState(
+            "snapshot-" + "".join(ALPHABET[i * 7 % 64] for i in range(size)), STATE.position
+        )
+        cursor = issue_cursor(form, BINDING, state)
+        remainders.add(len(cursor) % 4)
+        assert verify_cursor(form, cursor, BINDING, AVAILABLE) == state
+        for other in ALPHABET.replace(cursor[-1], ""):
+            changed = cursor[:-1] + other
+            assert refusal(partial(verify_cursor, form, changed, BINDING, AVAILABLE)) == {
+                "reason": "invalid"
+            }
+    if isinstance(form, ProductForm):  # a test form's handle may have a fixed length
+        assert remainders == {0, 2, 3}  # a length leaving 1 over is never Base64
 
 
 @pytest.mark.parametrize(
