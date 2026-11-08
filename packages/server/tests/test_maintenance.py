@@ -278,7 +278,7 @@ def test_a_due_model_runs_before_maintenance(
     ((run_start, maintenance_start),) = lake_rows(
         folder,
         "SELECT (SELECT strftime(timezone('UTC', max(started_at)), '%Y-%m-%dT%H:%M:%S.%f') "
-        "FROM lake._meta.run_records WHERE trigger = 'freshness'), "
+        "FROM lake._meta.run_records_v2 WHERE trigger = 'freshness'), "
         "(SELECT strftime(timezone('UTC', min(started_at)), '%Y-%m-%dT%H:%M:%S.%f') "
         "FROM lake._meta.maintenance_runs)",
     )

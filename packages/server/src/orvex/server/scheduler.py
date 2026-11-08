@@ -149,14 +149,16 @@ def _read_records(home: Path, place: lake_place.Place) -> _Records:
         lake = commands.open_existing(home, place)
         try:
             maintained = maintenance.last_maintenance(lake)
+            # The tables before the snapshot: record tables are never dropped, so each one
+            # listed exists at the snapshot read after them (#394).
+            tables = lake.tables()
             snapshot = lake.current_snapshot().id
-            try:
-                rows = lake.read(model_history_request(snapshot)).read_all().to_pylist()
-                (last,) = lake.read(last_run_request(snapshot)).read_all().to_pylist()
-            except StoreError as error:
-                if error.code != "STORE_STATEMENT_INVALID":
-                    raise
+            histories_request = model_history_request(snapshot, tables)
+            last_request = last_run_request(snapshot, tables)
+            if histories_request is None or last_request is None:
                 return _Records({}, None, (), maintained)  # no run records yet
+            rows = lake.read(histories_request).read_all().to_pylist()
+            (last,) = lake.read(last_request).read_all().to_pylist()
         finally:
             lake.close()
     histories = {

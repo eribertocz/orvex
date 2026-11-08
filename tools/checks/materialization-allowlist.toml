@@ -72,7 +72,7 @@ reason = "Run metadata, not analytical data: _column reads one watermark (one ro
 [[allow]]
 file = "packages/server/src/orvex/server/commands.py"
 call = "as_py"
-reason = "_count reads one count(*) value"
+reason = "_committed_snapshot reads one max(snapshot_id) value of one run's records"
 
 [[allow]]
 file = "packages/server/src/orvex/server/maintenance.py"

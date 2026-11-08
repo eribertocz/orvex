@@ -88,7 +88,7 @@ def lake_value(folder: Path, sql: str) -> list[tuple[object, ...]]:
 def results(folder: Path, model: str = "a.readings") -> list[dict[str, object]]:
     (row,) = lake_value(
         folder,
-        f"SELECT tests FROM lake._meta.run_records WHERE model = '{model}' "
+        f"SELECT tests FROM lake._meta.run_records_v2 WHERE model = '{model}' "
         "ORDER BY started_at DESC LIMIT 1",
     )
     found: list[dict[str, object]] = json.loads(str(row[0]))
@@ -185,7 +185,7 @@ def test_later_models_do_not_run_after_a_failed_test(
     assert code == 1
     assert [r["outcome"] for r in results(tmp_path)] == ["failed", "failed"]
     (outcome,) = lake_value(
-        tmp_path, "SELECT outcome FROM lake._meta.run_records WHERE model = 'b.after'"
+        tmp_path, "SELECT outcome FROM lake._meta.run_records_v2 WHERE model = 'b.after'"
     )
     assert outcome == ("not_run",)
 

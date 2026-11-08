@@ -524,22 +524,22 @@ def test_a_commit_failure_is_blamed_on_the_run(
     assert "models/" not in out
 
 
-def test_a_read_failing_after_the_commit_still_reports_the_run(
+def test_a_count_failing_in_the_run_s_transaction_rolls_the_run_back(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # #394: rows are counted before the commit, so a count that fails leaves nothing committed
+    # and the run is reported as failed, rather than committed without its counts.
     full_project(tmp_path)
 
-    def unreadable(lake: Lake, model: object, snapshot: int) -> int:
+    def unreadable(transaction: object, model: object) -> str:
         raise StoreError("STORE_QUERY_FAILED", "count failed", {})
 
     monkeypatch.setattr(commands, "_count", unreadable)
     code, out = command(capsys, "run", str(tmp_path))
-    assert code == 0, out
+    assert code == 1, out
     lines = out.splitlines()
     assert any(line.startswith("STORE_QUERY_FAILED . ") for line in lines)
-    snapshot = next(line for line in lines if line.startswith("snapshot "))
-    assert snapshot.removeprefix("snapshot ").isdigit()
-    assert "built marts.consumption: unknown rows" in lines
+    assert not any(line.startswith(("snapshot ", "built ")) for line in lines)
 
 
 def test_the_run_s_snapshot_needs_no_read_of_the_latest_one_after_the_commit(

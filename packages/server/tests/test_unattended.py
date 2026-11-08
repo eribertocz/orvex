@@ -524,7 +524,7 @@ def lake_records(folder: Path) -> tuple[list[tuple[str, str, str | None]], int]:
     catalog = home(folder) / "lake" / "catalog.ducklake"
     lake.execute(f"ATTACH 'ducklake:{catalog}' AS lake (READ_ONLY)")
     rows = lake.execute(
-        "SELECT model, outcome, error_code FROM lake._meta.run_records "
+        "SELECT model, outcome, error_code FROM lake._meta.run_records_v2 "
         "WHERE model = 's.slow' ORDER BY started_at"
     ).fetchall()
     tables = lake.execute(

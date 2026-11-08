@@ -97,7 +97,7 @@ def records(folder: Path) -> list[tuple[str, str, str, str]]:
     lake.execute(f"ATTACH 'ducklake:{catalog}' AS lake (READ_ONLY)")
     rows = lake.execute(
         "SELECT model, strftime(timezone('UTC', started_at), '%H:%M'), outcome, trigger "
-        "FROM lake._meta.run_records WHERE outcome <> 'not_run' ORDER BY started_at, model"
+        "FROM lake._meta.run_records_v2 WHERE outcome <> 'not_run' ORDER BY started_at, model"
     ).fetchall()
     lake.close()
     return [(str(a), str(b), str(c), str(d)) for a, b, c, d in rows]

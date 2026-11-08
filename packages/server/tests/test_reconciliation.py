@@ -66,7 +66,7 @@ def lake_value(folder: Path, sql: str) -> list[tuple[object, ...]]:
 def results(folder: Path) -> list[dict[str, object]]:
     (row,) = lake_value(
         folder,
-        "SELECT reconciliation FROM lake._meta.run_records WHERE model = 's.m' "
+        "SELECT reconciliation FROM lake._meta.run_records_v2 WHERE model = 's.m' "
         "ORDER BY started_at DESC LIMIT 1",
     )
     found: list[dict[str, object]] = json.loads(str(row[0]))
@@ -153,7 +153,7 @@ def test_one_failing_check_of_two_fails_the_run(
     ]
     assert out.count("RECONCILIATION_FAILED") == 1
     assert lake_value(
-        tmp_path, "SELECT outcome FROM lake._meta.run_records WHERE model = 't.after'"
+        tmp_path, "SELECT outcome FROM lake._meta.run_records_v2 WHERE model = 't.after'"
     ) == [("not_run",)]
 
 
