@@ -22,6 +22,11 @@ concurrency:
 
 jobs:
   trends:
+    # Only main's own builds: a fork's pull request from a branch named `main` matches the
+    # branch filter too, and its logs must never enter the history (Reviewer, #380).
+    if: >-
+      github.event.workflow_run.event != 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

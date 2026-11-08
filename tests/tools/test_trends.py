@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tools.ci import durations, trends
 from tools.repository import REPOSITORY_ROOT
@@ -172,3 +173,16 @@ def test_no_test_file_is_in_no_profile(tmp_path: Path) -> None:
     assert trends.unprofiled(tmp_path, discovered=".github/workflows/scripts") == [
         "stray/test_b.py"
     ]
+
+
+def test_only_main_s_own_builds_enter_the_history() -> None:
+    # A fork's pull request from a branch named `main` passes the `branches` filter: the job
+    # itself must refuse pull-request runs and other repositories (Reviewer, #380).
+    workflow = yaml.safe_load(
+        (REPOSITORY_ROOT / ".github/workflows/test-trends.yml").read_text("utf-8")
+    )
+    condition = " ".join(workflow["jobs"]["trends"]["if"].split())
+    assert "github.event.workflow_run.event != 'pull_request'" in condition
+    assert "github.event.workflow_run.head_repository.full_name == github.repository" in condition
+    assert " && " in condition
+    assert " || " not in condition
