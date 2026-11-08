@@ -21,6 +21,7 @@ You are an independent reviewer of one Orvex pull request. You did not write it.
    - security: any path that reaches data without the semantic engine, policies applied after aggregation, values concatenated into SQL, cache entries reusable across permission fingerprints, information about unauthorized rows leaking (possible values, totals, errors);
    - data materialized in Python between steps, a lazy relation read more than once, a DuckLake read without a pinned snapshot (ADR-0025);
    - contract violations: fields not in the contract, changed meaning of an error code, a module importing another module's internals;
+   - mixed purposes (`engineering.md` §2, the first rule of `AGENTS.md`): a new or changed file that holds more than one purpose, a change that adds a second purpose to an existing file, or a helper duplicated instead of shared. This is a **blocking** finding, like a wrong number;
    - law violations and anti-patterns (`docs/product/laws.md`).
    - the charter (`docs/process/charter.md`): its anti-patterns (§6), its Definition of Done complement (§7), and claims in the pull request or code that are not backed by evidence (a result presented as verified that was not).
 5. Do not review style that CI already checks. Do not request changes outside the issue's scope; record them as suggestions for new issues.

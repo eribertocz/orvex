@@ -25,23 +25,47 @@ def _codes(findings: list[structure.Finding]) -> list[tuple[str, str]]:
     return [(f.level, f.code) for f in findings]
 
 
-def test_a_large_file_is_a_warning_never_a_failure(tmp_path: Path) -> None:
+def test_a_large_file_fails_unless_listed_with_its_ceiling(tmp_path: Path) -> None:
     root = _package(tmp_path, {"__init__.py": "", "big.py": "x = 1\n" * 801, "ok.py": "x = 1\n"})
-    assert _codes(structure.sizes(root)) == [("warning", "FILE_TOO_LARGE")]
+    assert _codes(structure.sizes(root)) == [("error", "FILE_TOO_LARGE")]
     assert structure.imports(root) == []
 
 
-def test_a_justified_large_file_is_quiet_and_a_stale_entry_is_warned(tmp_path: Path) -> None:
-    exceptions = (
-        '[size]\n"packages/store/src/pkg/store/big.py" = "reason"\n'
-        '"packages/store/src/pkg/store/ok.py" = "no longer large"\n'
-    )
-    root = _package(
-        tmp_path, {"__init__.py": "", "big.py": "x = 1\n" * 801, "ok.py": "x = 1\n"}, exceptions
-    )
+def test_a_listed_file_may_not_grow_past_its_ceiling(tmp_path: Path) -> None:
+    exceptions = '[size]\n"packages/store/src/pkg/store/big.py" = { most = 801, reason = "#1" }\n'
+    files = {"__init__.py": "", "big.py": "x = 1\n" * 801}
+    assert structure.sizes(_package(tmp_path / "a", files, exceptions)) == []
+    grown = _package(tmp_path / "b", {**files, "big.py": "x = 1\n" * 802}, exceptions)
+    (finding,) = structure.sizes(grown)
+    assert (finding.level, finding.code) == ("error", "FILE_GREW")
+
+
+def test_a_shrunk_file_is_warned_to_lower_its_ceiling(tmp_path: Path) -> None:
+    exceptions = '[size]\n"packages/store/src/pkg/store/big.py" = { most = 900, reason = "#1" }\n'
+    root = _package(tmp_path, {"__init__.py": "", "big.py": "x = 1\n" * 850}, exceptions)
+    (finding,) = structure.sizes(root)
+    assert (finding.level, "lower `most`" in finding.text) == ("warning", True)
+
+
+def test_an_entry_without_a_ceiling_fails(tmp_path: Path) -> None:
+    exceptions = '[size]\n"packages/store/src/pkg/store/big.py" = "reason only"\n'
+    root = _package(tmp_path, {"__init__.py": "", "big.py": "x = 1\n" * 801}, exceptions)
+    (finding,) = structure.sizes(root)
+    assert (finding.level, finding.code) == ("error", "FILE_TOO_LARGE")
+
+
+def test_a_stale_entry_is_warned(tmp_path: Path) -> None:
+    exceptions = '[size]\n"packages/store/src/pkg/store/ok.py" = { most = 900, reason = "#1" }\n'
+    root = _package(tmp_path, {"__init__.py": "", "ok.py": "x = 1\n"}, exceptions)
     (finding,) = structure.sizes(root)
     assert finding.path.endswith("ok.py")
     assert "remove the entry" in finding.text
+
+
+def test_generated_contract_modules_are_not_checked() -> None:
+    assert structure.generated("packages/contracts/src/orvex/contracts/semantic_error/v1.py")
+    assert not structure.generated("packages/contracts/src/orvex/contracts/__init__.py")
+    assert not structure.generated("packages/store/src/orvex/store/v1.py")
 
 
 @pytest.mark.parametrize(
@@ -131,8 +155,9 @@ def test_a_dynamic_import_is_listed(tmp_path: Path, text: str) -> None:
 def test_warnings_and_errors_are_ci_annotations(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    exceptions = '[size]\n"packages/store/src/pkg/store/big.py" = { most = 900, reason = "#1" }\n'
     files = {"__init__.py": "", "big.py": "x = 1\n" * 801, "a.py": "from . import b\n"}
-    root = _package(tmp_path, {**files, "b.py": "from . import a\n"})
+    root = _package(tmp_path, {**files, "b.py": "from . import a\n"}, exceptions)
     assert structure.main(root) == 1
     out = capsys.readouterr().out
     assert "::warning file=packages/store/src/pkg/store/big.py::FILE_TOO_LARGE packages/" in out

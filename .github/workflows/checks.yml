@@ -42,3 +42,4 @@ jobs:
       - run: python -m tools.checks.error_codes
       # File sizes (a warning), import cycles and façade imports (#246).
       - run: python -m tools.checks.structure
+      - run: python -m tools.checks.purpose

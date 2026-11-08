@@ -2,9 +2,11 @@
 
     python -m tools.checks.structure
 
-1. FILE_TOO_LARGE (a warning, never a failure): a module source file over `LIMIT` lines, unless
-   `file-size-exceptions.toml` justifies it in one line. An exception for a file that no longer
-   exists or is within the limit is warned too, so the list only holds what it must.
+1. FILE_TOO_LARGE / FILE_GREW (failures): a module source file over `LIMIT` lines fails unless
+   `file-size-exceptions.toml` lists it with its current size as a ceiling (`most`) and the
+   issue that splits it; a listed file that grows past its ceiling fails too (Owner's rule,
+   2026-11-08: every file has one purpose, and the debt may only shrink). A listed file that has
+   shrunk is warned to lower its ceiling, and one within the limit to remove its entry.
 2. IMPORT_CYCLE (a failure): a cycle among the modules of one package (`<namespace>.<module>`),
    through absolute imports, relative imports, and imports inside functions or `if`/`try`
    blocks. Imports under `if TYPE_CHECKING:` are typing-only: a cycle made only of them is not
@@ -44,14 +46,26 @@ class Finding:
         return f"{self.level}: {self.code} {self.path}: {self.text}"
 
 
+def generated(relative: str) -> bool:
+    """A contract type module `tools/contracts/generate.py` writes: never edited by hand."""
+    parts = relative.split("/")
+    return (
+        relative.startswith("packages/contracts/src/orvex/contracts/")
+        and len(parts) == 7
+        and parts[-1].startswith("v")
+        and parts[-1].removesuffix(".py")[1:].isdigit()
+    )
+
+
 def _sources(root: Path) -> Iterator[tuple[str, Path]]:
-    """Each module package's source files, with the package (`store`, `server`, …)."""
+    """Each module package's hand-written source files, with the package (`store`, …)."""
     for path in sorted(root.glob("packages/*/src/*/*/**/*.py")):
         relative = path.relative_to(root)
-        yield relative.parts[1], path
+        if not generated(relative.as_posix()):
+            yield relative.parts[1], path
 
 
-def _exceptions(root: Path) -> dict[str, dict[str, str]]:
+def _exceptions(root: Path) -> dict[str, dict[str, object]]:
     file = root / EXCEPTIONS.relative_to(REPOSITORY_ROOT)
     if not file.is_file():
         return {"size": {}, "facade": {}, "cycle": {}}
@@ -59,19 +73,53 @@ def _exceptions(root: Path) -> dict[str, dict[str, str]]:
     return {key: dict(document.get(key, {})) for key in ("size", "facade", "cycle")}
 
 
+def _ceiling(entry: object) -> int | None:
+    """A size entry's ceiling: `{ most = <lines>, reason = "..." }`; anything else has none."""
+    if isinstance(entry, dict) and isinstance(entry.get("most"), int) and entry.get("reason"):
+        return int(entry["most"])
+    return None
+
+
 def sizes(root: Path) -> list[Finding]:
-    justified = _exceptions(root)["size"]
+    listed = _exceptions(root)["size"]
     found = []
     counted: dict[str, int] = {}
     for _, path in _sources(root):
         relative = path.relative_to(root).as_posix()
         counted[relative] = len(path.read_text("utf-8").splitlines())
     for relative, lines in counted.items():
-        if lines > LIMIT and relative not in justified:
+        if lines <= LIMIT:
+            continue
+        most = _ceiling(listed.get(relative))
+        if relative not in listed:
             found.append(
-                Finding("warning", "FILE_TOO_LARGE", relative, f"{lines} lines (limit {LIMIT})")
+                Finding("error", "FILE_TOO_LARGE", relative, f"{lines} lines (limit {LIMIT})")
             )
-    for relative in sorted(justified):
+        elif most is None:
+            found.append(
+                Finding(
+                    "error",
+                    "FILE_TOO_LARGE",
+                    relative,
+                    'its exception needs { most = <lines>, reason = "<issue that splits it>" }',
+                )
+            )
+        elif lines > most:
+            found.append(
+                Finding(
+                    "error",
+                    "FILE_GREW",
+                    relative,
+                    f"{lines} lines, over its ceiling of {most}: split it, never grow it",
+                )
+            )
+        elif lines < most:
+            found.append(
+                Finding(
+                    "warning", "FILE_TOO_LARGE", relative, f"shrunk to {lines}: lower `most` to it"
+                )
+            )
+    for relative in sorted(listed):
         if counted.get(relative, 0) <= LIMIT:
             found.append(
                 Finding(

@@ -82,7 +82,7 @@ job = "boundaries"
 kind = "check"
 required = true
 contexts = ["boundaries"]
-digest = "d1f6ce772bd7d472"
+digest = "3677706bcf40b787"
 setup = []
 [[job.check]]
 name = "boundaries"
@@ -94,9 +94,14 @@ name = "error-codes"
 run = "python -m tools.checks.error_codes"
 local = true
 [[job.check]]
-# File sizes (a warning), import cycles and façade imports (#246).
+# File sizes (a ceiling that only shrinks), import cycles and façade imports (#246).
 name = "structure"
 run = "python -m tools.checks.structure"
+local = true
+[[job.check]]
+# Every hand-written module states its one purpose (#246, Owner's rule 2026-11-08).
+name = "purpose"
+run = "python -m tools.checks.purpose"
 local = true
 
 [[job]]
