@@ -542,9 +542,11 @@ def test_a_read_failing_after_the_commit_still_reports_the_run(
     assert "built marts.consumption: unknown rows" in lines
 
 
-def test_a_snapshot_unreadable_after_the_commit_prints_a_dash(
+def test_the_run_s_snapshot_needs_no_read_of_the_latest_one_after_the_commit(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # #255: the commit itself names the run's snapshot; the latest snapshot, unreadable here,
+    # is never asked for after the commit (it could be another writer's).
     full_project(tmp_path)
     real_transaction, real_snapshot = Lake.transaction, Lake.current_snapshot
     committed: list[bool] = []
@@ -564,8 +566,8 @@ def test_a_snapshot_unreadable_after_the_commit_prints_a_dash(
     monkeypatch.setattr(Lake, "current_snapshot", snapshot)
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 0, out
-    assert "snapshot -" in out.splitlines()
-    assert any(line.startswith("STORE_SNAPSHOT_NOT_FOUND . ") for line in out.splitlines())
+    assert "snapshot 1" in out.splitlines()
+    assert "STORE_SNAPSHOT_NOT_FOUND" not in out
 
 
 def test_a_real_second_run_process_is_locked_out(tmp_path: Path) -> None:

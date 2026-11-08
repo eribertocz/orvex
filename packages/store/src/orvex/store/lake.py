@@ -1824,6 +1824,17 @@ class Lake:
         )
         return None if row is None else _snapshot_of(row)
 
+    def _committed(self, token: str) -> Snapshot | None:
+        """The snapshot a transaction committed, by its token; None when it changed nothing
+        (DuckLake then makes no snapshot). Never the latest snapshot: another writer of a shared
+        lake may have committed since (#255)."""
+        row = self._one(
+            "SELECT snapshot_id, epoch_us(snapshot_time) FROM ducklake_snapshots($lake) "
+            "WHERE commit_extra_info = $token",
+            {"lake": LAKE, "token": token},
+        )
+        return None if row is None else _snapshot_of(row)
+
     def _oldest_snapshot(self, cursor: duckdb.DuckDBPyConnection | None = None) -> Snapshot | None:
         row = self._one(
             "SELECT snapshot_id, epoch_us(snapshot_time) FROM ducklake_snapshots($lake) "
@@ -2661,8 +2672,8 @@ class Lake:
     def transaction(self) -> Iterator[Transaction]:
         """Statements inside the block commit together to one snapshot, or roll back on error.
 
-        Write transactions in this process run one at a time, so the snapshot reported in the
-        result is the one this transaction created.
+        The snapshot reported in the result is the one this transaction created, found by a
+        token it carries, even when another process commits to the same lake right after (#255).
         """
         if getattr(self._local, "writing", False):
             raise StoreError(
@@ -2696,11 +2707,7 @@ class Lake:
             raise
         try:
             # The store's own catalog queries run under the transaction's limit too (#160).
-            before, outside = _bounded(
-                cursor,
-                deadline,
-                lambda: (self._snapshot(None, cursor), _outside_inventory(cursor)),
-            )
+            outside = _bounded(cursor, deadline, lambda: _outside_inventory(cursor))
             cursor.begin()
             handle = Transaction(
                 cursor,
@@ -2742,6 +2749,10 @@ class Lake:
                     raise StoreError(
                         "STORE_TIMEOUT", "The transaction exceeded its time limit.", {}
                     )
+                # A token of this transaction alone on its snapshot, so the snapshot it
+                # committed is found by the token, never as the latest one (#255).
+                token = uuid.uuid4().hex
+                handle.bounded(lambda: _tag(cursor, token))
             except BaseException:
                 cursor.rollback()
                 raise
@@ -2761,12 +2772,11 @@ class Lake:
                     "The transaction could not commit.",
                     {"duckdb": str(error)},
                 ) from error
-            after = self._snapshot(None)
+            after = self._committed(token)
         finally:
             cursor.close()
             self._local.writing = False
-        changed = after is not None and (before is None or after.id != before.id)
-        handle.result = CommitResult(kind="commit_result", snapshot=after if changed else None)
+        handle.result = CommitResult(kind="commit_result", snapshot=after)
 
 
 def _read_tree(sql: str) -> dict[str, Any]:
@@ -2830,6 +2840,16 @@ def _parser() -> duckdb.DuckDBPyConnection:
             database.execute("SET autoload_known_extensions = false")
             _PARSER_DATABASE.append(database)
         return _PARSER_DATABASE[0].cursor()
+
+
+def _tag(cursor: duckdb.DuckDBPyConnection, token: str) -> None:
+    """Mark the transaction's snapshot with `token` (DuckLake's commit information): no user
+    data and no secret, only a random id. SQL from callers cannot set it
+    (`DUCKLAKE_TABLE_MACROS`)."""
+    cursor.execute(
+        "CALL ducklake_set_commit_message($lake, '', 'transaction', extra_info => $token)",
+        {"lake": LAKE, "token": token},
+    )
 
 
 def _commit(cursor: duckdb.DuckDBPyConnection) -> None:
