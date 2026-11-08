@@ -9,9 +9,11 @@ guard it pass:
    connection string, a SQLite catalog given by an absolute path.
 2. **The catalog, before the attach.**
    - A PostgreSQL catalog is first reached through a plain, read-only PostgreSQL attach. Its
-     session must be read-only (`SOURCE_NOT_READ_ONLY`), and its role dedicated and minimal:
-     used by no other connection, a member of no privileged built-in role, and unable to use
-     any object outside the catalog schema, system catalogs aside (`STORE_SOURCE_INVALID`).
+     session must be read-only (`SOURCE_NOT_READ_ONLY`), with `pg_catalog` alone on its search
+     path and no role setting in effect. Its login role must be dedicated and minimal: used by
+     no other connection, neither it nor a role it is a member of privileged, able to use any
+     object outside the catalog schema (system catalogs aside) or to write in that schema
+     (`STORE_SOURCE_INVALID`). The checks' SQL qualifies every operator and function.
      The catalog's owner can turn catalog tables into views over `SECURITY INVOKER` functions,
      which run with this role; so these checks come before DuckLake reads any catalog table.
    - A SQLite catalog is opened without following links. On the opened descriptors, the file
@@ -64,7 +66,10 @@ METADATA = f"__ducklake_metadata_{LAKE}"
 # newer one is refused by DuckLake itself; both are refused before the attach.
 TESTED_CATALOG_VERSIONS = frozenset({"1.1"})
 # Added last to every catalog connection string (libpq keeps the last of a repeated keyword).
-READ_ONLY_SESSION = "options='-c default_transaction_read_only=on'"
+# Every name in the store's own catalog SQL resolves in `pg_catalog` alone, whatever search path
+# the database or the role sets: an operator or function the catalog's owner creates elsewhere
+# never runs in place of PostgreSQL's (the SQL below also qualifies each one).
+READ_ONLY_SESSION = "options='-c default_transaction_read_only=on -c search_path=pg_catalog'"
 DEFAULT_SCHEMA = "public"
 PRIVILEGED_ROLES = (
     "pg_read_all_data",
@@ -79,47 +84,71 @@ SQLITE_HEADER = b"SQLite format 3\x00"
 SQLITE_WAL_FORMAT = 2  # header bytes 18 and 19: the write and read format versions
 _EXPECTED_DATABASES = frozenset({LAKE, "memory", "system", "temp"})
 
-_READ_ONLY_SQL = (
-    "SELECT current_setting('default_transaction_read_only') AS d, "
-    "current_setting('transaction_read_only') AS t"
+_SESSION_SQL = (
+    "SELECT pg_catalog.current_setting('default_transaction_read_only') AS d, "
+    "pg_catalog.current_setting('transaction_read_only') AS t, "
+    "pg_catalog.current_setting('search_path') AS s, "
+    "(current_user OPERATOR(pg_catalog.=) session_user)::pg_catalog.text AS r"
 )
+_EQ = "OPERATOR(pg_catalog.=)"
+_RELATIONS = "ARRAY['r', 'p', 'v', 'm', 'f']::pg_catalog.\"char\"[]"
 
 
 def privileges_sql(schema: str) -> str:
-    """PostgreSQL SQL naming each kind of thing the session's role can use beyond the catalog
-    schema: superuser, a privileged built-in role, or any privilege on a schema, table, view,
-    sequence, function or foreign server elsewhere. Every role it is a member of counts (it
-    could `SET ROLE` to it), and so does `PUBLIC` (`has_*_privilege` includes it). System
-    catalogs (`pg_catalog`, `information_schema`, TOAST and temporary schemas) aside. `schema`
-    matches `[a-z_][a-z0-9_]*`."""
+    """PostgreSQL SQL naming each kind of thing the session's login role can use beyond reading
+    the catalog schema: superuser, a privileged built-in role, any privilege on a schema, table,
+    view, sequence, function or foreign server elsewhere, or any write in the catalog schema.
+    Every role the login role (`session_user`) is a member of counts: code running with it can
+    `SET ROLE` to any of them, or reset the role. `PUBLIC` counts too (`has_*_privilege`
+    includes it). System catalogs (`pg_catalog`, `information_schema`, TOAST and temporary
+    schemas) aside. Every operator, function and type is qualified with `pg_catalog`, so no
+    object the catalog's owner creates can stand in for one. `schema` matches
+    `[a-z_][a-z0-9_]*`."""
     roles = ", ".join(f"'{role}'" for role in PRIVILEGED_ROLES)
     return (
         "WITH member AS (SELECT r.oid, r.rolname, r.rolsuper FROM pg_catalog.pg_roles AS r "
-        "WHERE pg_catalog.pg_has_role(current_user, r.oid, 'MEMBER')), "
+        "WHERE pg_catalog.pg_has_role(session_user, r.oid, 'MEMBER')), "
         "outside AS (SELECT n.oid FROM pg_catalog.pg_namespace AS n "
-        f"WHERE n.nspname <> '{schema}' "
-        "AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
-        "AND n.nspname !~ '^pg_(toast|temp_|toast_temp_)') "
+        f"WHERE NOT n.nspname {_EQ} ANY (ARRAY['{schema}', 'pg_catalog', 'information_schema']"
+        "::pg_catalog.name[]) "
+        "AND n.nspname OPERATOR(pg_catalog.!~) '^pg_(toast|temp_|toast_temp_)'::pg_catalog.text), "
+        "inside AS (SELECT n.oid FROM pg_catalog.pg_namespace AS n "
+        f"WHERE n.nspname {_EQ} '{schema}'::pg_catalog.name) "
         "SELECT DISTINCT kind AS v FROM ("
-        "SELECT 'superuser' AS kind FROM member WHERE rolsuper "
-        f"UNION ALL SELECT 'role ' || rolname FROM member WHERE rolname IN ({roles}) "
+        "SELECT 'superuser'::pg_catalog.text AS kind FROM member WHERE rolsuper "
+        "UNION ALL SELECT pg_catalog.concat('role ', rolname) FROM member "
+        f"WHERE rolname {_EQ} ANY (ARRAY[{roles}]::pg_catalog.name[]) "
         "UNION ALL SELECT 'schema' FROM outside AS o, member AS m "
         "WHERE pg_catalog.has_schema_privilege(m.oid, o.oid, 'USAGE, CREATE') "
-        "UNION ALL SELECT CASE c.relkind WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized view' "
-        "WHEN 'S' THEN 'sequence' WHEN 'f' THEN 'foreign table' ELSE 'table' END "
-        "FROM pg_catalog.pg_class AS c JOIN outside AS o ON o.oid = c.relnamespace, member AS m "
-        "WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') AND CASE WHEN c.relkind = 'S' "
-        "THEN pg_catalog.has_sequence_privilege(m.oid, c.oid, 'USAGE, SELECT, UPDATE') "
-        "ELSE pg_catalog.has_table_privilege(m.oid, c.oid, "
+        "UNION ALL SELECT CASE "
+        f"WHEN c.relkind {_EQ} 'v'::pg_catalog.\"char\" THEN 'view' "
+        f"WHEN c.relkind {_EQ} 'm'::pg_catalog.\"char\" THEN 'materialized view' "
+        f"WHEN c.relkind {_EQ} 'S'::pg_catalog.\"char\" THEN 'sequence' "
+        f"WHEN c.relkind {_EQ} 'f'::pg_catalog.\"char\" THEN 'foreign table' ELSE 'table' END "
+        f"FROM pg_catalog.pg_class AS c JOIN outside AS o ON o.oid {_EQ} c.relnamespace, "
+        "member AS m "
+        f"WHERE (c.relkind {_EQ} ANY ({_RELATIONS}) AND "
+        "(pg_catalog.has_table_privilege(m.oid, c.oid, "
         "'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') "
         "OR pg_catalog.has_any_column_privilege(m.oid, c.oid, "
-        "'SELECT, INSERT, UPDATE, REFERENCES') "
-        "END "
+        "'SELECT, INSERT, UPDATE, REFERENCES'))) "
+        f"OR (c.relkind {_EQ} 'S'::pg_catalog.\"char\" AND "
+        "pg_catalog.has_sequence_privilege(m.oid, c.oid, 'USAGE, SELECT, UPDATE')) "
         "UNION ALL SELECT 'function' FROM pg_catalog.pg_proc AS p "
-        "JOIN outside AS o ON o.oid = p.pronamespace, member AS m "
+        f"JOIN outside AS o ON o.oid {_EQ} p.pronamespace, member AS m "
         "WHERE pg_catalog.has_function_privilege(m.oid, p.oid, 'EXECUTE') "
         "UNION ALL SELECT 'foreign server' FROM pg_catalog.pg_foreign_server AS s, member AS m "
-        "WHERE pg_catalog.has_server_privilege(m.oid, s.oid, 'USAGE')"
+        "WHERE pg_catalog.has_server_privilege(m.oid, s.oid, 'USAGE') "
+        "UNION ALL SELECT 'write in the catalog schema' FROM inside AS i, member AS m "
+        "WHERE pg_catalog.has_schema_privilege(m.oid, i.oid, 'CREATE') "
+        "UNION ALL SELECT 'write in the catalog schema' "
+        f"FROM pg_catalog.pg_class AS c JOIN inside AS i ON i.oid {_EQ} c.relnamespace, "
+        "member AS m "
+        f"WHERE (c.relkind {_EQ} ANY ({_RELATIONS}) AND "
+        "(pg_catalog.has_table_privilege(m.oid, c.oid, 'INSERT, UPDATE, DELETE, TRUNCATE') "
+        "OR pg_catalog.has_any_column_privilege(m.oid, c.oid, 'INSERT, UPDATE'))) "
+        f"OR (c.relkind {_EQ} 'S'::pg_catalog.\"char\" AND "
+        "pg_catalog.has_sequence_privilege(m.oid, c.oid, 'USAGE, UPDATE'))"
         ") AS found"
     )
 
@@ -188,7 +217,7 @@ class ExistingLake:
                 self._check_postgres(password)
                 options.append(f"METADATA_SCHEMA {_quote(self._schema)}")
                 self._attach(f"ducklake:postgres:{self._connection_text}", options)
-                self._require_read_only(METADATA)
+                self._require_session(METADATA)
                 files: list[str] = []
             else:
                 self._check_sqlite()
@@ -253,7 +282,7 @@ class ExistingLake:
                 "credentials.",
                 {"connection": self.name, "duckdb": str(error)},
             ) from None
-        self._require_read_only(CHECK)
+        self._require_session(CHECK)
         found = self._postgres_rows(privileges_sql(self._schema))
         if found:
             raise StoreError(
@@ -263,16 +292,20 @@ class ExistingLake:
                 {"connection": self.name, "kind": found[0]},
             )
         version = self._postgres_rows(
-            f"SELECT value AS v FROM \"{self._schema}\".ducklake_metadata WHERE key = 'version'"
+            f'SELECT value AS v FROM "{self._schema}".ducklake_metadata '
+            f"WHERE key {_EQ} 'version'::pg_catalog.text"
         )
         self._require_version(version)
         self._connection.execute(f"DETACH {CHECK}")
 
-    def _require_read_only(self, database: str) -> None:
+    def _require_session(self, database: str) -> None:
+        """A catalog session as the store opened it: read-only, `pg_catalog` alone on the search
+        path, and the login role itself (a role setting such as `ALTER ROLE … SET role` would
+        make the checks look at another role than the one code can return to)."""
         try:
             row = self._connection.execute(
-                "SELECT d, t FROM postgres_query($database, $sql)",
-                {"database": database, "sql": _READ_ONLY_SQL},
+                "SELECT d, t, s, r FROM postgres_query($database, $sql)",
+                {"database": database, "sql": _SESSION_SQL},
             ).fetchone()
         except duckdb.Error as error:
             raise StoreError(
@@ -280,13 +313,25 @@ class ExistingLake:
                 f"Connection {self.name}: the catalog session could not be inspected.",
                 {"connection": self.name, "duckdb": str(error)},
             ) from None
-        if row is None or tuple(map(str, row)) != ("on", "on"):
+        found = tuple(map(str, row)) if row is not None else ("", "", "", "")
+        if found[:2] != ("on", "on"):
             raise StoreError(
                 "SOURCE_NOT_READ_ONLY",
                 f"Connection {self.name}: the catalog's PostgreSQL session is not read-only "
                 "(default_transaction_read_only must be on).",
                 {"connection": self.name},
             )
+        for value, expected, kind in (
+            (found[2], "pg_catalog", "search path"),
+            (found[3], "true", "role setting"),
+        ):
+            if value != expected:
+                raise StoreError(
+                    "STORE_SOURCE_INVALID",
+                    f"Connection {self.name}: the catalog session's {kind} is not the store's; "
+                    "remove the database's or the role's own setting for it.",
+                    {"connection": self.name, "kind": kind},
+                )
 
     def _postgres_rows(self, sql: str) -> list[str]:
         try:

@@ -511,6 +511,13 @@ def test_a_role_in_use_elsewhere_is_refused(catalog: Catalog) -> None:
         (["CREATE SEQUENCE other.s", "GRANT USAGE ON SEQUENCE other.s TO {reader}"], "sequence"),
         (["CREATE FUNCTION other.f() RETURNS int LANGUAGE sql AS 'SELECT 1'"], "function"),
         (["GRANT pg_read_all_data TO {reader}"], "role pg_read_all_data"),
+        (["GRANT INSERT ON cat.ducklake_snapshot TO {reader}"], "write in the catalog schema"),
+        (
+            ["GRANT UPDATE (snapshot_id) ON cat.ducklake_snapshot TO {reader}"],
+            "write in the catalog schema",
+        ),
+        (["GRANT TRUNCATE ON cat.ducklake_metadata TO {reader}"], "write in the catalog schema"),
+        (["GRANT CREATE ON SCHEMA cat TO {reader}"], "write in the catalog schema"),
         (["GRANT pg_read_server_files TO {reader}"], "role pg_read_server_files"),
         (
             [
@@ -538,6 +545,72 @@ def test_a_role_that_can_use_anything_beyond_the_catalog_schema_is_refused(
     # The object kind is named, never an object of another schema.
     assert "other" not in error.message
     assert "secrets" not in error.message
+
+
+def test_an_operator_or_function_of_the_owner_cannot_stand_in_for_postgresqls(
+    catalog: Catalog,
+) -> None:
+    # The database's owner puts its own `<>` and `current_setting` ahead of pg_catalog's.
+    catalog.execute(
+        f"GRANT USAGE ON SCHEMA other TO {catalog.reader}",
+        f"GRANT SELECT ON other.secrets TO {catalog.reader}",
+        "CREATE FUNCTION cat.ne(name, name) RETURNS boolean LANGUAGE sql IMMUTABLE "
+        "AS 'SELECT false'",
+        "CREATE OPERATOR cat.<> (LEFTARG = name, RIGHTARG = name, FUNCTION = cat.ne)",
+        "CREATE FUNCTION cat.current_setting(text) RETURNS text LANGUAGE sql "
+        "AS 'SELECT ''on''::text'",
+        f"ALTER DATABASE {catalog.database} SET search_path = cat, pg_catalog",
+    )
+    error = refused(catalog.attachment())
+    assert error.code == "STORE_SOURCE_INVALID"
+    assert error.details["kind"] in {"schema", "table"}
+
+
+def test_a_hijacked_current_setting_cannot_fake_a_read_only_session(
+    catalog: Catalog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Without the store's session options, the database's search path reaches the owner's
+    # `current_setting`, which answers `on`: only the qualified call tells the truth.
+    monkeypatch.setattr(existing_lake, "READ_ONLY_SESSION", "")
+    catalog.execute(
+        "CREATE FUNCTION cat.current_setting(text) RETURNS text LANGUAGE sql "
+        "AS 'SELECT ''on''::text'",
+        f"ALTER DATABASE {catalog.database} SET search_path = cat, pg_catalog",
+    )
+    assert refused(catalog.attachment()).code == "SOURCE_NOT_READ_ONLY"
+
+
+def test_a_role_setting_that_switches_the_role_is_refused(catalog: Catalog) -> None:
+    # The login role holds pg_read_all_data, but its setting makes each session start as a
+    # clean role; code running in the session could reset the role and read everything.
+    other = f"{catalog.reader}_y"
+    catalog.execute(
+        f"CREATE ROLE {other} NOLOGIN",
+        f"GRANT USAGE ON SCHEMA cat TO {other}",
+        f"GRANT SELECT ON ALL TABLES IN SCHEMA cat TO {other}",
+        f"GRANT {other} TO {catalog.reader}",
+        f"GRANT pg_read_all_data TO {catalog.reader}",
+        f"ALTER ROLE {catalog.reader} SET role = '{other}'",
+    )
+    try:
+        error = refused(catalog.attachment())
+    finally:
+        catalog.execute(f"ALTER ROLE {catalog.reader} RESET role")
+        catalog.execute_on("admin", f"DROP OWNED BY {other} CASCADE")
+        catalog.execute(f"DROP OWNED BY {other} CASCADE")
+        catalog.execute_on("admin", f"DROP ROLE {other}")
+    assert error.code == "STORE_SOURCE_INVALID"
+    assert error.details["kind"] == "role setting"
+
+
+def test_privileges_are_those_of_the_login_role() -> None:
+    # Membership is read from `session_user`, never `current_user`, and nothing in the SQL is
+    # left for the search path to resolve.
+    sql = existing_lake.privileges_sql("cat")
+    assert "pg_has_role(session_user" in sql
+    assert "current_user" not in sql
+    for bare in (" <> ", " = ", " || ", " IN (", " !~ ", "CASE c.relkind WHEN"):
+        assert bare not in sql
 
 
 def test_an_invoker_view_reaching_another_schema_is_refused_before_the_attach(
