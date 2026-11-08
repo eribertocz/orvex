@@ -123,7 +123,7 @@ Grammar:
 
 Run-time values:
 
-- `$since` = last watermark − `lookback`. On a full refresh (and on the first run), `$since` is the lowest value of the `time_column` type: `-infinity` for `DATE`, `TIMESTAMP` and `TIMESTAMPTZ`. The **same SQL** serves full and incremental runs.
+- `$since` = last watermark − `lookback`. On a `DATE` time column the lookback counts whole days: any other value (`12h`, `36h`) is rejected with `MODEL_CONFIG_INVALID` at `/incremental/lookback` (#254), never cut silently. On a full refresh (and on the first run), `$since` is the lowest value of the `time_column` type: `-infinity` for `DATE`, `TIMESTAMP` and `TIMESTAMPTZ`. The **same SQL** serves full and incremental runs.
 - The new watermark is `max(time_column)` **of the rows loaded**, never the wall clock, to avoid clock skew between servers. A run that loads zero rows keeps the previous watermark.
 - `$since` is always passed as an explicit prepared-statement parameter, never through `SET VARIABLE` on a shared connection.
 
