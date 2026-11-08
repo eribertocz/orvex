@@ -87,6 +87,7 @@ class Plan:
     full_refresh: frozenset[str]
     reasons: tuple[str, ...]
     wake_at: dt.datetime
+    next_run: dt.datetime | None = None  # when the next model is due, while none runs (#257)
 
 
 def freshness_due(model: Model, history: History, now: dt.datetime) -> dt.datetime | None:
@@ -174,7 +175,8 @@ def plan(
     if not runnable or earliest > now:
         # Nothing to run yet: look again at the next due time, or within a minute.
         candidates = [earliest] if runnable else [moment for moment in upcoming if moment > now]
-        return Plan((), frozenset(), (), min([now + LOOK_AGAIN, *candidates]))
+        later = min(candidates, default=None)
+        return Plan((), frozenset(), (), min([now + LOOK_AGAIN, *candidates]), later)
     needed: set[str] = set()
     for name in runnable:
         needed |= closure(name, dependencies, known)

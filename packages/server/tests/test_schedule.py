@@ -10,6 +10,7 @@ import datetime as dt
 import io
 import itertools
 import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -539,3 +540,25 @@ def test_a_catalog_that_cannot_be_stamped_is_read_every_time(
     for _ in range(3):
         scheduler._records(tmp_path, cast(lake_place.Place, None), kept)
     assert len(reads) == 3
+
+
+def test_an_idle_scheduler_says_when_the_next_run_is_once_per_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #257: one status line while it waits, in the project's zone, not one per minute.
+    feed(tmp_path, "valid")
+    write(
+        tmp_path,
+        {
+            "project.yaml": PROJECT,
+            "connections.yaml": CONNECTIONS,
+            "models/s/m.sql": "SELECT * FROM feed.data",
+            "models/s/m.yaml": "version: 1\nfreshness: 1d\n",
+        },
+    )
+    out = scheduled(tmp_path, monkeypatch, START + dt.timedelta(hours=3))
+    waits = [line for line in out.splitlines() if " waiting: " in line]
+    assert waits, out
+    assert len(waits) <= 3  # three idle hours: a line when the next run changes, not 180
+    # Fresh for a day after its run: due again at the same time tomorrow, in the project zone.
+    assert re.fullmatch(r"\S+ \S+ waiting: next run at 2026-10-29 \d\d:\d\d", waits[-1])

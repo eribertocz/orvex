@@ -926,6 +926,7 @@ class _Outcome:
     outcome: str = "not_run"
     rows_read: str | None = None
     rows_written: str | None = None
+    total: str | None = None  # an incremental table's rows after the run (#257)
     error: RunError | None = None
     since: str | None = None
     watermark: str | None = None
@@ -1116,6 +1117,9 @@ def _run_locked(
                 for item in outcomes:
                     if item.rows_written is None and item.model.config.materialized != "view":
                         item.rows_written = str(_count(lake, item.model, snapshot))
+                for item in outcomes:
+                    if item.model.config.materialized == "incremental":
+                        item.total = str(_count(lake, item.model, snapshot))
             except StoreError as error:
                 # The run is committed: it is recorded as such, without what could not be read.
                 warning = _store_problem(error, ".", "after the commit")
@@ -1203,7 +1207,12 @@ def _run_locked(
             print(f"tested {item.model.name}", file=out)  # a view is not stored
         else:
             rows = "unknown" if item.rows_written is None else item.rows_written
-            print(f"built {item.model.name}: {rows} rows", file=out)
+            if item.model.config.materialized == "incremental":
+                # New rows, and the table they joined (#257): 0 new rows is not an empty table.
+                total = "table total unknown" if item.total is None else f"{item.total} in table"
+                print(f"built {item.model.name}: {rows} new rows ({total})", file=out)
+            else:
+                print(f"built {item.model.name}: {rows} rows", file=out)
     for schema, table in leftovers:
         if drop_leftovers:
             print(f"dropped {schema}.{table}", file=out)
