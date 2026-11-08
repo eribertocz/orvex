@@ -1,5 +1,7 @@
 # AGENTS.md — rules for the AI agent working on Orvex
 
+> **First rule — one purpose per file (Owner, 2026-11-08).** Every file, module and sub-module has **one purpose**, stated in the first line of its docstring, and stays easy to maintain. Before writing code, the pull request names the files it adds or changes and each one's purpose. A file is changed only for a change that belongs to its purpose; anything else goes in its own file. Mixed purposes are a blocking Reviewer finding. For the Python of `packages/*/src`, `tools/` and `conformance/runners/`, CI fails a file without a stated purpose, a file over 800 lines not listed with its ceiling, any growth past that ceiling, and a ceiling not lowered when the file shrinks; the rest (web, workflows, tests) is checked by the Reviewer (`engineering.md` §2).
+
 This file is read by the AI coding agent (Claude Code). It is the operational summary of the governing documents; when it disagrees with a document ranked in [`docs/README.md`](docs/README.md), that document wins and this file is corrected.
 
 **Spirit:** automated gates (conformance suites, types, CI) carry the quality; ceremony is kept to the minimum. Be rigorous where errors are expensive (numbers, security, contracts) and fast everywhere else.
@@ -10,7 +12,7 @@ This file is read by the AI coding agent (Claude Code). It is the operational su
 
 | Role | Who | Responsibilities |
 |---|---|---|
-| **Owner** | @eribertocz (human) | Decides product; approves each phase's batch of new behaviors; merges every pull request touching governed paths (all documentation under `docs/` except end-user docs, `AGENTS.md`, `CLAUDE.md`, `identity.toml`, `LICENSE`, `NOTICE`, normative conformance cases and CI workflows — the binding list is in [`docs/process/git-workflow.md`](docs/process/git-workflow.md) §2); approves `beta.1`, every `rc`, `v1.0.0` and stable patches; validates features in phase demos |
+| **Owner** | @eribertocz (human) | Decides product; approves each phase's batch of new behaviors; merges every pull request touching governed paths (all documentation under `docs/` except end-user docs, `AGENTS.md`, `CLAUDE.md`, `identity.toml`, `LICENSE`, `NOTICE`, normative conformance cases, CI workflows and the file-size ceilings — the binding list is in [`docs/process/git-workflow.md`](docs/process/git-workflow.md) §2); approves `beta.1`, every `rc`, `v1.0.0` and stable patches; validates features in phase demos |
 | **Agent** | Claude Code | **Specifies and implements**: creates milestones and issues, keeps the next three issues fully specified, implements one issue at a time, runs an independent Reviewer pass on critical work, merges pull requests outside governed paths, prepares releases and creates tags |
 | **Reviewer** | A subagent launched by the Agent with clean context and the instructions in [`docs/process/review.md`](docs/process/review.md) | Verifies tier A pull requests independently; posts a `[Reviewer]` verdict |
 
@@ -56,6 +58,7 @@ Full rules: [`docs/process/engineering.md`](docs/process/engineering.md).
 - **Product name:** never hard-code the display name or slug in code or UI strings; read them from `identity.toml` (exemptions in `engineering.md` §1).
 - **No secrets** in Git, logs, issues or comments. **No real company data** in the repository; use the synthetic data generator.
 - Required CI checks for the current phase pass locally before a pull request is marked ready.
+- **One purpose per file** (the first rule above): stated, kept, and checked by CI and the Reviewer.
 - No `TODO`, dead code or commented-out code at merge time. Fix root causes, not symptoms: a finding is fixed for its whole class, not for the one case found.
 - **Fail closed** in every security decision. **Never lower** existing tests or criteria to make CI pass.
 - **Only DuckDB reads source rows** in `store` and `transform`; Arrow may carry them as a transport (`engineering.md` §2).
