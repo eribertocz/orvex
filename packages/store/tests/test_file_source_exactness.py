@@ -24,6 +24,7 @@ import pytest
 from orvex.store.errors import StoreError
 from orvex.store.file_sources import view_query
 
+from tests.support import parquet_footer
 from tests.support.fixtures import frozen
 
 D = decimal.Decimal
@@ -590,3 +591,161 @@ def test_a_headerless_csv_is_read_with_one_header_decision(
     ).fetchall()
     served = connection.execute("SELECT * FROM data").fetchall()
     assert [tuple(None if v is None else str(v) for v in row) for row in served] == expected
+
+
+# --- #260: a decimal with only the logical annotation ---------------------------------------------
+
+
+def _logical_only(tmp_path: Path, integers: bool) -> Path:
+    cents = [decimal.Decimal("1.10"), None]
+    table = pa.table(
+        {
+            "small": pa.array(cents, pa.decimal128(9, 2)),
+            "wide": pa.array(cents, pa.decimal128(18, 2)),
+            "nested": pa.StructArray.from_arrays([pa.array(cents, pa.decimal128(10, 2))], ["v"]),
+            "listed": pa.array([[cents[0]], []], pa.list_(pa.decimal128(12, 2))),
+            "k": pa.array([1, 2]),
+        }
+    )
+    path = tmp_path / "f.parquet"
+    pq.write_table(table, path, store_decimal_as_integer=integers)
+    parquet_footer.without_converted_types(path)
+    return path
+
+
+@pytest.mark.parametrize("integers", [False, True], ids=["fixed-bytes", "int32-int64"])
+def test_a_decimal_duckdb_does_not_read_as_one_is_refused_at_any_depth(
+    tmp_path: Path, integers: bool
+) -> None:
+    # DuckDB v2.0.0 reads a logical-only decimal as BLOB on fixed bytes, and as the unscaled
+    # integer on INT32/INT64 (1.10 as 110): never a value a model may read.
+    path = _logical_only(tmp_path, integers)
+    connection = duckdb.connect()
+    _view(connection, "parquet", [path])
+    for column in ("small", "wide", "nested", "listed"):
+        with pytest.raises(duckdb.Error, match=f"UNSUPPORTED_SOURCE_TYPE: column {column} "):
+            connection.execute(f"SELECT {column} FROM data").fetchall()
+    assert connection.execute("SELECT k FROM data ORDER BY k").fetchall() == [(1,), (2,)]
+
+
+def test_the_rewritten_footer_keeps_every_value_and_drops_only_converted_annotations(
+    tmp_path: Path,
+) -> None:
+    path = _logical_only(tmp_path, integers=False)
+    read = pq.read_table(path).to_pylist()
+    assert read[0]["small"] == decimal.Decimal("1.10")
+    assert read[0]["nested"] == {"v": decimal.Decimal("1.10")}
+    rows = (
+        duckdb.connect()
+        .execute(f"SELECT converted_type, logical_type FROM parquet_schema('{path}')")
+        .fetchall()
+    )
+    assert sum(1 for _, logical in rows if logical and logical.startswith("DecimalType")) == 4
+    assert all(converted is None for converted, logical in rows if logical)
+
+
+@pytest.mark.parametrize("integers", [False, True])
+def test_the_footer_codec_gives_back_an_unchanged_footer_byte_for_byte(
+    tmp_path: Path, integers: bool
+) -> None:
+    path = tmp_path / "f.parquet"
+    pq.write_table(_every_kind(), path, store_decimal_as_integer=integers)
+    data = path.read_bytes()
+    size = int.from_bytes(data[-8:-4], "little")
+    footer = data[-8 - size : -8]
+    writer = parquet_footer._Writer()
+    writer.struct(parquet_footer._Reader(footer).struct())
+    assert bytes(writer.out) == footer
+
+
+def _every_kind() -> pa.Table:
+    return pa.table(
+        {
+            "u8": pa.array([255], pa.uint8()),
+            "u64": pa.array([2**64 - 1], pa.uint64()),
+            "i16": pa.array([-1], pa.int16()),
+            "date": pa.array([dt.date(2026, 1, 2)]),
+            "text": pa.array(["a"]),
+            "items": pa.array([[1]], pa.list_(pa.int64())),
+            "pairs": pa.array([[("k", 1)]], pa.map_(pa.string(), pa.int64())),
+            "money": pa.array([decimal.Decimal("1.10")], pa.decimal128(9, 2)),
+            "stamp": pa.array([1], pa.timestamp("us", tz="UTC")),
+            "clock": pa.array([1], pa.time64("us")),
+            "k": pa.array([7]),
+        }
+    )
+
+
+def test_every_logical_only_type_duckdb_misreads_is_refused_and_the_rest_read(
+    tmp_path: Path,
+) -> None:
+    # Measured on DuckDB v2.0.0: without the converted twin, an unsigned is read as signed
+    # (2^64-1 as -1), a date as its day number, a string as BLOB, a list or a map as a struct.
+    path = tmp_path / "f.parquet"
+    pq.write_table(_every_kind(), path)
+    parquet_footer.without_converted_types(path)
+    connection = duckdb.connect()
+    _view(connection, "parquet", [path])
+    for column in ("u8", "u64", "i16", "date", "text", "items", "pairs", "money"):
+        with pytest.raises(duckdb.Error, match=f"UNSUPPORTED_SOURCE_TYPE: column {column} "):
+            connection.execute(f"SELECT {column} FROM data").fetchall()
+    assert connection.execute("SELECT k, epoch_us(stamp), clock FROM data").fetchall() == [
+        (7, 1, dt.time(0, 0, 0, 1))
+    ]
+
+
+def test_a_decimal_with_both_annotations_still_reads_exactly(tmp_path: Path) -> None:
+    path = tmp_path / "f.parquet"
+    table = pa.table({"small": pa.array([decimal.Decimal("1.10")], pa.decimal128(9, 2))})
+    pq.write_table(table, path, store_decimal_as_integer=True)
+    connection = duckdb.connect()
+    _view(connection, "parquet", [path])
+    assert connection.execute("SELECT small FROM data").fetchall() == [(decimal.Decimal("1.10"),)]
+
+
+def test_an_ordinary_file_with_logical_only_types_duckdb_honors_reads(tmp_path: Path) -> None:
+    # pyarrow writes these with the logical annotation only: each is read as its own type.
+    path = tmp_path / "f.parquet"
+    table = pa.table(
+        {
+            "half": pa.array([1.5], pa.float16()),
+            "nothing": pa.array([None], pa.null()),
+            "nanos": pa.array([1767261600123456789], pa.timestamp("ns")),
+            "id": pa.array([b"0123456789abcdef"], pa.uuid()),
+        }
+    )
+    pq.write_table(table, path)
+    connection = duckdb.connect()
+    _view(connection, "parquet", [path])
+    assert connection.execute(
+        "SELECT half, nothing, epoch_ns(nanos), CAST(id AS VARCHAR) FROM data"
+    ).fetchall() == [(1.5, None, 1767261600123456789, "30313233-3435-3637-3839-616263646566")]
+
+
+# The refusal above exists only because of DuckDB v2.0.0. This test measures DuckDB itself: when
+# an upgrade (ADR-0022 keeps it current) makes DuckDB honor a logical-only annotation, it fails,
+# naming the type, so its refusal is removed (`_HONORED_LOGICAL` in `file_sources.py`).
+MISREAD = {
+    "u8": "INTEGER",
+    "u64": "BIGINT",
+    "i16": "INTEGER",
+    "date": "INTEGER",
+    "text": "BLOB",
+    "money": "BLOB",
+}
+
+
+def test_duckdb_still_misreads_the_logical_only_types_refused(tmp_path: Path) -> None:
+    file = tmp_path / "f.parquet"
+    pq.write_table(_every_kind(), file)
+    parquet_footer.without_converted_types(file)
+    found = dict(
+        duckdb.connect()
+        .execute(f"SELECT name, duckdb_type FROM parquet_schema('{file}')")
+        .fetchall()
+    )
+    honored = [name for name, misread in MISREAD.items() if found[name] != misread]
+    assert not honored, (
+        f"DuckDB {duckdb.__version__} now reads {honored} correctly without the converted "
+        "annotation: add their logical types to _HONORED_LOGICAL and drop them from MISREAD"
+    )
