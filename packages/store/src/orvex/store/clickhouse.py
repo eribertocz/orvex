@@ -19,6 +19,7 @@ plan; it runs the statement the semantic adapter wrote, over ClickHouse's HTTP i
 from __future__ import annotations
 
 import http.client
+import json
 import os
 import re
 import socket
@@ -53,14 +54,24 @@ REQUIRED_SETTINGS: Mapping[str, str] = {
     "cancel_http_readonly_queries_on_client_close": "1",  # closing the connection cancels
 }
 LIMIT_SETTINGS = ("max_execution_time", "max_memory_usage", "max_result_rows")
+# Settings a profile may also change: none of them changes a result. Any other changed setting
+# is refused, so no setting can silently cut, filter, cache or reshape a result
+# (`result_overflow_mode`, `additional_table_filters`, `use_query_cache`, `limit`, ...).
+HARMLESS_SETTINGS = frozenset({"database", "max_threads", "log_queries", "log_comment", "priority"})
 
 _TIMEOUT_CODES = frozenset({"159"})  # TIMEOUT_EXCEEDED
-_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*):([^{}]+)\}")
-_QUOTED = re.compile(r"'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|\"(?:[^\"\\]|\\.)*\"", re.S)
-_COMMENT = re.compile(r"--[^\n]*|/\*.*?\*/", re.S)
-# Placeholders outside string literals: at each position a placeholder (whose type may quote a
-# zone) is tried before a literal, so a `{` inside a literal is never read as one.
-_TOKENS = re.compile(_PLACEHOLDER.pattern + "|" + _QUOTED.pattern, re.S)
+# One left-to-right scan of a statement: at each position the first alternative that matches
+# wins, so a quote inside a comment, a comment marker inside a string, or a `{` inside either is
+# never read as anything else. ClickHouse's comments are `--`, `#` (and `#!`) to the end of the
+# line, and `/* */`; its strings take `\\` escapes and doubled quotes.
+_SCAN = re.compile(
+    r"(?P<comment>--[^\n]*|#[^\n]*|/\*.*?\*/)"
+    r"|(?P<string>'(?:[^'\\]|\\.|'')*')"
+    r"|(?P<name>`(?:[^`\\]|\\.|``)*`|\"(?:[^\"\\]|\\.|\"\")*\")"
+    r"|\{(?P<parameter>[A-Za-z_][A-Za-z0-9_]*):(?P<type>[^{}]+)\}"
+    r"|(?P<open>/\*|['`\"])",  # a comment or quote never closed
+    re.S,
+)
 _FORBIDDEN_WORDS = re.compile(r"\b(SETTINGS|FORMAT|INTO\s+OUTFILE)\b", re.I)
 _DECIMAL = re.compile(r"DECIMAL\((\d+),(\d+)\)")
 
@@ -285,10 +296,35 @@ class ClickHouse:
             connection.close()
         return [line.split("\t") for line in body.splitlines() if line]
 
+    def _json(self, sql: str, values: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
+        """A small catalog query in JSON lines: schema and settings facts, never data rows."""
+        connection, response = self._send(
+            sql + " FORMAT JSONEachRow", dict(values or {}), self._budget.timeout_ms / 1000
+        )
+        try:
+            body = response.read().decode("utf-8")
+        finally:
+            connection.close()
+        return [json.loads(line) for line in body.splitlines() if line]
+
     # --- verification --------------------------------------------------------------------------
 
     def _verify(self) -> None:
-        ((version,),) = self._text("SELECT version()")
+        # One aggregated row, so no setting that cuts or skips rows can hide one: with
+        # `offset` set it is skipped, and that alone refuses the connection.
+        try:
+            rows = self._json(
+                "SELECT version() AS version, groupArray((name, value)) AS settings "
+                "FROM system.settings WHERE changed"
+            )
+        except StoreError as error:
+            # The query cache refuses this query (a system table, a non-deterministic function).
+            if error.details.get("engine_code") in {"704", "719"}:
+                raise _setting("use_query_cache", "0", "1") from None
+            raise
+        if len(rows) != 1:
+            raise _setting("offset", "0", "a value that skips rows")
+        version = str(rows[0]["version"])
         family = ".".join(version.split(".")[:2])
         if family not in TESTED_VERSIONS:
             raise StoreError(
@@ -297,33 +333,35 @@ class ClickHouse:
                 {"version": version},
             )
         self.version = version
-        names = ["readonly", *REQUIRED_SETTINGS, *LIMIT_SETTINGS]
-        found = {
-            row[0]: row[1]
-            for row in self._text(
-                "SELECT name, value FROM system.settings WHERE name IN {names:Array(String)}",
-                {"param_names": _array(names)},
-            )
-        }
+        found = {str(name): str(value) for name, value in rows[0]["settings"]}
         if found.get("readonly") != "1":
             raise StoreError(
                 "SOURCE_NOT_READ_ONLY",
                 "The ClickHouse user's profile must set readonly = 1: read-only, and unable to "
                 "change its own settings.",
-                {"setting": "readonly", "expected": "1", "found": found.get("readonly", "")},
+                {"setting": "readonly", "expected": "1", "found": found.get("readonly", "0")},
             )
+        allowed = {"readonly", *REQUIRED_SETTINGS, *LIMIT_SETTINGS, *HARMLESS_SETTINGS}
+        if others := sorted(set(found) - allowed):
+            raise _setting(",".join(others), "its default", ",".join(found[n] for n in others))
+        defaults = self._json(
+            "SELECT groupArray((name, value)) AS defaults FROM system.settings "
+            "WHERE name IN {names:Array(String)}",
+            {"param_names": _array([*REQUIRED_SETTINGS, *LIMIT_SETTINGS])},
+        )
+        current = {str(name): str(value) for name, value in defaults[0]["defaults"]}
         for name, expected in REQUIRED_SETTINGS.items():
-            if found.get(name) != expected:
-                raise _setting(name, expected, found.get(name, ""))
+            if current.get(name) != expected:
+                raise _setting(name, expected, current.get(name, ""))
         limits = {
             "max_execution_time": self._budget.timeout_ms / 1000,
             "max_memory_usage": self._budget.memory_bytes,
             "max_result_rows": self._budget.result_rows,
         }
         for name, most in limits.items():
-            value = Decimal(found.get(name, "0") or "0")
+            value = Decimal(current.get(name, "0") or "0")
             if value <= 0 or value > Decimal(str(most)):
-                raise _setting(name, f"more than 0 and at most {most}", found.get(name, ""))
+                raise _setting(name, f"more than 0 and at most {most}", current.get(name, ""))
 
     # --- catalog and clock ---------------------------------------------------------------------
 
@@ -441,6 +479,10 @@ def _column(values: pa.Array, got: pa.Field, want: pa.Field) -> pa.Array:
             source = values.type
         if pa.types.is_string(source) and source == target:
             values.validate(full=True)  # valid UTF-8 only
+            if kind == "UHUGEINT" and not pc.all(
+                pc.match_substring_regex(values, r"^[0-9]{1,39}$"), skip_nulls=True
+            ).as_py() in (True, None):
+                raise pa.ArrowInvalid("a value is not unsigned decimal digits")
             return values
         if pa.types.is_timestamp(target) and pa.types.is_timestamp(source):
             if source.unit == "us" and source.tz is not None:
@@ -548,19 +590,15 @@ def _value(parameter: Parameter) -> str:
 
 def _bound(sql: str, parameters: Sequence[Parameter]) -> dict[str, str]:
     """The HTTP parameters for `sql`: each placeholder's type must be its parameter's type."""
-    _check_statement(sql)
     given = {parameter.name: parameter for parameter in parameters}
     if len(given) != len(parameters):
         raise StoreError("STORE_PARAMETER_INVALID", "A parameter is given twice.", {})
     used: dict[str, str] = {}
-    placeholders = [
-        (found.group(1), found.group(2))
-        for found in _TOKENS.finditer(_COMMENT.sub(" ", sql))
-        if found.group(1)
-    ]
+    plain, placeholders = _scan(sql)
+    _check_statement(plain)
     for name, written in placeholders:
-        used.setdefault(name, written.strip())
-        if used[name] != written.strip():
+        used.setdefault(name, written)
+        if used[name] != written:
             raise StoreError(
                 "STORE_PARAMETER_INVALID",
                 f"Parameter {name} is written with two types.",
@@ -594,14 +632,35 @@ def _bound(sql: str, parameters: Sequence[Parameter]) -> dict[str, str]:
     return values
 
 
-def _without_literals(sql: str) -> str:
-    return _QUOTED.sub("''", _COMMENT.sub(" ", _PLACEHOLDER.sub("0", sql)))
+def _scan(sql: str) -> tuple[str, list[tuple[str, str]]]:
+    """The statement with every comment, string, quoted name and placeholder blanked, and its
+    placeholders in order. An unclosed comment or quote is refused."""
+    plain: list[str] = []
+    placeholders: list[tuple[str, str]] = []
+    last = 0
+    for found in _SCAN.finditer(sql):
+        if found.group("open"):
+            raise StoreError(
+                "STORE_STATEMENT_INVALID", "A ClickHouse read has an unclosed quote or comment.", {}
+            )
+        plain.append(sql[last : found.start()])
+        if found.group("parameter"):
+            placeholders.append((found.group("parameter"), found.group("type").strip()))
+            plain.append(" 0 ")
+        elif found.group("comment"):
+            plain.append(" ")
+        else:
+            plain.append(" '' " if found.group("string") else " x ")
+        last = found.end()
+    plain.append(sql[last:])
+    return "".join(plain), placeholders
 
 
-def _check_statement(sql: str) -> None:
-    """One SELECT, with no clause that changes settings or the output format."""
-    plain = _without_literals(sql).strip()
-    if ";" in plain.rstrip(";") or not re.match(r"(?is)^\(*\s*(SELECT|WITH)\b", plain):
+def _check_statement(plain: str) -> None:
+    """One SELECT, with no clause that changes settings or the output format; `plain` is the
+    statement with its comments, strings, names and placeholders blanked."""
+    plain = plain.strip()
+    if ";" in plain or not re.match(r"(?is)^\(*\s*(SELECT|WITH)\b", plain):
         raise StoreError(
             "STORE_STATEMENT_INVALID", "A ClickHouse read must be one SELECT statement.", {}
         )

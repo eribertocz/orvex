@@ -195,6 +195,33 @@ def test_the_password_appears_in_no_error(
     assert password not in str(caught.value) + repr(caught.value.details)
 
 
+# A setting changed beyond the verified ones is refused, whatever it is: each of these cut,
+# filter, cache or skip rows silently (measured on 26.8 by the #400 review).
+SILENT = {
+    "result_overflow_mode": "break",
+    "read_overflow_mode": "break",
+    "timeout_overflow_mode": "break",
+    "max_rows_to_read": "1000",
+    "additional_table_filters": "{\\'t\\': \\'k < 7\\'}",
+    "use_query_cache": "1",
+    "limit": "5",
+    "offset": "1",
+    "session_timezone": "America/La_Paz",
+}
+
+
+@pytest.mark.parametrize(("name", "value"), sorted(SILENT.items()))
+def test_any_other_changed_setting_is_refused(connect: Connect, name: str, value: str) -> None:
+    with pytest.raises(StoreError) as caught:
+        connect({**SAFE, name: value})
+    assert caught.value.code == "ENGINE_SETTING_REQUIRED"
+    assert name in caught.value.details["setting"].split(",")
+
+
+def test_a_harmless_setting_may_be_changed(connect: Connect) -> None:
+    assert connect({**SAFE, "max_threads": "2", "log_queries": "1"}).version
+
+
 # --- types -------------------------------------------------------------------------------------
 
 MAPPED = {
@@ -336,8 +363,9 @@ def test_every_type_round_trips_exactly_at_its_extremes(connect: Connect) -> Non
         ("SELECT toDateTime('2024-01-01 00:00:00', 'UTC') AS v", "TIMESTAMPTZ"),  # not µs
         ("SELECT toInt32(1) AS v", "BIGINT"),  # another width
         ("SELECT toFloat64(1.5) AS v", "DECIMAL(18,2)"),  # a float never becomes a decimal
+        ("SELECT '-1' AS v", "UHUGEINT"),  # text that is not unsigned digits
     ],
-    ids=["hugeint-beyond-38-digits", "invalid-utf8", "datetime-seconds", "width", "float"],
+    ids=["hugeint-beyond-38-digits", "invalid-utf8", "datetime-seconds", "width", "float", "uhuge"],
 )
 def test_a_value_or_form_that_is_not_exact_is_refused(
     connect: Connect, sql: str, kind: str
@@ -416,6 +444,13 @@ def test_a_parameter_that_does_not_fit_its_placeholder_is_refused(
         "SELECT 1 AS v FORMAT JSON",
         "SELECT 1 AS v INTO OUTFILE 'x'",
         "INSERT INTO t VALUES (1)",
+        "SELECT '--' AS a, 1 SETTINGS max_threads = 1",
+        "SELECT 1 # '\nSETTINGS max_threads = 1 # '",
+        "SELECT 1 # '\nFORMAT TSV # '",
+        "SELECT '--'; SELECT 1",
+        "SELECT 1 AS v /* unclosed",
+        "SELECT 'unclosed",
+        "SELECT 1;",
     ],
 )
 def test_only_one_plain_select_is_run(connect: Connect, sql: str) -> None:
