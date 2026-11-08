@@ -42,7 +42,7 @@ def durations(path: Path = RECORD) -> dict[str, float]:
     that is not an object of finite, non-negative seconds says nothing reliable."""
     try:
         found = json.loads(path.read_text("utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return {}
     if not isinstance(found, dict):
         return {}
