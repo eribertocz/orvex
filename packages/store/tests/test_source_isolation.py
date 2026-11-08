@@ -562,7 +562,11 @@ def test_the_worker_gets_its_own_share_of_the_limits(
     lake = opened(lake_folder, duckdb_source(source))
     try:
         land(lake, "SELECT * FROM ventas.base")
-        lake_memory = rows(lake, "SELECT current_setting('memory_limit') AS m")
+        # Read on the lake's own connection: SQL may not read settings (#256).
+        cursor = lake._cursor()
+        (setting,) = cursor.execute("SELECT current_setting('memory_limit')").fetchone() or ("",)
+        cursor.close()
+        lake_memory = [{"m": setting}]
     finally:
         lake.close()
     total = source_worker.memory_bytes(str(LIMITS.memory_limit))
