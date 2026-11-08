@@ -182,7 +182,7 @@ Because `transform` and `semantic` live in the same product, the engine **re-ver
 ### S5 — Equivalent acceleration
 
 - **Pre-aggregations** declared by the Builder or suggested by the engine from query statistics.
-- Used only with a **proof of equivalence** (C8): same grain or a legal roll-up, same metric semantics, same policy columns available so row-level security still applies.
+- Used only with a **proof of equivalence** (C8): same grain or a legal roll-up, same metric semantics, same policy columns available so row-level security still applies: every row policy on the base decides each row by grain fields the table keeps, and a policy reached by propagation is preserved only when the base's columns of its first link are such grain fields (#354), so each stored group is wholly authorized or not.
 - Refreshed by `transform`; the receipt records that a pre-aggregation was used and its snapshot.
 - In v1.0.0 pre-aggregations apply only to datasets in the managed lake (ADR-0027 §7).
 - Never changes results (verified by the corpus case on materialization equivalence plus added cases).

@@ -18,8 +18,10 @@ measure the base `metric` it stores at the table's grain, re-aggregated by `SUM(
 - **Security: exact preservation (Owner precision on #348).** Every row policy that restricts
   the base for this caller decides each base row by fields of the grain only, the same fields
   the table stores, so every group the table holds is wholly authorized or wholly not. A policy
-  reached by propagation, one reading any other field, a policy on the table itself, or a table
-  field the caller cannot see makes the table not eligible. A table is never a reason to refuse
+  reached by propagation decides a base row by the related row it links to: it is preserved when
+  the base's columns of that first link are grain fields (#354). A policy reading any other
+  field, one propagated through any other link, a policy on the table itself, or a table field
+  the caller cannot see makes the table not eligible. A table is never a reason to refuse
   a question: the base is read, with its policies.
 """
 
@@ -273,10 +275,22 @@ def _policies(
     if placement.of(dataset):
         raise _No("policy")  # the table's own policies would restrict beyond the base's
     for restriction in placement.of(home):
-        if restriction.path:
-            raise _No("policy")  # decided by a related row: not by the grain alone
         if restriction.no_rows:
             continue  # zero rows from either plan
+        if restriction.path:
+            # Decided by the related row the base row links to (#354): exact when the base's
+            # columns of that first link are kept as the grain, so every row of a group links to
+            # the same related row, and the group is wholly in or out, `orphans: visible`, role
+            # paths, mapping tables and registrations included (they read the related rows).
+            for name in link_columns(analysis.compiled, home, restriction.path):
+                member = MemberId("field", home, sql.normalize(name))
+                if member not in analysis.compiled.members:
+                    raise _No("policy")
+                try:
+                    fields.setdefault(member, mapped(member, "policy"))
+                except _No:
+                    raise _No("policy") from None
+            continue
         predicate = restriction.rule.predicate
         if predicate is None:
             raise _No("policy")
@@ -288,6 +302,24 @@ def _policies(
                 fields.setdefault(member, mapped(member, "policy"))
             except _No:
                 raise _No("policy") from None
+
+
+def link_columns(compiled: Any, dataset: str, path: tuple[str, ...]) -> tuple[str, ...]:  # noqa: ANN401
+    """`dataset`'s own columns in the first step of a propagation path from it: the step written
+    last, since a path runs from the policy's dataset (`Restriction.path`). A step this proof
+    does not know is no proof."""
+    found = compiled.ossie.document.get("relationships", ())
+    relationships = {
+        sql.normalize(str(r["name"])): r for r in (found if isinstance(found, tuple) else ())
+    }
+    related = relationships.get(sql.normalize(path[-1])) if path else None
+    if related is None:
+        raise _No("policy")
+    if sql.normalize(str(related["from"])) == dataset:
+        return tuple(str(c) for c in related["from_columns"])
+    if sql.normalize(str(related["to"])) == dataset:
+        return tuple(str(c) for c in related["to_columns"])
+    raise _No("policy")
 
 
 def _fields(node: object) -> list[str]:

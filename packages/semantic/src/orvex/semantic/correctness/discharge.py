@@ -427,9 +427,25 @@ def _equivalent(p: _Plan, o: Obligation) -> str:
         raise DischargeError(f"{name} answers no metric over metrics, window or total")
     placement = plan.placement
     for restriction in placement.of(candidate.base) if placement else ():
-        if restriction.path:
-            raise DischargeError(f"{name} cannot carry a propagated policy")
+        if restriction.path and not restriction.no_rows:
+            # #354: the base's columns of the first link must be grain fields the table keeps.
+            for column in _first_link(p, candidate.base, restriction.path):
+                if MemberId("field", candidate.base, sql.normalize(column)) not in candidate.fields:
+                    raise DischargeError(f"{name} does not keep the link of a propagated policy")
     return f"rollup:{name}"
+
+
+def _first_link(p: _Plan, dataset: str, path: tuple[str, ...]) -> tuple[str, ...]:
+    """`dataset`'s columns in the first step of a policy's path from it (the step written
+    last), from the model's own relationships."""
+    found = p.compiled.ossie.document.get("relationships", ())
+    for related in found if isinstance(found, tuple) else ():
+        if path and sql.normalize(str(related["name"])) == sql.normalize(path[-1]):
+            if sql.normalize(str(related["from"])) == dataset:
+                return tuple(str(c) for c in related["from_columns"])
+            if sql.normalize(str(related["to"])) == dataset:
+                return tuple(str(c) for c in related["to_columns"])
+    raise DischargeError("a propagated policy's path is not in the model")
 
 
 CHECKERS: Mapping[tuple[str, str], Callable[[_Plan, Obligation], str]] = {

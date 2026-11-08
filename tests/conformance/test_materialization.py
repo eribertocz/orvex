@@ -204,6 +204,37 @@ def policies(compiled: CompiledModel, *rules: Document) -> PolicyModel:
     )
 
 
+def add_mappings(lake: Any, mappings: dict[str, list[tuple[str, ...]]]) -> None:  # noqa: ANN401
+    """Each mapping table, as `schema.name` with its `(user_id, category)` rows."""
+    for table_name, values in mappings.items():
+        with lake.transaction() as transaction:
+            mapping_schema, name_ = table_name.split(".")
+            transaction.execute(
+                StatementRequest(
+                    kind="statement",
+                    sql=f'CREATE SCHEMA IF NOT EXISTS "{mapping_schema}"',
+                    parameters=[],
+                )
+            )
+            transaction.execute(
+                StatementRequest(
+                    kind="statement",
+                    sql=f'CREATE TABLE "{mapping_schema}"."{name_}" '
+                    '("user_id" VARCHAR, "category" VARCHAR)',
+                    parameters=[],
+                )
+            )
+            for row in values:
+                written = ", ".join(f"'{v}'" for v in row)
+                transaction.execute(
+                    StatementRequest(
+                        kind="statement",
+                        sql=f'INSERT INTO "{mapping_schema}"."{name_}" VALUES ({written})',
+                        parameters=[],
+                    )
+                )
+
+
 def run(
     document: Document,
     sales: list[Sale],
@@ -230,33 +261,7 @@ def run(
             paths.append(path)
         placed = {(n if schema is None else f"{schema}.{n}"): tables[n] for n in names}
         with ce.case_lake(paths, placed, schema) as lake:
-            for table_name, values in (mappings or {}).items():
-                with lake.transaction() as transaction:
-                    mapping_schema, name_ = table_name.split(".")
-                    transaction.execute(
-                        StatementRequest(
-                            kind="statement",
-                            sql=f'CREATE SCHEMA IF NOT EXISTS "{mapping_schema}"',
-                            parameters=[],
-                        )
-                    )
-                    transaction.execute(
-                        StatementRequest(
-                            kind="statement",
-                            sql=f'CREATE TABLE "{mapping_schema}"."{name_}" '
-                            '("user_id" VARCHAR, "category" VARCHAR)',
-                            parameters=[],
-                        )
-                    )
-                    for row in values:
-                        written = ", ".join(f"'{v}'" for v in row)
-                        transaction.execute(
-                            StatementRequest(
-                                kind="statement",
-                                sql=f'INSERT INTO "{mapping_schema}"."{name_}" VALUES ({written})',
-                                parameters=[],
-                            )
-                        )
+            add_mappings(lake, mappings or {})
             return ask(document, compiled, lake, evidence=checked(compiled, lake, verified), **more)
 
 
