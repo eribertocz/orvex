@@ -25,6 +25,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import datetime as dt
+import hashlib
 import os
 import select
 import signal
@@ -83,10 +84,67 @@ class _Records:
     maintained: maintenance.Last = field(default_factory=maintenance.Last)
 
 
-def _records(home: Path, place: lake_place.Place) -> _Records:
-    """What the run records say (nothing yet when there is no lake or no record)."""
+Stamp = tuple[tuple[str, int, str], ...]
+
+
+@dataclass(slots=True)
+class _Kept:
+    """The records last read, and the stamp of the catalog files they were read from."""
+
+    stamp: Stamp | None = None
+    records: _Records | None = None
+
+
+# Catalog files larger than this together are not hashed: the records are read every time.
+STAMP_LIMIT = 64 * 1024 * 1024
+
+
+def _stamp(home: Path) -> Stamp | None:
+    """Path, size and content digest of the lake's catalog files (the catalog and its
+    journals): every commit writes one of them. The content, not the modification time, since
+    a coarse file-system clock can give a commit the time of the one before (FAT keeps 2 s).
+    None when the catalog is not a local file (PostgreSQL), is too large or cannot be read:
+    the records are then read every time."""
+    catalog = lake_place.catalog_file(home)
+    if catalog is None:
+        return None
+    try:
+        folder = catalog.parent.resolve()
+        files = sorted(p for p in folder.iterdir() if p.name.startswith(catalog.name))
+        if not files or sum(p.stat().st_size for p in files) > STAMP_LIMIT:
+            return None
+        return tuple((str(p), p.stat().st_size, _digest(p)) for p in files)
+    except OSError:
+        return None
+
+
+def _digest(path: Path) -> str:
+    with path.open("rb") as file:
+        return hashlib.file_digest(file, "sha256").hexdigest()
+
+
+def _records(home: Path, place: lake_place.Place, kept: _Kept | None = None) -> _Records:
+    """What the run records say (nothing yet when there is no lake or no record).
+
+    With `kept`, an idle scheduler does not open the lake again while its catalog files are
+    unchanged since the last read (#382): only a commit changes the records, and a commit
+    changes the catalog or its journal. The records are kept only when the files did not change
+    while they were read."""
     if not lake_place.exists(home):
         return _Records({}, None, ())
+    before = _stamp(home)
+    unchanged = before is not None and kept is not None and kept.stamp == before
+    if unchanged and kept is not None and kept.records is not None:
+        return kept.records
+    found = _read_records(home, place)
+    if kept is not None:
+        after = _stamp(home)
+        settled = before is not None and after == before
+        kept.stamp, kept.records = (before, found) if settled else (None, None)
+    return found
+
+
+def _read_records(home: Path, place: lake_place.Place) -> _Records:
     with project_lock(home):
         lake = commands.open_existing(home, place)
         try:
@@ -146,6 +204,7 @@ class _State:
     decision: tuple[dt.datetime, str] | None = None  # the last one printed (for the heartbeat)
     zone: str | None = None  # the project's, once it has been loaded
     decided: Callable[[], None] = lambda: None  # called after each printed decision
+    kept: _Kept = field(default_factory=_Kept)  # the records, while the lake is unchanged
 
 
 def schedule(
@@ -449,7 +508,7 @@ def _cycle(
     assert checked.place is not None  # a refused lake location is a problem
     place = checked.place
     try:
-        records = _records(home, place)
+        records = _records(home, place, state.kept)
     except commands.ProjectLocked:
         return _report(out, state, ("waiting: another process holds the project",), now)
     except ProjectLoadError as error:
@@ -515,7 +574,9 @@ def _cycle(
     state.last_run_wall, state.last_run_monotonic = now, monotonic()
     selection = Selection(decided.models, "freshness", decided.full_refresh, control)
     previous_start = records.last_run_start
-    if commands.run(folder, identity, out, selection=selection) == 0:
+    ran = commands.run(folder, identity, out, selection=selection)
+    state.kept = _Kept()  # the run may have committed: the records are read again
+    if ran == 0:
         for name in decided.models:
             state.failures.pop(name, None)
             state.held.pop(name, None)

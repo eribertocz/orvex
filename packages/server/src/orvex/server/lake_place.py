@@ -840,6 +840,18 @@ def _unwritable(home: Path, error: OSError) -> ProjectLoadError:
     )
 
 
+def catalog_file(home: Path) -> Path | None:
+    """The catalog file of the project's confirmed DuckDB or SQLite lake; None for a
+    PostgreSQL catalog, an unconfirmed lake or no record."""
+    read = _read_record(home)
+    if read is None or read[1] or _unfinished_default(home, read):
+        return None
+    identity = read[0]
+    if identity.get("catalog") not in {"duckdb", "sqlite"}:
+        return None
+    return Path(str(identity.get("path", "")))
+
+
 def missing_catalog(home: Path) -> str | None:
     """The catalog file of the project's confirmed lake when it is missing (#192): a DuckDB or
     SQLite catalog holds the lake's history, and opening its place again would create a new,
