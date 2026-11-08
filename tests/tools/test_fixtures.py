@@ -65,7 +65,11 @@ def _scope(decorator: ast.expr) -> str | None:
     for keyword in decorator.keywords:
         if keyword.arg == "scope":
             value = keyword.value
-            return value.value if isinstance(value, ast.Constant) else "unknown"
+            return (
+                value.value
+                if isinstance(value, ast.Constant) and isinstance(value.value, str)
+                else "unknown"
+            )
     return None
 
 
