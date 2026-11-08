@@ -9,6 +9,7 @@ not the seconds a busy machine takes to do it.
 
 from __future__ import annotations
 
+import gc
 import os
 import time
 from collections.abc import Callable, Iterator
@@ -27,9 +28,18 @@ LIMIT = 8.0
 def _best(run: Callable[[int], object], size: int, tries: int = 3) -> float:
     best = SAFETY_NET
     for _ in range(tries):  # the fastest: noise only ever adds time
-        started = time.perf_counter()
-        run(size)
-        best = min(best, time.perf_counter() - started)
+        # The cyclic garbage collector walks every object alive in the process, so after other
+        # tests (in a random order) a large run's collections cost in proportion to their heap,
+        # not to its input: measured, 8.2 times for 4 times the input on CI, 4.4 locally.
+        gc.collect()
+        gc.disable()
+        try:
+            started = time.perf_counter()
+            run(size)
+            elapsed = time.perf_counter() - started
+        finally:
+            gc.enable()
+        best = min(best, elapsed)
     assert best < SAFETY_NET
     return best
 
