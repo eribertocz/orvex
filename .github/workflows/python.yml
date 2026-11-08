@@ -111,26 +111,9 @@ jobs:
           # A pull request selects its tests from the change (#391): it needs main's history to
           # compare with; a push to main runs the whole suite and needs only the commit.
           fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: ${{ matrix.python }}
-          # The downloaded wheels are kept between runs: 20 parts would otherwise download
-          # the same lock file 20 times.
-          cache: pip
-          cache-dependency-path: ${{ matrix.lock }}
-      - name: Install from the lock file and the workspace packages
-        run: |
-          python -m pip install --quiet pip==26.2.2
-          python -m pip install --quiet -r ${{ matrix.lock }}
-          for package in packages/*/; do
-            python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
-          done
-      - name: Choose this part's tests (#391)
-        run: python -m tools.ci.select
-        env:
-          PART: ${{ matrix.part }}
-          PYTHON: ${{ matrix.python }}
-      - name: Start a PostgreSQL with TLS for the catalog tests (#120)
+      - name: Start a PostgreSQL with TLS for the catalog tests (#120) and Azurite (#127)
+        # Started before the Python install and waited for after it (#373): the Azurite image
+        # downloads while Python and the lock file install.
         # A certificate authority and a server certificate made for this job only: disposable,
         # never committed, not secrets. The CA file is given to the tests by its path.
         run: |
@@ -160,24 +143,49 @@ jobs:
             --volume "$dir/server.key:/tls/server.key:ro" \
             postgres@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6 \
             -c ssl=on -c ssl_cert_file=/tls/server.crt -c ssl_key_file=/tls/server.key
-          # Ready when it accepts TCP connections (the first start listens on a socket only).
+          echo "STORE_TEST_POSTGRES_TLS_CA=$dir/ca.crt" >> "$GITHUB_ENV"
+          # azurite 3.37.0, blob service only, downloaded and started in the background; its
+          # output goes to a file the wait below shows when it fails.
+          nohup docker run --detach --name azurite --publish 10000:10000 \
+            mcr.microsoft.com/azure-storage/azurite@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5 \
+            azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --skipApiVersionCheck --loose \
+            > "$RUNNER_TEMP/azurite-start.log" 2>&1 &
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+          # The downloaded wheels are kept between runs: 20 parts would otherwise download
+          # the same lock file 20 times.
+          cache: pip
+          cache-dependency-path: ${{ matrix.lock }}
+      - name: Install from the lock file and the workspace packages
+        run: |
+          python -m pip install --quiet pip==26.2.2
+          python -m pip install --quiet -r ${{ matrix.lock }}
+          for package in packages/*/; do
+            python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
+          done
+      - name: Choose this part's tests (#391)
+        run: python -m tools.ci.select
+        env:
+          PART: ${{ matrix.part }}
+          PYTHON: ${{ matrix.python }}
+      - name: Wait for the PostgreSQL with TLS and Azurite
+        # The PostgreSQL is ready when it accepts TCP connections (the first start listens on a
+        # socket only). Azurite's development account is public and disposable, not a secret.
+        run: |
           for attempt in $(seq 60); do
             if docker exec postgres-tls pg_isready -U postgres -h 127.0.0.1 -q; then break; fi
             sleep 1
           done
           docker exec postgres-tls pg_isready -U postgres -h 127.0.0.1
-          echo "STORE_TEST_POSTGRES_TLS_CA=$dir/ca.crt" >> "$GITHUB_ENV"
-      - name: Start Azurite, Azure Storage's emulator, for the lake data tests (#127)
-        # azurite 3.37.0. Its development account is public and disposable, not a secret. Blob
-        # service only.
-        run: |
-          docker run --detach --name azurite --publish 10000:10000 \
-            mcr.microsoft.com/azure-storage/azurite@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5 \
-            azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --skipApiVersionCheck --loose
-          for attempt in $(seq 60); do
+          for attempt in $(seq 120); do
             if curl --silent --output /dev/null http://127.0.0.1:10000/; then break; fi
             sleep 1
           done
+          if ! curl --silent --output /dev/null http://127.0.0.1:10000/; then
+            cat "$RUNNER_TEMP/azurite-start.log"
+            exit 1
+          fi
           key="Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
           echo "STORE_TEST_AZURE_CONNECTION_STRING=DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=$key;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;" >> "$GITHUB_ENV"
       - run: |
