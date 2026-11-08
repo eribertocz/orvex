@@ -172,6 +172,69 @@ class _Writer:
         self.parameters.append({"name": name, "type": kind, "value": value})
         return f"${name}"
 
+    # Dialect hooks: each writes what this dialect writes; another dialect's adapter overrides
+    # only these (and the methods whose meaning differs), never the shape of the statement.
+
+    def column_ref(self, alias: str, dataset: str, name: str) -> str:
+        """A source column of `dataset`, read from the row `alias`."""
+        return f"{quote(alias)}.{quote(name)}"
+
+    def table_sql(self, source: str) -> str:
+        return table(source)
+
+    def cast_to(self, expression: str, kind: str) -> str:
+        """`expression` as the store type `kind` (`contracts/store/v1`)."""
+        return f"CAST({expression} AS {kind})"
+
+    def sum_of(self, expression: str, member: MemberId) -> str:
+        """The sum of a stored column `member` (C8)."""
+        return f"SUM({expression})"
+
+    def latest_first(self, axis: str) -> str:
+        return f"{axis} DESC"
+
+    def list_text(self, values: Any) -> str:  # noqa: ANN401
+        return json.dumps(list(values))
+
+    def bound_list(self, listed: str, kind: str) -> str:
+        """The values of the bound JSON list `listed`, each of the type `kind`."""
+        return f"(SELECT unnest(CAST(CAST({listed} AS JSON) AS {kind}[])))"
+
+    def membership(self, field: str, values: str, negated: bool) -> str:
+        return f"({field} {'NOT ' if negated else ''}IN {values})"
+
+    def power(self, exponent: int) -> str:
+        return _power(exponent)
+
+    def unscaled(self, value: str, scale: int) -> str:
+        return _unscaled(value, scale)
+
+    def rounded(self, a: str, b: str, mode: str) -> str:
+        return _rounded(a, b, mode)
+
+    def shifted(self, value: str, scale: int) -> str:
+        """An integer-valued `DECIMAL(38,0)` moved `scale` digits to the right of the point."""
+        return f"{value} * 0.{'0' * (scale - 1)}1" if scale else value
+
+    def ordered(
+        self,
+        text: str,
+        columns: list[ColumnSpec],
+        checks: list[tuple[str, str]],
+        order: Any,  # noqa: ANN401
+        limit: int | None,
+    ) -> str:
+        """The statement's rows in `order` (none: as they come), cut to `limit` and one more."""
+        if order:
+            text += " ORDER BY " + ", ".join(
+                f"{quote(s.name)} {'DESC' if s.descending else 'ASC'} "
+                f"NULLS {'FIRST' if s.nulls_first else 'LAST'}"
+                for s in order
+            )
+        if limit is not None:
+            text += f" LIMIT {int(limit) + 1}"  # one more row says the page is truncated
+        return text
+
     # members
 
     def field(self, member: MemberId, alias: str) -> str:
@@ -222,9 +285,8 @@ class _Writer:
         """A metric read from the aggregate-table column storing it: its sum, in the metric's
         own type (C8). The same expression a question reads and a consistency check compares."""
         typed = self.compiled.require(metric).typed.type
-        return (
-            f"CAST(SUM({self.field(column, alias)}) AS {encoding(dict(_logical(typed.logical)))})"
-        )
+        written = self.sum_of(self.field(column, alias), column)
+        return self.cast_to(written, encoding(dict(_logical(typed.logical))))
 
     def node(self, node: sql.Node, alias: str, dataset: str, context: str) -> str:
         def again(child: sql.Node) -> str:
@@ -345,7 +407,7 @@ class _Writer:
             return self.field(member, alias)
         if len(parts) == 2 and parts[0] != dataset:
             raise _unsupported()
-        return f"{quote(alias)}.{quote(parts[-1])}"
+        return self.column_ref(alias, dataset, parts[-1])
 
     # predicates
 
@@ -421,7 +483,7 @@ class _Writer:
         # whose fields it keeps as the grain it groups by: each group wholly in or out.
         read = rollup.dataset if rollup is not None and dataset == rollup.base else dataset
         self.reads.append((self.tables[read], dataset if read == dataset else None))
-        relation = table(self.tables[read])
+        relation = self.table_sql(self.tables[read])
         restrictions = self.placement.of(dataset) if self.placement else ()
         if not restrictions:
             return relation
@@ -446,7 +508,7 @@ class _Writer:
                 own, other, target = related["to_columns"], related["from_columns"], related["from"]
             target = sql.normalize(str(target))
             self.reads.append((self.tables[target], None))
-            tables.append(f"{table(self.tables[target])} AS {quote(here)}")
+            tables.append(f"{self.table_sql(self.tables[target])} AS {quote(here)}")
             links += [
                 f"{self.field(MemberId('field', current, sql.normalize(str(a))), at)}"
                 f" = {self.field(MemberId('field', target, sql.normalize(str(b))), here)}"
@@ -491,13 +553,13 @@ class _Writer:
         negated = "NOT " if node.negated else ""
         if isinstance(node, policy_grammar.Exists):
             return f"({negated}{self.flag(bool(found.values))})"
-        listed = self.bind("VARCHAR", json.dumps(list(found.values)))
-        values = f"(SELECT unnest(CAST(CAST({listed} AS JSON) AS {found.type}[])))"
+        listed = self.bind("VARCHAR", self.list_text(found.values))
+        values = self.bound_list(listed, found.type)
         field = self.operand_sql(node.field, dataset, alias)
-        return f"({field} {negated}IN {values})"
+        return self.membership(field, values, node.negated)
 
     def flag(self, value: bool) -> str:
-        return f"CAST({self.bind('VARCHAR', 'true' if value else 'false')} AS BOOLEAN)"
+        return self.cast_to(self.bind("VARCHAR", "true" if value else "false"), "BOOLEAN")
 
     def mapping(self, table: str) -> str:
         if self.values is not None:  # another engine never reads a managed-lake table
@@ -517,13 +579,12 @@ class _Writer:
         if kind == "list":
             if not isinstance(value, tuple) or datatype not in ("Integer", "String"):
                 raise _unsupported()
-            text = self.bind("VARCHAR", json.dumps(list(value)))
-            element = "HUGEINT" if datatype == "Integer" else "VARCHAR"
-            return f"(SELECT unnest(CAST(CAST({text} AS JSON) AS {element}[])))"
+            text = self.bind("VARCHAR", self.list_text(value))
+            return self.bound_list(text, "HUGEINT" if datatype == "Integer" else "VARCHAR")
         if kind == "boolean":
-            return f"CAST({self.bind('VARCHAR', 'true' if value else 'false')} AS BOOLEAN)"
+            return self.cast_to(self.bind("VARCHAR", "true" if value else "false"), "BOOLEAN")
         if kind == "integer" and datatype != "String":
-            return f"CAST({self.bind('VARCHAR', str(value))} AS HUGEINT)"
+            return self.cast_to(self.bind("VARCHAR", str(value)), "HUGEINT")
         return self.bind("VARCHAR", str(value))  # text, or a key compared as text
 
     def scalar_sql(self, operand: Any, other: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
@@ -545,7 +606,7 @@ class _Writer:
         if operand.kind == "boolean":
             return "TRUE" if operand.text.upper() == "TRUE" else "FALSE"
         if operand.kind == "integer":
-            return f"CAST({self.bind('VARCHAR', operand.text)} AS HUGEINT)"
+            return self.cast_to(self.bind("VARCHAR", operand.text), "HUGEINT")
         return self.bind("VARCHAR", operand.text)  # already the literal's value
 
     def condition_sql(self, condition: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
@@ -572,7 +633,7 @@ class _Writer:
             field = self.operand_sql(node.field, dataset, alias)
             datatype = field_datatype(self.compiled, dataset, node.field.name)
             values = self.attribute_value(node.attribute.name, ("list",), datatype)
-            return f"({field} {'NOT ' if node.negated else ''}IN {values})"
+            return self.membership(field, values, node.negated)
         if isinstance(node, g.InSelect | g.Exists) and self.values is not None:
             return self.bound_subquery(node, dataset, alias)
         if isinstance(node, g.InSelect | g.Exists):
@@ -617,7 +678,7 @@ class _Writer:
         return (
             f"(SELECT * FROM {self.relation(source.dataset)} AS {quote('s')}"
             " QUALIFY row_number() OVER "
-            f"(PARTITION BY {partition} ORDER BY {axis} DESC) = 1)"
+            f"(PARTITION BY {partition} ORDER BY {self.latest_first(axis)}) = 1)"
         )
 
     def detail(self) -> PhysicalQuery:
@@ -736,16 +797,12 @@ class _Writer:
             if len(parts) > 1 or plan.derived:
                 raise PlanError("a running total is computed over one fact's aggregation")
             text, columns = self.accumulate(text, columns, checks)
+        order = None
         if plan.totals is not None:
             text = self.by_level(text, columns, checks)
-        elif plan.order:
-            text += " ORDER BY " + ", ".join(
-                f"{quote(s.name)} {'DESC' if s.descending else 'ASC'} "
-                f"NULLS {'FIRST' if s.nulls_first else 'LAST'}"
-                for s in plan.order
-            )
-        if plan.limit is not None:
-            text += f" LIMIT {int(plan.limit) + 1}"  # one more row says the page is truncated
+        else:
+            order = plan.order
+        text = self.ordered(text, columns, checks, order, plan.limit)
         return PhysicalQuery(
             text,
             tuple(self.parameters),
@@ -883,7 +940,7 @@ class _Writer:
                     if aggregate.metric not in rollup.components:
                         raise PlanError("a ratio whose components the aggregate table lacks")
                     stored = rollup.components[aggregate.metric][at]
-                    written = f"SUM({self.field(stored, aggregate.source)})"
+                    written = self.sum_of(self.field(stored, aggregate.source), stored)
                 else:
                     written = self.node(trees[part].node, aggregate.source, dataset, "metric")
                 select.append(f"{written} AS {quote(f'{prefix}{k}')}")
@@ -1201,10 +1258,10 @@ class _Writer:
             # N/10^sn ÷ D/10^sd at scale s is (N·10^(sd+s)) / (D·10^sn); the common power of
             # ten is cancelled first, so no intermediate is larger than it must be.
             common = min(sd + scale, sn)
-            numerator = _unscaled(quote(f"#n{k}"), sn)
-            denominator = _unscaled(quote(f"#d{k}"), sd)
-            scaled.append(f"{numerator} * {_power(sd + scale - common)} AS {quote(f'#a{k}')}")
-            scaled.append(f"{denominator} * {_power(sn - common)} AS {quote(f'#b{k}')}")
+            numerator = self.unscaled(quote(f"#n{k}"), sn)
+            denominator = self.unscaled(quote(f"#d{k}"), sd)
+            scaled.append(f"{numerator} * {self.power(sd + scale - common)} AS {quote(f'#a{k}')}")
+            scaled.append(f"{denominator} * {self.power(sn - common)} AS {quote(f'#b{k}')}")
         middle = f"SELECT *, {', '.join(scaled)} FROM ({inner}) AS {quote('q')}"
         by_name = {column.name: (k, plan) for k, plan, column in ratios}
         outer: list[str] = []
@@ -1218,11 +1275,9 @@ class _Writer:
             division = aggregate.division
             a, b = quote(f"#a{k}"), quote(f"#b{k}")
             scale = int(str(column.logical["scale"])) if column.logical else 0
-            value = f"CAST({_rounded(a, b, division.mode)} AS DECIMAL(38,0))"
-            if scale:
-                value = f"{value} * 0.{'0' * (scale - 1)}1"
+            value = self.shifted(self.cast_to(self.rounded(a, b, division.mode), "DECIMAL(38,0)"), scale)
             outer.append(
-                f"CASE WHEN {b} = 0 THEN NULL ELSE CAST({value} AS {column.encoding}) END"
+                f"CASE WHEN {b} = 0 THEN NULL ELSE {self.cast_to(value, column.encoding)} END"
                 f" AS {quote(column.name)}"
             )
             if division.zero == "reject":
@@ -1261,10 +1316,11 @@ def _scale(logical: Mapping[str, object]) -> int:
     raise _unsupported()  # only an exact component divides exactly
 
 
-def _rounded(a: str, b: str, mode: str) -> str:
+def _rounded(a: str, b: str, mode: str, quotient: str | None = None) -> str:
     """The quotient a / b rounded to an integer in `mode`, from truncating integer division
-    and its remainder; written so that no step can exceed the operands' range."""
-    quotient, rest = f"({a} // {b})", f"({a} % {b})"
+    (`quotient`, the dialect's) and its remainder; written so that no step can exceed the
+    operands' range."""
+    quotient, rest = quotient or f"({a} // {b})", f"({a} % {b})"
     away = f"(CASE WHEN ({a} < 0) <> ({b} < 0) THEN -1 ELSE 1 END)"
     half = f"abs({rest}) >= abs({b}) - abs({rest})"
     above = f"abs({rest}) > abs({b}) - abs({rest})"

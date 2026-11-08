@@ -106,6 +106,9 @@ jobs:
       TRANSFORM_TEST_CLICKHOUSE: http://localhost:8123
       TRANSFORM_TEST_CLICKHOUSE_USER: ci
       TRANSFORM_TEST_CLICKHOUSE_PASSWORD: ci-disposable-database
+      # The ClickHouse dialect adapter's parity tests (P2-31, #225): the same disposable server.
+      SEMANTIC_TEST_CLICKHOUSE: localhost:8123:ci
+      SEMANTIC_TEST_CLICKHOUSE_PASSWORD: ci-disposable-database
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
