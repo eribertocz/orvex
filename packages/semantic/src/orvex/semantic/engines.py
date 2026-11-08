@@ -14,8 +14,9 @@
   anything else is refused before any read with `UNSUPPORTED_OPERATION`, naming it.
 - **Enabled engines.** An entry is usable only with an adapter. `server` supplies adapters only
   for engines whose whole semantic corpus passes with results identical to the managed lake
-  (ADR-0027 §4); none is enabled in this release, so outside the test suite a dataset on
-  another engine is refused (`UNSUPPORTED_OPERATION`, `operation: route`).
+  (ADR-0027 §4), and only with their development switch on until the security suite passes on
+  them (P3-13): otherwise a dataset on another engine is refused (`UNSUPPORTED_OPERATION`,
+  `operation: route`).
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from orvex.semantic.ossie.model import OssieModel
 if TYPE_CHECKING:
     import pyarrow as pa
     from orvex.semantic.adapters.duckdb import PhysicalQuery, PolicyValues
+    from orvex.semantic.evidence import EvidenceRecord
 
 MANAGED = "managed"
 Route = Literal["managed", "existing_ducklake", "live"]
@@ -112,14 +114,19 @@ ALL_MANAGED = Routing({})
 
 
 class ExternalAdapter(Protocol):
-    """What `server` supplies for one enabled Direct Query connection (none in this release).
+    """What `server` supplies for one enabled Direct Query connection.
 
     - `pin()`: the data version every read of one question uses, fixed once, before the first
       read: `{"id", "committed_at", "project"}` for an existing DuckLake snapshot, or
       `{"read_at"}` for a live engine, whose reads are not repeatable.
     - `compile(plan, values)`: the plan's statement in the engine's dialect, with every mapping
       subquery bound from `values` (resolved on the managed lake); it never reads.
-    - `read(...)`: one read-only statement at that version, every value bound."""
+    - `read(...)`: one read-only statement at that version, every value bound.
+    - `estimate(query, restricted)`: the engine's own estimate of the read (`{"rows_scanned"}`),
+      or None without statistics; `QUERY_BUDGET_EXCEEDED` above its budget, before the read,
+      naming the estimate only when no row policy `restricted` it (law 7).
+    - `evidence()`: the evidence records the engine's schedule verified (a live engine's,
+      ADR-0027 §7), each holding until the next verification; none for an existing DuckLake."""
 
     connection: str
     engine: str
@@ -137,6 +144,10 @@ class ExternalAdapter(Protocol):
         batch_size: int,
         timeout_ms: int | None,
     ) -> pa.RecordBatchReader: ...
+
+    def estimate(self, query: PhysicalQuery, restricted: bool) -> Mapping[str, int] | None: ...
+
+    def evidence(self) -> Iterable[EvidenceRecord]: ...
 
 
 def _items(node: Mapping[str, Any], key: str) -> list[Mapping[str, Any]]:

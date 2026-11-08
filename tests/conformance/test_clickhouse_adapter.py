@@ -33,7 +33,7 @@ import pyarrow.compute as pc
 import pyarrow.ipc
 import pytest
 from orvex.contracts.store.v1 import Parameter, ParameterType, StatementRequest
-from orvex.semantic import execution
+from orvex.semantic import execution, external
 from orvex.semantic.adapters import clickhouse as ch
 from orvex.semantic.adapters.clickhouse import exact as ch_exact
 from orvex.semantic.adapters.clickhouse import writer as ch_writer
@@ -641,6 +641,12 @@ class OnClickHouse:
         table = exact(pyarrow.ipc.open_stream(body).read_all(), kinds)
         return pa.RecordBatchReader.from_batches(table.schema, table.to_batches())
 
+    def estimate(self, query: PhysicalQuery, restricted: bool) -> Mapping[str, int] | None:
+        return None
+
+    def evidence(self) -> tuple[()]:
+        return ()
+
 
 def everywhere(compiled: CompiledModel) -> Routing:
     datasets = compiled.ossie.document.get("datasets", ())
@@ -803,7 +809,7 @@ def test_a_null_in_a_deny_list_returns_no_rows(
     server: Server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     values = PolicyValues("BIGINT", ("2", None))
-    real = execution._resolve
+    real = external.resolve
 
     def with_null(*arguments: Any) -> Any:  # noqa: ANN401 - the lake's set, plus a NULL
         found, queries = real(*arguments)
@@ -811,7 +817,7 @@ def test_a_null_in_a_deny_list_returns_no_rows(
             queries
         )
 
-    monkeypatch.setattr(execution, "_resolve", with_null)
+    monkeypatch.setattr(execution, "resolve", with_null)  # where `_execute` looks it up
     deny = rp.DENY | {
         "predicate": "customer_id NOT IN (SELECT zone_id FROM security.user_zone"
         " WHERE user_id = $user_id)"

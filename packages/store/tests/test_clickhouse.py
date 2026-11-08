@@ -292,6 +292,43 @@ def test_table_columns_are_mapped_and_an_unmappable_one_is_named(
     assert code_of(lambda: engine.columns("missing")) == "SOURCE_NOT_FOUND"
 
 
+def test_the_catalog_reads_a_quoted_type_exactly_and_lists_an_unmappable_table_apart(
+    server: Server, database: str, connect: Connect
+) -> None:
+    server.run(
+        f"CREATE TABLE {database}.ok (a Int64, at Nullable(DateTime64(6, 'America/La_Paz')), "
+        "z DateTime('Asia/Kolkata')) ENGINE = Memory"
+    )
+    server.run(f"CREATE TABLE {database}.bad (a Int64, tags Array(String)) ENGINE = Memory")
+    engine = connect()
+    found, refused = engine.catalog()
+    assert [(c.name, c.engine_type, c.type) for c in found["ok"]] == [
+        ("a", "Int64", "BIGINT"),
+        ("at", "Nullable(DateTime64(6, 'America/La_Paz'))", "TIMESTAMPTZ"),
+        ("z", "DateTime('Asia/Kolkata')", "TIMESTAMPTZ"),
+    ]
+    assert [(c.name, c.type) for c in engine.columns("ok")][1] == ("at", "TIMESTAMPTZ")
+    assert set(found) == {"ok"}
+    assert (refused["bad"].code, refused["bad"].details["column"]) == (
+        "UNSUPPORTED_SOURCE_TYPE",
+        "tags",
+    )
+
+
+def test_explain_estimate_counts_a_mergetree_read_and_is_checked_as_a_read(
+    server: Server, database: str, connect: Connect
+) -> None:
+    server.run(f"CREATE TABLE {database}.m (a Int64) ENGINE = MergeTree ORDER BY a")
+    server.run(f"INSERT INTO {database}.m SELECT number FROM numbers(5)")
+    server.run(f"CREATE TABLE {database}.k (a Int64) ENGINE = Memory")
+    engine = connect()
+    bound = [Parameter.model_validate({"name": "p0", "type": "BIGINT", "value": "1"})]
+    rows = engine.estimate("SELECT a FROM m WHERE a >= {p0:Int64}", bound)
+    assert [(r["table"], int(r["rows"])) for r in rows] == [("m", 5)]
+    assert engine.estimate("SELECT a FROM k", []) == []  # not MergeTree: no estimate
+    assert code_of(lambda: engine.estimate("SELECT 1; SELECT 2", [])) == "STORE_STATEMENT_INVALID"
+
+
 EXTREMES = (
     "SELECT toInt64(-9223372036854775808) AS i64, toUInt64(18446744073709551615) AS u64, "
     "toString(toInt128('-99999999999999999999999999999999999999')) AS i128, "

@@ -2,6 +2,7 @@
 
     python -m conformance.runners.semantic_corpus [--through library|http|both|existing-ducklake]
         [--switch-on] [--json <file>]
+    (also: --through clickhouse)
 
 Loads every imported case, checks that it is complete and unchanged, validates its Ossie model
 against the pinned specification, and reports it. Until the engine executes queries (P2-12) every
@@ -10,6 +11,8 @@ asked through the HTTP API, and the run is the required `semantic-corpus` check:
 only when every case loads, none fails, and both ways give the same outcome. Since P2-30 (#399),
 `--through existing-ducklake` also asks every case on an existing DuckLake with a PostgreSQL
 catalog (`corpus_existing_ducklake`) and compares it with the library: the corpus parity.
+Since P2-31 (#225), `--through clickhouse` asks every case on ClickHouse (`corpus_clickhouse`)
+and compares it with the library in the same way.
 """
 
 from __future__ import annotations
@@ -180,6 +183,8 @@ def load_case(
             from conformance.runners.corpus_http import run_case
         elif through == "existing-ducklake":
             from conformance.runners.corpus_existing_ducklake import run_case
+        elif through == "clickhouse":
+            from conformance.runners.corpus_clickhouse import run_case
         else:
             from conformance.runners.corpus_execution import run_case
 
@@ -201,7 +206,8 @@ def run(
     root: Path = ROOT, execute: bool = True, through: str = "library"
 ) -> tuple[list[CaseReport], list[Finding]]:
     """Every case checked, and run for real unless `execute` is false (P2-12), through the
-    library, the HTTP API (`through`, P2-27a) or on an existing DuckLake (P2-30)."""
+    library, the HTTP API (`through`, P2-27a), on an existing DuckLake (P2-30) or on ClickHouse
+    (P2-31)."""
     corpus = root / CORPUS
     findings = check_sources(corpus) + check_vendored(root / OSSIE)
     try:
@@ -226,7 +232,7 @@ def compare(
     library: list[CaseReport], other_way: list[CaseReport], name: str = "http"
 ) -> list[Finding]:
     """A finding for every case that fails either way, or whose outcome differs between the
-    library and the other way `name` (the HTTP API, or an existing DuckLake)."""
+    library and the other way `name` (the HTTP API, an existing DuckLake or ClickHouse)."""
     findings = []
     by_case = {report.case: report for report in other_way}
     for report in library:
@@ -249,26 +255,29 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=ROOT, help=argparse.SUPPRESS)
     parser.add_argument(
         "--through",
-        choices=("library", "http", "both", "existing-ducklake"),
+        choices=("library", "http", "both", "existing-ducklake", "clickhouse"),
         default="library",
         help="ask through the library, the HTTP API, or both and compare them; or through the "
-        "library and on an existing DuckLake, and compare them",
+        "library and on an existing DuckLake or on ClickHouse, and compare them",
     )
     parser.add_argument(
         "--switch-on",
         action="store_true",
-        help="turn the existing-DuckLake development switch on for this run (its variable "
-        "named from identity.toml)",
+        help="turn the Direct Query development switches on for this run (existing DuckLake "
+        "and ClickHouse; their variables named from identity.toml)",
     )
     arguments = parser.parse_args()
     if arguments.switch_on:
         from orvex.server import development_switch
         from orvex.server.identity import load_identity
 
-        os.environ[development_switch.variable(load_identity())] = "1"
+        identity = load_identity()
+        for suffix in (development_switch.SUFFIX, development_switch.CLICKHOUSE_SUFFIX):
+            os.environ[development_switch.variable(identity, suffix)] = "1"
     ways = {
         "both": ("library", "http"),
         "existing-ducklake": ("library", "existing-ducklake"),
+        "clickhouse": ("library", "clickhouse"),
     }.get(arguments.through, (arguments.through,))
     runs = {way: run(arguments.root, through=way) for way in ways}
     reports, findings = runs[ways[0]]

@@ -31,6 +31,7 @@ FUNCTIONS = frozenset(
         "has",
         "if",
         "intDiv",
+        "isNaN",
         "JSONExtract",
         "makeDate32",
         "multiIf",

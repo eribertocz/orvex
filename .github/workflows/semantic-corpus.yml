@@ -2,7 +2,9 @@
 # HTTP API, as JSON and as Arrow. Fails when any case fails, when the two ways disagree, or on any
 # finding (engineering.md §8: required from P2-27). Since P2-30 (#399) the same job also asks
 # every case on an existing DuckLake with a PostgreSQL catalog, with the development switch on,
-# and fails unless each case ends exactly as through the library (corpus parity).
+# and fails unless each case ends exactly as through the library (corpus parity). Since P2-31
+# (#225) it does the same on ClickHouse, on each tested version: the latest stable (26.9, the
+# service) and the current LTS (26.8, run from its release archive, checked by its SHA-512).
 name: semantic-corpus
 
 on:
@@ -23,10 +25,23 @@ permissions:
 jobs:
   semantic-corpus:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     # The existing lake's PostgreSQL catalog (#399); a disposable database, not a secret. Each
     # case creates its own database, owner role and reader role, and drops them.
     services:
+      # ClickHouse 26.9 for the corpus parity on ClickHouse (#225); a disposable server, not a
+      # secret. Each case creates its own database, read-only profile and reader, and drops them.
+      clickhouse:
+        # clickhouse/clickhouse-server:26.9.25.15, the image of python.yml's service
+        image: clickhouse/clickhouse-server@sha256:19bfacb135479a892551a8155cfbbc8211aedf2aa888cd91950b9ee7e76cc7e3
+        env:
+          CLICKHOUSE_USER: ci
+          CLICKHOUSE_PASSWORD: ci-disposable-database
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports: ["8123:8123"]
+        options: >-
+          --health-cmd "clickhouse-client --user ci --password ci-disposable-database --query 'SELECT 1'"
+          --health-interval 2s --health-timeout 5s --health-retries 60
       postgres:
         # postgres:18.6-trixie, the image of python.yml's service
         image: postgres@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
@@ -50,9 +65,42 @@ jobs:
           for package in packages/*/; do
             python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
           done
+      - name: Start ClickHouse 26.8 LTS from its release archive (#225)
+        # The official static build, checked against its pinned SHA-512 before it runs; on port
+        # 8124 beside the 26.9 service, its own data in the runner's temporary folder.
+        run: |
+          version=26.8.30.8
+          archive="clickhouse-common-static-$version-amd64.tgz"
+          dir="$RUNNER_TEMP/clickhouse-$version"
+          mkdir -p "$dir"
+          cd "$dir"
+          curl -fsSL -o "$archive" \
+            "https://github.com/ClickHouse/ClickHouse/releases/download/v$version-lts/$archive"
+          echo "36ae5d4629a19480a009aa278c8625aa3d01935b09c4a3ee3163700e895fc6b53d92f286cf01b90461cc63de0bd45e452153e90ddee61a0fe18f6287c6c7e575  $archive" | sha512sum -c -
+          tar -xzf "$archive"
+          mkdir data
+          cd data
+          nohup "../clickhouse-common-static-$version/usr/bin/clickhouse" server -- \
+            --http_port=8124 --tcp_port=9100 --mysql_port=9104 --postgresql_port=9105 \
+            --interserver_http_port=9109 --logger.level=warning > ../server.log 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -sf http://localhost:8124/ping && exit 0
+            sleep 1
+          done
+          cat ../server.log
+          exit 1
       - run: python -m conformance.runners.semantic_corpus --through both
       - name: Corpus parity on an existing DuckLake, the development switch on (#399)
         run: python -m conformance.runners.semantic_corpus --through existing-ducklake --switch-on
         env:
           CORPUS_POSTGRES: host=localhost port=5432 dbname=postgres user=postgres
           CORPUS_POSTGRES_PASSWORD: ci-disposable-database
+      - name: Corpus parity on ClickHouse 26.9, the development switch on (#225)
+        run: python -m conformance.runners.semantic_corpus --through clickhouse --switch-on
+        env:
+          CORPUS_CLICKHOUSE: localhost:8123:ci
+          CORPUS_CLICKHOUSE_PASSWORD: ci-disposable-database
+      - name: Corpus parity on ClickHouse 26.8 LTS, the development switch on (#225)
+        run: python -m conformance.runners.semantic_corpus --through clickhouse --switch-on
+        env:
+          CORPUS_CLICKHOUSE: localhost:8124:default

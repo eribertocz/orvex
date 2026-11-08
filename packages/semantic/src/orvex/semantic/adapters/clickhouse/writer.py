@@ -18,7 +18,10 @@ never reads data and never transpiles.
   meaning: as `=` comparisons for a list, and, for a bound set, `NULL` membership explicit
   (ClickHouse's `2 NOT IN (1, NULL)` is true). A filter's values are never `NULL`, and its
   `NULL` rows are written apart, so its `IN` keeps the reference's form.
-- **Order.** `NULLS FIRST` or `NULLS LAST` is always written.
+- **Order.** `NULLS FIRST` or `NULLS LAST` is always written. A float is ordered and compared
+  as the reference does: `NaN` above every number and equal to itself (ClickHouse puts `NaN`
+  on the `NULL`s' side and `nan > 1` is false), in the final order, a detail page's keyset and
+  a range filter, so a page never skips a `NaN` row.
 - **Dates.** A date bucket is computed in `Date32` (`toStartOf*` answers a 16-bit `Date`).
 - **The result.** Each column is converted last to its exact store form, exact types checked:
   `HUGEINT`, `UHUGEINT` and `UUID` as text, `TIMESTAMP WITH TIME ZONE` with microseconds in
@@ -113,6 +116,10 @@ class _ClickHouse(_Writer):
         values: Mapping[int, PolicyValues],
     ) -> None:
         super().__init__(plan, values)
+        self.catalog(plan.compiled, columns)
+
+    def catalog(self, compiled: Any, columns: Mapping[str, Iterable[str]]) -> None:  # noqa: ANN401
+        """Each table's exact column names, and every model expression's type."""
         self.levels: list[tuple[str, str]] = []  # a pivot table's sort keys (`by_level`)
         # Each table's columns, by DuckDB's identity of a name (the compiler's), exact.
         self.names: dict[str, dict[str, str]] = {}
@@ -125,7 +132,7 @@ class _ClickHouse(_Writer):
             self.names[source] = exact
         # The type of every expression node of the model, by identity (the compiled trees).
         self.types: dict[int, NodeType] = {}
-        for member in plan.compiled.members.values():
+        for member in compiled.members.values():
             trees = [member.typed.tree, *(v for _, v in member.typed.payload)]
             for tree in trees:
                 if isinstance(tree, TypedNode):
@@ -258,11 +265,10 @@ class _ClickHouse(_Writer):
             f"{_converted(f'{row}.{quote(name)}', kind)} AS {quote(name)}" for name, kind in names
         )
         text = f"SELECT {converted} FROM ({text}) AS {row}"
+        kinds = dict(names)
         if order:
             text += " ORDER BY " + ", ".join(
-                f"{row}.{quote(s.name)} {'DESC' if s.descending else 'ASC'} "
-                f"NULLS {'FIRST' if s.nulls_first else 'LAST'}"
-                for s in order
+                key for s in order for key in _sort_keys(f"{row}.{quote(s.name)}", kinds[s.name], s)
             )
         elif self.levels:  # a pivot table's order (`by_level`)
             text += " ORDER BY " + ", ".join(f"{row}.{quote(n)} {d}" for n, d in self.levels)
@@ -457,6 +463,52 @@ class _ClickHouse(_Writer):
                 return written if scale is None else wide(written, scale)
         raise _unsupported()
 
+    def predicate(self, column: str, predicate: Mapping[str, Any], member: MemberId) -> str:
+        """A float's range as the reference compares it: `NaN` above every number."""
+        logical = self.compiled.require(member).typed.type.logical
+        if predicate["op"] != "range" or logical.datatype != "Float":
+            return super().predicate(column, predicate, member)
+        signs = {"gte": ">=", "gt": ">", "lte": "<=", "lt": "<"}
+        terms = [
+            _float_compared(column, sign, self.value(predicate[key], member))
+            for key, sign in signs.items()
+            if key in predicate
+        ]
+        return "(" + " AND ".join(terms) + ")"
+
+    def after_position(self, encodings: Mapping[str, str]) -> str:
+        """The rows strictly after the cursor's position, as the reference's keyset reads them
+        (`duckdb._Writer.after_position`), a float compared as DuckDB orders it: `NaN` above
+        every number and equal to itself (ClickHouse's `nan > 1` is false, `nan = nan` too)."""
+        plan = self.plan
+        if plan.start is None or len(plan.start) != len(plan.order):
+            raise PlanError("a page position has one value per sort column")
+        alternatives: list[str] = []
+        for at, sort in enumerate(plan.order):
+            column, kind = quote(sort.name), encodings[sort.name]
+            value = plan.start[at]
+            if value is None:
+                after = f"{column} IS NOT NULL" if sort.nulls_first else "FALSE"
+            else:
+                bound = self.typed(value, kind)
+                sign = "<" if sort.descending else ">"
+                comparison = (
+                    _float_compared(column, sign, bound)
+                    if _floating(kind)
+                    else f"{column} {sign} {bound}"
+                )
+                after = (
+                    f"({comparison} OR {column} IS NULL)" if not sort.nulls_first else comparison
+                )
+            equal = [
+                _same(
+                    quote(s.name), self.typed(plan.start[i], encodings[s.name]), encodings[s.name]
+                )
+                for i, s in enumerate(plan.order[:at])
+            ]
+            alternatives.append("(" + " AND ".join([*equal, after]) + ")")
+        return "(" + " OR ".join(alternatives) + ")"
+
     def typed(self, value: object, encoding: str) -> str:
         """A page position, bound as text and read back exactly into its column's type."""
         if value is None:
@@ -511,6 +563,33 @@ def _narrower(reference: LogicalType, declared: LogicalType) -> bool:
 
 def _bits(node: NodeType) -> int:
     return magnitude_bits(_kind(node))
+
+
+def _floating(kind: str) -> bool:
+    return canonical(kind) in ("FLOAT", "DOUBLE")
+
+
+def _sort_keys(column: str, kind: str, sort: Any) -> list[str]:  # noqa: ANN401 - a plan sort
+    """A column's order keys as the reference orders it: a float's `NaN` above every number
+    (ClickHouse puts it with the `NULL`s' side), so `isNaN` is the first key."""
+    way = f"{'DESC' if sort.descending else 'ASC'} NULLS {'FIRST' if sort.nulls_first else 'LAST'}"
+    keys = [f"isNaN({column}) {way}"] if _floating(kind) else []
+    return [*keys, f"{column} {way}"]
+
+
+def _float_compared(column: str, sign: str, value: str) -> str:
+    """`column sign value` for floats as the reference compares them: `NaN` above every number
+    and equal to itself; `NULL` stays unknown."""
+    either = f"isNaN({column}) OR isNaN({value})"
+    return f"if({either}, isNaN({column}) {sign} isNaN({value}), {column} {sign} {value})"
+
+
+def _same(column: str, value: str, kind: str) -> str:
+    """`column` not distinct from `value`, a float's `NaN` equal to `NaN` as in the reference."""
+    same = f"{column} IS NOT DISTINCT FROM {value}"
+    if not _floating(kind):
+        return same
+    return f"({same} OR (isNaN({column}) AND isNaN({value})))"
 
 
 def _converted(column: str, kind: str) -> str:

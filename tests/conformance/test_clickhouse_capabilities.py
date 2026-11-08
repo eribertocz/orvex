@@ -343,9 +343,8 @@ class Disagreeing(base.OnClickHouse):
 
 
 # --- detail_pages: keyset pages at the base grain (P2-24) -------------------------------------
-# Execution refuses a detail page on another engine until a cursor can name its read instant
-# (#225 PR 4), so each page's statement is compared here: the same plan, from the same position,
-# read on each engine.
+# Each page's statement is compared here: the same plan, from the same position, read on each
+# engine. Pages asked through execution and their cursors are `test_clickhouse_engine`'s.
 
 
 def detail_plan(document: Document, start: Any, policy: Any) -> Any:  # noqa: ANN401
@@ -421,16 +420,6 @@ def test_a_masked_field_is_its_mask_on_clickhouse_as_on_the_managed_lake(
 ) -> None:
     found = pages(server, details.query(4), details.policies(column_policies=[details.MASKED]))
     assert {row["region"] for row in found[0]} == {"###"}
-
-
-def test_a_detail_page_on_another_engine_stays_refused_until_its_cursor_names_a_read_instant(
-    server: base.Server,  # noqa: F811
-) -> None:
-    with rp.lake_of() as lake:
-        more = details.Pager(lake).engine()
-        found, _, adapter = parity(server, rp.COMPILED, rp.CATALOG, lake, details.query(), **more)
-    assert found == ("SemanticError", "UNSUPPORTED_OPERATION", {"operation": "detail_pages"})
-    assert adapter.statements == []
 
 
 def test_a_page_position_is_read_back_exactly_into_its_column_type() -> None:

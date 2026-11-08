@@ -40,7 +40,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 import pyarrow as pa
 from orvex.semantic.adapters.duckdb import (
@@ -64,6 +64,32 @@ CONSISTENT = "consistent"
 BATCH_SIZE = 16
 
 Status = Literal["verified", "violated"]
+
+
+class Checks(Protocol):
+    """The evidence statements of one dialect: the DuckDB adapter's for the managed lake and an
+    existing DuckLake (`DUCKDB`), or another engine's adapter's (`adapters.clickhouse`)."""
+
+    def unique(self, compiled: CompiledModel, dataset: str, key: Any) -> EvidenceCheck: ...  # noqa: ANN401
+
+    def overlap(self, compiled: CompiledModel, dataset: str, *rest: Any) -> EvidenceCheck: ...  # noqa: ANN401
+
+    def repeat(self, compiled: CompiledModel, side: str, *rest: Any) -> EvidenceCheck: ...  # noqa: ANN401
+
+    def orphan(self, compiled: CompiledModel, source: str, *rest: Any) -> EvidenceCheck: ...  # noqa: ANN401
+
+    def consistency(self, compiled: CompiledModel, base: str, *rest: Any) -> EvidenceCheck: ...  # noqa: ANN401
+
+
+class _DuckDBChecks:
+    unique = staticmethod(unique_check)
+    overlap = staticmethod(overlap_check)
+    repeat = staticmethod(repeat_check)
+    orphan = staticmethod(orphan_check)
+    consistency = staticmethod(consistency_check)
+
+
+DUCKDB: Checks = _DuckDBChecks()
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,35 +315,37 @@ def _pairs(model: _Model, node: Mapping[str, Any]) -> tuple[tuple[MemberId, Memb
     )
 
 
-def _statements(model: _Model, declaration: Declaration) -> tuple[EvidenceCheck, ...]:
-    """The statements checking one declaration (two for a `one_to_one` cardinality), or
-    `_Unchecked`."""
+def _statements(
+    model: _Model, declaration: Declaration, checks: Checks
+) -> tuple[EvidenceCheck, ...]:
+    """The statements checking one declaration (two for a `one_to_one` cardinality) in the
+    dialect of `checks`, or `_Unchecked`."""
     compiled, name, kind = model.compiled, declaration.name, declaration.kind
     if declaration.element == "dataset":
         if kind == "unique":
-            return (unique_check(compiled, name, _key(model, name)),)
+            return (checks.unique(compiled, name, _key(model, name)),)
         if kind == "non_overlap":
             entity, start, end = _validity(model, name)
-            return (overlap_check(compiled, name, entity, start, end),)
+            return (checks.overlap(compiled, name, entity, start, end),)
         if kind == CONSISTENT:
-            return (_consistency(model, name),)
+            return (_consistency(model, name, checks),)
         raise _Unchecked  # append_only compares two snapshots: `_append_only`, not a statement
     node = model.relationships[name]
     payload = model.payload("relationship", name)
     source, target = sql.normalize(str(node["from"])), sql.normalize(str(node["to"]))
     pairs = _pairs(model, node)
     if kind == "referential_integrity":
-        return (orphan_check(compiled, source, target, pairs),)
+        return (checks.orphan(compiled, source, target, pairs),)
     temporal = payload.get("temporal")
     if isinstance(temporal, Mapping):  # one valid version of each referenced key (C6)
         start = _ref(model, target, temporal["valid_from"])
         end = _ref(model, target, temporal["valid_to"])
         entity = tuple(b for _, b in pairs)
-        return (overlap_check(compiled, target, entity, start, end, (source, pairs)),)
-    checks = [repeat_check(compiled, target, source, pairs)]
+        return (checks.overlap(compiled, target, entity, start, end, (source, pairs)),)
+    found = [checks.repeat(compiled, target, source, pairs)]
     if payload.get("cardinality") == "one_to_one":
-        checks.append(repeat_check(compiled, source, target, tuple((b, a) for a, b in pairs)))
-    return tuple(checks)
+        found.append(checks.repeat(compiled, source, target, tuple((b, a) for a, b in pairs)))
+    return tuple(found)
 
 
 def _ref(model: _Model, dataset: str, reference: object) -> MemberId:
@@ -328,7 +356,7 @@ def _ref(model: _Model, dataset: str, reference: object) -> MemberId:
     return model.member(dataset, name)
 
 
-def _consistency(model: _Model, table: str) -> EvidenceCheck:
+def _consistency(model: _Model, table: str, checks: Checks) -> EvidenceCheck:
     """`consistent`: the table's grain mapped to its base, one field of each conformed
     dimension on each side, and every measure that stores a base metric as the sum of one
     column, as P2-25's proof reads them. Anything else: not checkable, never consistent."""
@@ -362,7 +390,7 @@ def _consistency(model: _Model, table: str) -> EvidenceCheck:
     measures = tuple(sorted(stored_measures(compiled, table, aggregate, base).items()))
     if not measures:
         raise _Unchecked
-    return consistency_check(compiled, base, table, tuple(grain), measures)
+    return checks.consistency(compiled, base, table, tuple(grain), measures)
 
 
 def verify(
@@ -377,6 +405,7 @@ def verify(
     clock: Callable[[], float] = time.monotonic,
     changes: Callable[[Any], Any] | None = None,
     baselines: Mapping[str, int] | None = None,
+    checks: Checks = DUCKDB,
 ) -> Verification:
     """Every declaration of `compiled` (or of the datasets and relationships in `only`, by
     normalized name) checked on `snapshot` through `read` (`store/v1` `ReadRequest`s), within
@@ -384,7 +413,8 @@ def verify(
     or has none left, leaves its evidence `declared`; any other failure is raised.
     `append_only` is checked through `changes` (`store/v1` `ChangesRequest`) against the
     dataset's snapshot in `baselines` (normalized name: the earlier snapshot it was verified
-    on); without one it stays `declared` (`first`)."""
+    on); without one it stays `declared` (`first`). `checks`: the statements' dialect, the
+    engine's that `read` reaches (DuckDB's by default)."""
     from orvex.contracts.store.v1 import Parameter, ReadRequest
 
     model = _Model(compiled)
@@ -403,7 +433,7 @@ def verify(
                 records.append(found)
             continue
         try:
-            statements = _statements(model, declaration)
+            statements = _statements(model, declaration, checks)
         except _Unchecked, SemanticError, PlanError:  # nothing this adapter writes checks it
             skipped.append(Skipped(declaration, "unsupported"))
             continue
