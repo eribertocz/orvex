@@ -48,6 +48,9 @@
     },
     {
       "$ref": "#/$defs/ChangesResult"
+    },
+    {
+      "$ref": "#/$defs/ExistingLakeAttachment"
     }
   ],
   "$defs": {
@@ -1111,6 +1114,58 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/TableChanges"
+          }
+        }
+      }
+    },
+    "ExistingLakeAttachment": {
+      "description": "An existing DuckLake that another system owns and writes, attached read-only in a DuckDB instance of its own (ADR-0027 \u00a73, P2-30). The catalog and sandbox checks are made before any of its data is read; see README, \"Existing DuckLake\".",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "location",
+        "roles_in_use",
+        "protected_files"
+      ],
+      "properties": {
+        "kind": {
+          "const": "existing_lake_attachment"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,62}$",
+          "description": "The connection's name."
+        },
+        "location": {
+          "description": "The lake's catalog and data location. `encrypted` is the owner's setting and is refused here.",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SqliteLakeLocation"
+            },
+            {
+              "$ref": "#/$defs/PostgresLakeLocation"
+            }
+          ]
+        },
+        "roles_in_use": {
+          "description": "Every PostgreSQL role name used by another connection of the instance (catalogs and sources) and by every managed lake's catalog. A PostgreSQL catalog whose role is listed is refused.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "protected_files": {
+          "description": "Absolute paths of the files no SQLite catalog may be a hard link to (the protected set). Each one's -wal, -shm, -journal and .wal files are protected with it.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 4096,
+            "pattern": "^(/|[A-Za-z]:[\\\\/])"
           }
         }
       }

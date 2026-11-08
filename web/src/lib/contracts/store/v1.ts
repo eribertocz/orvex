@@ -17,7 +17,8 @@ export type StoreMessage =
 	| TablesRequest
 	| TablesResult
 	| ChangesRequest
-	| ChangesResult;
+	| ChangesResult
+	| ExistingLakeAttachment;
 /**
  * Where the lake is.
  */
@@ -401,4 +402,26 @@ export interface TableChanges {
 	table: TableName;
 	changed: boolean;
 	removed_rows?: number;
+}
+/**
+ * An existing DuckLake that another system owns and writes, attached read-only in a DuckDB instance of its own (ADR-0027 §3, P2-30). The catalog and sandbox checks are made before any of its data is read; see README, "Existing DuckLake".
+ */
+export interface ExistingLakeAttachment {
+	kind: 'existing_lake_attachment';
+	/**
+	 * The connection's name.
+	 */
+	name: string;
+	/**
+	 * The lake's catalog and data location. `encrypted` is the owner's setting and is refused here.
+	 */
+	location: SqliteLakeLocation | PostgresLakeLocation;
+	/**
+	 * Every PostgreSQL role name used by another connection of the instance (catalogs and sources) and by every managed lake's catalog. A PostgreSQL catalog whose role is listed is refused.
+	 */
+	roles_in_use: string[];
+	/**
+	 * Absolute paths of the files no SQLite catalog may be a hard link to (the protected set). Each one's -wal, -shm, -journal and .wal files are protected with it.
+	 */
+	protected_files: string[];
 }

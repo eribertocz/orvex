@@ -10,6 +10,8 @@ import pytest
 from orvex.contracts.project.v1 import (
     CsvConnection,
     DuckdbConnection,
+    DucklakeConnection,
+    DucklakeSqliteCatalog,
     ParquetConnection,
     PostgresConnection,
     SqliteConnection,
@@ -622,3 +624,184 @@ def test_check_names_a_model_that_reads_a_clickhouse_connection(tmp_path: Path) 
     assert [(p.code, "Direct Query" in p.message) for p in checked.problems] == [
         ("MODEL_REFERENCE_UNKNOWN", True)
     ]
+
+
+# --- Existing DuckLake connections (P2-30 PR 1, #399) ----------------------------------------
+
+DUCKLAKE_POSTGRES = """version: 1
+connections:
+  billing:
+    type: ducklake
+    catalog:
+      type: postgres
+      host: {host}
+      port: 5432
+      database: lakes
+      user: billing_reader
+      password: ${{env:BILLING_CATALOG_PASSWORD}}
+      schema: billing
+{catalog_extra}    data_path: {data_path}
+    read_only: {read_only}
+{extra}"""
+
+
+def ducklake(
+    host: str = "catalog.example.com",
+    catalog_extra: str = "      ssl_mode: verify-full\n",
+    data_path: str = "s3://lakes/billing/",
+    read_only: str = "true",
+    extra: str = "    s3:\n      region: us-east-1\n"
+    "      key_id: ${env:BILLING_KEY}\n      secret: ${env:BILLING_SECRET}\n",
+) -> str:
+    return DUCKLAKE_POSTGRES.format(
+        host=host,
+        catalog_extra=catalog_extra,
+        data_path=data_path,
+        read_only=read_only,
+        extra=extra,
+    )
+
+
+def test_a_ducklake_connection_loads_with_safe_defaults_and_is_direct_query_only(
+    tmp_path: Path,
+) -> None:
+    loaded = load_project(project(tmp_path, connections=ducklake()))
+    connection = loaded.connections["billing"]
+    assert connection.type == "ducklake"
+    assert (connection.schedule, connection.freshness) == ("1h", None)
+    assert loaded.direct == frozenset({"billing"})
+    assert dict(loaded.sources) == {}
+
+
+def test_a_ducklake_sqlite_catalog_and_local_data_are_resolved_against_the_project(
+    tmp_path: Path,
+) -> None:
+    text = (
+        "version: 1\nconnections:\n  billing:\n    type: ducklake\n"
+        "    catalog:\n      type: sqlite\n      path: lakes/billing.sqlite\n"
+        "    data_path: lakes/billing/\n    read_only: true\n    schedule: 5m\n"
+        "    freshness: 2h\n"
+    )
+    folder = project(tmp_path, connections=text)
+    connection = load_project(folder).connections["billing"]
+    assert isinstance(connection, DucklakeConnection)
+    assert isinstance(connection.catalog.root, DucklakeSqliteCatalog)
+    assert connection.catalog.root.path.root == str(folder / "lakes" / "billing.sqlite")
+    assert connection.data_path == str(folder / "lakes" / "billing") + "/"
+    assert (connection.schedule, connection.freshness) == ("5m", "2h")
+
+
+@pytest.mark.parametrize("kind", ["duckdb", "mysql", "quack"])
+def test_a_ducklake_catalog_other_than_postgres_or_sqlite_is_a_schema_error(
+    tmp_path: Path, kind: str
+) -> None:
+    text = (
+        "version: 1\nconnections:\n  billing:\n    type: ducklake\n"
+        f"    catalog:\n      type: {kind}\n      path: lakes/billing.{kind}\n"
+        "    data_path: lakes/billing/\n    read_only: true\n"
+    )
+    assert failure(project(tmp_path, connections=text)).code == "PROJECT_SCHEMA_INVALID"
+
+
+def test_a_ducklake_connection_must_be_read_only(tmp_path: Path) -> None:
+    error = failure(project(tmp_path, connections=ducklake(read_only="false")))
+    assert error.code == "SOURCE_NOT_READ_ONLY"
+
+
+@pytest.mark.parametrize("catalog_extra", ["", "      ssl_mode: disable\n"])
+def test_a_remote_ducklake_catalog_without_verify_full_is_refused(
+    tmp_path: Path, catalog_extra: str
+) -> None:
+    error = failure(project(tmp_path, connections=ducklake(catalog_extra=catalog_extra)))
+    assert error.code == "SOURCE_TLS_REQUIRED"
+    assert error.error.details.path == "/connections/billing/catalog/ssl_mode"
+
+
+def test_a_local_ducklake_catalog_may_go_without_tls(tmp_path: Path) -> None:
+    text = ducklake(host="localhost", catalog_extra="      ssl_mode: disable\n")
+    assert load_project(project(tmp_path, connections=text)).direct == frozenset({"billing"})
+
+
+def test_ducklake_object_storage_over_plain_http_to_another_machine_is_refused(
+    tmp_path: Path,
+) -> None:
+    extra = (
+        "    s3:\n      region: us-east-1\n      endpoint: minio.example.com:9000\n"
+        "      use_ssl: false\n      key_id: ${env:BILLING_KEY}\n"
+        "      secret: ${env:BILLING_SECRET}\n"
+    )
+    error = failure(project(tmp_path, connections=ducklake(extra=extra)))
+    assert error.code == "SOURCE_TLS_REQUIRED"
+    assert error.error.details.path == "/connections/billing/s3/use_ssl"
+    local = extra.replace("minio.example.com", "localhost")
+    assert load_project(project(tmp_path, connections=ducklake(extra=local))).direct
+
+
+@pytest.mark.parametrize(
+    ("data_path", "extra"),
+    [
+        ("s3://lakes/billing/", ""),
+        (
+            "lakes/billing/",
+            "    s3:\n      region: us-east-1\n      key_id: ${env:K}\n      secret: ${env:S}\n",
+        ),
+        (
+            "gs://lakes/billing/",
+            "    s3:\n      region: us-east-1\n      key_id: ${env:K}\n      secret: ${env:S}\n",
+        ),
+        ("https://lakes.example.com/billing/", ""),
+        (
+            "s3://lakes/../billing/",
+            "    s3:\n      region: us-east-1\n      key_id: ${env:K}\n      secret: ${env:S}\n",
+        ),
+    ],
+    ids=["s3-without-settings", "settings-without-s3", "other-kind", "web-url", "dot-dot"],
+)
+def test_a_ducklake_data_path_must_match_its_storage_settings(
+    tmp_path: Path, data_path: str, extra: str
+) -> None:
+    text = ducklake(data_path=data_path, extra=extra)
+    assert failure(project(tmp_path, connections=text)).code == "PROJECT_SCHEMA_INVALID"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    ["    schedule: 4m\n", "    schedule: 0h\n", "    freshness: 1w\n", "    snapshot: 3\n"],
+    ids=["schedule-below-5m", "schedule-zero", "freshness-unit", "unknown-field"],
+)
+def test_a_ducklake_connection_outside_its_schema_is_refused(tmp_path: Path, extra: str) -> None:
+    text = ducklake() + extra
+    assert failure(project(tmp_path, connections=text)).code == "PROJECT_SCHEMA_INVALID"
+
+
+def test_a_ducklake_catalog_password_must_be_a_reference(tmp_path: Path) -> None:
+    text = ducklake().replace("${env:BILLING_CATALOG_PASSWORD}", "s3cret-value")
+    error = failure(project(tmp_path, connections=text))
+    assert error.code == "PROJECT_SCHEMA_INVALID"
+    assert "s3cret-value" not in str(error)
+
+
+def test_a_ducklake_sqlite_catalog_cannot_be_a_url(tmp_path: Path) -> None:
+    text = (
+        "version: 1\nconnections:\n  billing:\n    type: ducklake\n"
+        "    catalog:\n      type: sqlite\n      path: s3://lakes/billing.sqlite\n"
+        "    data_path: /srv/billing/\n    read_only: true\n"
+    )
+    assert failure(project(tmp_path, connections=text)).code == "LAKE_LOCATION_INVALID"
+
+
+@pytest.mark.parametrize("kind", ["nfs4", "fuse.sshfs", None])
+def test_a_ducklake_sqlite_catalog_must_be_on_a_local_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str | None
+) -> None:
+    from orvex.server import project as project_module
+
+    monkeypatch.setattr(project_module, "file_system", lambda path: kind)
+    text = (
+        "version: 1\nconnections:\n  billing:\n    type: ducklake\n"
+        "    catalog:\n      type: sqlite\n      path: /mnt/shared/billing.sqlite\n"
+        "    data_path: /mnt/shared/billing/\n    read_only: true\n"
+    )
+    error = failure(project(tmp_path, connections=text))
+    assert error.code == "LAKE_LOCATION_INVALID"
+    assert error.error.details.path == "/connections/billing/catalog/path"

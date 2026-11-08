@@ -325,24 +325,48 @@ class ClickhouseConnection(BaseModel):
     """
 
 
-class Connection(
-    RootModel[
-        ParquetConnection
-        | CsvConnection
-        | DuckdbConnection
-        | SqliteConnection
-        | PostgresConnection
-        | ClickhouseConnection
-    ]
-):
-    root: (
-        ParquetConnection
-        | CsvConnection
-        | DuckdbConnection
-        | SqliteConnection
-        | PostgresConnection
-        | ClickhouseConnection
+class DucklakePostgresCatalog(BaseModel):
+    """
+    A PostgreSQL catalog, read with a dedicated role that can read nothing outside the catalog schema (checked when the lake is attached).
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
     )
+    type: Literal["postgres"]
+    host: Annotated[str, Field(max_length=253, min_length=1)]
+    port: Annotated[int, Field(ge=1, le=65535)]
+    database: Annotated[str, Field(max_length=128, min_length=1)]
+    user: Annotated[str, Field(max_length=128, min_length=1)]
+    password: SecretReference
+    schema_: Annotated[
+        str | None, Field(alias="schema", max_length=63, pattern="^[a-z_][a-z0-9_]*$")
+    ] = None
+    """
+    PostgreSQL schema holding the catalog tables (DuckLake `METADATA_SCHEMA`); default `public`.
+    """
+    ssl_mode: Literal["verify-full", "disable"] | None = None
+    """
+    libpq `sslmode`: `verify-full`, or `disable` for the local machine only. Absent: libpq's default, accepted on the local machine only.
+    """
+    ssl_root_cert: Annotated[
+        str | None, Field(pattern="^(system|\\$\\{env:[A-Z_][A-Z0-9_]*\\})$")
+    ] = "system"
+    """
+    Certificate authorities that verify the server with `verify-full`: `system` (the default) or `${env:NAME}`, a variable holding the path of a CA file.
+    """
+
+
+class DucklakeSqliteCatalog(BaseModel):
+    """
+    A SQLite catalog file on a local disk (the mount rule of `lake.catalog`); a relative path is resolved against the project folder.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    type: Literal["sqlite"]
+    path: CatalogPath
 
 
 class ProjectError(BaseModel):
@@ -379,20 +403,10 @@ class LakeData(BaseModel):
     azure: AzureStorage | None = None
 
 
-class ConnectionsFile(BaseModel):
+class DucklakeCatalog(RootModel[DucklakePostgresCatalog | DucklakeSqliteCatalog]):
+    root: DucklakePostgresCatalog | DucklakeSqliteCatalog
     """
-    `connections.yaml`: data sources by name. A name becomes a SQL schema, so it follows identifier rules and cannot be `lake`.
-    """
-
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    version: Literal[1]
-    connections: dict[
-        Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,62}$")], Connection
-    ]
-    """
-    Connections by name. A name becomes a SQL schema: lowercase identifier, not `lake`.
+    The existing lake's catalog: PostgreSQL or a SQLite file. A DuckDB-file catalog is refused (its owner's writer would conflict with this reader), and so are MySQL and Quack catalogs (ADR-0027 §3).
     """
 
 
@@ -409,6 +423,36 @@ class Lake(BaseModel):
     encrypted: bool | None = False
     """
     DuckLake data-file encryption, fixed when the lake is created. The keys are stored in the catalog: encryption protects the files only from someone without catalog access.
+    """
+
+
+class DucklakeConnection(BaseModel):
+    """
+    An existing DuckLake, owned and written by another system, queried in place (Direct Query, ADR-0027 §3): datasets of the semantic model name it as their `connection`; transformation models never read it. It is attached read-only, in a DuckDB instance of its own and inside a file sandbox (`contracts/store/v1`, "Existing DuckLake"). A PostgreSQL catalog on a host other than the local machine needs `ssl_mode: verify-full`, and object storage with `use_ssl: false` is accepted only on the local machine; the loader refuses them otherwise with `SOURCE_TLS_REQUIRED`.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    type: Literal["ducklake"]
+    catalog: DucklakeCatalog
+    data_path: Annotated[str, Field(max_length=4096, min_length=1)]
+    """
+    Where the lake's data files are, exactly as its catalog records them: a local folder (a relative path is resolved against the project folder) or `s3://`, `gs://` or `az://` with the settings block of its kind (`s3`, `gcs` or `azure`, as in `lake.data`).
+    """
+    s3: S3Storage | None = None
+    gcs: GcsStorage | None = None
+    azure: AzureStorage | None = None
+    read_only: ReadOnly
+    schedule: Annotated[str | None, Field(pattern="^(([5-9]|[1-9][0-9]+)m|[1-9][0-9]*[hd])$")] = (
+        "1h"
+    )
+    """
+    How often a new snapshot is looked for and verified (ADR-0027 §7): `<n>m`, `<n>h` or `<n>d`, at least `5m`.
+    """
+    freshness: Annotated[str | None, Field(pattern="^[1-9][0-9]*[mhd]$")] = None
+    """
+    Optional: the age of the served snapshot (`<n>m`, `<n>h` or `<n>d`) after which its state turns amber.
     """
 
 
@@ -438,6 +482,45 @@ class ProjectFile(BaseModel):
     retention: Retention | None = None
     lineage: Lineage | None = None
     lake: Lake | None = None
+
+
+class Connection(
+    RootModel[
+        ParquetConnection
+        | CsvConnection
+        | DuckdbConnection
+        | SqliteConnection
+        | PostgresConnection
+        | ClickhouseConnection
+        | DucklakeConnection
+    ]
+):
+    root: (
+        ParquetConnection
+        | CsvConnection
+        | DuckdbConnection
+        | SqliteConnection
+        | PostgresConnection
+        | ClickhouseConnection
+        | DucklakeConnection
+    )
+
+
+class ConnectionsFile(BaseModel):
+    """
+    `connections.yaml`: data sources by name. A name becomes a SQL schema, so it follows identifier rules and cannot be `lake`.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    version: Literal[1]
+    connections: dict[
+        Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,62}$")], Connection
+    ]
+    """
+    Connections by name. A name becomes a SQL schema: lowercase identifier, not `lake`.
+    """
 
 
 class ProjectDocument(RootModel[ProjectFile | ConnectionsFile | ProjectError]):

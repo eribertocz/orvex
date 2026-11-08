@@ -1,0 +1,1 @@
+{"version": 1, "connections": {"billing": {"type": "ducklake", "catalog": {"type": "duckdb", "path": "/srv/lakes/billing.ducklake"}, "data_path": "/srv/lakes/billing/", "read_only": true}}}

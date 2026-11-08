@@ -120,6 +120,9 @@
         },
         {
           "$ref": "#/$defs/ClickhouseConnection"
+        },
+        {
+          "$ref": "#/$defs/DucklakeConnection"
         }
       ]
     },
@@ -647,6 +650,142 @@
           "pattern": "^([1-9][0-9]*)(h|d)$",
           "default": "1d",
           "description": "How often the evidence the model relies on is verified on this live engine (ADR-0027 §7): `<n>h` or `<n>d`, at least `1h`."
+        }
+      }
+    },
+    "DucklakeConnection": {
+      "description": "An existing DuckLake, owned and written by another system, queried in place (Direct Query, ADR-0027 §3): datasets of the semantic model name it as their `connection`; transformation models never read it. It is attached read-only, in a DuckDB instance of its own and inside a file sandbox (`contracts/store/v1`, \"Existing DuckLake\"). A PostgreSQL catalog on a host other than the local machine needs `ssl_mode: verify-full`, and object storage with `use_ssl: false` is accepted only on the local machine; the loader refuses them otherwise with `SOURCE_TLS_REQUIRED`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "catalog",
+        "data_path",
+        "read_only"
+      ],
+      "properties": {
+        "type": {
+          "const": "ducklake"
+        },
+        "catalog": {
+          "$ref": "#/$defs/DucklakeCatalog"
+        },
+        "data_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "Where the lake's data files are, exactly as its catalog records them: a local folder (a relative path is resolved against the project folder) or `s3://`, `gs://` or `az://` with the settings block of its kind (`s3`, `gcs` or `azure`, as in `lake.data`)."
+        },
+        "s3": {
+          "$ref": "#/$defs/S3Storage"
+        },
+        "gcs": {
+          "$ref": "#/$defs/GcsStorage"
+        },
+        "azure": {
+          "$ref": "#/$defs/AzureStorage"
+        },
+        "read_only": {
+          "$ref": "#/$defs/ReadOnly"
+        },
+        "schedule": {
+          "type": "string",
+          "pattern": "^(([5-9]|[1-9][0-9]+)m|[1-9][0-9]*[hd])$",
+          "default": "1h",
+          "description": "How often a new snapshot is looked for and verified (ADR-0027 §7): `<n>m`, `<n>h` or `<n>d`, at least `5m`."
+        },
+        "freshness": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*[mhd]$",
+          "description": "Optional: the age of the served snapshot (`<n>m`, `<n>h` or `<n>d`) after which its state turns amber."
+        }
+      }
+    },
+    "DucklakeCatalog": {
+      "description": "The existing lake's catalog: PostgreSQL or a SQLite file. A DuckDB-file catalog is refused (its owner's writer would conflict with this reader), and so are MySQL and Quack catalogs (ADR-0027 §3).",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/DucklakePostgresCatalog"
+        },
+        {
+          "$ref": "#/$defs/DucklakeSqliteCatalog"
+        }
+      ]
+    },
+    "DucklakePostgresCatalog": {
+      "description": "A PostgreSQL catalog, read with a dedicated role that can read nothing outside the catalog schema (checked when the lake is attached).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "host",
+        "port",
+        "database",
+        "user",
+        "password"
+      ],
+      "properties": {
+        "type": {
+          "const": "postgres"
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "database": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "user": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "password": {
+          "$ref": "#/$defs/SecretReference"
+        },
+        "schema": {
+          "description": "PostgreSQL schema holding the catalog tables (DuckLake `METADATA_SCHEMA`); default `public`.",
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "maxLength": 63
+        },
+        "ssl_mode": {
+          "description": "libpq `sslmode`: `verify-full`, or `disable` for the local machine only. Absent: libpq's default, accepted on the local machine only.",
+          "enum": [
+            "verify-full",
+            "disable"
+          ]
+        },
+        "ssl_root_cert": {
+          "description": "Certificate authorities that verify the server with `verify-full`: `system` (the default) or `${env:NAME}`, a variable holding the path of a CA file.",
+          "type": "string",
+          "pattern": "^(system|\\$\\{env:[A-Z_][A-Z0-9_]*\\})$",
+          "default": "system"
+        }
+      }
+    },
+    "DucklakeSqliteCatalog": {
+      "description": "A SQLite catalog file on a local disk (the mount rule of `lake.catalog`); a relative path is resolved against the project folder.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "path"
+      ],
+      "properties": {
+        "type": {
+          "const": "sqlite"
+        },
+        "path": {
+          "$ref": "#/$defs/CatalogPath"
         }
       }
     }

@@ -1,0 +1,1 @@
+{"kind": "existing_lake_attachment", "name": "billing", "location": {"kind": "lake_location", "catalog": "sqlite", "path": "/srv/lakes/billing.sqlite", "data_path": "/srv/lakes/billing/"}, "roles_in_use": [], "protected_files": ["catalog.ducklake"]}

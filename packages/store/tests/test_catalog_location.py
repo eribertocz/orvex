@@ -23,16 +23,13 @@ from orvex.contracts.store.v1 import (
     StatementRequest,
 )
 from orvex.store.errors import StoreError
-from orvex.store.lake import (
+from orvex.store.lake import Lake, Limits, _sandbox_entries, open_lake
+from orvex.store.locations import (
     AnyLakeLocation,
-    Lake,
-    Limits,
     _conninfo,
     _inline_secret,
     _require_tls,
-    _sandbox_entries,
     _with_root_cert,
-    open_lake,
 )
 
 LIMITS = Limits(
