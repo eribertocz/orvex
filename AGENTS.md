@@ -12,7 +12,7 @@ This file is read by the AI coding agent (Claude Code). It is the operational su
 
 | Role | Who | Responsibilities |
 |---|---|---|
-| **Owner** | @eribertocz (human) | Decides product; approves each phase's batch of new behaviors; merges every pull request touching governed paths (all documentation under `docs/` except end-user docs, `AGENTS.md`, `CLAUDE.md`, `identity.toml`, `LICENSE`, `NOTICE`, normative conformance cases and CI workflows — the binding list is in [`docs/process/git-workflow.md`](docs/process/git-workflow.md) §2); approves `beta.1`, every `rc`, `v1.0.0` and stable patches; validates features in phase demos |
+| **Owner** | @eribertocz (human) | Decides product; approves each phase's batch of new behaviors; merges every pull request touching governed paths (all documentation under `docs/` except end-user docs, `AGENTS.md`, `CLAUDE.md`, `identity.toml`, `LICENSE`, `NOTICE`, normative conformance cases, CI workflows and the file-size ceilings — the binding list is in [`docs/process/git-workflow.md`](docs/process/git-workflow.md) §2); approves `beta.1`, every `rc`, `v1.0.0` and stable patches; validates features in phase demos |
 | **Agent** | Claude Code | **Specifies and implements**: creates milestones and issues, keeps the next three issues fully specified, implements one issue at a time, runs an independent Reviewer pass on critical work, merges pull requests outside governed paths, prepares releases and creates tags |
 | **Reviewer** | A subagent launched by the Agent with clean context and the instructions in [`docs/process/review.md`](docs/process/review.md) | Verifies tier A pull requests independently; posts a `[Reviewer]` verdict |
 

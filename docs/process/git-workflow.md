@@ -38,6 +38,7 @@ NOTICE
 conformance/semantic-corpus/
 conformance/security/scenarios/
 .github/workflows/
+tools/checks/file-size-exceptions.toml   the ceilings of oversized files: only the Owner may raise one (2026-11-08)
 ```
 
 ## 3. Branches, commits and pull requests
