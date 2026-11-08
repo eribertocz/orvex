@@ -83,10 +83,57 @@ class _Records:
     maintained: maintenance.Last = field(default_factory=maintenance.Last)
 
 
-def _records(home: Path, place: lake_place.Place) -> _Records:
-    """What the run records say (nothing yet when there is no lake or no record)."""
+Stamp = tuple[tuple[str, int, int], ...]
+
+
+@dataclass(slots=True)
+class _Kept:
+    """The records last read, and the stamp of the catalog files they were read from."""
+
+    stamp: Stamp | None = None
+    records: _Records | None = None
+
+
+def _stamp(home: Path) -> Stamp | None:
+    """Name, size and modification time of the lake's catalog files (the catalog and its
+    journals): a commit changes one of them. None when the catalog is not a local file
+    (PostgreSQL), or it cannot be read: the records are then read every time."""
+    catalog = lake_place.catalog_file(home)
+    if catalog is None:
+        return None
+    try:
+        files = sorted(p for p in catalog.parent.iterdir() if p.name.startswith(catalog.name))
+        return tuple((p.name, *_size_and_time(p)) for p in files)
+    except OSError:
+        return None
+
+
+def _size_and_time(path: Path) -> tuple[int, int]:
+    found = path.stat()
+    return found.st_size, found.st_mtime_ns
+
+
+def _records(home: Path, place: lake_place.Place, kept: _Kept | None = None) -> _Records:
+    """What the run records say (nothing yet when there is no lake or no record).
+
+    With `kept`, an idle scheduler does not open the lake again while its catalog files are
+    unchanged since the last read (#382): only a commit changes the records, and a commit
+    changes the catalog or its journal. The records are kept only when the files did not change
+    while they were read."""
     if not lake_place.exists(home):
         return _Records({}, None, ())
+    before = _stamp(home)
+    unchanged = before is not None and kept is not None and kept.stamp == before
+    if unchanged and kept is not None and kept.records is not None:
+        return kept.records
+    found = _read_records(home, place)
+    if kept is not None:
+        after = _stamp(home)
+        kept.stamp, kept.records = (before, found) if after == before else (None, None)
+    return found
+
+
+def _read_records(home: Path, place: lake_place.Place) -> _Records:
     with project_lock(home):
         lake = commands.open_existing(home, place)
         try:
@@ -146,6 +193,7 @@ class _State:
     decision: tuple[dt.datetime, str] | None = None  # the last one printed (for the heartbeat)
     zone: str | None = None  # the project's, once it has been loaded
     decided: Callable[[], None] = lambda: None  # called after each printed decision
+    kept: _Kept = field(default_factory=_Kept)  # the records, while the lake is unchanged
 
 
 def schedule(
@@ -449,7 +497,7 @@ def _cycle(
     assert checked.place is not None  # a refused lake location is a problem
     place = checked.place
     try:
-        records = _records(home, place)
+        records = _records(home, place, state.kept)
     except commands.ProjectLocked:
         return _report(out, state, ("waiting: another process holds the project",), now)
     except ProjectLoadError as error:
@@ -522,7 +570,7 @@ def _cycle(
         return 1.0
     after = clock()
     try:
-        latest: _Records | None = _records(home, place)
+        latest: _Records | None = _records(home, place, state.kept)
     except commands.ProjectLocked, ProjectLoadError, StoreError:
         latest = None
     if latest is None or latest.last_run_start in {None, previous_start}:

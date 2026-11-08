@@ -11,10 +11,11 @@ import io
 import itertools
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import duckdb
 import pytest
-from orvex.server import commands, scheduler
+from orvex.server import commands, lake_place, scheduler
 from orvex.server.cli import main
 from orvex.server.identity import Identity, load_identity
 from orvex.server.scheduler import schedule
@@ -316,7 +317,7 @@ def test_unreadable_records_never_crash_or_speed_up_runs(
             raise StoreError("STORE_EXTENSION_UNAVAILABLE", "unavailable", {})
         return scheduler._Records({}, None, ())  # records say nothing: never ran
 
-    monkeypatch.setattr(scheduler, "_records", unreadable)
+    monkeypatch.setattr(scheduler, "_read_records", unreadable)
     out = scheduled(tmp_path, monkeypatch, START + dt.timedelta(minutes=30))
     assert out.count("STORE_EXTENSION_UNAVAILABLE") >= 1
     assert_five_minutes_apart(records(tmp_path))
@@ -395,3 +396,101 @@ def test_a_failing_model_reading_a_busy_model_is_still_retried(
     assert len(down) == 4  # the first run and three retries
     assert "SCHEDULE_GAVE_UP s.down" in out
     assert_five_minutes_apart(records(tmp_path))
+
+
+# --- #382: an idle scheduler does not open the lake while it is unchanged ------------------------
+
+
+def test_idle_hours_open_the_lake_only_when_its_catalog_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    feed(tmp_path, "valid")
+    write(
+        tmp_path,
+        {
+            "project.yaml": PROJECT,
+            "connections.yaml": CONNECTIONS,
+            "models/s/m.sql": "SELECT * FROM feed.data",
+            "models/s/m.yaml": "version: 1\nfreshness: 1d\n",
+        },
+    )
+    opened: list[int] = []
+    original = commands.open_existing
+
+    def counted(home: Path, place: object) -> object:
+        opened.append(1)
+        return original(home, place)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(commands, "open_existing", counted)
+    out = scheduled(tmp_path, monkeypatch, START + dt.timedelta(hours=3))
+    assert "running s.m" in out
+    # The run and the maintenance after it change the catalog; three idle hours then read the
+    # kept records instead of opening the lake once a minute (about 180 times before #382).
+    assert len(opened) <= 6, len(opened)
+
+
+def test_kept_records_are_read_again_once_the_catalog_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = tmp_path / "lake" / "catalog.ducklake"
+    catalog.parent.mkdir()
+    catalog.write_bytes(b"one")
+    reads: list[int] = []
+
+    def read(_home: Path, _place: object) -> object:
+        reads.append(1)
+        return scheduler._Records({}, None, (str(len(reads)),))
+
+    monkeypatch.setattr(lake_place, "exists", lambda _home: True)
+    monkeypatch.setattr(lake_place, "catalog_file", lambda _home: catalog)
+    monkeypatch.setattr(scheduler, "_read_records", read)
+    kept = scheduler._Kept()
+    place = cast(lake_place.Place, None)
+    assert scheduler._records(tmp_path, place, kept).failed == ("1",)
+    assert scheduler._records(tmp_path, place, kept).failed == ("1",)  # unchanged: kept
+    (catalog.parent / "catalog.ducklake.wal").write_bytes(b"commit")  # a commit's journal
+    assert scheduler._records(tmp_path, place, kept).failed == ("2",)
+    catalog.write_bytes(b"one, then checkpointed")
+    assert scheduler._records(tmp_path, place, kept).failed == ("3",)
+    assert len(reads) == 3
+
+
+def test_records_are_not_kept_when_the_catalog_changes_while_they_are_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = tmp_path / "catalog.sqlite"
+    catalog.write_bytes(b"a")
+    reads: list[int] = []
+
+    def read(_home: Path, _place: object) -> object:
+        reads.append(1)
+        catalog.write_bytes(b"a" * (len(reads) + 1))  # another process commits meanwhile
+        return scheduler._Records({}, None, ())
+
+    monkeypatch.setattr(lake_place, "exists", lambda _home: True)
+    monkeypatch.setattr(lake_place, "catalog_file", lambda _home: catalog)
+    monkeypatch.setattr(scheduler, "_read_records", read)
+    kept = scheduler._Kept()
+    place = cast(lake_place.Place, None)
+    scheduler._records(tmp_path, place, kept)
+    scheduler._records(tmp_path, place, kept)
+    assert len(reads) == 2
+    assert kept.records is None
+
+
+def test_a_catalog_that_is_not_a_local_file_is_read_every_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads: list[int] = []
+    monkeypatch.setattr(lake_place, "exists", lambda _home: True)
+    monkeypatch.setattr(lake_place, "catalog_file", lambda _home: None)  # PostgreSQL
+
+    def read(_home: Path, _place: object) -> object:
+        reads.append(1)
+        return scheduler._Records({}, None, ())
+
+    monkeypatch.setattr(scheduler, "_read_records", read)
+    kept = scheduler._Kept()
+    for _ in range(3):
+        scheduler._records(tmp_path, cast(lake_place.Place, None), kept)
+    assert len(reads) == 3
