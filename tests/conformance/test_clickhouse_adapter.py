@@ -35,6 +35,8 @@ import pytest
 from orvex.contracts.store.v1 import Parameter, ParameterType, StatementRequest
 from orvex.semantic import execution
 from orvex.semantic.adapters import clickhouse as ch
+from orvex.semantic.adapters.clickhouse import exact as ch_exact
+from orvex.semantic.adapters.clickhouse import writer as ch_writer
 from orvex.semantic.adapters.duckdb import PhysicalQuery, PolicyValues, mapping_queries
 from orvex.semantic.adapters.duckdb import compile_plan as duckdb_compile
 from orvex.semantic.compiler.catalog import SourceColumn
@@ -49,6 +51,7 @@ from orvex.semantic.policies import PolicyModel
 from orvex.semantic.query.binding import Limits as QueryLimits
 from orvex.semantic.query.binding import bind_query
 from orvex.semantic.result.descriptors import arrow_type
+from orvex.store.errors import StoreError
 from orvex.store.lake import Lake
 
 from conformance.runners import bi_platform_adapter
@@ -260,7 +263,8 @@ def test_every_value_is_a_typed_placeholder() -> None:
 def test_exact_arithmetic_is_widened_and_never_divided_by_slash() -> None:
     statement = written(question("product", "scaled_total", "doubled_total")).sql
     # Each exact operand widened to 38 digits first: a native product keeps the narrower one.
-    assert 'toDecimal128("t0"."price", 4) * toDecimal128("t0"."rate", 2)' in statement
+    assert 'toDecimal256("t0"."price", 4) * toDecimal256("t0"."rate", 2)' in statement
+    assert "toDecimal128(" not in statement  # 38 digits wrap on a product
     assert "CAST('1.15' AS Decimal(3, 2))" in statement  # never the float literal 1.15
     assert re.search(r"[^']1\.15", statement) is None
     assert " / " not in statement
@@ -278,14 +282,18 @@ def test_a_ratio_is_an_exact_integer_division_rounded_once() -> None:
     assert " / " not in statement
 
 
-def test_a_sum_is_null_over_no_row_and_an_integer_sum_is_int128() -> None:
+def test_a_sum_is_null_over_no_row_and_accumulates_in_256_bits() -> None:
     statement = written(question("total", "big_total")).sql
-    assert 'if(count("t0"."Amount") = 0, NULL, sum("t0"."Amount"))' in statement
-    assert 'sum(CAST("t0"."big" AS Int128))' in statement
+    amount = 'toDecimal256("t0"."Amount", 2)'
+    assert f"if(count({amount}) = 0, NULL, sum({amount}))" in statement
+    big = 'toInt256("t0"."big")'  # 256 bits: no sum of the plan's sizes wraps there
+    assert f"if(count({big}) = 0, NULL, sum({big}))" in statement
     assert "SUM(" not in statement
     filtered = written(question("a_total")).sql  # a filtered sum: NULL when no row passes
     assert re.search(
-        r'if\(countIf\("t0"\."Amount", (.+)\) = 0, NULL, sumIf\("t0"\."Amount", \1\)\)', filtered
+        r'if\(countIf\(toDecimal256\("t0"\."Amount", 2\), (.+)\) = 0, NULL, '
+        r'sumIf\(toDecimal256\("t0"\."Amount", 2\), \1\)\)',
+        filtered,
     )
 
 
@@ -326,8 +334,8 @@ def test_each_result_column_is_converted_to_its_exact_store_form_after_ordering(
     query = written(question("big_total", "rows", group_by=["label"]))
     assert query.sql.startswith(
         'SELECT CAST("#r"."label" AS String) AS "label", '
-        'toString(CAST("#r"."big_total" AS Int128)) AS "big_total", '
-        'CAST("#r"."rows" AS Int64) AS "rows" FROM ('
+        f'toString({ch_exact.checked('"#r"."big_total"', "HUGEINT")}) AS "big_total", '
+        f'{ch_exact.checked('"#r"."rows"', "BIGINT")} AS "rows" FROM ('
     )
     assert query.sql.endswith(' AS "#r" ORDER BY "#r"."label" ASC NULLS LAST')
     assert query.adapter == "clickhouse"
@@ -466,6 +474,15 @@ PROFILE = {
 }
 
 
+class EngineFailure(AssertionError):
+    """An error the server answered, with its ClickHouse code."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        found = re.match(r"Code: (\d+)\. ", text)
+        self.code = found.group(1) if found else ""
+
+
 @dataclass
 class Server:
     host: str
@@ -493,7 +510,9 @@ class Server:
                 body: bytes = response.read()
                 return body
         except urllib.error.HTTPError as error:
-            raise AssertionError(error.read().decode()[:2000]) from None
+            with error:
+                text = error.read().decode()[:2000]
+            raise EngineFailure(text) from None
 
 
 @pytest.fixture(scope="module")
@@ -625,11 +644,18 @@ class OnClickHouse:
             raise AssertionError("a statement this adapter did not compile")
         self.statements.append((statement, tuple(parameters)))
         assert placeholders(statement) == {p["name"] for p in parameters}
-        body = self.server.run(
-            statement + "\nFORMAT ArrowStream",
-            bound(parameters),
-            as_reader=self.server.reader,  # type: ignore[attr-defined]
-        )
+        try:
+            body = self.server.run(
+                statement + "\nFORMAT ArrowStream",
+                bound(parameters),
+                as_reader=self.server.reader,  # type: ignore[attr-defined]
+            )
+        except (
+            EngineFailure
+        ) as failure:  # as the store's boundary maps it (`orvex.store.clickhouse`)
+            raise StoreError(
+                "STORE_QUERY_FAILED", str(failure), {"engine_code": failure.code}
+            ) from None
         kinds = [(c.name, c.encoding) for c in query.columns]
         kinds += [(n, "BOOLEAN") for n, _ in query.checks]
         table = exact(pyarrow.ipc.open_stream(body).read_all(), kinds)
@@ -877,3 +903,230 @@ def test_a_corpus_case_answers_on_clickhouse_as_on_the_managed_lake(
     )
     assert (outcome.status, compared) == ("pass", [True]), outcome.reason
     assert adapter.statements
+
+
+# Bounds: no result leaves its declared type without an error, as on the managed lake.
+
+HUGE = str(2**127 - 1)
+UHUGE = str(2**128 - 1)
+BOUNDS = {
+    "b": {
+        "id": SourceColumn("BIGINT", False),
+        "k": SourceColumn("VARCHAR", False),
+        "i32": SourceColumn("INTEGER", False),
+        "i64": SourceColumn("BIGINT", False),
+        "i128": SourceColumn("HUGEINT", False),
+        "u128": SourceColumn("UHUGEINT", False),
+        "d9": SourceColumn("DECIMAL(9,2)", False),
+        "d18": SourceColumn("DECIMAL(18,2)", False),
+        "d38": SourceColumn("DECIMAL(38,0)", False),
+        "ts": SourceColumn("TIMESTAMP WITH TIME ZONE", True),
+    }
+}
+BOUND_ROWS: dict[str, list[list[str | None]]] = {
+    # Each type's largest value three times (three wrap back into range in 128 bits), its
+    # smallest once, and small values.
+    "b": [
+        ["1", "max", str(2**31 - 1), str(2**63 - 1), HUGE, UHUGE, "9999999.99",
+         "9999999999999999.99", "9" * 38, "1969-07-20 20:17:40+00"],
+        ["2", "max2", str(2**31 - 1), str(2**63 - 1), HUGE, UHUGE, "9999999.99",
+         "9999999999999999.99", "9" * 38, "2106-02-07 06:28:16+00"],
+        ["5", "max3", str(2**31 - 1), str(2**63 - 1), HUGE, UHUGE, "9999999.99",
+         "9999999999999999.99", "9" * 38, "2000-01-01 00:00:00+00"],
+        # x100 lands at 44 past 2^128: an Int128 product wraps into range there.
+        ["6", "wrap", "1", "1", "1", "1", "0.01", "0.01", str(-(-(2**128) // 100)), None],
+        ["3", "min", str(-(2**31)), str(-(2**63)), str(-(2**127)), "0", "-9999999.99",
+         "-9999999999999999.99", "-" + "9" * 38, None],
+        ["4", "small", "3", "5", "7", "11", "0.01", "0.02", "13", "2024-02-29 23:59:59.999999+00"],
+    ]
+}  # fmt: skip
+BOUND_FIELDS = {
+    "i32_twice": "i32 * 2",
+    "i64_twice": "i64 * 2",
+    "i128_next": "i128 + 1",
+    "i128_negated": "-i128",
+    "d38_next": "d38 + 1",
+    "d9_twice": "d9 * 2",
+    "i32_d9": "CAST(i32 AS DECIMAL(9, 2))",
+    "i32_d5": "CAST(i32 AS DECIMAL(5, 2))",
+    "i64_d18": "CAST(i64 AS DECIMAL(18, 2))",
+    "u128_squared": "u128 * u128",  # past 76 digits: refused, never wrapped
+}
+BOUND_METRICS = {
+    **{f"sum_{name}": f"SUM(b.{name})" for name in ("i32", "i64", "i128", "u128", "d9", "d18")},
+    **{f"sum_{name}": f"SUM(b.{name})" for name in ("d38", *BOUND_FIELDS)},
+    "rows": "COUNT(*)",
+    "d38_per_row": "SUM(b.d38) / COUNT(b.id)",  # at scale 2: the numerator times 10^2
+}
+PER_ROW = {
+    "element": "metric",
+    "additivity": "recomputable",
+    "components": {"numerator": "SUM(b.d38)", "denominator": "COUNT(b.id)"},
+    "zero_denominator": "null",
+    "rounding": {"scale": 2, "mode": "half_away_from_zero"},
+}
+
+
+def bounds_model() -> CompiledModel:
+    columns = BOUNDS["b"]
+    fields = [{"name": c, "expression": {"sql": c}} for c in columns]
+    fields += [{"name": n, "expression": {"sql": e}} for n, e in BOUND_FIELDS.items()]
+    home = {"element": "metric", "home_dataset": "b"}
+    document = {
+        "version": "0.2.0.dev0",
+        "name": "bounds",
+        "datasets": [{"name": "b", "source": "b", "primary_key": ["id"], "fields": fields}],
+        "metrics": [
+            {"name": n, "expression": {"sql": e}}
+            | ({"custom_extensions": [extension(home)]} if "(*)" in e else {})
+            | ({"custom_extensions": [extension(PER_ROW)]} if " / " in e else {})
+            for n, e in BOUND_METRICS.items()
+        ],
+        "custom_extensions": [extension({"element": "model", "default_time_zone": "UTC"})],
+    }
+    loaded = read(json.dumps(document).encode(), "semantic/bounds.ossie.json", VENDORS)
+    return compile_model(loaded, BOUNDS, VENDORS)
+
+
+BOUNDS_MODEL = bounds_model()
+
+
+def of_rows(metric: str, *keys: str, **more: Any) -> Document:  # noqa: ANN401
+    keep = {"type": "text", "value": ""}
+    values = [keep | {"value": k} for k in keys]
+    board = {"scope": "board", "member": "b.k", "predicate": {"op": "in", "values": values}}
+    return question(metric, filters=[board], **more)
+
+
+def both_bounds(server: Server, document: Document) -> tuple[Any, Any]:
+    """(ClickHouse's outcome, the managed lake's): the envelope and rows, or the error."""
+    load(server, BOUNDS, BOUND_ROWS)
+    adapter = OnClickHouse(server, names_of(BOUNDS))
+    outcomes: list[Any] = []
+    with managed(BOUNDS, BOUND_ROWS) as lake:
+        for engine in (
+            ce.engine_for(
+                lake, routing=everywhere(BOUNDS_MODEL), adapters={adapter.connection: adapter}
+            ),
+            ce.engine_for(lake),
+        ):
+            try:
+                found = answer(
+                    json.dumps(document),
+                    BOUNDS_MODEL,
+                    no_policies(BOUNDS_MODEL),
+                    ce.viewer_context(),
+                    engine,
+                )
+                outcomes.append(envelope_and_rows(found))
+            except (StoreError, PlanError) as error:
+                outcomes.append(error)
+    assert adapter.statements  # asked on ClickHouse
+    return outcomes[0], outcomes[1]
+
+
+SINCE_1970 = {"op": "range", "gte": {"type": "timestamp", "value": "1970-01-01T00:00:00Z"}}
+
+
+def bound_question(*metrics: str, group_by: Sequence[str] = ()) -> Document:
+    found = question(*metrics)
+    if group_by:
+        found["group_by"] = [{"member": f"b.{g}"} for g in group_by]
+    return found
+
+
+OVERFLOWS = {  # the reference raises an overflow for each
+    "SUM of HUGEINT": of_rows("sum_i128", "max", "max2", "max3"),
+    "SUM of DECIMAL(38,0)": of_rows("sum_d38", "max", "max2", "max3"),
+    "INTEGER product": of_rows("sum_i32_twice", "max"),
+    "BIGINT product": of_rows("sum_i64_twice", "max"),
+    "HUGEINT increment": of_rows("sum_i128_next", "max"),
+    "HUGEINT negated": of_rows("sum_i128_negated", "min"),
+    "DECIMAL(38,0) increment": of_rows("sum_d38_next", "max"),
+    "INTEGER as DECIMAL(9,2)": of_rows("sum_i32_d9", "max"),
+    "INTEGER as DECIMAL(5,2)": of_rows("sum_i32_d5", "small", "max"),
+    "BIGINT as DECIMAL(18,2)": of_rows("sum_i64_d18", "min"),
+    "a ratio scaled past HUGEINT": of_rows("d38_per_row", "wrap"),
+}
+FITS = {  # each at its type's edge, identical to the reference
+    "SUM of INTEGER and BIGINT maxima": bound_question("sum_i32", "sum_i64"),
+    "SUM of DECIMAL(9,2) and DECIMAL(18,2)": bound_question("sum_d9", "sum_d18", "sum_d9_twice"),
+    # A HUGEINT result travels in 38 digits (`contracts/store/v1`), so its edge is that.
+    "DECIMAL(38,0) at its edges": of_rows("sum_d38", "max", "small", "min")
+    | {"group_by": [{"member": "b.id"}]},
+    "products in the reference's own type": bound_question("sum_d9_twice", "sum_i32"),
+    "INTEGER as DECIMAL(5,2) when it fits": of_rows("sum_i32_d5", "small"),
+    "a TIMESTAMP WITH TIME ZONE key": bound_question("rows", group_by=["ts"]),
+    "a TIMESTAMP WITH TIME ZONE bound": bound_question("rows")
+    | {"filters": [{"scope": "board", "member": "b.ts", "predicate": SINCE_1970}]},
+}
+
+
+@pytest.mark.parametrize("document", OVERFLOWS.values(), ids=list(OVERFLOWS))
+def test_a_value_past_its_declared_type_is_an_error_as_on_the_managed_lake(
+    server: Server, document: Document
+) -> None:
+    found, reference = both_bounds(server, document)
+    assert isinstance(reference, StoreError), reference
+    assert re.search("Overflow|Could not cast", str(reference.details)), reference.details
+    assert isinstance(found, StoreError), found  # never a wrapped or widened value
+    assert found.code == reference.code == "STORE_QUERY_FAILED"
+    assert dict(found.details)["engine_code"] == "395", found  # throwIf, `exact.checked`
+    assert ch.OUT_OF_RANGE in str(found)
+
+
+@pytest.mark.parametrize("document", FITS.values(), ids=list(FITS))
+def test_a_value_at_its_declared_type_s_edge_answers_as_the_managed_lake(
+    server: Server, document: Document
+) -> None:
+    found, reference = both_bounds(server, document)
+    assert not isinstance(reference, Exception), reference
+    assert found == reference
+
+
+def test_a_sum_of_uhugeint_is_exact_or_an_error_never_wrapped(server: Server) -> None:
+    """`SUM(UHUGEINT)` is a `HUGEINT` (the type checker's rule). The reference answers it as a
+    `DOUBLE`, which it refuses (a defect of DuckDB recorded apart), so ClickHouse is held to
+    the declared type alone: exact within it, an error past it."""
+    small, _ = both_bounds(server, of_rows("sum_u128", "small", "min"))
+    assert small[1] == [["11"]]
+    wide, reference = both_bounds(server, of_rows("sum_u128", "max"))
+    assert isinstance(reference, PlanError)  # DuckDB's DOUBLE
+    assert isinstance(wide, StoreError)
+    assert dict(wide.details)["engine_code"] == "395"
+
+
+def test_each_spelling_of_a_store_type_is_one_clickhouse_type() -> None:
+    for spelling in ("TIMESTAMPTZ", "timestamp with  time zone", "TIMESTAMP WITH TIME ZONE"):
+        assert ch.engine_type(spelling) == "DateTime64(6, 'UTC')"
+    assert ch.engine_type("decimal(18, 2)") == "Decimal(18, 2)"
+    with pytest.raises(SemanticError):
+        ch.engine_type("TIMESTAMP")  # no zone: no exact ClickHouse form here
+
+
+def test_a_checked_value_stops_past_its_range_and_its_precision() -> None:
+    integer = ch_exact.checked("x", "INTEGER")
+    assert "toDecimal256('-2147483648', 0)" in integer
+    assert "toDecimal256('2147483647', 0)" in integer
+    assert integer.endswith(" AS Int32)")
+    decimal = ch_exact.checked("x", "DECIMAL(5,2)")  # P too: no ClickHouse cast tests it
+    assert "abs(toDecimal256(x, 2)) >= toDecimal256('1000', 0)" in decimal
+    outside = "coalesce(abs(toDecimal256(x, 2)) >= toDecimal256('1000', 0), false)"
+    assert f"throwIf({outside}, '{ch.OUT_OF_RANGE}')" in decimal
+    assert "accurateCast" not in decimal  # it keeps a value past P and refuses NULL
+    assert ch_exact.checked("x", "VARCHAR") == "CAST(x AS String)"
+
+
+def test_a_product_that_could_pass_76_digits_is_refused() -> None:
+    with pytest.raises(SemanticError) as caught:
+        ch.compile_plan(plan_of(question("sum_u128_squared"), BOUNDS_MODEL), names_of(BOUNDS), {})
+    assert caught.value.code == "UNSUPPORTED_OPERATION"
+
+
+def test_a_power_of_ten_past_hugeint_is_checked_and_never_wrapped() -> None:
+    writer = ch_writer._ClickHouse(plan_of(question("rows")), names_of(DIALECT), {})
+    assert writer.power(38) == f"CAST('1{'0' * 38}' AS Int128)"
+    assert writer.power(39) == ch_exact.checked(f"toDecimal256('1{'0' * 39}', 0)", "HUGEINT")
+    assert writer.scaled("v", 2) == ch_exact.checked(
+        f"(toInt256(v) * toInt256({writer.power(2)}))", "HUGEINT"
+    )

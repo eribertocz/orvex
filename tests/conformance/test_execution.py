@@ -507,7 +507,7 @@ SQL_OR_DATA = {
     # `mapping_queries` (P2-29): a plan's mapping subqueries, for the managed lake.
     "orvex.semantic.adapters.duckdb": {"compile_plan", "mapping_queries"},
     # The ClickHouse dialect (P2-31, #225): only a plan the planner issued.
-    "orvex.semantic.adapters.clickhouse": {"compile_plan"},
+    "orvex.semantic.adapters.clickhouse.writer": {"compile_plan"},
 }
 
 

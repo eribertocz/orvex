@@ -1,29 +1,28 @@
-"""The ClickHouse adapter (P2-31, #225; ADR-0027 §8, ADR-0028 §3): a `SemanticPlan` as one
-ClickHouse `SELECT` with bound parameters, for the store's ClickHouse read boundary
-(`contracts/store/v1`, "ClickHouse Direct Query"). It writes the statement the DuckDB adapter
-writes, with the same shape, and encodes every difference of meaning explicitly; it never
-reads data and never transpiles.
+"""The ClickHouse statement of a plan (P2-31, #225; ADR-0027 §8): the statement the DuckDB
+adapter writes, with the same shape, and every difference of meaning encoded explicitly. It
+never reads data and never transpiles.
 
 - **Identifiers.** ClickHouse matches names with their case: each source column is written
   with its exact name in the engine's catalog, never the model's normalized one.
 - **Values.** Every value is a typed placeholder `{pN:Type}` (`Nullable(Type)` for a `NULL`).
   A model's decimal constant is a `Decimal`, never a float (ClickHouse reads `0.5` as one).
-- **Exact arithmetic.** ClickHouse keeps a decimal product at the narrower operand's precision
-  and detects overflow only at its native integer's width, and its integer arithmetic wraps.
-  So every exact operand of `+`, `-` and `*` is widened to `Decimal(38, s)` first; a sum of
-  integers is a sum of `Int128`. `/` between exact values is never written: a ratio is C2's
-  exact division, with `intDiv` and the remainder.
+- **Exact arithmetic.** Every exact operand of `+`, `-` and `*` is carried in 76 digits
+  (`exact.wide`), and every value that may leave its declared type (the type checker's
+  overflow obligation: arithmetic, `SUM`, a narrowing `CAST`) is returned to it by
+  `exact.checked`, which stops the statement past the type's range, as the reference does. A
+  sum accumulates in 256 bits. A product whose operands could exceed 76 digits together is
+  refused. `/` between exact values is never written: a ratio is C2's exact division, with
+  `intDiv`, the remainder, and each step checked against `HUGEINT`.
 - **`NULL`.** A `sum` over no row or only `NULL`s is `NULL`, written as such (ClickHouse gives
   `0` for no row). `IN` and `NOT IN` of an expression are written with SQL's three-valued
   meaning: as `=` comparisons for a list, and, for a bound set, `NULL` membership explicit
   (ClickHouse's `2 NOT IN (1, NULL)` is true). A filter's values are never `NULL`, and its
   `NULL` rows are written apart, so its `IN` keeps the reference's form.
+- **Order.** `NULLS FIRST` or `NULLS LAST` is always written.
 - **Dates.** A date bucket is computed in `Date32` (`toStartOf*` answers a 16-bit `Date`).
-- **The result.** Each column is converted last to its exact store form: `HUGEINT`,
-  `UHUGEINT` and `UUID` as text, `TIMESTAMPTZ` with microseconds in UTC, every other type by
-  an explicit `CAST`; the order is that of the unconverted values.
-- **Functions.** Only `FUNCTIONS` are written; `check_statement` refuses any other, any table
-  function, and any `SETTINGS`, `FORMAT` or `;`.
+- **The result.** Each column is converted last to its exact store form, exact types checked:
+  `HUGEINT`, `UHUGEINT` and `UUID` as text, `TIMESTAMP WITH TIME ZONE` with microseconds in
+  UTC, every other type by an explicit `CAST`; the order is that of the unconverted values.
 - **Capabilities.** `CAPABILITIES`; a plan needing any other is refused before anything is
   written (`UNSUPPORTED_OPERATION`, naming it), as P2-29 defines. `LOWER` and `UPPER` are
   refused: ClickHouse's Unicode case mapping is not DuckDB's (`ß`, a final sigma).
@@ -37,9 +36,22 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from orvex.semantic.adapters.clickhouse.allowlist import check_statement
+from orvex.semantic.adapters.clickhouse.exact import (
+    DECIMAL,
+    WIDE_BITS,
+    canonical,
+    checked,
+    constant,
+    engine_type,
+    exact_kind,
+    magnitude_bits,
+    wide,
+)
+from orvex.semantic.adapters.clickhouse.names import quote_name
 from orvex.semantic.adapters.duckdb import (
     LEVEL,
     PhysicalQuery,
@@ -47,10 +59,12 @@ from orvex.semantic.adapters.duckdb import (
     _rounded,
     _unsupported,
     _Writer,
+    encoding,
     number_parameter,
     quote,
 )
-from orvex.semantic.compiler.catalog import column_key
+from orvex.semantic.catalog.building import _logical
+from orvex.semantic.compiler.catalog import LogicalType, column_key
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.compiler.typecheck import NodeType, TypedNode
 from orvex.semantic.engines import required
@@ -64,26 +78,6 @@ VERSION = "1"
 # What this adapter runs (`engines.CAPABILITIES`); the rest lands with #225 PR 3.
 CAPABILITIES = frozenset({"count_distinct", "exact_decimal"})
 
-_TYPES = {
-    "BOOLEAN": "Bool",
-    "TINYINT": "Int8",
-    "SMALLINT": "Int16",
-    "INTEGER": "Int32",
-    "BIGINT": "Int64",
-    "HUGEINT": "Int128",
-    "UTINYINT": "UInt8",
-    "USMALLINT": "UInt16",
-    "UINTEGER": "UInt32",
-    "UBIGINT": "UInt64",
-    "UHUGEINT": "UInt128",
-    "FLOAT": "Float32",
-    "DOUBLE": "Float64",
-    "VARCHAR": "String",
-    "UUID": "UUID",
-    "DATE": "Date32",
-    "TIMESTAMPTZ": "DateTime64(6, 'UTC')",
-}
-_DECIMAL = re.compile(r"DECIMAL\((\d+),(\d+)\)")
 _EXACT = frozenset({"Integer", "Decimal"})
 _DATE_BUCKETS = {
     "day": "{d}",
@@ -92,94 +86,7 @@ _DATE_BUCKETS = {
     "quarter": "makeDate32(toYear({d}), intDiv(toMonth({d}) - 1, 3) * 3 + 1, 1)",
     "year": "makeDate32(toYear({d}), 1, 1)",
 }
-
-# Every function a statement may call; a name before `(` that is neither one of these nor a
-# keyword is refused, and so is every table function.
-FUNCTIONS = frozenset(
-    {
-        "CAST",
-        "abs",
-        "coalesce",
-        "count",
-        "countIf",
-        "empty",
-        "has",
-        "if",
-        "intDiv",
-        "JSONExtract",
-        "makeDate32",
-        "multiIf",
-        "nullIf",
-        "row_number",
-        "sum",
-        "sumIf",
-        "toDateTime64",
-        "toDecimal128",
-        "toDayOfWeek",
-        "toMonth",
-        "toString",
-        "toYear",
-        "uniqExact",
-        "uniqExactIf",
-    }
-)
-_KEYWORDS = frozenset(
-    {
-        "AND",
-        "AS",
-        "BETWEEN",
-        "BY",
-        "ELSE",
-        "END",
-        "EXISTS",
-        "FROM",
-        "IN",
-        "IS",
-        "JOIN",
-        "NOT",
-        "NULL",
-        "ON",
-        "OR",
-        "OVER",
-        "QUALIFY",
-        "SELECT",
-        "THEN",
-        "WHEN",
-        "WHERE",
-        "CASE",
-        "PARTITION",
-        "DESC",
-        "ASC",
-        "LAST",
-        "FIRST",
-        "NULLS",
-    }
-)
-_TYPE_NAMES = frozenset({"Array", "DateTime64", "Decimal", "DECIMAL", "Nullable"})  # in a CAST
-_TOKENS = re.compile(
-    r"""(?P<string>'(?:[^'\\]|\\.|'')*')"""
-    r"""|(?P<name>"(?:[^"\\]|\\.|"")*")"""
-    r"""|(?P<parameter>\{[A-Za-z_][A-Za-z0-9_]*:[^{}]*\})"""
-    r"""|(?P<word>[A-Za-z_][A-Za-z0-9_]*)"""
-    r"""|(?P<other>\S)""",
-    re.S,
-)
-
-
-def engine_type(kind: str) -> str:
-    """The ClickHouse type of a store type (`contracts/store/v1`, "ClickHouse Direct Query")."""
-    found = _DECIMAL.fullmatch(kind)
-    if found is not None:
-        return f"Decimal({found.group(1)}, {found.group(2)})"
-    if kind not in _TYPES:
-        raise _unsupported()
-    return _TYPES[kind]
-
-
-def quote_name(name: str) -> str:
-    """A name from the engine's catalog: ClickHouse reads a backslash in a quoted name as an
-    escape, so it is escaped too."""
-    return '"' + name.replace("\\", "\\\\").replace('"', '""') + '"'
+_HUGEINT_DIGITS = 38  # 10^38 is the largest power of ten a `HUGEINT` holds
 
 
 def _scale(node: NodeType | None) -> int | None:
@@ -187,6 +94,11 @@ def _scale(node: NodeType | None) -> int | None:
     if node is None or node.logical.datatype not in _EXACT:
         return None
     return int(node.logical.scale or 0) if node.logical.datatype == "Decimal" else 0
+
+
+def _kind(node: NodeType) -> str:
+    """The store type of a typed node (`semantic-result`'s mapping table)."""
+    return encoding(dict(_logical(node.logical)))
 
 
 class _ClickHouse(_Writer):
@@ -238,14 +150,19 @@ class _ClickHouse(_Writer):
         return ".".join(quote_name(part) for part in source.split("."))
 
     def cast_to(self, expression: str, kind: str) -> str:
-        found = _DECIMAL.fullmatch(kind)
-        if found is not None:  # ClickHouse casts no `Int128` to a `Decimal`; this converts all
-            return f"toDecimal128({expression}, {int(found.group(2))})"
-        return f"CAST({expression} AS {engine_type(kind)})"
+        return checked(expression, kind)
 
     def sum_of(self, expression: str, member: MemberId) -> str:
-        integer = self.compiled.require(member).typed.type.logical.datatype == "Integer"
-        return self.total(f"CAST({expression} AS Int128)" if integer else expression, None)
+        logical = self.compiled.require(member).typed.type.logical
+        return self.total(self.accumulated(expression, logical.datatype, logical.scale), None)
+
+    def accumulated(self, value: str, datatype: str | None, scale: int | None) -> str:
+        """A summed value in 256 bits: no sum of the plan's sizes wraps there."""
+        if datatype == "Integer":
+            return f"toInt256({value})"
+        if datatype == "Decimal":
+            return wide(value, int(scale or 0))
+        return value
 
     def total(self, value: str, where: str | None) -> str:
         """`sum`, `NULL` over no row or only `NULL`s: ClickHouse's own gives `0` for no row."""
@@ -275,17 +192,15 @@ class _ClickHouse(_Writer):
         return f"(NOT {test})" if negated else f"({test})"
 
     def power(self, exponent: int) -> str:
+        if exponent > _HUGEINT_DIGITS:  # past `HUGEINT`, as the reference's cast fails
+            return checked(constant(10**exponent), "HUGEINT")
         return f"CAST('1{'0' * exponent}' AS Int128)"
 
     def unscaled(self, value: str, scale: int) -> str:
-        if scale == 0:
-            return f"CAST({value} AS Int128)"
-        wide = f"CAST({value} AS Decimal(38, {scale}))"
-        whole = f"CAST({wide} AS Int128)"  # toward zero, as `trunc`
-        return (
-            f"({whole} * {self.power(scale)}"
-            f" + CAST(({wide} - {whole}) * {self.power(scale)} AS Int128))"
-        )
+        return checked(f"({wide(value, scale)} * {constant(10**scale)})", "HUGEINT")
+
+    def scaled(self, value: str, exponent: int) -> str:
+        return checked(f"(toInt256({value}) * toInt256({self.power(exponent)}))", "HUGEINT")
 
     def rounded(self, a: str, b: str, mode: str) -> str:
         return _rounded(a, b, mode, f"intDiv({a}, {b})")
@@ -338,16 +253,23 @@ class _ClickHouse(_Writer):
                 return node.text
             return f"CAST('{node.text}' AS {engine_type(number_parameter(node.text))})"
         if isinstance(node, sql.Unary) and node.op in ("-", "+"):
-            return f"({node.op}{self.exact(node.operand, again)})"
+            return self.declared(node, f"({node.op}{self.exact(node.operand, again)})")
         if isinstance(node, sql.Binary) and node.op in ("+", "-", "*"):
             left, right = self.types.get(id(node.left)), self.types.get(id(node.right))
-            if _scale(left) is not None and _scale(right) is not None:
+            if (
+                left is not None
+                and right is not None
+                and _scale(left) is not None
+                and (_scale(right) is not None)
+            ):
+                if node.op == "*" and _bits(left) + _bits(right) > WIDE_BITS:
+                    raise _unsupported()  # a product past 76 digits would wrap
                 written = (self.exact(node.left, again), self.exact(node.right, again))
             elif left is not None and right is not None:
                 written = (again(node.left), again(node.right))  # a float's own arithmetic
             else:
                 raise _unsupported()
-            return f"({written[0]} {node.op} {written[1]})"
+            return self.declared(node, f"({written[0]} {node.op} {written[1]})")
         if isinstance(node, sql.Binary) and node.op == "/":
             sides = (self.types.get(id(node.left)), self.types.get(id(node.right)))
             if not all(s is not None and s.logical.datatype == "Float" for s in sides):
@@ -359,6 +281,45 @@ class _ClickHouse(_Writer):
             return f"(NOT ({equal}))" if node.negated else f"({equal})"
         return super().node(node, alias, dataset, context)
 
+    def declared(self, node: sql.Node, written: str) -> str:
+        """An exact value the type checker says may leave its type, checked back into it; an
+        integer the reference computes in a narrower type is checked against that type."""
+        typed = self.types.get(id(node))
+        if typed is None or _scale(typed) is None:
+            return written
+        reference = self.integer_type(node)
+        if reference is not None and _narrower(reference, typed.logical):
+            return checked(written, encoding(dict(_logical(reference))))
+        if not typed.overflow_check:
+            return written
+        return checked(written, _kind(typed))
+
+    def integer_type(self, node: sql.Node) -> LogicalType | None:
+        """The integer type the reference computes `node` in. DuckDB gives an integer literal
+        the type of the integer it meets when it fits there (`TINYINT * 2` is a `TINYINT`),
+        and otherwise the narrowest of `INTEGER`, `BIGINT` and `HUGEINT` that holds it; the
+        result of `+`, `-` and `*` is the wider operand's type. The type checker's own type
+        when the rule does not decide (mixed signs, or no integer)."""
+        typed = self.types.get(id(node))
+        if typed is None or typed.logical.datatype != "Integer":
+            return None
+        if isinstance(node, sql.Number):
+            return _literal(int(node.text)) or typed.logical
+        if isinstance(node, sql.Unary) and node.op in ("-", "+"):
+            return self.integer_type(node.operand) or typed.logical
+        if not (isinstance(node, sql.Binary) and node.op in ("+", "-", "*")):
+            return typed.logical
+        left, right = self.integer_type(node.left), self.integer_type(node.right)
+        if left is None or right is None:
+            return typed.logical
+        if isinstance(node.left, sql.Number) and not isinstance(node.right, sql.Number):
+            left = _adapted(int(node.left.text), right)
+        elif isinstance(node.right, sql.Number) and not isinstance(node.left, sql.Number):
+            right = _adapted(int(node.right.text), left)
+        if left.signed != right.signed or left.width is None or right.width is None:
+            return typed.logical
+        return left if left.width >= right.width else right
+
     def cast(self, node: sql.Cast, again: Any, dataset: str, context: str) -> str:  # noqa: ANN401
         super().cast(node, again, dataset, context)  # the one cast with an exact meaning
         return self.cast_to(
@@ -366,11 +327,11 @@ class _ClickHouse(_Writer):
         )
 
     def exact(self, node: sql.Node, again: Callable[[sql.Node], str]) -> str:
-        """An exact value widened to `Decimal(38, s)`, so no step narrows or wraps it."""
+        """An exact value in 76 digits, so no step narrows or wraps it."""
         scale = _scale(self.types.get(id(node)))
         if scale is None:
             return again(node)
-        return f"toDecimal128({again(node)}, {scale})"  # an `Int128` too, which CAST refuses
+        return wide(again(node), scale)
 
     def call(self, node: sql.Call, again: Any, context: str, dataset: str) -> str:  # noqa: ANN401
         name = node.name.upper()
@@ -391,9 +352,8 @@ class _ClickHouse(_Writer):
                 kind = self.types.get(id(arguments[0]))
                 if kind is None:
                     raise _unsupported()
-                if kind.logical.datatype == "Integer":
-                    value = f"CAST({value} AS Int128)"
-                return self.total(value, where)
+                value = self.accumulated(value, kind.logical.datatype, kind.logical.scale)
+                return self.declared(node, self.total(value, where))
             function = "uniqExact" if distinct else "count"
             if where is None:
                 return f"{function}({value})"
@@ -411,17 +371,52 @@ class _ClickHouse(_Writer):
         return _DATE_BUCKETS[unit].format(d=value)
 
 
+_LITERALS = (32, 64, 128)  # DuckDB's integer literal types, narrowest first
+
+
+def _literal(value: int) -> LogicalType | None:
+    for width in _LITERALS:
+        if value < 2 ** (width - 1):
+            return LogicalType("Integer", width=width, signed=True)
+    return None
+
+
+def _adapted(value: int, other: LogicalType) -> LogicalType:
+    """A literal's type beside the integer `other`: `other`'s when the literal fits there."""
+    width = other.width or 0
+    limit = 2**width if other.signed is False else 2 ** (width - 1)
+    if value < limit:
+        return other
+    return _literal(value) or other
+
+
+def _narrower(reference: LogicalType, declared: LogicalType) -> bool:
+    return (
+        declared.datatype == "Integer"
+        and reference.signed == declared.signed
+        and (reference.width or 0) < (declared.width or 0)
+    )
+
+
+def _bits(node: NodeType) -> int:
+    return magnitude_bits(_kind(node))
+
+
 def _converted(column: str, kind: str) -> str:
-    """A result column in the exact form the store reads it in (`contracts/store/v1`)."""
+    """A result column in the exact form the store reads it in (`contracts/store/v1`), every
+    exact value checked against its declared type."""
+    kind = canonical(kind)
     if kind in ("HUGEINT", "UHUGEINT"):
-        return f"toString(CAST({column} AS {engine_type(kind)}))"
+        return f"toString({checked(column, kind)})"
     if kind == "UUID":
         return f"toString({column})"
-    if kind == "TIMESTAMPTZ":
+    if kind == "TIMESTAMP WITH TIME ZONE":
         return f"toDateTime64({column}, 6, 'UTC')"
-    found = _DECIMAL.fullmatch(kind)
-    if found is not None:  # the store narrows it to its precision, refusing what overflows
-        return f"CAST({column} AS Decimal(38, {int(found.group(2))}))"
+    found = DECIMAL.fullmatch(kind)
+    if found is not None:  # the store reads every decimal at 38 digits, at its scale
+        return f"CAST({checked(column, kind)} AS Decimal(38, {int(found.group(2))}))"
+    if exact_kind(kind):
+        return checked(column, kind)
     return f"CAST({column} AS {engine_type(kind)})"
 
 
@@ -457,112 +452,3 @@ def compile_plan(
         level=query.level,
         reads=query.reads,
     )
-
-
-def check_statement(statement: str, tables: Iterable[str]) -> None:
-    """A statement this adapter may send: one `SELECT`, no `SETTINGS`, `FORMAT` or `;`, every
-    function in `FUNCTIONS`, and every table read one of `tables` or a subquery. Anything else
-    is an internal error, never sent."""
-    allowed = {tuple(_name(part) for part in table.split(".")) for table in tables}
-    tokens = [(m.lastgroup, m.group()) for m in _TOKENS.finditer(statement)]
-    if not tokens or tokens[0] != ("word", "SELECT"):
-        raise PlanError("a ClickHouse statement is one SELECT")
-    for at, (kind, text) in enumerate(tokens):
-        following = tokens[at + 1][1] if at + 1 < len(tokens) else ""
-        if kind == "other" and text == ";":
-            raise PlanError("a ClickHouse statement is one statement")
-        if kind == "word" and text.upper() in ("SETTINGS", "FORMAT", "INTO"):
-            raise PlanError(f"a ClickHouse statement never has {text.upper()}")
-        called = kind == "word" and following == "("
-        if called and text not in FUNCTIONS | _TYPE_NAMES and text.upper() not in _KEYWORDS:
-            raise PlanError(f"a function outside the allow-list: {text}")
-        if (kind == "word" and text.upper() in ("FROM", "JOIN")) or (kind, text) == ("other", ","):
-            if kind == "other" and not _in_from(tokens, at):
-                continue
-            target = _table_at(tokens, at + 1)
-            if target is not None and target not in allowed:
-                raise PlanError("a ClickHouse statement reads a table the model does not name")
-
-
-def _name(written: str) -> str:
-    if written.startswith('"'):
-        return written[1:-1].replace('""', '"').replace("\\\\", "\\")
-    return written
-
-
-def _table_at(tokens: Sequence[tuple[str | None, str]], at: int) -> tuple[str, ...] | None:
-    """The table named at `at` (a subquery: None); a word there is a table function's or a
-    table's bare name, both refused."""
-    if at >= len(tokens) or tokens[at][1] == "(":
-        return None
-    parts: list[str] = []
-    while at < len(tokens) and tokens[at][0] in ("name", "word"):
-        if tokens[at][0] == "word":
-            raise PlanError("a ClickHouse statement reads a table by a bare name")
-        parts.append(_name(tokens[at][1]))
-        if at + 1 < len(tokens) and tokens[at + 1][1] == ".":
-            at += 2
-            continue
-        break
-    return tuple(parts)
-
-
-def _in_from(tokens: Sequence[tuple[str | None, str]], at: int) -> bool:
-    """Whether the comma at `at` separates tables of a `FROM` list at its own depth."""
-    depth = 0
-    for kind, text in reversed(tokens[:at]):
-        if text == ")":
-            depth += 1
-        elif text == "(":
-            if depth == 0:
-                return False
-            depth -= 1
-        elif depth == 0 and kind == "word":
-            upper = text.upper()
-            if upper == "FROM":
-                return True
-            if upper in ("SELECT", "WHERE", "ON", "BY", "JOIN", "QUALIFY"):
-                return False
-    return False
-
-
-# Cost (law 7; ADR-0027 §7): ClickHouse's own estimate of the rows a statement reads.
-
-
-def estimate_statement(query: PhysicalQuery) -> str:
-    """`EXPLAIN ESTIMATE` of the statement, with the same parameters: one row per MergeTree-
-    family table it reads (`database`, `table`, `parts`, `rows`, `marks`); a table of any other
-    engine has no row."""
-    return f"EXPLAIN ESTIMATE {query.sql}"
-
-
-def rows_scanned(
-    query: PhysicalQuery, rows: Sequence[Mapping[str, object]], database: str
-) -> int | None:
-    """The rows the statement reads, from its `EXPLAIN ESTIMATE` rows: each table read counts
-    its estimated rows once per read. A table with no estimate (not MergeTree) means there are
-    no statistics, so no estimate at all (`semantic-engine.md` §8)."""
-    found: dict[tuple[str, str], int] = {}
-    for row in rows:
-        key = (str(row["database"]), str(row["table"]))
-        found[key] = found.get(key, 0) + int(str(row["rows"]))
-    total = 0
-    for source, _ in query.reads:
-        parts = source.split(".")
-        key = (parts[0], parts[1]) if len(parts) == 2 else (database, parts[0])
-        if key not in found:
-            return None
-        total += found[key]
-    return total
-
-
-def refuse_over_budget(estimate: int | None, limit: int, restricted: bool) -> None:
-    """`QUERY_BUDGET_EXCEEDED` (`rows_scanned`) before the read when the estimate is above the
-    budget. The estimate is named only when no row policy restricts a dataset read, since it
-    counts the rows a policy hides (`semantic-error/v1`). No estimate decides nothing."""
-    if estimate is None or estimate <= limit:
-        return
-    details = {"budget": "rows_scanned", "limit": str(limit)}
-    if not restricted:
-        details["estimate"] = str(estimate)
-    raise SemanticError("QUERY_BUDGET_EXCEEDED", details)

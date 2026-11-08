@@ -209,6 +209,10 @@ class _Writer:
     def unscaled(self, value: str, scale: int) -> str:
         return _unscaled(value, scale)
 
+    def scaled(self, value: str, exponent: int) -> str:
+        """`value`, an exact integer, times 10^exponent; an overflow is an error."""
+        return f"{value} * {self.power(exponent)}"
+
     def rounded(self, a: str, b: str, mode: str) -> str:
         return _rounded(a, b, mode)
 
@@ -1260,8 +1264,8 @@ class _Writer:
             common = min(sd + scale, sn)
             numerator = self.unscaled(quote(f"#n{k}"), sn)
             denominator = self.unscaled(quote(f"#d{k}"), sd)
-            scaled.append(f"{numerator} * {self.power(sd + scale - common)} AS {quote(f'#a{k}')}")
-            scaled.append(f"{denominator} * {self.power(sn - common)} AS {quote(f'#b{k}')}")
+            scaled.append(f"{self.scaled(numerator, sd + scale - common)} AS {quote(f'#a{k}')}")
+            scaled.append(f"{self.scaled(denominator, sn - common)} AS {quote(f'#b{k}')}")
         middle = f"SELECT *, {', '.join(scaled)} FROM ({inner}) AS {quote('q')}"
         by_name = {column.name: (k, plan) for k, plan, column in ratios}
         outer: list[str] = []
