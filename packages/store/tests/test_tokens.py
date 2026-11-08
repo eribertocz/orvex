@@ -416,22 +416,12 @@ def wide(columns: int) -> str:
     return f"CREATE TABLE t AS SELECT {items} FROM src"
 
 
-def guard_seconds(sql: str) -> float:
-    functions = table_functions()
-    started = time.perf_counter()
-    _guarded(sql, functions)
-    return time.perf_counter() - started
-
-
 def test_the_statement_checks_take_time_in_proportion_to_the_statement() -> None:
     # #158: each token's end was found by scanning every position, quadratic in the length
-    # (116 KB took 15 s). About 1 MB is checked well within 2 s, 116 KB within 0.5 s.
-    large = wide(18_000)
-    assert len(large) > 1_000_000
-    assert guard_seconds(large) < 2.0
-    assert guard_seconds(wide(2_000)) < 0.5
-    small, big = guard_seconds(wide(2_000)), guard_seconds(wide(8_000))
-    assert big < 8 * small + 0.2, (small, big)
+    # (116 KB took 15 s). Linear up to about 1 MB (#329: proportion, not seconds).
+    assert len(wide(18_000)) > 1_000_000
+    functions = table_functions()
+    linear(lambda columns: _guarded(wide(columns), functions), 4_500)
 
 
 # --- #178: the checks cost a bounded amount --------------------------------------------------

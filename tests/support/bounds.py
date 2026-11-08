@@ -34,11 +34,22 @@ def _best(run: Callable[[int], object], size: int) -> float:
     return best
 
 
+# A run shorter than this is mostly fixed cost and scheduling noise: the size grows until the
+# small run takes at least this long (or reaches `size * GROWTH`), so the ratio measures work.
+MEASURABLE = 0.02  # seconds
+GROWTH = 16
+
+
 def linear(run: Callable[[int], object], size: int) -> None:
-    """Fail unless `run(FACTOR * size)` takes under `LIMIT` times as long as `run(size)`."""
-    small = max(_best(run, size), 1e-4)  # below the clock's useful resolution, use its floor
-    large = _best(run, FACTOR * size)
-    assert large / small < LIMIT, f"{size}: {small:.4f}s; {FACTOR * size}: {large:.4f}s"
+    """Fail unless `run(FACTOR * n)` takes under `LIMIT` times as long as `run(n)`, from `size`
+    up to the size whose run is measurable."""
+    small, n = _best(run, size), size
+    while small < MEASURABLE and n < size * GROWTH:
+        n *= 2
+        small = _best(run, n)
+    small = max(small, 1e-4)  # below the clock's useful resolution, use its floor
+    large = _best(run, FACTOR * n)
+    assert large / small < LIMIT, f"{n}: {small:.4f}s; {FACTOR * n}: {large:.4f}s"
 
 
 class _Listing(Protocol):
