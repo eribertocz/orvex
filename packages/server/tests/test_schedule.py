@@ -16,7 +16,8 @@ from typing import cast
 
 import duckdb
 import pytest
-from orvex.server import commands, lake_place, scheduler
+from orvex.server import commands, lake_open, lake_place, project_check, run_metadata, scheduler
+from orvex.server import run as run_command
 from orvex.server.cli import main
 from orvex.server.identity import Identity, load_identity
 from orvex.server.scheduler import schedule
@@ -73,7 +74,7 @@ def scheduled(
 ) -> str:
     fake = FakeTime(folder, until)
     fake.hooks += hooks
-    monkeypatch.setattr(commands, "_now", fake.text)
+    monkeypatch.setattr(run_metadata, "_now", fake.text)
     out = io.StringIO()
     assert (
         schedule(
@@ -290,7 +291,7 @@ def test_idle_scheduling_does_not_touch_the_sources(
         checks.append(1)
         return original(folder, identity)
 
-    monkeypatch.setattr(commands, "check_project", counted)
+    monkeypatch.setattr(project_check, "check_project", counted)
     scheduled(tmp_path, monkeypatch, START + dt.timedelta(hours=3))
     # Once by the scheduler (the files never changed) and once by the only run: three idle
     # hours never bind the models against the sources again.
@@ -338,10 +339,10 @@ def test_a_run_that_does_not_start_is_not_a_model_failure(
     attempts: list[str] = []
 
     def refused(*_: object, **__: object) -> int:
-        attempts.append(commands._now()[11:16])
+        attempts.append(run_metadata._now()[11:16])
         return 1  # as when a source is down: nothing recorded
 
-    monkeypatch.setattr(commands, "run", refused)
+    monkeypatch.setattr(run_command, "run", refused)
     out = scheduled(tmp_path, monkeypatch, START + dt.timedelta(minutes=30))
     assert attempts == ["09:50", "09:55", "10:00", "10:05", "10:10", "10:15"]
     assert "the run did not start" in out
@@ -422,7 +423,7 @@ def test_idle_hours_open_the_lake_only_when_its_catalog_changes(
         opened.append(1)
         return original(home, place)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(commands, "open_existing", counted)
+    monkeypatch.setattr(lake_open, "open_existing", counted)
     out = scheduled(tmp_path, monkeypatch, START + dt.timedelta(hours=3))
     assert "running s.m" in out
     # The run and the maintenance after it change the catalog; three idle hours then read the

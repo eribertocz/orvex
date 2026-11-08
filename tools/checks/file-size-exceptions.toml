@@ -6,7 +6,6 @@
 # #246 pull request that splits it by purpose; when a file shrinks, lower its `most`.
 
 [size]
-"packages/server/src/orvex/server/commands.py" = { most = 1771, reason = "#246: split by command and purpose (project check, lock, validate, run, lake open, run metadata, lineage, evidence, run history)" }
 "packages/semantic/src/orvex/semantic/compiler/typecheck.py" = { most = 1622, reason = "#246: split by purpose (types, expression types, scalar functions, unit inference)" }
 "packages/semantic/src/orvex/semantic/adapters/duckdb.py" = { most = 1538, reason = "#246: split into plan SQL, policy mappings and evidence checks" }
 "packages/semantic/src/orvex/semantic/correctness/analysis.py" = { most = 1563, reason = "#246: one purpose, split by rule family for size" }
@@ -20,6 +19,3 @@
 [cycle]
 
 [facade]
-"orvex.server.cli" = "the CLI calls the commands; they move to their own modules in #246 PR 3"
-"orvex.server.maintenance" = "#246 PR 3"
-"orvex.server.scheduler" = "#246 PR 3"

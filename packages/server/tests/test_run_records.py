@@ -20,14 +20,14 @@ import duckdb
 import orvex.store.transaction as store_transaction
 import pytest
 from orvex.contracts.run_record.v1 import RunRecord
-from orvex.contracts.store.v1 import StatementRequest
-from orvex.server import commands, maintenance
+from orvex.contracts.store.v1 import LocalLakeLocation, ReadRequest, StatementRequest
+from orvex.server import commands, lake_open, maintenance
+from orvex.server import run as run_command
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.project import load_project
 from orvex.store.errors import StoreError
-from orvex.store.lake import Lake, Transaction
-from orvex.store.parameters import _typed as typed
+from orvex.store.lake import Lake, Transaction, open_lake
 from orvex.transform.run_records import (
     history_request,
     last_run_request,
@@ -166,7 +166,7 @@ def armed_on_records(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
         armed.append(True)
         return real(records)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(commands, "record_statements", arming)
+    monkeypatch.setattr(run_command, "record_statements", arming)
     return armed
 
 
@@ -180,41 +180,7 @@ MODELS = {
 # --- without a lake --------------------------------------------------------------------------
 
 
-def test_record_statements_bind_every_value() -> None:
-    record = RunRecord.model_validate(
-        json.loads(
-            (
-                Path(__file__).resolve().parents[3]
-                / "contracts/run-record/v1/examples/valid/failed.json"
-            ).read_text(encoding="utf-8")
-        )
-    )
-    statements = record_statements([record])
-    insert = statements[-1]
-    assert insert.sql.startswith("INSERT INTO _meta.run_records_v2 VALUES")
-    # Both tables exist once any record does; the old one keeps its own snapshot column (#394).
-    creates = [statement.sql for statement in statements[:-1]]
-    assert "CREATE TABLE IF NOT EXISTS _meta.run_records (" in creates[1]
-    assert "snapshot_id BIGINT" in creates[1]
-    assert "CREATE TABLE IF NOT EXISTS _meta.run_records_v2 (" in creates[2]
-    assert "snapshot_id" not in creates[2]
-    assert "Conversion" not in insert.sql  # values never enter the SQL text
-    # Every parameter is found and typed the way the store binds it.
-    assert typed(insert.sql, list(insert.parameters)).count("CAST($p_") == len(insert.parameters)
-    values = {parameter.name: parameter.value for parameter in insert.parameters}
-    assert values["p_error_code"] == "STORE_QUERY_FAILED"
-    assert values["p_rows_written"] is None
-    assert values["p_project_dirty"] == "false"
-    assert "p_snapshot_id" not in values  # resolved from the row's own snapshot when read
-
-
 BOTH = {("_meta", "run_records"), ("_meta", "run_records_v2")}
-
-
-def test_history_parameters_bind() -> None:
-    request = history_request(1, "America/La_Paz", 5, BOTH)
-    assert request is not None
-    assert typed(request.sql, list(request.parameters)).count("CAST($p_") == 2
 
 
 def test_a_lake_without_record_tables_has_no_record_reads() -> None:
@@ -234,6 +200,80 @@ def test_runs_without_any_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]
 
 
 # --- with a lake (DuckLake extension, CI) --------------------------------------------------------
+
+
+def failed_record() -> RunRecord:
+    return RunRecord.model_validate(
+        json.loads(
+            (
+                Path(__file__).resolve().parents[3]
+                / "contracts/run-record/v1/examples/valid/failed.json"
+            ).read_text(encoding="utf-8")
+        )
+    )
+
+
+@contextlib.contextmanager
+def recorded_lake(folder: Path, record: RunRecord) -> Iterator[Lake]:
+    """A lake of its own, opened through the store's public API, holding `record`: the store
+    binds every parameter of a statement or refuses it (#246 item 6)."""
+    location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(folder))
+    lake = open_lake(location, lake_open._limits())
+    try:
+        with lake.transaction() as transaction:
+            for statement in record_statements([record]):
+                transaction.execute(statement)
+        yield lake
+    finally:
+        lake.close()
+
+
+def lake_read(lake: Lake, request: ReadRequest) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = lake.read(request).read_all().to_pylist()
+    return rows
+
+
+def test_record_statements_bind_every_value(tmp_path: Path) -> None:
+    record = failed_record()
+    statements = record_statements([record])
+    insert = statements[-1]
+    assert insert.sql.startswith("INSERT INTO _meta.run_records_v2 VALUES")
+    # Both tables exist once any record does; the old one keeps its own snapshot column (#394).
+    creates = [statement.sql for statement in statements[:-1]]
+    assert "CREATE TABLE IF NOT EXISTS _meta.run_records (" in creates[1]
+    assert "snapshot_id BIGINT" in creates[1]
+    assert "CREATE TABLE IF NOT EXISTS _meta.run_records_v2 (" in creates[2]
+    assert "snapshot_id" not in creates[2]
+    assert "Conversion" not in insert.sql  # values never enter the SQL text
+    values = {parameter.name: parameter.value for parameter in insert.parameters}
+    assert values["p_error_code"] == "STORE_QUERY_FAILED"
+    assert values["p_rows_written"] is None
+    assert values["p_project_dirty"] == "false"
+    assert "p_snapshot_id" not in values  # resolved from the row's own snapshot when read
+    # Every parameter is found and bound, with its declared type, the way the store binds it.
+    with recorded_lake(tmp_path, record) as lake:
+        sql = "SELECT error_code, rows_written, project_dirty FROM _meta.run_records_v2"
+        request = ReadRequest(
+            kind="read",
+            sql=sql,
+            parameters=[],
+            snapshot=lake.current_snapshot().id,
+            batch_size=10,
+        )
+        assert lake_read(lake, request) == [
+            {"error_code": "STORE_QUERY_FAILED", "rows_written": None, "project_dirty": False}
+        ]
+
+
+def test_history_parameters_bind(tmp_path: Path) -> None:
+    record = failed_record()
+    with recorded_lake(tmp_path, record) as lake:
+        tables = lake.tables()
+        assert set(tables) >= BOTH
+        request = history_request(lake.current_snapshot().id, "America/La_Paz", 5, tables)
+        assert request is not None
+        assert len(request.parameters) == 2
+        assert [row["run_id"] for row in lake_read(lake, request)] == [record.run_id]
 
 
 def test_successful_run_records_every_model(
@@ -427,7 +467,7 @@ def test_run_failures_no_model_caused_are_recorded_with_their_reason(
 ) -> None:
     project(tmp_path, MODELS)
     lake = FakeLake(fail)
-    monkeypatch.setattr(commands, "open_lake", lambda *args, **kwargs: lake)
+    monkeypatch.setattr(lake_open, "open_lake", lambda *args, **kwargs: lake)
     exit_code, out = command(capsys, "run", str(tmp_path))
     assert exit_code == 1
     assert code in out
@@ -483,12 +523,12 @@ CHILD = textwrap.dedent(
     import os, sys
     import orvex.store.lake as store_lake
     import orvex.store.transaction as store_transaction
-    from orvex.server import commands
+    from orvex.server import run as run_command
     from orvex.server.cli import main
 
     folder, mode, token_file = sys.argv[1], sys.argv[2], sys.argv[3]
     armed = []
-    records = commands.record_statements
+    records = run_command.record_statements
 
     def arming(items):
         armed.append(True)
@@ -512,7 +552,7 @@ CHILD = textwrap.dedent(
             other.close()
         commit(cursor)
 
-    commands.record_statements = arming
+    run_command.record_statements = arming
     if mode == "kill":
         store_lake.Lake._committed = killed
     else:
@@ -826,7 +866,7 @@ def test_the_time_limit_expiring_while_counting_or_recording_rolls_the_run_back(
         def counting(transaction: Transaction, model: object) -> str:
             raise timed_out(transaction)
 
-        monkeypatch.setattr(commands, "_count", counting)
+        monkeypatch.setattr(run_command, "_count", counting)
     else:
         real = Transaction.execute
 
@@ -882,7 +922,7 @@ def test_a_failed_run_whose_records_cannot_be_written_says_so(
             StatementRequest(kind="statement", sql="INSERT INTO nowhere VALUES (1)", parameters=[])
         ]
 
-    monkeypatch.setattr(commands, "record_statements", broken)
+    monkeypatch.setattr(run_command, "record_statements", broken)
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 1
     lines = out.splitlines()

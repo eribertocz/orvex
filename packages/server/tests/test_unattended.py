@@ -22,7 +22,16 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from orvex.server import commands, heartbeat, lake_place, maintenance, scheduler
+from orvex.server import (
+    commands,
+    heartbeat,
+    lake_place,
+    maintenance,
+    project_check,
+    run_metadata,
+    scheduler,
+)
+from orvex.server import run as run_command
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.scheduler import SCHEDULER_LOCK, schedule
@@ -78,7 +87,7 @@ class Clock:
 
 def scheduled(folder: Path, monkeypatch: pytest.MonkeyPatch, minutes: int) -> tuple[str, Clock]:
     clock = Clock(folder, START + dt.timedelta(minutes=minutes))
-    monkeypatch.setattr(commands, "_now", clock.text)
+    monkeypatch.setattr(run_metadata, "_now", clock.text)
     out = io.StringIO()
     code = schedule(
         folder,
@@ -165,7 +174,7 @@ class Watching(Clock):
 
 
 def watched(folder: Path, monkeypatch: pytest.MonkeyPatch, clock: Watching) -> str:
-    monkeypatch.setattr(commands, "_now", clock.text)
+    monkeypatch.setattr(run_metadata, "_now", clock.text)
     out = io.StringIO()
     code = schedule(
         folder,
@@ -265,7 +274,7 @@ def test_runs_shows_the_scheduler(
 ) -> None:
     write(tmp_path, {"project.yaml": PROJECT})
     now = "2026-10-28T10:10:00+00:00"
-    monkeypatch.setattr(commands, "_now", lambda: now)
+    monkeypatch.setattr(run_metadata, "_now", lambda: now)
     if payload is not None:
         record(tmp_path, {key: now if value == "now" else value for key, value in payload.items()})
     assert main(["runs", str(tmp_path)]) == 0
@@ -339,7 +348,7 @@ def test_the_heartbeat_says_a_run_started_and_is_renewed_during_it(
         seen.append(beat(tmp_path))
         return 0
 
-    monkeypatch.setattr(commands, "run", run)
+    monkeypatch.setattr(run_command, "run", run)
     out = io.StringIO()
     code = schedule(tmp_path, load_identity(), out, should_stop=lambda: len(seen) == 2)
     assert code == 0, out.getvalue()
@@ -376,8 +385,8 @@ def test_a_stop_while_checking_the_project_starts_no_run(
     def run(*_args: object, **_keywords: object) -> int:
         pytest.fail("a run started after the stop")
 
-    monkeypatch.setattr(commands, "check_project", checking)
-    monkeypatch.setattr(commands, "run", run)
+    monkeypatch.setattr(project_check, "check_project", checking)
+    monkeypatch.setattr(run_command, "run", run)
     out = io.StringIO()
     assert schedule(tmp_path, load_identity(), out, should_stop=lambda: bool(stop)) == 0
     assert "running" not in out.getvalue().replace("stopped", "")
@@ -667,7 +676,7 @@ def test_incremental_loads_from_postgres_every_five_minutes_without_duplicates_o
                 insert(boundary[0], late=True)
                 boundary[0] += dt.timedelta(minutes=5)
 
-        monkeypatch.setattr(commands, "_now", clock.text)
+        monkeypatch.setattr(run_metadata, "_now", clock.text)
         out = io.StringIO()
         code = schedule(
             tmp_path,

@@ -31,9 +31,9 @@ from orvex.contracts.store.v1 import (
     ReadRequest,
     StatementRequest,
 )
-from orvex.server import commands, lake_place
-from orvex.server.commands import LOCK_FILE, project_lock
+from orvex.server import error_problems, lake_open, lake_place, locking, run_metadata
 from orvex.server.identity import Identity
+from orvex.server.locking import LOCK_FILE, project_lock
 from orvex.server.problems import Problem
 from orvex.server.project import Project, ProjectLoadError, load_project
 from orvex.store.errors import StoreError
@@ -66,7 +66,7 @@ _ISO = "'%Y-%m-%dT%H:%M:%S.%f+00:00'"
 
 
 def _clock() -> dt.datetime:
-    return dt.datetime.fromisoformat(commands._now())
+    return dt.datetime.fromisoformat(run_metadata._now())
 
 
 def _text(moment: dt.datetime) -> str:
@@ -232,7 +232,7 @@ def run_maintenance(
         report = lake.maintain(cutoff, started - ORPHAN_GRACE)
     except StoreError as error:
         failure = error
-    commanded = commands._versions(identity)
+    commanded = run_metadata._versions(identity)
     versions = Versions(
         duckdb=commanded.duckdb,
         modules=[ModuleVersion(name=m.name, version=m.version) for m in commanded.modules],
@@ -276,7 +276,7 @@ def _load(
     try:
         project = load_project(folder)
         home = project.folder / f".{identity.slug}"
-        return project, home, commands.lake_location(project, home)
+        return project, home, lake_open.lake_location(project, home)
     except ProjectLoadError as error:
         details = error.error.details
         print(Problem(error.code, details.file or ".", details.line, error.error.message), file=out)
@@ -308,18 +308,18 @@ def maintain(
         return 0
     try:
         with project_lock(home):
-            lake = commands.open_existing(home, place)
+            lake = lake_open.open_existing(home, place)
             try:
                 record = run_maintenance(project, lake, identity, trigger, clock)
             finally:
                 lake.close()
-    except commands.ProjectLocked:
+    except locking.ProjectLocked:
         return _locked(identity, out, "another process is running this project; try again later.")
     except ProjectLoadError as error:
-        print(commands._load_problem(error), file=out)
+        print(error_problems._load_problem(error), file=out)
         return 1
     except StoreError as error:
-        print(commands._store_problem(error, ".", ""), file=out)
+        print(error_problems._store_problem(error, ".", ""), file=out)
         return 1
     if record.error is not None:
         print(
@@ -341,7 +341,7 @@ def history(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
     if lake_place.exists(home):
         try:
             with project_lock(home):
-                lake = commands.open_existing(home, place)
+                lake = lake_open.open_existing(home, place)
                 try:
                     snapshot = lake.current_snapshot().id
                     request = history_request(snapshot, project.settings.time_zone, limit)
@@ -352,13 +352,13 @@ def history(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
                             raise
                 finally:
                     lake.close()
-        except commands.ProjectLocked:
+        except locking.ProjectLocked:
             return _locked(identity, out, "a run is in progress.")
         except ProjectLoadError as error:
-            print(commands._load_problem(error), file=out)
+            print(error_problems._load_problem(error), file=out)
             return 1
         except StoreError as error:
-            print(commands._store_problem(error, ".", ""), file=out)
+            print(error_problems._store_problem(error, ".", ""), file=out)
             return 1
     if not rows:
         print("no maintenance yet", file=out)

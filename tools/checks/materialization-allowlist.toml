@@ -105,12 +105,17 @@ call = "to_pylist"
 reason = "ResultJson encoding streams one record batch at a time (arrow_to_json reads its reader batch by batch and yields text): at most the read's batch_size rows are Python values at once"
 
 [[allow]]
-file = "packages/server/src/orvex/server/commands.py"
+file = "packages/server/src/orvex/server/run_reads.py"
 call = "to_pylist"
-reason = "Run metadata, not analytical data: _column reads one watermark (one row per model in _meta.watermarks, or one max() row); runs reads at most --limit runs (LIMIT $p_limit in the SQL, default 20)"
+reason = "Run metadata, not analytical data: _column reads one watermark (one row per model in _meta.watermarks, or one max() row)"
 
 [[allow]]
-file = "packages/server/src/orvex/server/commands.py"
+file = "packages/server/src/orvex/server/history.py"
+call = "to_pylist"
+reason = "Run metadata, not analytical data: runs reads at most --limit runs (LIMIT $p_limit in the SQL, default 20)"
+
+[[allow]]
+file = "packages/server/src/orvex/server/run_reads.py"
 call = "as_py"
 reason = "_committed_snapshot reads one max(snapshot_id) value of one run's records"
 

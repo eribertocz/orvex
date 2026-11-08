@@ -13,7 +13,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from orvex.contracts.maintenance_record.v1 import MaintenanceRecord
-from orvex.server import commands, maintenance
+from orvex.server import commands, maintenance, run_metadata
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.scheduler import schedule
@@ -208,7 +208,7 @@ def test_the_scheduler_maintains_when_nothing_is_due(
     # A shorter day, so the scenario needs fewer cycles: every 2 hours, retried after 30 minutes.
     monkeypatch.setattr(maintenance, "INTERVAL", dt.timedelta(hours=2))
     monkeypatch.setattr(maintenance, "RETRY", dt.timedelta(minutes=30))
-    monkeypatch.setattr(commands, "_now", lambda: now[0].isoformat(timespec="microseconds"))
+    monkeypatch.setattr(run_metadata, "_now", lambda: now[0].isoformat(timespec="microseconds"))
 
     def sleep(seconds: float) -> None:
         now[0] += dt.timedelta(seconds=max(seconds, 1.0))
@@ -252,7 +252,7 @@ def test_a_due_model_runs_before_maintenance(
     # A day after that run: the model is stale, so both are due in the first cycle.
     start = dt.datetime.now(dt.UTC) + dt.timedelta(days=1)
     now = [start]
-    monkeypatch.setattr(commands, "_now", lambda: now[0].isoformat(timespec="microseconds"))
+    monkeypatch.setattr(run_metadata, "_now", lambda: now[0].isoformat(timespec="microseconds"))
 
     def sleep(seconds: float) -> None:
         now[0] += dt.timedelta(seconds=max(seconds, 1.0))

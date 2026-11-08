@@ -14,6 +14,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from orvex.server import commands
+from orvex.server import run as run_command
 from orvex.server.cli import main
 from orvex.server.commands import project_lock
 from orvex.server.identity import load_identity
@@ -534,7 +535,7 @@ def test_a_count_failing_in_the_run_s_transaction_rolls_the_run_back(
     def unreadable(transaction: object, model: object) -> str:
         raise StoreError("STORE_QUERY_FAILED", "count failed", {})
 
-    monkeypatch.setattr(commands, "_count", unreadable)
+    monkeypatch.setattr(run_command, "_count", unreadable)
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 1, out
     lines = out.splitlines()

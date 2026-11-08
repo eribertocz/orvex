@@ -20,18 +20,9 @@ from types import FrameType
 import uvicorn
 from orvex.server import development_switch, existing_lakes
 from orvex.server.app import LocalSemantic, create_app
-from orvex.server.commands import (
-    ProjectLocked,
-    evidence,
-    lake_location,
-    memory_limit,
-    open_existing,
-    project_lock,
-    run,
-    runs,
-    validate,
-)
+from orvex.server.evidence_command import evidence
 from orvex.server.existing_lakes import ExistingLakes, ducklake_connections, memory_share
+from orvex.server.history import runs
 from orvex.server.identity import Identity, load_identity
 from orvex.server.instance import (
     Project,
@@ -41,10 +32,13 @@ from orvex.server.instance import (
     instance_directory,
     open_project,
 )
+from orvex.server.lake_open import lake_location, memory_limit, open_existing
 from orvex.server.local_access import new_access, serving
+from orvex.server.locking import ProjectLocked, project_lock
 from orvex.server.logs import configure_logging
 from orvex.server.maintenance import history, maintain
 from orvex.server.project import ProjectLoadError, load_project
+from orvex.server.run import run
 from orvex.server.scheduler import STOP_GRACE_SECONDS, schedule
 from orvex.server.semantic_http import (
     QUERY_TIMEOUT_MS,
@@ -54,6 +48,7 @@ from orvex.server.semantic_http import (
     project_source,
     session_settings,
 )
+from orvex.server.validate import validate
 from orvex.server.versions import (
     ContractVersionIncompatible,
     Versions,

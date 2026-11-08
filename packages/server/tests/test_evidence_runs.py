@@ -344,14 +344,20 @@ def test_on_demand_without_a_lake_checks_nothing(tmp_path: Path) -> None:
 
 
 def test_the_http_app_never_reaches_the_cli_builder_grant() -> None:
-    """The grant lives in `commands.evidence`; the HTTP app imports nothing that holds it."""
+    """The grant lives in `evidence_command.evidence` (re-exported by the `commands` façade); the
+    HTTP app imports nothing that holds it."""
     found = subprocess.run(
         [sys.executable, "-c", "import sys, orvex.server.app; print(sorted(sys.modules))"],
         capture_output=True,
         text=True,
         check=True,
     ).stdout
-    for module in ("orvex.server.commands", "orvex.server.evidence_runs", "orvex.server.cli"):
+    for module in (
+        "orvex.server.commands",
+        "orvex.server.evidence_command",
+        "orvex.server.evidence_runs",
+        "orvex.server.cli",
+    ):
         assert f"'{module}'" not in found
 
 

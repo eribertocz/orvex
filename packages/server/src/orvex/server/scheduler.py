@@ -39,11 +39,23 @@ from types import FrameType
 from typing import IO
 from zoneinfo import ZoneInfo
 
-from orvex.server import commands, heartbeat, lake_place, maintenance
-from orvex.server.commands import Checked, Selection, project_lock
+from orvex.server import (
+    error_problems,
+    heartbeat,
+    lake_open,
+    lake_place,
+    locking,
+    maintenance,
+    project_check,
+    run,
+    run_metadata,
+)
 from orvex.server.identity import Identity
+from orvex.server.locking import project_lock
 from orvex.server.problems import Problem
 from orvex.server.project import ProjectLoadError
+from orvex.server.project_check import Checked
+from orvex.server.run import Selection
 from orvex.store.errors import StoreError
 from orvex.transform.run_records import last_run_request, model_history_request
 from orvex.transform.schedule import (
@@ -69,7 +81,7 @@ HEARTBEAT_EVERY = dt.timedelta(minutes=1)
 
 def _clock() -> dt.datetime:
     """The runner's clock (the same one run records use)."""
-    return dt.datetime.fromisoformat(commands._now())
+    return dt.datetime.fromisoformat(run_metadata._now())
 
 
 def _instant(text: object) -> dt.datetime | None:
@@ -146,7 +158,7 @@ def _records(home: Path, place: lake_place.Place, kept: _Kept | None = None) -> 
 
 def _read_records(home: Path, place: lake_place.Place) -> _Records:
     with project_lock(home):
-        lake = commands.open_existing(home, place)
+        lake = lake_open.open_existing(home, place)
         try:
             maintained = maintenance.last_maintenance(lake)
             # The tables before the snapshot: record tables are never dropped, so each one
@@ -229,11 +241,11 @@ def schedule(
     """
     home = Path(folder).expanduser().absolute() / f".{identity.slug}"
     try:
-        with commands.project_lock(home, SCHEDULER_LOCK):
+        with locking.project_lock(home, SCHEDULER_LOCK):
             return _schedule(
                 folder, home, identity, out, clock, sleep, should_stop, monotonic, stop_grace
             )
-    except commands.ProjectLocked:
+    except locking.ProjectLocked:
         beat = heartbeat.read(home)
         pid = str(beat.pid) if beat is not None else "unknown"
         print(
@@ -260,7 +272,7 @@ def _schedule(
     monotonic: Monotonic,
     stop_grace: float,
 ) -> int:
-    control = commands.RunControl()
+    control = run.RunControl()
     stop_reason: list[str] = []  # set once, by the first stop signal
     requested = threading.Event()  # a stop arrived: the grace period starts
     finished = threading.Event()  # the scheduler is done: the grace period is moot
@@ -483,7 +495,7 @@ def _cycle(
     clock: Clock,
     monotonic: Monotonic,
     state: _State,
-    control: commands.RunControl | None = None,
+    control: run.RunControl | None = None,
     stopped: Callable[[], bool] = lambda: False,
 ) -> float:
     """One decision; returns how long to wait before the next one (seconds).
@@ -502,7 +514,10 @@ def _cycle(
     if state.checked is None or fingerprint != state.fingerprint or stale or due_again:
         # Checked again when the files change, or every 5 minutes while the check fails (a
         # source may be back), never more often: checking binds models against the sources.
-        state.checked, state.fingerprint = commands.check_project(folder, identity), fingerprint
+        state.checked, state.fingerprint = (
+            project_check.check_project(folder, identity),
+            fingerprint,
+        )
         state.checked_at, state.recheck_at = monotonic(), None
     checked = state.checked
     if checked.problems or checked.project is None or checked.graph is None:
@@ -515,12 +530,14 @@ def _cycle(
     place = checked.place
     try:
         records = _records(home, place, state.kept)
-    except commands.ProjectLocked:
+    except locking.ProjectLocked:
         return _report(out, state, ("waiting: another process holds the project",), now)
     except ProjectLoadError as error:
-        return _report(out, state, (str(commands._load_problem(error)),), now)
+        return _report(out, state, (str(error_problems._load_problem(error)),), now)
     except StoreError as error:
-        return _report(out, state, (str(commands._store_problem(error, ".", "run records")),), now)
+        return _report(
+            out, state, (str(error_problems._store_problem(error, ".", "run records")),), now
+        )
     last_runs = [moment for moment in (records.last_run_start, state.last_run_wall) if moment]
 
     def decide(held: dict[str, dt.datetime]) -> Plan:
@@ -569,7 +586,7 @@ def _cycle(
     try:
         with project_lock(home):
             pass  # free now; a process taking it in between makes the run fail as locked
-    except commands.ProjectLocked:
+    except locking.ProjectLocked:
         return _report(out, state, ("waiting: another process holds the project",), now)
     state.reported = ()
     for name in decided.models:
@@ -580,7 +597,7 @@ def _cycle(
     state.last_run_wall, state.last_run_monotonic = now, monotonic()
     selection = Selection(decided.models, "freshness", decided.full_refresh, control)
     previous_start = records.last_run_start
-    ran = commands.run(folder, identity, out, selection=selection)
+    ran = run.run(folder, identity, out, selection=selection)
     state.kept = _Kept()  # the run may have committed: the records are read again
     if ran == 0:
         for name in decided.models:
@@ -590,7 +607,7 @@ def _cycle(
     after = clock()
     try:
         latest: _Records | None = _records(home, place)
-    except commands.ProjectLocked, ProjectLoadError, StoreError:
+    except locking.ProjectLocked, ProjectLoadError, StoreError:
         latest = None
     if latest is None or latest.last_run_start in {None, previous_start}:
         # No run was recorded: it did not start (a source down while checking, the project
