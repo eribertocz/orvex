@@ -145,6 +145,8 @@ Each run of a model executes inside **one DuckLake transaction**:
 4. **All pass** ⇒ commit. DuckLake creates one snapshot; dashboards see the new data atomically.
 5. **Any fails** ⇒ rollback. Consumers keep reading the last good snapshot; the run record marks the failure, and the UI shows a visible warning on affected dashboards (law 4, anti-pattern A6).
 
+One process at a time writes a project: runs, the scheduler and maintenance take the **project lock**, an operating-system file lock (`fcntl.flock`) on a file in the project folder. Such locks are unreliable on some network file systems (NFS, SMB and FUSE mounts may not share them between machines), so **the project folder must be on a local file system**; only the lake's data files may live on a network file system or in object storage (ADR-0027 §2).
+
 Every run produces a **run record** (`contracts/run-record/v1`): run id, model, trigger (manual, schedule, freshness, full refresh), project commit hash, DuckDB and module versions, `$since`, rows read and written, watermark, test and reconciliation results, DuckLake snapshot id, timings and outcome. Every run also emits OpenLineage events (start, complete, fail) with input and output datasets.
 
 ## 5. Scheduling

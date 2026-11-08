@@ -799,3 +799,66 @@ def test_the_commit_tag_holds_only_a_random_token(lake: Lake) -> None:
     assert extra is not None
     assert len(extra) == 32
     assert int(extra, 16) >= 0  # hexadecimal: a random token, nothing else
+
+
+# --- #256: the engine's own catalog, logs and settings are not readable from SQL ---------------
+
+ENGINE_READS = [
+    "SELECT * FROM pg_settings",
+    "SELECT * FROM pg_catalog.pg_class",
+    "SELECT * FROM duckdb_databases",
+    "SELECT * FROM duckdb_logs",
+    "SELECT * FROM sqlite_master",
+    "SELECT current_setting('temp_directory') AS v",
+    "SELECT getvariable('x') AS v",
+    "SELECT current_query() AS v",
+    "SELECT pg_get_viewdef(1) AS v",
+]
+
+
+@pytest.mark.parametrize("sql", ENGINE_READS)
+def test_the_engine_s_catalog_and_settings_are_refused_in_reads_and_writes(
+    lake: Lake, sql: str
+) -> None:
+    write(lake, statement("CREATE TABLE m AS SELECT 1 AS a"))
+    assert code_of(lambda: read(lake, sql)) == "STORE_STATEMENT_INVALID"
+    assert code_of(lambda: write(lake, statement(f"CREATE TABLE x AS {sql}"))) == (
+        "STORE_STATEMENT_INVALID"
+    )
+
+
+def test_a_lake_column_or_table_with_an_ordinary_name_is_still_read(lake: Lake) -> None:
+    write(lake, statement("CREATE TABLE tables AS SELECT 1 AS columns, 2 AS settings"))
+    assert read(lake, "SELECT columns, settings FROM tables").to_pylist() == [
+        {"columns": 1, "settings": 2}
+    ]
+
+
+def test_every_engine_view_and_setting_function_is_refused() -> None:
+    # Measured on the pinned DuckDB: a new internal view, catalog function or setting reader in
+    # an upgrade fails here until it is refused too (`lake._ENGINE_NAMES`).
+    import orvex.store.lake as store_lake
+
+    connection = duckdb.connect()
+    connection.execute("INSTALL ducklake")
+    connection.execute("LOAD ducklake")
+    views = {
+        name
+        for (name,) in connection.execute(
+            "SELECT view_name FROM duckdb_views() "
+            "WHERE internal AND schema_name <> 'information_schema'"
+        ).fetchall()
+    }
+    functions = {
+        name
+        for (name,) in connection.execute(
+            "SELECT function_name FROM duckdb_functions() WHERE schema_name = 'pg_catalog' "
+            "OR function_name IN ('current_setting', 'getvariable', 'current_query')"
+        ).fetchall()
+    }
+    connection.close()
+    allowed = store_lake.ENGINE_NAMES_ALLOWED
+    assert not views - store_lake._ENGINE_NAMES - allowed
+    assert not functions - store_lake._ENGINE_NAMES - allowed
+    assert "pg_catalog" in store_lake._ENGINE_NAMES
+    assert not store_lake._ENGINE_NAMES & allowed

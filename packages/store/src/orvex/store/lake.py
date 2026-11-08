@@ -83,6 +83,104 @@ _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 _LOCAL_ADDRESSES = frozenset({"127.0.0.1", "::1"})
 _VARIABLE = re.compile(r"\$\{env:([A-Z_][A-Z0-9_]*)\}")
 type AnyLakeLocation = LocalLakeLocation | SqliteLakeLocation | PostgresLakeLocation
+# The engine's own catalog, logs and settings, reachable by name from any SQL (#256, measured on
+# the pinned DuckDB; a test fails when an upgrade adds one): the views of `pg_catalog` and the
+# internal `duckdb_*`/`sqlite_*` views (attach strings, logged queries), the setting and query
+# readers, and the `pg_catalog` functions. Never readable from model or read SQL. Two names stay
+# allowed, and only these: `information_schema` (the names and types of the lake's own tables,
+# which incremental models compare) and `current_database()` (the lake's name).
+_ENGINE_NAMES = frozenset(
+    {
+        "col_description",
+        "current_query",
+        "current_schema",
+        "current_schemas",
+        "current_setting",
+        "duckdb_columns",
+        "duckdb_constraints",
+        "duckdb_databases",
+        "duckdb_indexes",
+        "duckdb_logs",
+        "duckdb_schemas",
+        "duckdb_tables",
+        "duckdb_types",
+        "duckdb_views",
+        "format_pg_type",
+        "format_type",
+        "getvariable",
+        "has_any_column_privilege",
+        "has_column_privilege",
+        "has_database_privilege",
+        "has_foreign_data_wrapper_privilege",
+        "has_function_privilege",
+        "has_language_privilege",
+        "has_schema_privilege",
+        "has_sequence_privilege",
+        "has_server_privilege",
+        "has_table_privilege",
+        "has_tablespace_privilege",
+        "inet_client_addr",
+        "inet_client_port",
+        "inet_server_addr",
+        "inet_server_port",
+        "map_to_pg_oid",
+        "obj_description",
+        "pg_am",
+        "pg_attrdef",
+        "pg_attribute",
+        "pg_catalog",
+        "pg_class",
+        "pg_collation",
+        "pg_collation_is_visible",
+        "pg_conf_load_time",
+        "pg_constraint",
+        "pg_conversion_is_visible",
+        "pg_database",
+        "pg_depend",
+        "pg_description",
+        "pg_enum",
+        "pg_function_is_visible",
+        "pg_get_constraintdef",
+        "pg_get_expr",
+        "pg_get_viewdef",
+        "pg_has_role",
+        "pg_index",
+        "pg_indexes",
+        "pg_is_other_temp_schema",
+        "pg_my_temp_schema",
+        "pg_namespace",
+        "pg_opclass_is_visible",
+        "pg_operator_is_visible",
+        "pg_opfamily_is_visible",
+        "pg_postmaster_start_time",
+        "pg_prepared_statements",
+        "pg_proc",
+        "pg_sequence",
+        "pg_sequences",
+        "pg_settings",
+        "pg_size_pretty",
+        "pg_sleep",
+        "pg_table_is_visible",
+        "pg_tables",
+        "pg_tablespace",
+        "pg_ts_config_is_visible",
+        "pg_ts_dict_is_visible",
+        "pg_ts_parser_is_visible",
+        "pg_ts_template_is_visible",
+        "pg_type",
+        "pg_type_is_visible",
+        "pg_typeof",
+        "pg_views",
+        "pragma_database_list",
+        "shobj_description",
+        "sqlite_master",
+        "sqlite_schema",
+        "sqlite_temp_master",
+        "sqlite_temp_schema",
+    }
+)
+ENGINE_NAMES_ALLOWED = frozenset({"information_schema", "current_database"})
+
 # Functions that run SQL or open connections outside the lake; never allowed in a statement.
 _EXTERNAL_SQL_FUNCTIONS = frozenset(
     {
@@ -822,6 +920,12 @@ def _guarded(sql: str, table_functions: frozenset[str]) -> None:
                 "STORE_STATEMENT_INVALID",
                 "Table options are not allowed: the lake's options are set by the store.",
                 {"clause": name.upper()},
+            )
+        if name in _ENGINE_NAMES:
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "The engine's own catalog, logs and settings are not readable from SQL.",
+                {"name": name},
             )
         if (
             sql[following : following + 1] == "("
