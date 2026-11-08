@@ -97,6 +97,7 @@ def test_the_summary_keeps_only_successful_rounds() -> None:
 
 
 def test_the_baseline_runs_end_to_end_on_the_small_dataset(dataset: Path, tmp_path: Path) -> None:
+    dataset = private_copy(dataset, tmp_path / "small")  # the baseline appends a day to it
     completed = subprocess.run(
         [
             sys.executable,

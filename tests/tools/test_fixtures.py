@@ -11,7 +11,7 @@ import pytest
 from tests.support.fixtures import freeze, frozen, private_copy, thaw
 from tools.repository import REPOSITORY_ROOT
 
-SHARED = {"module", "package", "session"}
+SHARED = {"class", "module", "package", "session", "unknown"}
 
 
 def _template(folder: Path) -> Path:
@@ -58,23 +58,42 @@ def test_a_private_copy_is_writable_and_leaves_the_template_unchanged(tmp_path: 
         thaw(template)
 
 
+def _scope(decorator: ast.expr) -> str | None:
+    """A fixture's scope; a scope that is not a literal counts as shared (fail closed)."""
+    if not isinstance(decorator, ast.Call):
+        return None
+    for keyword in decorator.keywords:
+        if keyword.arg == "scope":
+            value = keyword.value
+            return value.value if isinstance(value, ast.Constant) else "unknown"
+    return None
+
+
+def _creates_files(node: ast.AST) -> bool:
+    names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+    attributes = {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)}
+    return bool(
+        "tmp_path_factory" in names | attributes
+        or {"mkdtemp", "TemporaryDirectory"} & (names | attributes)
+    )
+
+
+def _freezes(node: ast.AST) -> bool:
+    """The fixture passes a folder to `frozen` and yields from it (or iterates it)."""
+    return any(
+        isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "frozen"
+        for call in ast.walk(node)
+    ) and any(isinstance(n, (ast.Yield, ast.YieldFrom)) for n in ast.walk(node))
+
+
 def _shared_fixtures_writing_files(path: Path, root: Path = REPOSITORY_ROOT) -> list[str]:
     """The shared fixtures in `path` that create a folder but do not freeze it."""
     found = []
     for node in ast.walk(ast.parse(path.read_text("utf-8"))):
-        if not isinstance(node, ast.FunctionDef):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
-        scopes = {
-            keyword.value.value
-            for decorator in node.decorator_list
-            if isinstance(decorator, ast.Call)
-            for keyword in decorator.keywords
-            if keyword.arg == "scope" and isinstance(keyword.value, ast.Constant)
-        }
-        if not scopes & SHARED:
-            continue
-        names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
-        if "tmp_path_factory" in names and "frozen" not in names:
+        scopes = {_scope(decorator) for decorator in node.decorator_list}
+        if scopes & SHARED and _creates_files(node) and not _freezes(node):
             found.append(f"{path.relative_to(root).as_posix()}::{node.name}")
     return found
 
@@ -89,13 +108,33 @@ def test_every_shared_fixture_with_files_freezes_them() -> None:
     assert not unfrozen, unfrozen
 
 
-def test_the_check_finds_an_unfrozen_shared_fixture(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "body",
+    [
+        '@pytest.fixture(scope="module")\ndef data(tmp_path_factory):\n'
+        '    return tmp_path_factory.mktemp("x")\n',
+        '@pytest.fixture(scope="class")\ndef data(tmp_path_factory):\n'
+        '    return tmp_path_factory.mktemp("x")\n',
+        "@pytest.fixture(scope=SCOPE)\ndef data():\n    return tempfile.mkdtemp()\n",
+        '@pytest.fixture(scope="session")\nasync def data(tmp_path_factory):\n'
+        '    return tmp_path_factory.mktemp("x")\n',
+        '@pytest.fixture(scope="module")\ndef data(tmp_path_factory):\n'
+        '    frozen(tmp_path_factory.mktemp("x"))\n    return 1\n',
+    ],
+    ids=["module", "class", "mkdtemp-unknown-scope", "async", "frozen-not-yielded"],
+)
+def test_the_check_finds_an_unfrozen_shared_fixture(tmp_path: Path, body: str) -> None:
+    source = tmp_path / "test_example.py"
+    source.write_text("import pytest\nimport tempfile\n\n" + body, "utf-8")
+    assert _shared_fixtures_writing_files(source, tmp_path) == ["test_example.py::data"]
+
+
+def test_the_check_accepts_a_frozen_shared_fixture(tmp_path: Path) -> None:
     source = tmp_path / "test_example.py"
     source.write_text(
         "import pytest\n\n"
-        '@pytest.fixture(scope="module")\n'
-        "def data(tmp_path_factory):\n"
-        '    return tmp_path_factory.mktemp("x")\n',
+        '@pytest.fixture(scope="module")\ndef data(tmp_path_factory):\n'
+        '    yield from frozen(tmp_path_factory.mktemp("x"))\n',
         "utf-8",
     )
-    assert _shared_fixtures_writing_files(source, tmp_path) == ["test_example.py::data"]
+    assert _shared_fixtures_writing_files(source, tmp_path) == []
