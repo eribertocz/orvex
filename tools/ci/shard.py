@@ -13,6 +13,7 @@ no record, every n-th collected test is kept, starting at the i-th.
 
 from __future__ import annotations
 
+import hashlib
 import heapq
 import json
 import os
@@ -23,6 +24,15 @@ from pathlib import Path
 import pytest
 
 RECORD = Path(__file__).with_name("test-durations.json")
+
+
+def key(nodeid: str) -> str:
+    """A test's name in the record: its parameters become a digest, since they may hold
+    synthetic credentials that secret scanning (rightly) refuses to see committed."""
+    name, bracket, parameters = nodeid.partition("[")
+    if not bracket:
+        return nodeid
+    return f"{name}[{hashlib.sha256(parameters.encode('utf-8')).hexdigest()[:12]}]"
 
 
 def durations(path: Path = RECORD) -> dict[str, float]:
@@ -38,7 +48,7 @@ def assign(tests: Sequence[str], total: int, known: Mapping[str, float]) -> list
     if not known:
         return [position % total for position in range(len(tests))]
     default = statistics.median(known.values())
-    cost = [known.get(test, default) for test in tests]
+    cost = [known.get(key(test), default) for test in tests]
     order = sorted(range(len(tests)), key=lambda i: (-cost[i], tests[i]))
     parts = [(0.0, part) for part in range(total)]  # (time so far, part): a min-heap
     heapq.heapify(parts)

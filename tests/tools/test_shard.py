@@ -8,7 +8,7 @@ from typing import cast
 import pytest
 
 from tools.ci import shard as shard_module
-from tools.ci.shard import assign, pytest_collection_modifyitems
+from tools.ci.shard import assign, key, pytest_collection_modifyitems
 
 
 def _items(count: int) -> list[SimpleNamespace]:
@@ -71,3 +71,13 @@ def test_without_a_shard_every_test_runs(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_a_part_outside_the_split_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(pytest.UsageError):
         _split(monkeypatch, "7/7", 10)
+
+
+def test_parameters_are_recorded_as_a_digest() -> None:
+    assert key("a.py::t") == "a.py::t"
+    hidden = key("a.py::t[key-abc123]")
+    assert hidden.startswith("a.py::t[")
+    assert "abc123" not in hidden
+    known = {key("a.py::t[x]"): 9.0, "a.py::u": 1.0, "a.py::v": 1.0}
+    placed = assign(["a.py::t[x]", "a.py::u", "a.py::v"], 2, known)
+    assert placed[1] == placed[2] != placed[0]  # the digest finds the long test

@@ -30,6 +30,7 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from tools.ci import shard
 from tools.repository import REPOSITORY_ROOT
 
 MARK = "test-duration"
@@ -122,7 +123,7 @@ def record(timings: Iterable[Timing]) -> dict[str, float]:
     """Every test's median total seconds: what the shards are balanced on."""
     seen: dict[str, list[float]] = defaultdict(list)
     for timing in timings:
-        seen[timing.test].append(timing.total)
+        seen[shard.key(timing.test)].append(timing.total)
     return {test: round(statistics.median(values), 3) for test, values in sorted(seen.items())}
 
 
@@ -174,7 +175,7 @@ def markdown(timings: Sequence[Timing], title: str, top: int = 50) -> str:
         "| Test | Python | Seconds | Setup s |",
         "|---|---|---|---|",
         *(
-            f"| `{t.test}` | {t.python} | {t.total:,.1f} | {t.setup:,.1f} |"
+            f"| `{shard.key(t.test)}` | {t.python} | {t.total:,.1f} | {t.setup:,.1f} |"
             for t in sorted(timings, key=lambda t: -t.total)[:top]
         ),
         "",
