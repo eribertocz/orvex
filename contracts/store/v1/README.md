@@ -24,6 +24,7 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 | `ChangesRequest` | What changed in lake tables after `since` up to `snapshot` (below) |
 | `ChangesResult` | One `TableChanges` (`table`, `changed`, `removed_rows`) per table asked, in order |
 | `SourceAttachment` | A source given to `open_lake` — files (`parquet`, `csv`, `duckdb`) or databases (`sqlite`, `postgres`); readable by name inside write transactions only (below) |
+| `ExistingLakeAttachment` | An existing DuckLake another system owns and writes, attached read-only and isolated by `ExistingLake` (below) |
 
 ## File statistics (`StatisticsRequest`, #352)
 
@@ -262,15 +263,35 @@ Preconditions:
 | `STORE_BUSY` | The lake is running its maximum number of statements and its queue is full |
 | `STORE_TYPE_UNSUPPORTED` | A result column has a type with no JSON encoding yet |
 | `STORE_CATALOG_UNAVAILABLE` | The lake cannot be opened: its catalog (a DuckDB or SQLite file, or PostgreSQL) cannot be reached or refused the credentials, its data files cannot be reached, or DuckDB refused the object storage settings; DuckDB's message is in `details`, never a credential |
-| `STORE_LOCATION_INVALID` | The data location is not a local path or an `s3://` prefix, or an `s3://` path and the storage settings do not come together (new in #126, compatible) |
+| `STORE_LOCATION_INVALID` | The data location is not a local path or an `s3://` prefix, or an `s3://` path and the storage settings do not come together (new in #126, compatible). For an existing DuckLake: `encrypted` declared, a relative SQLite catalog path, or a catalog connection string that sets `options` or names no `user` |
 | `SOURCE_NOT_FOUND` | A declared file source matches no file, or a SQLite source file does not exist, when the lake opens; `details` names the source |
-| `STORE_SOURCE_INVALID` | A source the lake cannot attach safely: two sources with the same name, a file that is not a readable database, a view that needs a capability the worker refuses; `details` names the source |
+| `STORE_SOURCE_INVALID` | A source the lake cannot attach safely: two sources with the same name, a file that is not a readable database, a view that needs a capability the worker refuses; `details` names the source. For an existing DuckLake: a catalog role in use elsewhere or able to use anything beyond the catalog schema (`details.kind` names the kind of object, never the object), a SQLite catalog that is a link, a hard link to a protected file or not in WAL mode, a catalog that is not DuckLake's, or a data path other than the catalog's own; `details.connection` names the connection |
 | `STORE_SOURCE_FAILED` | The worker reading a database source ended early: it died, hung or sent a malformed stream (ADR-0031); nothing was kept |
 | `STORE_CONNECTION_FAILED` | A database source (PostgreSQL) cannot be reached or refuses the credentials when it is read; `details` names the source, the password redacted |
 | `UNSUPPORTED_SOURCE_TYPE` | A write reads a source column DuckDB cannot carry exactly (see "Exact types" above); the message names `<source>.<table>.<column>`. On ClickHouse: a table column with no exact type, or a result value its type cannot carry (below) |
-| `SOURCE_NOT_READ_ONLY` | A ClickHouse user whose profile does not set `readonly = 1` |
-| `ENGINE_VERSION_UNTESTED` | A ClickHouse server whose version is not one of the tested versions; `details.version` |
+| `SOURCE_NOT_READ_ONLY` | A ClickHouse user whose profile does not set `readonly = 1`, or an existing DuckLake's PostgreSQL catalog session that is not read-only |
+| `ENGINE_VERSION_UNTESTED` | A ClickHouse server whose version is not one of the tested versions, or an existing DuckLake catalog whose version is not one the bundled DuckLake reads without migrating and the corpus has run on; `details.version` |
 | `ENGINE_SETTING_REQUIRED` | A ClickHouse profile setting that decides a result's meaning, or a limit, without the required value; `details` names the setting, the value expected and the value found |
+
+## Existing DuckLake (`ExistingLakeAttachment`, P2-30 PR 1, #399; ADR-0027 §3)
+
+`orvex.store.existing_lake.ExistingLake(attachment, memory_limit=…, threads=…)` attaches a DuckLake that another system owns and writes. Its catalog and files are untrusted, so the lake gets a DuckDB instance of its own, holding that lake and its secrets only, and nothing of it is read before these checks pass, in this order:
+
+- **Location.** As for a managed lake (`STORE_LOCATION_INVALID`, `STORE_TLS_REQUIRED`, `STORE_SECRET_INLINE`, `STORE_SECRET_MISSING`); `encrypted` is the owner's setting and refused. A PostgreSQL connection string must name its `user` and set no `options`.
+- **PostgreSQL catalog, before DuckLake reads any catalog table** (the catalog's owner can turn catalog tables into views over `SECURITY INVOKER` functions, which run with this role):
+  - Every catalog session is opened with `options='-c default_transaction_read_only=on'`, and `default_transaction_read_only` and `transaction_read_only` must both be `on`, checked on a plain read-only PostgreSQL attach and again on DuckLake's own catalog session; otherwise `SOURCE_NOT_READ_ONLY`.
+  - The role must not be in `roles_in_use` (every other connection's and every managed lake's catalog role; compared by name, on any host, so two spellings of one server cannot hide a shared role).
+  - Neither the role nor any role it is a member of (`pg_has_role … 'MEMBER'`, since a function can `SET ROLE`) may be a superuser or a member of `pg_read_all_data`, `pg_read_server_files`, `pg_execute_server_program` or `pg_write_all_data`, or hold any privilege, `PUBLIC`'s included, on a schema, table, view, materialized view, foreign table, sequence (any column privilege counts) or function outside the catalog schema, or on a foreign server. System schemas (`pg_catalog`, `information_schema`, TOAST and temporary schemas) aside. A database whose `public` schema keeps PostgreSQL's default `USAGE` for `PUBLIC` is therefore refused unless the catalog is in `public`: revoke it, or grant the catalog role nothing else.
+  - Any of these is `STORE_SOURCE_INVALID`, `details.kind` naming the kind (`role in use`, `superuser`, `role pg_read_all_data`, `schema`, `table`, `view`, `sequence`, `function`, …), never an object of another schema.
+- **SQLite catalog.** The file and each `-wal`, `-shm` and `-journal` file that exists are opened with `O_NOFOLLOW`; on the descriptors, each must be a regular file, none the same file as another, and none the same device and inode as a protected file (`protected_files`, each with its `-wal`, `-shm`, `-journal` and `.wal` files). The check runs before the attach and again after it (SQLite may create the `-wal` and `-shm` files), and the catalog must still be the file first checked. The catalog must be in WAL mode (header bytes 18 and 19): measured on DuckDB 2.0.0, a reader of a rollback-journal catalog keeps a lock after its first read, and every later commit of the owner fails. Any of these is `STORE_SOURCE_INVALID`. The descriptors stay open while the lake is open.
+- **Version.** The catalog's `ducklake_metadata` `version` must be one of `TESTED_CATALOG_VERSIONS` (`1.1`, the bundled DuckLake's, which the corpus runs on); otherwise `ENGINE_VERSION_UNTESTED` with `details.version`. Measured: DuckLake would read a `1.0` catalog without migrating it, and then fail on inlined data; it refuses a newer one itself.
+- **Attach.** `READ_ONLY`, `AUTOMATIC_MIGRATION false`, `DATA_PATH` as declared and, for PostgreSQL, `METADATA_SCHEMA` (default `public`). DuckLake refuses a `DATA_PATH` other than the catalog's own, which is `STORE_SOURCE_INVALID`; `OVERRIDE_DATA_PATH` is never set.
+- **Sandbox.** The instance must then hold no database but the lake (`memory`, `system` and `temp` aside). Every setting is set globally (`TimeZone = 'UTC'`, `python_enable_replacements = false`, `arrow_lossless_conversion = true`, `temp_directory`), then `allowed_directories` (the data location, resolved when local, and the instance's own spill folder) and `allowed_paths` (a SQLite catalog file and its `-wal`, `-shm`, `-journal` files), then `enable_external_access = false`, then `lock_configuration = true`. `allowed_configs` is never set, so after the lock no `SET` or `RESET` succeeds, on the connection or any cursor.
+  - Measured on DuckDB 2.0.0: DuckDB resolves a symbolic link before it checks the allow-list, so a link under the data location that leads out of it is refused, and one that stays inside is read.
+  - Measured on DuckDB 2.0.0: SQLite opens its catalog files itself, outside DuckDB's file system, so the allow-list does not govern them; the descriptor checks above do. With the catalog in WAL mode, the locked instance still sees each new snapshot the owner commits, inlined rows included.
+- **The lake is never on the search path:** the instance's current database stays `memory`.
+
+`latest_snapshot()` returns the newest snapshot the catalog lists. Verifying snapshots (their files, the protected set across the instance) and serving queries come with P2-30 PR 2 and PR 3; the engine stays disabled until then.
 
 ## ClickHouse Direct Query (P2-31, #225; ADR-0028 §3)
 

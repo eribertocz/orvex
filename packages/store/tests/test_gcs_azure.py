@@ -136,7 +136,7 @@ def test_azure_over_plain_http_to_another_machine_is_refused(
 def test_azure_connection_strings_are_checked_without_being_shown(
     connection: str, code: str | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from orvex.store.lake import _storage_credentials
+    from orvex.store.locations import _storage_credentials
 
     monkeypatch.setenv(AZURE_ENV, connection)
     if code is None:

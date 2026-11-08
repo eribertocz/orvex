@@ -16,7 +16,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from orvex.contracts.store.v1 import ReadRequest
-from orvex.server import commands, lake_place
+from orvex.server import commands, lake_place, mounts
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.project import ProjectLoadError, load_project
@@ -138,7 +138,7 @@ MOUNTINFO = """\
     ],
 )
 def test_the_file_system_of_a_path(path: str, kind: str) -> None:
-    assert lake_place.mount_type(Path(path), MOUNTINFO) == kind
+    assert mounts.mount_type(Path(path), MOUNTINFO) == kind
 
 
 # --- refused before anything is created ------------------------------------------------------

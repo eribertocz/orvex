@@ -19,6 +19,9 @@ from orvex.contracts.project.v1 import (
     ClickhouseConnection,
     CsvConnection,
     DuckdbConnection,
+    DucklakeConnection,
+    DucklakePostgresCatalog,
+    DucklakeSqliteCatalog,
     ParquetConnection,
     PostgresConnection,
     ProjectError,
@@ -28,6 +31,7 @@ from orvex.contracts.project.v1 import (
     SecretReference,
     SqliteConnection,
 )
+from orvex.server.mounts import NETWORK_FILE_SYSTEMS, file_system
 from orvex.transform.config_file import ConfigFile, ConfigProblem, token
 
 PROJECT_FILE = "project.yaml"
@@ -57,14 +61,21 @@ type Connection = (
     | SqliteConnection
     | PostgresConnection
     | ClickhouseConnection
+    | DucklakeConnection
 )
-DATABASE_TYPES = (DuckdbConnection, SqliteConnection, PostgresConnection, ClickhouseConnection)
+DATABASE_TYPES = (
+    DuckdbConnection,
+    SqliteConnection,
+    PostgresConnection,
+    ClickhouseConnection,
+    DucklakeConnection,
+)
 type RouteAConnection = (
     ParquetConnection | CsvConnection | DuckdbConnection | SqliteConnection | PostgresConnection
 )
 # Connections queried in place by the semantic engine (Direct Query, ADR-0027, ADR-0028): never
 # a source of a transformation model.
-DIRECT_QUERY_TYPES = (ClickhouseConnection,)
+DIRECT_QUERY_TYPES = (ClickhouseConnection, DucklakeConnection)
 FILE_TYPES = (ParquetConnection, CsvConnection, DuckdbConnection, SqliteConnection)
 
 CONNECTION_TYPES: dict[str, type[Connection]] = {
@@ -74,7 +85,11 @@ CONNECTION_TYPES: dict[str, type[Connection]] = {
     "sqlite": SqliteConnection,
     "postgres": PostgresConnection,
     "clickhouse": ClickhouseConnection,
+    "ducklake": DucklakeConnection,
 }
+# The object-storage schemes of a data location, and the settings block each one needs.
+OBJECT_STORAGE = {"s3://": "s3", "gs://": "gcs", "az://": "azure"}
+_URL = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 CONNECTION_NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
 SECRET_REFERENCE = re.compile(r"\$\{env:([A-Z_][A-Z0-9_]*)\}")
 
@@ -298,6 +313,8 @@ def _load_connections(document: ConfigFile, folder: Path) -> dict[str, Connectio
                 line=document.line(f"{pointer}/tls"),
                 connection=name,
             )
+        if isinstance(connection, DucklakeConnection):
+            connection = _existing_lake(document, pointer, name, connection, folder)
         if isinstance(connection, FILE_TYPES):
             connection = connection.model_copy(
                 update={"path": type(connection.path)(_absolute(connection.path.root, folder))}
@@ -313,6 +330,107 @@ def _iana_zones() -> frozenset[str]:
     text = resources.files("tzdata").joinpath("zones").read_text(encoding="utf-8")
     # `Factory` is a placeholder of the database, not a place.
     return frozenset(text.split()) - {"Factory"}
+
+
+def endpoint_host(endpoint: str) -> str:
+    """The host of `host[:port]` or `[ipv6][:port]`."""
+    if endpoint.startswith("["):
+        return endpoint[1 : endpoint.find("]")]
+    return endpoint.split(":", 1)[0]
+
+
+def _existing_lake(
+    document: ConfigFile, pointer: str, name: str, connection: DucklakeConnection, folder: Path
+) -> DucklakeConnection:
+    """An existing DuckLake's location (ADR-0027 §3), checked without opening anything: TLS to
+    another machine, a data path that matches its storage settings, a SQLite catalog on a local
+    disk. Relative paths are made absolute against the project folder. The catalog's role, its
+    privileges and its files are checked by the store when the lake is attached."""
+
+    def refuse(code: str, message: str, where: str) -> ProjectLoadError:
+        return ProjectLoadError(
+            code,
+            f"Connection '{name}': {message}",
+            file=document.file,
+            path=f"{pointer}/{where}",
+            line=document.line(f"{pointer}/{where}"),
+            connection=name,
+        )
+
+    catalog = connection.catalog.root
+    if (
+        isinstance(catalog, DucklakePostgresCatalog)
+        and not is_local_host(catalog.host)
+        and catalog.ssl_mode != "verify-full"
+    ):
+        raise refuse(
+            "SOURCE_TLS_REQUIRED",
+            f"the catalog is on another machine ({catalog.host}) and must declare ssl_mode: "
+            "verify-full, so its password and metadata travel only over TLS that checks the "
+            "server's certificate and name.",
+            "catalog/ssl_mode",
+        )
+    s3 = connection.s3
+    if s3 is not None and s3.use_ssl is False:
+        endpoint = s3.endpoint or ""
+        if not endpoint or endpoint_host(endpoint).lower() not in LOCAL_HOSTS:
+            raise refuse(
+                "SOURCE_TLS_REQUIRED",
+                "use_ssl: false is accepted only for an endpoint on the local machine (found: "
+                f"{endpoint or 'AWS S3'}); object storage is reached over HTTPS.",
+                "s3/use_ssl",
+            )
+    text = connection.data_path
+    blocks = {"s3": connection.s3, "gcs": connection.gcs, "azure": connection.azure}
+    given = [kind for kind, block in blocks.items() if block is not None]
+    scheme = next((prefix for prefix in OBJECT_STORAGE if text.startswith(prefix)), None)
+    if scheme is not None:
+        if given != [OBJECT_STORAGE[scheme]]:
+            raise document.schema_error(
+                f"Connection '{name}': data_path {text} needs the {OBJECT_STORAGE[scheme]} "
+                "settings, and no other storage settings.",
+                f"{pointer}/data_path",
+            )
+        if any(part in {".", ".."} for part in text[len(scheme) :].split("/")):
+            raise document.schema_error(
+                f"Connection '{name}': an object-storage data_path cannot contain . or .. "
+                "segments.",
+                f"{pointer}/data_path",
+            )
+        data_path = text
+    elif _URL.match(text) or given:
+        raise document.schema_error(
+            f"Connection '{name}': data_path {text} must be a local folder, or s3://, gs:// or "
+            "az:// with the settings of its kind.",
+            f"{pointer}/data_path",
+        )
+    else:
+        data_path = _absolute(text, folder)
+    data_path = data_path if data_path.endswith("/") else data_path + "/"
+    update: dict[str, object] = {"data_path": data_path}
+    if isinstance(catalog, DucklakeSqliteCatalog):
+        if _URL.match(catalog.path.root):
+            raise refuse(
+                "LAKE_LOCATION_INVALID",
+                f"the SQLite catalog {catalog.path.root} must be a file on a local disk, never "
+                "a URL.",
+                "catalog/path",
+            )
+        path = Path(_absolute(catalog.path.root, folder))
+        kind = file_system(path)
+        if kind is None or kind in NETWORK_FILE_SYSTEMS or kind.startswith("fuse."):
+            found = "a file system this platform cannot identify" if kind is None else kind
+            raise refuse(
+                "LAKE_LOCATION_INVALID",
+                f"the SQLite catalog {path} is on {found}; it must be on a local disk, where "
+                "file locking is reliable. Use a postgres catalog for a lake shared between "
+                "machines.",
+                "catalog/path",
+            )
+        update["catalog"] = connection.catalog.model_copy(
+            update={"root": catalog.model_copy(update={"path": type(catalog.path)(str(path))})}
+        )
+    return connection.model_copy(update=update)
 
 
 def _absolute(path: str, folder: Path) -> str:

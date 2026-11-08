@@ -25,7 +25,8 @@ export type Connection =
 	| DuckdbConnection
 	| SqliteConnection
 	| PostgresConnection
-	| ClickhouseConnection;
+	| ClickhouseConnection
+	| DucklakeConnection;
 /**
  * A file path; relative paths are resolved against the project folder. Globs are allowed for `parquet` and `csv`.
  */
@@ -34,6 +35,10 @@ export type Path = string;
  * Required for database connections. `false` is valid here and refused by the loader with `SOURCE_NOT_READ_ONLY`: every database source is read-only in v1.
  */
 export type ReadOnly = boolean;
+/**
+ * The existing lake's catalog: PostgreSQL or a SQLite file. A DuckDB-file catalog is refused (its owner's writer would conflict with this reader), and so are MySQL and Quack catalogs (ADR-0027 §3).
+ */
+export type DucklakeCatalog = DucklakePostgresCatalog | DucklakeSqliteCatalog;
 export type ProjectErrorCode =
 	| 'PROJECT_NOT_FOUND'
 	| 'PROJECT_YAML_INVALID'
@@ -250,6 +255,59 @@ export interface ClickhouseConnection {
 	 * How often the evidence the model relies on is verified on this live engine (ADR-0027 §7): `<n>h` or `<n>d`, at least `1h`.
 	 */
 	evidence_schedule?: string;
+}
+/**
+ * An existing DuckLake, owned and written by another system, queried in place (Direct Query, ADR-0027 §3): datasets of the semantic model name it as their `connection`; transformation models never read it. It is attached read-only, in a DuckDB instance of its own and inside a file sandbox (`contracts/store/v1`, "Existing DuckLake"). A PostgreSQL catalog on a host other than the local machine needs `ssl_mode: verify-full`, and object storage with `use_ssl: false` is accepted only on the local machine; the loader refuses them otherwise with `SOURCE_TLS_REQUIRED`.
+ */
+export interface DucklakeConnection {
+	type: 'ducklake';
+	catalog: DucklakeCatalog;
+	/**
+	 * Where the lake's data files are, exactly as its catalog records them: a local folder (a relative path is resolved against the project folder) or `s3://`, `gs://` or `az://` with the settings block of its kind (`s3`, `gcs` or `azure`, as in `lake.data`).
+	 */
+	data_path: string;
+	s3?: S3Storage;
+	gcs?: GcsStorage;
+	azure?: AzureStorage;
+	read_only: ReadOnly;
+	/**
+	 * How often a new snapshot is looked for and verified (ADR-0027 §7): `<n>m`, `<n>h` or `<n>d`, at least `5m`.
+	 */
+	schedule?: string;
+	/**
+	 * Optional: the age of the served snapshot (`<n>m`, `<n>h` or `<n>d`) after which its state turns amber.
+	 */
+	freshness?: string;
+}
+/**
+ * A PostgreSQL catalog, read with a dedicated role that can read nothing outside the catalog schema (checked when the lake is attached).
+ */
+export interface DucklakePostgresCatalog {
+	type: 'postgres';
+	host: string;
+	port: number;
+	database: string;
+	user: string;
+	password: SecretReference;
+	/**
+	 * PostgreSQL schema holding the catalog tables (DuckLake `METADATA_SCHEMA`); default `public`.
+	 */
+	schema?: string;
+	/**
+	 * libpq `sslmode`: `verify-full`, or `disable` for the local machine only. Absent: libpq's default, accepted on the local machine only.
+	 */
+	ssl_mode?: 'verify-full' | 'disable';
+	/**
+	 * Certificate authorities that verify the server with `verify-full`: `system` (the default) or `${env:NAME}`, a variable holding the path of a CA file.
+	 */
+	ssl_root_cert?: string;
+}
+/**
+ * A SQLite catalog file on a local disk (the mount rule of `lake.catalog`); a relative path is resolved against the project folder.
+ */
+export interface DucklakeSqliteCatalog {
+	type: 'sqlite';
+	path: CatalogPath;
 }
 /**
  * A project that cannot be loaded or a secret that cannot be resolved. `details` names the file, the location of the problem as a JSON pointer (`path`) and its `line` when known; never a secret value.

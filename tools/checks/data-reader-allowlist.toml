@@ -64,3 +64,10 @@ reader = "pyarrow.ipc.open_stream"
 function = "read"
 reason = "ClickHouse Direct Query (ADR-0027 §8, ADR-0028 §3): the result of a statement ClickHouse ran, in its own Arrow stream; Arrow carries it as transport, each batch is cast column by column, and no row becomes a Python object. No source row is extracted into the lake"
 test = "packages/store/tests/test_clickhouse.py::test_no_row_becomes_a_python_object_in_the_read"
+
+[[allow]]
+file = "packages/store/src/orvex/store/existing_lake.py"
+reader = "os.open"
+function = "_open_no_follow"
+reason = "An existing lake's SQLite catalog files (ADR-0027 §3), opened with O_NOFOLLOW for their device and inode and the header's journal mode only; no row is read. DuckDB attaches the catalog"
+test = "packages/store/tests/test_existing_lake.py::test_a_catalog_that_is_a_symbolic_link_is_refused"

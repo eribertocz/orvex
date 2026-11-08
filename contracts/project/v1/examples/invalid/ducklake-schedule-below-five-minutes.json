@@ -1,0 +1,1 @@
+{"version": 1, "connections": {"billing": {"type": "ducklake", "catalog": {"type": "sqlite", "path": "/srv/lakes/billing.sqlite"}, "data_path": "/srv/lakes/billing/", "read_only": true, "schedule": "4m"}}}

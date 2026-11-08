@@ -866,7 +866,7 @@ def test_a_name_at_is_still_allowed(sql: str) -> None:
 def test_an_object_storage_data_path_is_a_folder(tmp_path: Path, given: str, used: str) -> None:
     # #147: the secret's SCOPE is that folder, not every key that starts like it.
     from orvex.contracts.store.v1 import LocalLakeLocation
-    from orvex.store.lake import _data_path
+    from orvex.store.locations import _data_path
 
     location = LocalLakeLocation(
         kind="lake_location", catalog="local", path=str(tmp_path), data_path=given

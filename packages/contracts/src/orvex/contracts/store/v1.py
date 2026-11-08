@@ -463,6 +463,14 @@ class ChangesResult(BaseModel):
     tables: list[TableChanges]
 
 
+class RolesInUseItem(RootModel[str]):
+    root: Annotated[str, Field(max_length=128, min_length=1)]
+
+
+class ProtectedFile(RootModel[str]):
+    root: Annotated[str, Field(max_length=4096, min_length=2, pattern="^(/|[A-Za-z]:[\\\\/])")]
+
+
 class Parameter(BaseModel):
     """
     A named parameter bound to `$name` in the SQL. The value is text converted to the declared DuckDB type; exact values are never JSON numbers.
@@ -604,6 +612,33 @@ class StatisticsRequest(BaseModel):
     snapshot: Annotated[int, Field(ge=0)]
 
 
+class ExistingLakeAttachment(BaseModel):
+    """
+    An existing DuckLake that another system owns and writes, attached read-only in a DuckDB instance of its own (ADR-0027 §3, P2-30). The catalog and sandbox checks are made before any of its data is read; see README, "Existing DuckLake".
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["existing_lake_attachment"]
+    name: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    """
+    The connection's name.
+    """
+    location: SqliteLakeLocation | PostgresLakeLocation
+    """
+    The lake's catalog and data location. `encrypted` is the owner's setting and is refused here.
+    """
+    roles_in_use: list[RolesInUseItem]
+    """
+    Every PostgreSQL role name used by another connection of the instance (catalogs and sources) and by every managed lake's catalog. A PostgreSQL catalog whose role is listed is refused.
+    """
+    protected_files: list[ProtectedFile]
+    """
+    Absolute paths of the files no SQLite catalog may be a hard link to (the protected set). Each one's -wal, -shm, -journal and .wal files are protected with it.
+    """
+
+
 class StoreMessage(
     RootModel[
         LakeLocation
@@ -621,6 +656,7 @@ class StoreMessage(
         | TablesResult
         | ChangesRequest
         | ChangesResult
+        | ExistingLakeAttachment
     ]
 ):
     root: Annotated[
@@ -638,7 +674,8 @@ class StoreMessage(
         | TablesRequest
         | TablesResult
         | ChangesRequest
-        | ChangesResult,
+        | ChangesResult
+        | ExistingLakeAttachment,
         Field(title="StoreMessage"),
     ]
     """

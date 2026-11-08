@@ -45,6 +45,7 @@ from orvex.contracts.store.v1 import (
     SqliteSourceAttachment,
 )
 from orvex.store.errors import StoreError, register_secret
+from orvex.store.locations import POSTGRES_CONNECT_TIMEOUT_S
 from orvex.store.sql_text import identifier as _identifier
 from orvex.store.sql_text import literal as _quote
 
@@ -398,7 +399,7 @@ def _open(
             f"USER {_quote(source.user)}, PASSWORD {_quote(password)})",
         )
         conninfo = (
-            f"connect_timeout={lake_module.POSTGRES_CONNECT_TIMEOUT_S} "
+            f"connect_timeout={POSTGRES_CONNECT_TIMEOUT_S} "
             "options='-c default_transaction_read_only=on'" + tls
         )
         options = ["TYPE postgres", f"SECRET {secret}", "READ_ONLY"]
