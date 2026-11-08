@@ -406,3 +406,19 @@ def test_reads_need_a_time_limit(made: tuple[Path, Path]) -> None:
         with pytest.raises(StoreError) as caught:
             LakeReads(lake, timeout_ms=0)
         assert caught.value.code == "STORE_LIMITS_REQUIRED"
+
+
+UHUGEINT_MAX = "340282366920938463463374607431768211455"
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        f"[CAST('{UHUGEINT_MAX}' AS UHUGEINT)]",
+        f"{{'a': CAST('{UHUGEINT_MAX}' AS UHUGEINT)}}",
+    ],
+    ids=["list", "struct"],
+)
+def test_a_nested_uhugeint_is_refused_never_wrapped(reads: LakeReads, column: str) -> None:
+    found = refused(reads, f'SELECT {column} AS "v" FROM "readings" LIMIT 1')
+    assert found.code == "STORE_TYPE_UNSUPPORTED"
