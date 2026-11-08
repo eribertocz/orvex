@@ -1651,3 +1651,35 @@ def test_a_select_list_subquery_at_the_bound_filtered_above_is_refused(tmp_path:
     found = config_problems(sql_model(tmp_path, MANUAL_APPEND, sql))
     assert [item.code.root for item in found] == ["INVALID_MODEL_SQL"]
     assert "keep every row they read" in found[0].message
+
+
+# --- #254: a lookback on a DATE time column counts whole days -----------------------------------
+
+DATED = [("id", "BIGINT"), ("read_at", "DATE")]
+
+
+@pytest.mark.parametrize(
+    ("lookback", "suggested"),
+    [("12h", "0s or 1d"), ("36h", "1d or 2d"), ("86401s", "1d or 2d"), ("90m", "0s or 1d")],
+)
+def test_a_lookback_that_is_not_whole_days_is_refused_on_a_date_column(
+    tmp_path: Path, lookback: str, suggested: str
+) -> None:
+    # `86401s` stands for the issue's `1d1s`, which is not a valid Duration.
+    merge = model(tmp_path, MERGE.replace("[id]}", f"[id], lookback: {lookback}}}"))
+    (item,) = column_problems(merge, DATED)
+    assert (item.code.root, item.details.path) == ("MODEL_CONFIG_INVALID", "/incremental/lookback")
+    assert "DATE" in item.message
+    assert f"(use {suggested})" in item.message
+    for kind in ("TIMESTAMP", "TIMESTAMP WITH TIME ZONE"):  # read to the microsecond there
+        assert column_problems(merge, [("id", "BIGINT"), ("read_at", kind)]) == []
+
+
+@pytest.mark.parametrize(("lookback", "days"), [("0s", 0), ("24h", 1), ("1d", 1), ("2d", 2)])
+def test_a_lookback_of_whole_days_moves_since_by_exactly_those_days(
+    tmp_path: Path, lookback: str, days: int
+) -> None:
+    merge = model(tmp_path, MERGE.replace("[id]}", f"[id], lookback: {lookback}}}"))
+    assert column_problems(merge, DATED) == []
+    since = since_value("DATE", "2026-03-10", lookback)
+    assert since == (dt.date(2026, 3, 10) - dt.timedelta(days=days)).isoformat()

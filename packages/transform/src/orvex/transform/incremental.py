@@ -1171,6 +1171,22 @@ def column_problems(model: Model, columns: Columns) -> list[ModelError]:
                 path="/incremental/time_column",
             )
         )
+    back = lookback_microseconds(incremental.lookback)
+    day = _UNIT_MICROSECONDS["d"]
+    if kind == "DATE" and back % day:
+        # `$since` on a DATE moves by whole days: anything else would be cut silently (#254).
+        below, above = back // day, back // day + 1
+        found.append(
+            problem(
+                "MODEL_CONFIG_INVALID",
+                f"{file}: time_column {time_column} is a DATE, so lookback counts whole days; "
+                f"{incremental.lookback} is not a whole number of days (use "
+                f"{f'{below}d or ' if below else '0s or '}{above}d).",
+                file,
+                model=model.name,
+                path="/incremental/lookback",
+            )
+        )
     for field, listed in (
         ("unique_key", incremental.unique_key),
         ("partition_by", incremental.partition_by),
@@ -1222,7 +1238,8 @@ def lookback_microseconds(lookback: str | None) -> int:
 
 def since_value(kind: str, watermark: str | None, lookback: str | None) -> str:
     """`$since` for a time column of DuckDB type `kind`: the previous watermark minus `lookback`
-    (whole days for DATE, rounded down), or `-infinity` when there is no watermark.
+    (whole days for DATE: validation refuses any other lookback there, #254), or `-infinity` when
+    there is no watermark.
 
     Integer arithmetic on dates and microseconds: exact, and no clock is read. A watermark this
     code cannot read (a year outside 1-9999) is returned unchanged; the store then refuses it as
