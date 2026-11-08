@@ -4,29 +4,34 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import signal
 import socket
 import sys
 import threading
 import webbrowser
 from collections.abc import Iterator, Sequence
-from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
+from importlib.metadata import version
 from importlib.resources import files
 from pathlib import Path
 from types import FrameType
 
 import uvicorn
+from orvex.server import development_switch, existing_lakes
 from orvex.server.app import LocalSemantic, create_app
 from orvex.server.commands import (
     ProjectLocked,
     evidence,
     lake_location,
+    memory_limit,
     open_existing,
     project_lock,
     run,
     runs,
     validate,
 )
+from orvex.server.existing_lakes import ExistingLakes, ducklake_connections, memory_share
 from orvex.server.identity import Identity, load_identity
 from orvex.server.instance import (
     Project,
@@ -39,8 +44,10 @@ from orvex.server.instance import (
 from orvex.server.local_access import new_access, serving
 from orvex.server.logs import configure_logging
 from orvex.server.maintenance import history, maintain
+from orvex.server.project import ProjectLoadError, load_project
 from orvex.server.scheduler import STOP_GRACE_SECONDS, schedule
 from orvex.server.semantic_http import (
+    QUERY_TIMEOUT_MS,
     ProjectSource,
     Semantic,
     local_context,
@@ -54,6 +61,7 @@ from orvex.server.versions import (
     current_versions,
     installed_declarations,
 )
+from orvex.store.errors import StoreError
 
 LOCAL_HOST = "127.0.0.1"
 COMMANDS = frozenset({"validate", "run", "runs", "schedule", "maintain", "evidence"})
@@ -124,15 +132,52 @@ def describe_versions(identity: Identity, versions: Versions) -> str:
     return "\n".join(lines)
 
 
-def served_project(folder: Path, identity: Identity) -> ProjectSource:
-    """The opened project for the HTTP API, with the lake's opening and the project lock."""
+def served_project(
+    folder: Path, identity: Identity, lakes: ExistingLakes | None = None
+) -> ProjectSource:
+    """The opened project for the HTTP API, with the lake's opening and the project lock; with
+    `lakes`, its existing lakes, and the managed lake's instance on its share of the memory."""
+    memory = memory_share(memory_limit(), 1 + len(lakes)) if lakes else None
     return project_source(
         folder,
         identity,
-        lambda project, home: open_existing(home, lake_location(project, home)),
+        lambda project, home: open_existing(home, lake_location(project, home), memory),
         project_lock,
         ProjectLocked,
+        lakes.pinned if lakes else None,
     )
+
+
+@contextmanager
+def attached_lakes(
+    folder: Path, identity: Identity, project: str
+) -> Iterator[ExistingLakes | None]:
+    """The project's existing DuckLakes, attached for the serve session when the development
+    switch is on and it has any (#399); each instance, and the managed lake's, on an equal share
+    of the memory budget."""
+    if not development_switch.existing_ducklake(identity):
+        yield None
+        return
+    try:
+        connections = load_project(folder).connections
+    except ProjectLoadError:  # every question then says the settings have problems
+        connections = {}
+    count = len(ducklake_connections(connections))
+    if count == 0:
+        yield None
+        return
+    with existing_lakes.opened(
+        folder,
+        instance_directory(identity),
+        identity.slug,
+        project,
+        connections,
+        memory_limit=memory_share(memory_limit(), 1 + count),
+        threads=os.cpu_count() or 2,
+        timeout_ms=QUERY_TIMEOUT_MS,
+        engine_version=version("duckdb"),
+    ) as lakes:
+        yield lakes
 
 
 def server_config(
@@ -269,19 +314,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(error, file=sys.stderr)
             return 2
 
-    with project_context as project:
+    with project_context as project, ExitStack() as stack:
         try:
             port = free_port(arguments.port)
         except OSError as error:
             print(f"{error}; choose another --port", file=sys.stderr)
             return 1
+        try:
+            lakes = stack.enter_context(attached_lakes(project.path, identity, project.id))
+        except (ProjectLoadError, StoreError) as error:
+            print(error, file=sys.stderr)
+            return 1
         url = f"http://{LOCAL_HOST}:{port}/"
         access = new_access(identity.slug, port)
+        source = served_project(project.path, identity, lakes)
         local = LocalSemantic(
-            project.id,
-            access,
-            Semantic(served_project(project.path, identity), local_context, session_settings()),
+            project.id, access, Semantic(source, local_context, session_settings())
         )
+        if lakes is not None:
+            stack.enter_context(lakes.checking(source))
         server = uvicorn.Server(server_config(port, versions, web_build_directory(), local))
         serve_folder = instance_directory(identity) / "serve"
         with serving(serve_folder, port, access, url) as private, stopping(server) as received:

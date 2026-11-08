@@ -538,9 +538,14 @@ job = "semantic-corpus"
 kind = "check"
 required = true
 contexts = ["semantic-corpus"]
-digest = "359ba0125927ae59"
+digest = "3a1c19a783bf0f17"
 setup = ["python -m pip install --quiet pip==26.2.2"]
 [[job.check]]
 name = "semantic-corpus"
 run = "python -m conformance.runners.semantic_corpus --through both"
 local = true
+[[job.check]]
+name = "semantic-corpus-existing-ducklake"
+run = "python -m conformance.runners.semantic_corpus --through existing-ducklake --switch-on"
+local = false
+reason = "needs a PostgreSQL server for the existing lake's catalog (CORPUS_POSTGRES), the job's service"

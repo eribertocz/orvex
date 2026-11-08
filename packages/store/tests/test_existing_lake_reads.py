@@ -16,6 +16,7 @@ import pytest
 from orvex.contracts.store.v1 import (
     AzureStorage,
     ExistingLakeAttachment,
+    LocalLakeLocation,
     ObjectStorage,
     Parameter,
     ProtectedLocation,
@@ -23,10 +24,12 @@ from orvex.contracts.store.v1 import (
     RolesInUseItem,
     Snapshot,
     SqliteLakeLocation,
+    StatementRequest,
 )
 from orvex.store.errors import StoreError
 from orvex.store.existing_lake import ExistingLake
 from orvex.store.existing_lake_reads import SNAPSHOT_CHANGED, LakeReads
+from orvex.store.lake import Limits, open_lake
 
 from .test_existing_lake import MEMORY, Catalog
 from .test_existing_lake_files import attachment, edit_catalog
@@ -129,6 +132,41 @@ def test_a_read_carries_duckdb_types_as_the_managed_lake_does(reads: LakeReads) 
         request('SELECT "kwh" FROM "readings"', snapshot), snapshot.committed_at
     ).read_all()
     assert table.schema.field("kwh").metadata == {b"duckdb_type": b"DECIMAL(18,4)"}
+
+
+# Every kind whose Arrow form DuckDB exports in two ways (lossless or not), and an exact one.
+ARROW_KINDS = (
+    'SELECT "kwh" > 2 AS high, '
+    "'2b9b6b8e-2f6c-4a51-9a35-6f6d7a4b8c11'::UUID AS id, "
+    "INTERVAL 1 DAY AS span, 170141183460469231731687303715884105727::HUGEINT AS huge, "
+    '\'{"a": 1}\'::JSON AS doc, [1, 2] AS list, "kwh" FROM "readings"'
+)
+
+
+def test_a_reads_arrow_types_are_the_managed_lakes(reads: LakeReads, tmp_path: Path) -> None:
+    """Corpus parity (#399): booleans and every other kind arrive as the managed lake's reads
+    them, so the semantic engine finds the plan's own types (no lossless extension types)."""
+    snapshot = reads.latest()
+    found = reads.read(request(ARROW_KINDS, snapshot), snapshot.committed_at).read_all()
+    location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(tmp_path / "m"))
+    managed = open_lake(location, Limits(MEMORY, 1, 1, 0, 60_000))
+    try:
+        with managed.transaction() as transaction:
+            transaction.execute(
+                StatementRequest(
+                    kind="statement",
+                    sql="CREATE TABLE readings AS SELECT 2.5::DECIMAL(18,4) AS kwh",
+                    parameters=[],
+                )
+            )
+        current = managed.current_snapshot()
+        expected = managed.read(request(ARROW_KINDS, current)).read_all()
+    finally:
+        managed.close()
+    assert found.schema.field("high").type == "bool"
+    assert [(f.name, f.type, f.metadata) for f in found.schema] == [
+        (f.name, f.type, f.metadata) for f in expected.schema
+    ]
 
 
 def test_a_read_is_pinned_to_its_snapshot_whatever_the_owner_commits_after(
@@ -368,3 +406,19 @@ def test_reads_need_a_time_limit(made: tuple[Path, Path]) -> None:
         with pytest.raises(StoreError) as caught:
             LakeReads(lake, timeout_ms=0)
         assert caught.value.code == "STORE_LIMITS_REQUIRED"
+
+
+UHUGEINT_MAX = "340282366920938463463374607431768211455"
+
+
+@pytest.mark.parametrize(
+    "column",
+    [
+        f"[CAST('{UHUGEINT_MAX}' AS UHUGEINT)]",
+        f"{{'a': CAST('{UHUGEINT_MAX}' AS UHUGEINT)}}",
+    ],
+    ids=["list", "struct"],
+)
+def test_a_nested_uhugeint_is_refused_never_wrapped(reads: LakeReads, column: str) -> None:
+    found = refused(reads, f'SELECT {column} AS "v" FROM "readings" LIMIT 1')
+    assert found.code == "STORE_TYPE_UNSUPPORTED"

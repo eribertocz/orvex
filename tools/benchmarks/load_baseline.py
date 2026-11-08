@@ -102,7 +102,7 @@ TRACED = (
     "import orvex.server.commands as commands\n"
     "limit = sys.argv[1]\n"
     "if limit:\n"
-    "    commands._memory_limit = lambda: limit\n"
+    "    commands.memory_limit = lambda: limit\n"
     "step_of = commands._run_step\n"
     "def traced(transaction, step, item):\n"
     "    text = str(getattr(getattr(step, 'request', step), 'sql', ''))[:60]\n"

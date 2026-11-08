@@ -680,7 +680,6 @@ class ExistingLake:
         for statement in (
             "SET GLOBAL TimeZone = 'UTC'",
             "SET GLOBAL python_enable_replacements = false",
-            "SET GLOBAL arrow_lossless_conversion = true",
             f"SET temp_directory = {_quote(self._spill)}",
             f"SET allowed_directories = [{', '.join(map(_quote, folders))}]",
             f"SET allowed_paths = [{', '.join(map(_quote, files))}]",

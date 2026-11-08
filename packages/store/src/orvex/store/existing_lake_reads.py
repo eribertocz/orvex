@@ -35,6 +35,7 @@ from orvex.store.errors import StoreError
 from orvex.store.existing_lake import _EPOCH, LAKE, ExistingLake
 from orvex.store.existing_lake_guard import guarded
 from orvex.store.lake import Guard, _utc_schema, _with_duckdb_types, exact_select
+from orvex.store.nested_types import refuse_nested_uhugeint
 from orvex.store.sql_text import literal as _quote
 
 SNAPSHOT_CHANGED = "snapshot_changed"
@@ -75,6 +76,7 @@ class LakeReads:
             )
             sql = str(found[0]) if found else ""
             relation = cursor.sql(sql, params=values) if values else cursor.sql(sql)
+            refuse_nested_uhugeint(list(relation.columns), relation.types)
             types = [str(kind) for kind in relation.types]
             exact = exact_select(sql, list(relation.columns), types)
             if exact is not None:

@@ -181,13 +181,13 @@ def test_the_memory_limit_is_set_only_by_the_experiment() -> None:
     # traced process.
     from orvex.server import commands
 
-    assert commands._limits().memory_limit == commands._memory_limit()
+    assert commands._limits().memory_limit == commands.memory_limit()
     plain = command_for(["run", "x"])
     assert plain[1] == "-c"
     assert plain[3:] == ["", "run", "x"]
     limited = command_for(["run", "x"], "4GB")
     assert limited[3:] == ["4GB", "run", "x"]
-    for command, expected in ((plain, commands._memory_limit()), (limited, "4GB")):
+    for command, expected in ((plain, commands.memory_limit()), (limited, "4GB")):
         probe = subprocess.run(
             [
                 sys.executable,

@@ -306,6 +306,7 @@ def test_compiling_takes_no_caller_and_grants_nothing() -> None:
         "snapshot",
         "file",
         "routing",  # every dataset's engine (P2-29): no permission
+        "adapters",  # existing lakes' reads at the compiled snapshots (P2-30): no permission
     ]
     assert "semantic_model" not in inspect.getsource(app)
     assert semantic_model.__name__ == "orvex.server.semantic_model"

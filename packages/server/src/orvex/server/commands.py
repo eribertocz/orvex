@@ -576,7 +576,7 @@ def _stand_in(lake: Lake, model: Model, output: Columns) -> None:
         )
 
 
-def _memory_limit() -> str:
+def memory_limit() -> str:
     """Three quarters of the machine's memory, or 4GB when it cannot be read."""
     try:
         total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
@@ -825,14 +825,14 @@ def _open_recorded(home: Path, place: Place, attachments: Sequence[Attachment] =
     return lake
 
 
-def open_existing(home: Path, place: Place) -> Lake:
-    """Open the project's existing lake, under the project lock the caller holds, after
+def open_existing(home: Path, place: Place, memory: str | None = None) -> Lake:
+    """Open the project's existing lake (with `memory`, its share), under the project lock, after
     checking again that its settings are the lake's own: another process may have created the
     lake since the project was checked (#181, Reviewer pass 2). `ProjectLoadError` otherwise."""
     lake_place.check_unchanged(home, place)
     _refuse_missing_catalog(home)
     lake_place.adopt(home, place)  # a default lake made before #204 gets its record
-    lake = open_lake(place.location, _limits())
+    lake = open_lake(place.location, _limits(memory))
     try:
         lake_place.complete(home, place)  # a record written before #147 gets its endpoint
     except BaseException:
@@ -869,9 +869,9 @@ def _refuse_missing_catalog(home: Path) -> None:
         )
 
 
-def _limits() -> Limits:
+def _limits(memory: str | None = None) -> Limits:
     return Limits(
-        memory_limit=_memory_limit(),
+        memory_limit=memory or memory_limit(),
         threads=os.cpu_count() or 2,
         max_concurrent=4,
         queue_size=16,

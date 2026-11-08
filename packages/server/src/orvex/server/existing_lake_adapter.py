@@ -3,6 +3,8 @@
 
 - `pin`: the connection's served snapshot (`existing_lake_snapshots`), fixed once per question
   and named by its receipt with the project, the connection, its id and its commit time.
+  `fixed()` is the adapter of one question: pinned once, so the model compiled against the
+  lake's tables at that snapshot is read at that same snapshot.
 - `compile`: the semantic engine's DuckDB adapter, unchanged: the lake's dialect is DuckDB SQL,
   never translated, and the statement names datasets' tables as the managed lake's do.
 - `read`: the store's read of that statement at the pinned snapshot (`existing_lake_reads`),
@@ -17,7 +19,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pyarrow as pa
-from orvex.contracts.store.v1 import Parameter, ReadRequest
+from orvex.contracts.store.v1 import Parameter, ReadRequest, Snapshot
 from orvex.semantic.adapters.duckdb import PhysicalQuery, PolicyValues, compile_plan
 from orvex.server.existing_lake_snapshots import SnapshotSchedule
 from orvex.store.errors import StoreError
@@ -31,14 +33,33 @@ class ExistingLakeAdapter:
 
     engine = ENGINE
 
-    def __init__(self, reads: LakeReads, schedule: SnapshotSchedule, engine_version: str) -> None:
+    def __init__(
+        self,
+        reads: LakeReads,
+        schedule: SnapshotSchedule,
+        engine_version: str,
+        version: Mapping[str, object] | None = None,
+    ) -> None:
         self.connection = schedule.connection
         self.engine_version = engine_version
         self._reads = reads
         self._schedule = schedule
+        self._version = version
 
     def pin(self) -> Mapping[str, object]:
+        if self._version is not None:
+            return self._version
         return self._schedule.pin()
+
+    def fixed(self) -> ExistingLakeAdapter:
+        """This adapter pinned at the snapshot served now; `STORE_SOURCE_INVALID` when none is."""
+        return ExistingLakeAdapter(self._reads, self._schedule, self.engine_version, self.pin())
+
+    def snapshot(self) -> Snapshot:
+        """The snapshot `pin` names, as the store reads one."""
+        version = self.pin()
+        committed = dt.datetime.fromisoformat(str(version["committed_at"]))
+        return Snapshot(kind="snapshot", id=int(str(version["id"])), committed_at=committed)
 
     def compile(self, plan: Any, values: Mapping[int, PolicyValues]) -> PhysicalQuery:  # noqa: ANN401 - a `SemanticPlan`
         return compile_plan(plan, values)
