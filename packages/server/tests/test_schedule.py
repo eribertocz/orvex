@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import io
 import itertools
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -429,12 +430,19 @@ def test_idle_hours_open_the_lake_only_when_its_catalog_changes(
     assert len(opened) <= 6, len(opened)
 
 
+def settled(*paths: Path) -> None:
+    """The same modification time as before: only the content tells a commit apart."""
+    for path in paths:
+        os.utime(path, (1_000_000_000, 1_000_000_000))
+
+
 def test_kept_records_are_read_again_once_the_catalog_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     catalog = tmp_path / "lake" / "catalog.ducklake"
     catalog.parent.mkdir()
     catalog.write_bytes(b"one")
+    settled(catalog)
     reads: list[int] = []
 
     def read(_home: Path, _place: object) -> object:
@@ -448,11 +456,42 @@ def test_kept_records_are_read_again_once_the_catalog_changes(
     place = cast(lake_place.Place, None)
     assert scheduler._records(tmp_path, place, kept).failed == ("1",)
     assert scheduler._records(tmp_path, place, kept).failed == ("1",)  # unchanged: kept
-    (catalog.parent / "catalog.ducklake.wal").write_bytes(b"commit")  # a commit's journal
+    wal = catalog.parent / "catalog.ducklake.wal"
+    wal.write_bytes(b"commit")  # a commit's journal
+    settled(wal)
     assert scheduler._records(tmp_path, place, kept).failed == ("2",)
     catalog.write_bytes(b"one, then checkpointed")
+    settled(catalog)
     assert scheduler._records(tmp_path, place, kept).failed == ("3",)
     assert len(reads) == 3
+
+
+def test_a_commit_with_the_same_size_and_time_is_still_seen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A coarse file-system clock can give the next commit the same size and time (Reviewer,
+    # #383): the content tells it apart.
+    catalog = tmp_path / "catalog.sqlite"
+    catalog.write_bytes(b"page")
+    settled(catalog)
+    reads: list[int] = []
+
+    def read(_home: Path, _place: object) -> object:
+        reads.append(1)
+        return scheduler._Records({}, None, ())
+
+    monkeypatch.setattr(lake_place, "exists", lambda _home: True)
+    monkeypatch.setattr(lake_place, "catalog_file", lambda _home: catalog)
+    monkeypatch.setattr(scheduler, "_read_records", read)
+    kept = scheduler._Kept()
+    place = cast(lake_place.Place, None)
+    scheduler._records(tmp_path, place, kept)
+    scheduler._records(tmp_path, place, kept)
+    assert len(reads) == 1  # unchanged: kept
+    catalog.write_bytes(b"PAGE")  # the same size
+    settled(catalog)  # and the same time
+    scheduler._records(tmp_path, place, kept)
+    assert len(reads) == 2
 
 
 def test_records_are_not_kept_when_the_catalog_changes_while_they_are_read(
@@ -460,11 +499,13 @@ def test_records_are_not_kept_when_the_catalog_changes_while_they_are_read(
 ) -> None:
     catalog = tmp_path / "catalog.sqlite"
     catalog.write_bytes(b"a")
+    settled(catalog)
     reads: list[int] = []
 
     def read(_home: Path, _place: object) -> object:
         reads.append(1)
         catalog.write_bytes(b"a" * (len(reads) + 1))  # another process commits meanwhile
+        settled(catalog)
         return scheduler._Records({}, None, ())
 
     monkeypatch.setattr(lake_place, "exists", lambda _home: True)
@@ -478,12 +519,16 @@ def test_records_are_not_kept_when_the_catalog_changes_while_they_are_read(
     assert kept.records is None
 
 
-def test_a_catalog_that_is_not_a_local_file_is_read_every_time(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("local", [False, True], ids=["postgresql", "too-large-to-hash"])
+def test_a_catalog_that_cannot_be_stamped_is_read_every_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, local: bool
 ) -> None:
     reads: list[int] = []
+    catalog = tmp_path / "catalog.ducklake"
+    catalog.write_bytes(b"xx")
     monkeypatch.setattr(lake_place, "exists", lambda _home: True)
-    monkeypatch.setattr(lake_place, "catalog_file", lambda _home: None)  # PostgreSQL
+    monkeypatch.setattr(lake_place, "catalog_file", lambda _home: catalog if local else None)
+    monkeypatch.setattr(scheduler, "STAMP_LIMIT", 1)
 
     def read(_home: Path, _place: object) -> object:
         reads.append(1)

@@ -25,6 +25,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import datetime as dt
+import hashlib
 import os
 import select
 import signal
@@ -83,7 +84,7 @@ class _Records:
     maintained: maintenance.Last = field(default_factory=maintenance.Last)
 
 
-Stamp = tuple[tuple[str, int, int], ...]
+Stamp = tuple[tuple[str, int, str], ...]
 
 
 @dataclass(slots=True)
@@ -94,23 +95,32 @@ class _Kept:
     records: _Records | None = None
 
 
+# Catalog files larger than this together are not hashed: the records are read every time.
+STAMP_LIMIT = 64 * 1024 * 1024
+
+
 def _stamp(home: Path) -> Stamp | None:
-    """Name, size and modification time of the lake's catalog files (the catalog and its
-    journals): a commit changes one of them. None when the catalog is not a local file
-    (PostgreSQL), or it cannot be read: the records are then read every time."""
+    """Path, size and content digest of the lake's catalog files (the catalog and its
+    journals): every commit writes one of them. The content, not the modification time, since
+    a coarse file-system clock can give a commit the time of the one before (FAT keeps 2 s).
+    None when the catalog is not a local file (PostgreSQL), is too large or cannot be read:
+    the records are then read every time."""
     catalog = lake_place.catalog_file(home)
     if catalog is None:
         return None
     try:
-        files = sorted(p for p in catalog.parent.iterdir() if p.name.startswith(catalog.name))
-        return tuple((p.name, *_size_and_time(p)) for p in files)
+        folder = catalog.parent.resolve()
+        files = sorted(p for p in folder.iterdir() if p.name.startswith(catalog.name))
+        if not files or sum(p.stat().st_size for p in files) > STAMP_LIMIT:
+            return None
+        return tuple((str(p), p.stat().st_size, _digest(p)) for p in files)
     except OSError:
         return None
 
 
-def _size_and_time(path: Path) -> tuple[int, int]:
-    found = path.stat()
-    return found.st_size, found.st_mtime_ns
+def _digest(path: Path) -> str:
+    with path.open("rb") as file:
+        return hashlib.file_digest(file, "sha256").hexdigest()
 
 
 def _records(home: Path, place: lake_place.Place, kept: _Kept | None = None) -> _Records:
@@ -129,7 +139,8 @@ def _records(home: Path, place: lake_place.Place, kept: _Kept | None = None) -> 
     found = _read_records(home, place)
     if kept is not None:
         after = _stamp(home)
-        kept.stamp, kept.records = (before, found) if after == before else (None, None)
+        settled = before is not None and after == before
+        kept.stamp, kept.records = (before, found) if settled else (None, None)
     return found
 
 
@@ -563,14 +574,16 @@ def _cycle(
     state.last_run_wall, state.last_run_monotonic = now, monotonic()
     selection = Selection(decided.models, "freshness", decided.full_refresh, control)
     previous_start = records.last_run_start
-    if commands.run(folder, identity, out, selection=selection) == 0:
+    ran = commands.run(folder, identity, out, selection=selection)
+    state.kept = _Kept()  # the run may have committed: the records are read again
+    if ran == 0:
         for name in decided.models:
             state.failures.pop(name, None)
             state.held.pop(name, None)
         return 1.0
     after = clock()
     try:
-        latest: _Records | None = _records(home, place, state.kept)
+        latest: _Records | None = _records(home, place)
     except commands.ProjectLocked, ProjectLoadError, StoreError:
         latest = None
     if latest is None or latest.last_run_start in {None, previous_start}:
