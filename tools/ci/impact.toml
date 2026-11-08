@@ -10,7 +10,7 @@
 "tests/conformance" = ["access", "contracts", "semantic", "server", "store", "transform"]
 "tests/properties" = ["access", "contracts", "semantic", "server", "store"]
 "tests/contracts" = ["contracts", "semantic"]
-"tests/workspace" = []
+"tests/workspace" = ["access", "contracts", "semantic", "server", "store", "transform", "dashboards", "mcp"]
 "tests/tools" = ["server"]
 
 # Paths whose change selects the full suite: shared test support, the runners, the build, the
@@ -29,6 +29,7 @@ paths = [
   "versions.toml",
   "identity.toml",
   "packages/contracts/",
+  "contracts/",
 ]
 
 # Paths with a known, narrower effect: each selects the listed test folders (and nothing is
@@ -43,7 +44,7 @@ tests = ["tests/tools"]
 
 [[narrow]]
 paths = ["tools/checks/", "tools/licenses/", "tools/rename/", "tools/synthetic/"]
-tests = ["tests/tools"]
+tests = ["tests/tools", "tests/workspace"]
 
 [[narrow]]
 paths = ["tools/contracts/"]

@@ -7,10 +7,9 @@ A changed file selects:
 - **in a package** (`packages/<name>/…`: code, SQL, YAML, JSON, schemas, fixtures, tests): that
   package's tests, and the tests of every package and test folder that depends on it, directly or
   through others (the packages' `pyproject.toml` dependencies);
-- **a contract** (`contracts/<name>/…`): the contract tests and every package that produces or
-  consumes it (`contracts.toml`), with their dependents;
 - **a known narrower path** (`tools/ci/impact.toml`, `[[narrow]]`): the test folders it lists;
-- **a global path** (`[full]`) or **any path the map does not know: the full suite.**
+- **a global path** (`[full]`: shared code, CI, locks, the public contracts) or **any path the
+  map does not know: the full suite.**
 
 The output says what was chosen and why, one reason per changed file.
 """
@@ -57,18 +56,6 @@ def packages(root: Path) -> dict[str, set[str]]:
     }
 
 
-def contract_users(root: Path) -> dict[str, set[str]]:
-    """Each contract name and the package folders that produce or consume it."""
-    found: dict[str, set[str]] = {}
-    for declared in sorted((root / "packages").glob("*/src/*/*/contracts.toml")):
-        folder = declared.relative_to(root / "packages").parts[0]
-        document = tomllib.loads(declared.read_text("utf-8"))
-        for key in ("produces", "consumes"):
-            for name in dict(document.get(key) or {}):
-                found.setdefault(str(name), set()).add(folder)
-    return found
-
-
 def dependents(graph: Mapping[str, set[str]], changed: Iterable[str]) -> set[str]:
     """`changed` and every package that depends on one of them, at any depth."""
     reached = set(changed)
@@ -85,7 +72,6 @@ def dependents(graph: Mapping[str, set[str]], changed: Iterable[str]) -> set[str
 def select(root: Path, changed: Sequence[str]) -> Selection:
     impact = tomllib.loads(MAP.read_text("utf-8"))
     graph = packages(root)
-    users = contract_users(root)
     folders: Mapping[str, list[str]] = impact["tests"]
     selection = Selection()
     modules: set[str] = set()
@@ -104,15 +90,6 @@ def select(root: Path, changed: Sequence[str]) -> Selection:
         if parts[0] == "packages" and len(parts) > 1 and parts[1] in graph:
             modules.add(parts[1])
             selection.reasons.append(f"{path}: package {parts[1]}")
-            continue
-        if parts[0] == "contracts" and len(parts) > 1:
-            if parts[1] not in users:
-                everything(path, f"contract {parts[1]} has no declared user")
-                continue
-            modules |= users[parts[1]]
-            selection.tests.add("tests/contracts")
-            used = ", ".join(sorted(users[parts[1]]))
-            selection.reasons.append(f"{path}: contract {parts[1]}, used by {used}")
             continue
         if parts[0] == "tests" and len(parts) > 1 and f"tests/{parts[1]}" in folders:
             selection.tests.add(f"tests/{parts[1]}")
@@ -153,7 +130,7 @@ def changed_files(root: Path) -> list[str]:
         ).stdout
 
     base = git("merge-base", "HEAD", "origin/main").strip()
-    found = git("diff", "--name-only", base).splitlines()
+    found = git("diff", "--name-only", "--no-renames", base).splitlines()
     found += git("ls-files", "--others", "--exclude-standard").splitlines()
     return sorted(set(found))
 

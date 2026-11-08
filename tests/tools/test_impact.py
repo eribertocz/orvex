@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -118,11 +119,86 @@ def test_declarative_files_of_a_package_select_it(path: str) -> None:
     assert "packages/server/tests" in selection.paths()  # server depends on transform
 
 
-def test_a_contract_change_selects_its_users_and_the_contract_tests() -> None:
-    selection = impact.select(ROOT, ["contracts/model-config/v1/README.md"])
-    paths = set(selection.paths())
-    assert {"tests/contracts", "packages/transform/tests", "packages/server/tests"} <= paths
-    assert any("used by transform" in reason for reason in selection.reasons)
+def test_a_contract_change_selects_the_full_suite() -> None:
+    # #373 §3: contracts are read across modules, tests and conformance.
+    assert impact.select(ROOT, ["contracts/model-config/v1/README.md"]).full
+
+
+def test_a_rename_lists_both_paths(tmp_path: Path) -> None:
+    def git(*arguments: str) -> None:
+        subprocess.run(["git", *arguments], cwd=tmp_path, check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    (tmp_path / "old.py").write_text("x = 1\n" * 20)
+    git("add", ".")
+    git("commit", "-q", "-m", "a")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("mv", "old.py", "new.py")
+    git("commit", "-q", "-m", "b")
+    assert impact.changed_files(tmp_path) == ["new.py", "old.py"]
+
+
+def repository_reads(path: Path) -> set[str]:
+    """The repository paths a test file depends on beyond its package imports: the `tools.*`
+    modules it imports and the files it reads as `<…ROOT> / "literal"`."""
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text("utf-8"))):
+        names = (
+            [node.module or ""]
+            if isinstance(node, ast.ImportFrom)
+            else [a.name for a in node.names]
+            if isinstance(node, ast.Import)
+            else []
+        )
+        for name in names:
+            parts = name.split(".")
+            if parts[0] == "tools" and len(parts) > 1 and parts[1] != "repository":
+                found.add("/".join(parts[:2]) + "/__init__.py")
+        if (
+            isinstance(node, ast.BinOp)
+            and isinstance(node.op, ast.Div)
+            and isinstance(node.left, ast.Name)
+            and node.left.id.endswith("ROOT")
+            and isinstance(node.right, ast.Constant)
+            and isinstance(node.right.value, str)
+        ):
+            found |= samples(node.right.value)
+    return found
+
+
+def samples(target: str) -> set[str]:
+    """A file read stands for itself; a folder read, for one tracked file under each of its
+    entries, so a folder spanning several packages is checked against each of them."""
+    if not (ROOT / target).is_dir():
+        return {target}
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", target], cwd=ROOT, check=True, capture_output=True, text=True
+    ).stdout.splitlines()
+    first: dict[str, str] = {}
+    for path in sorted(tracked):
+        entry = Path(path).relative_to(target).parts[0]
+        first.setdefault(entry, path)
+    return set(first.values())
+
+
+def test_every_file_a_test_reads_selects_that_test() -> None:
+    # Owner precision 1: a test that reads a file outside its package (a lock, a contract, a
+    # corpus case, a checker) is selected when that file changes.
+    tests = sorted(ROOT.glob("tests/**/test_*.py")) + sorted(ROOT.glob("packages/*/tests/**/*.py"))
+    missing = []
+    for test in tests:
+        relative = test.relative_to(ROOT).as_posix()
+        if test == Path(__file__):
+            continue  # this file reads the whole layout; a new package also changes the locks
+        for read in sorted(repository_reads(test)):
+            selection = impact.select(ROOT, [read])
+            if not selection.full and not any(
+                relative.startswith(f"{p}/") for p in selection.paths()
+            ):
+                missing.append(f"{relative} reads {read}")
+    assert not missing, missing
 
 
 def test_every_change_gets_a_reason() -> None:

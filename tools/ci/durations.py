@@ -30,6 +30,8 @@ from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from tools.repository import REPOSITORY_ROOT
+
 MARK = "test-duration"
 # A GitHub Actions log line starts with its timestamp.
 _STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ")
@@ -46,15 +48,18 @@ class Timing:
     python: str
 
 
-def test_id(classname: str, name: str) -> str:
+def node_id(classname: str, name: str, root: Path | None = None) -> str:
     """The node id of a JUnit test case: `packages.store.tests.test_x` + `test_y` becomes
-    `packages/store/tests/test_x.py::test_y` (a class becomes `::Class::test`)."""
+    `packages/store/tests/test_x.py::test_y` (a class becomes `::Class::test`). The module is
+    the longest prefix that is a file of the repository; failing that, the last `test_` part."""
     parts = classname.split(".")
+    base = REPOSITORY_ROOT if root is None else root
+    for end in range(len(parts), 0, -1):
+        if (base / ("/".join(parts[:end]) + ".py")).is_file():
+            return "::".join(["/".join(parts[:end]) + ".py", *parts[end:], name])
     for end in range(len(parts), 0, -1):
         if parts[end - 1].startswith("test_") or end == 1:
-            path = "/".join(parts[:end]) + ".py"
-            rest = parts[end:]
-            return "::".join([path, *rest, name])
+            return "::".join(["/".join(parts[:end]) + ".py", *parts[end:], name])
     return f"{classname}::{name}"
 
 
@@ -66,7 +71,7 @@ def from_junit(path: Path, python: str = "") -> Iterator[Timing]:
             p.get("name", ""): p.get("value", "") for p in case.iter("property") if p.get("name")
         }
         yield Timing(
-            test_id(case.get("classname", ""), case.get("name", "")),
+            node_id(case.get("classname", ""), case.get("name", "")),
             float(case.get("time") or 0),
             float(properties.get("setup_s") or 0),
             tuple(f for f in properties.get("fixtures", "").split(",") if f),

@@ -418,12 +418,30 @@ def pr(
     return status
 
 
+def nightly(
+    root: Path,
+    workers: int,
+    run: Callable[[Step, Path, dict[str, str]], Result] = run_step,
+) -> int:
+    """`full` with the extensive variants on (`PROPERTY_PROFILE=nightly`, as
+    `property-nightly.yml` sets it): hours, never a merge gate."""
+    previous = os.environ.get("PROPERTY_PROFILE")
+    os.environ["PROPERTY_PROFILE"] = "nightly"
+    try:
+        return full(root, workers, run)
+    finally:
+        if previous is None:
+            os.environ.pop("PROPERTY_PROFILE", None)
+        else:
+            os.environ["PROPERTY_PROFILE"] = previous
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m tools.ci.verify")
-    parser.add_argument("mode", choices=("fast", "pr", "full"))
+    parser.add_argument("mode", choices=("fast", "pr", "full", "nightly"))
     parser.add_argument("--workers", type=int, default=max(2, os.cpu_count() or 2))
     arguments = parser.parse_args(argv)
-    modes = {"fast": fast, "pr": pr, "full": full}
+    modes = {"fast": fast, "pr": pr, "full": full, "nightly": nightly}
     try:
         return modes[arguments.mode](REPOSITORY_ROOT, arguments.workers)
     except (RuntimeError, subprocess.CalledProcessError) as error:

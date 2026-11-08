@@ -131,3 +131,12 @@ def test_report_writes_the_record_for_the_shards(tmp_path: Path) -> None:
     out = tmp_path / "record.json"
     assert durations.main(["report", str(junit), "--record", str(out)]) == 0
     assert "suite/test_sample.py::test_quick" in json.loads(out.read_text("utf-8"))
+
+
+def test_a_folder_or_class_named_like_a_test_still_maps_to_its_file(tmp_path: Path) -> None:
+    (tmp_path / "test_suite").mkdir()
+    (tmp_path / "test_suite" / "test_x.py").write_text("")
+    assert (
+        durations.node_id("test_suite.test_x.test_Class", "test_y", tmp_path)
+        == "test_suite/test_x.py::test_Class::test_y"
+    )

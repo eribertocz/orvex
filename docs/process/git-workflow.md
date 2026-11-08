@@ -64,7 +64,7 @@ conformance/security/scenarios/
 - **Reviewable size.** About 400 changed lines (without generated and lock files) is a guide, not a hard limit. A larger pull request is allowed for tests, fixtures, a mechanical refactor, or when splitting it would break technical coherence; its description then has a `## Size` section that says why, and it stays reviewable.
 - **Tests before code.** The case matrix and its tests are written before the implementation and fail without it (`engineering.md` §4).
 - **Only the issue.** An improvement the issue does not need is not mixed in: the Agent identifies it in the pull request and it is handled apart, after the Owner's approval (rule below).
-- Drafts allowed while working; **Ready for review** only when the `pr` local verification passes on a clean checkout of the commit (`engineering.md` §4); merging requires the `full` verification green in CI.
+- Drafts allowed while working; **Ready for review** only when the `pr` local verification passes on a clean checkout of the commit (`engineering.md` §4); a tier A pull request also needs the local `full` verification; merging requires the `full` verification green in CI.
 
 ### 3.3.1 Nothing new on GitHub without approval
 
