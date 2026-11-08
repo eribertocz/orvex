@@ -4,9 +4,11 @@
 
 - On `main` (every push), every Python runs the whole suite in `PARTS` parts.
 - On a pull request, the newest Python (`WHOLE`) runs the whole suite. The other runs what `pr`
-  runs locally (`tools/ci/verify.py`): the critical tests and those the change can affect, in
-  `FEW` parts, and its other parts run nothing. When the impact is uncertain, it runs the whole
-  suite too (Owner's order, 2026-11-08: half the CI jobs of a pull request, nothing untested on
+  runs locally (`tools/ci/verify.py`): the critical tests and those the change can affect,
+  spread over the same `PARTS` parts by their recorded durations, so it never becomes the
+  slowest job of the run (a change to `store` selects most of the suite: in two parts it took
+  14 minutes, against 5 for a tenth of the whole suite). When the impact is uncertain, it runs
+  the whole suite too (Owner's order, 2026-11-08: lighter pull requests, nothing untested on
   `main`).
 
 The printed reasons say what was chosen and why. A selected path that is not a plain repository
@@ -26,7 +28,6 @@ from tools.ci import impact, verify
 from tools.repository import REPOSITORY_ROOT
 
 PARTS = 10
-FEW = 2
 WHOLE = "3.15"
 PLAIN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*")
 
@@ -35,28 +36,24 @@ PLAIN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*")
 class Choice:
     shard: str  # `PYTEST_SHARD`: "<part>/<parts>"
     paths: tuple[str, ...]  # nothing: the configured suite
-    skip: bool
     reasons: tuple[str, ...]
 
 
 def choose(event: str, python: str, part: int, changed: Sequence[str] | None) -> Choice:
     """`changed` is read only for a pull request's lighter Python."""
-    whole = Choice(f"{part}/{PARTS}", (), False, ())
+    whole = Choice(f"{part}/{PARTS}", (), ())
     if event != "pull_request" or python == WHOLE or changed is None:
         return whole
     paths, reasons = verify.pr_tests(REPOSITORY_ROOT, changed)
     if paths == ["."] or not all(PLAIN.fullmatch(p) and ".." not in p for p in paths):
-        return Choice(whole.shard, (), False, (*reasons, "the whole suite"))
-    if part >= FEW:
-        return Choice("", (), True, (f"part {part}: nothing (the selection runs in {FEW})",))
-    return Choice(f"{part}/{FEW}", tuple(paths), False, tuple(reasons))
+        return Choice(whole.shard, (), (*reasons, "the whole suite"))
+    return Choice(whole.shard, tuple(paths), tuple(reasons))
 
 
 def lines(choice: Choice) -> list[str]:
     return [
         f"PYTEST_SHARD={choice.shard}",
         f"PYTEST_PATHS={' '.join(choice.paths)}",
-        f"PYTEST_SKIP={'true' if choice.skip else 'false'}",
     ]
 
 

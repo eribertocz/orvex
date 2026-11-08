@@ -180,8 +180,7 @@ jobs:
           done
           key="Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
           echo "STORE_TEST_AZURE_CONNECTION_STRING=DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=$key;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;" >> "$GITHUB_ENV"
-      - if: env.PYTEST_SKIP != 'true'
-        run: |
+      - run: |
           python -m pytest -p tools.ci.shard -p tools.ci.timing -p tools.ci.order --junitxml=junit.xml $PYTEST_PATHS
           # Each test's time to this log (#375): what tools/ci/durations.py reads back.
           python -m tools.ci.durations emit junit.xml
