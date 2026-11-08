@@ -25,6 +25,7 @@ from functools import cache
 from importlib import resources
 from zoneinfo import ZoneInfo
 
+from orvex.semantic.adapters.clickhouse import zones as clickhouse_zones
 from orvex.semantic.compiler.zones import TZDATA_VERSION
 
 START = datetime(1970, 1, 1, tzinfo=UTC)
@@ -40,6 +41,13 @@ CHECK_SQL = (
     " WHERE datediff('second', TIMESTAMP '1970-01-01 00:00:00',"
     " timezone($p2, to_timestamp(t))) <> l"
 )
+
+
+def check_sql(adapter: str) -> str:
+    """The check in the dialect of the adapter that wrote the statement (`PhysicalQuery`)."""
+    if adapter == "clickhouse":
+        return clickhouse_zones.CHECK_SQL
+    return CHECK_SQL
 
 
 def pinned(zone: str) -> ZoneInfo:

@@ -42,7 +42,7 @@ from orvex.semantic.adapters.duckdb import compile_plan as duckdb_compile
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.correctness import analyze
-from orvex.semantic.engines import EngineEntry, Routing
+from orvex.semantic.engines import CAPABILITIES, EngineEntry, Routing
 from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.execution import answer
 from orvex.semantic.ossie.reader import read
@@ -65,19 +65,13 @@ Document = dict[str, Any]
 ROOT = Path(__file__).resolve().parents[2]
 CORPUS = ROOT / "conformance/semantic-corpus/bi-platform"
 MANIFEST = json.loads((CORPUS / "corpus/manifest.json").read_text("utf-8"))
-# The corpus cases this pull request answers; the others need a capability of PR 3.
-ANSWERED: tuple[str, ...] = ("CASE-001", "CASE-002", "CASE-003", "CASE-005", "CASE-006", "CASE-007")
-ANSWERED += ("CASE-014", "CASE-015", "CASE-018")
-LATER = {
-    "CASE-004": "multi_fact",
-    "CASE-009": "multi_fact",
-    "CASE-010": "multi_fact",
-    "CASE-011": "bridge",
-    "CASE-012": "time_zone",
-    "CASE-013": "as_of",
-    "CASE-019": "time_zone",
-    "CASE-021": "window",
-}
+# The corpus cases ClickHouse answers: every case the managed lake answers (the others are
+# refused when the model is compiled, before any engine).
+ANSWERED = tuple(
+    c["id"]
+    for c in MANIFEST["cases"]
+    if c["id"] not in ("CASE-008", "CASE-016", "CASE-017", "CASE-020")
+)
 ENTRY = EngineEntry(
     "warehouse", "clickhouse", "live", "clickhouse://localhost/test", ch.CAPABILITIES
 )
@@ -347,25 +341,8 @@ def test_case_mapping_is_refused_as_it_differs_from_the_reference() -> None:
     assert caught.value.code == "UNSUPPORTED_OPERATION"
 
 
-def test_a_capability_of_a_later_pull_request_is_refused_naming_it() -> None:
-    detail = {
-        "kind": "semantic_query",
-        "version": 1,
-        "mode": "detail",
-        "fields": [{"member": "m.id"}],
-        "order": [{"by": "m.id", "direction": "asc"}],
-        "page": {"size": "10"},
-    }
-    for document, capability in (
-        (question("total", group_by=["label"], totals="grand"), "grouping_sets"),
-        (detail, "detail_pages"),
-    ):
-        with pytest.raises(SemanticError) as caught:
-            written(document)
-        assert (caught.value.code, caught.value.details) == (
-            "UNSUPPORTED_OPERATION",
-            {"operation": capability},
-        )
+def test_the_adapter_runs_every_capability() -> None:
+    assert ch.CAPABILITIES == CAPABILITIES
 
 
 @pytest.mark.parametrize(
@@ -397,7 +374,7 @@ def test_every_corpus_statement_passes_the_allow_lists(
     case: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Each statement the corpus produces compiles, and `compile_plan` checks it against the
-    allow-lists, or is refused naming the capability PR 3 brings."""
+    allow-lists."""
     model = CORPUS / "models" / f"{case}.yaml"
     outcomes: list[str] = []
     real = duckdb_compile
@@ -416,8 +393,6 @@ def test_every_corpus_statement_passes_the_allow_lists(
     if case in ANSWERED:
         assert outcomes
         assert set(outcomes) == {"compiled"}
-    elif case in LATER:
-        assert set(outcomes) == {LATER[case]}
     else:  # refused when the model is compiled, or not run: nothing is planned
         assert outcomes == []
 
@@ -607,7 +582,7 @@ def exact(table: pa.Table, kinds: Sequence[tuple[str, str]]) -> pa.Table:
     return pa.Table.from_arrays(columns, names=[n for n, _ in kinds])
 
 
-@dataclass
+@dataclass(eq=False)  # one connection: its zone checks are cached by identity (`zonedata`)
 class OnClickHouse:
     """An enabled ClickHouse engine over the test server (an `ExternalAdapter`)."""
 
@@ -640,7 +615,7 @@ class OnClickHouse:
         timeout_ms: int | None,
     ) -> pa.RecordBatchReader:
         query = self.compiled.get(statement)
-        if query is None:  # a zone check (C6): the time_zone capability is PR 3's
+        if query is None and statement != ch.ZONE_CHECK_SQL:
             raise AssertionError("a statement this adapter did not compile")
         self.statements.append((statement, tuple(parameters)))
         assert placeholders(statement) == {p["name"] for p in parameters}
@@ -656,8 +631,13 @@ class OnClickHouse:
             raise StoreError(
                 "STORE_QUERY_FAILED", str(failure), {"engine_code": failure.code}
             ) from None
-        kinds = [(c.name, c.encoding) for c in query.columns]
-        kinds += [(n, "BOOLEAN") for n, _ in query.checks]
+        kinds = [("#different", "BIGINT")]  # a zone check (C6)
+        if query is not None:
+            kinds = [(c.name, c.encoding) for c in query.columns]
+            kinds += [(n, "BOOLEAN") for n, _ in query.checks]
+            kinds += [(n, "BIGINT") for n, _ in [*query.weights, *query.as_of]]
+            kinds += [(query.level, "INTEGER")] if query.level else []
+            kinds += list(query.hidden)
         table = exact(pyarrow.ipc.open_stream(body).read_all(), kinds)
         return pa.RecordBatchReader.from_batches(table.schema, table.to_batches())
 

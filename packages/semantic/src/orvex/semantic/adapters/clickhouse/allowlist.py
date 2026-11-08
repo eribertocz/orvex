@@ -16,11 +16,18 @@ from orvex.semantic.errors import PlanError
 FUNCTIONS = frozenset(
     {
         "CAST",
+        "COALESCE",
+        "GROUPING",
+        "MAX",
         "abs",
+        "arrayJoin",
+        "arrayMap",
+        "arrayZip",
         "coalesce",
         "count",
         "countIf",
         "empty",
+        "fromUnixTimestamp64Micro",
         "has",
         "if",
         "intDiv",
@@ -28,17 +35,26 @@ FUNCTIONS = frozenset(
         "makeDate32",
         "multiIf",
         "nullIf",
+        "parseDateTime64BestEffort",
+        "positiveModulo",
         "row_number",
+        "splitByChar",
         "sum",
         "sumIf",
         "throwIf",
+        "timeZoneOffset",
+        "toDate32",
         "toDateTime64",
         "toDecimal256",
         "toDayOfWeek",
         "toInt256",
+        "toInt64",
         "toMonth",
         "toString",
+        "toTimeZone",
+        "toUnixTimestamp64Micro",
         "toYear",
+        "tupleElement",
         "uniqExact",
         "uniqExactIf",
     }
@@ -73,6 +89,7 @@ _KEYWORDS = frozenset(
         "LAST",
         "FIRST",
         "NULLS",
+        "SETS",
     }
 )
 _TYPE_NAMES = frozenset({"Array", "DateTime64", "Decimal", "DECIMAL", "Nullable"})  # in a CAST
@@ -102,7 +119,10 @@ def check_statement(statement: str, tables: Iterable[str]) -> None:
         called = kind == "word" and following == "("
         if called and text not in FUNCTIONS | _TYPE_NAMES and text.upper() not in _KEYWORDS:
             raise PlanError(f"a function outside the allow-list: {text}")
-        if (kind == "word" and text.upper() in ("FROM", "JOIN")) or (kind, text) == ("other", ","):
+        reads = kind == "word" and text.upper() in ("FROM", "JOIN")
+        if reads and at and tokens[at - 1][1].upper() == "DISTINCT":  # `IS NOT DISTINCT FROM`
+            continue
+        if reads or (kind, text) == ("other", ","):
             if kind == "other" and not _in_from(tokens, at):
                 continue
             target = _table_at(tokens, at + 1)

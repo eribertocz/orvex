@@ -23,9 +23,13 @@ never reads data and never transpiles.
 - **The result.** Each column is converted last to its exact store form, exact types checked:
   `HUGEINT`, `UHUGEINT` and `UUID` as text, `TIMESTAMP WITH TIME ZONE` with microseconds in
   UTC, every other type by an explicit `CAST`; the order is that of the unconverted values.
-- **Capabilities.** `CAPABILITIES`; a plan needing any other is refused before anything is
-  written (`UNSUPPORTED_OPERATION`, naming it), as P2-29 defines. `LOWER` and `UPPER` are
-  refused: ClickHouse's Unicode case mapping is not DuckDB's (`ß`, a final sigma).
+- **Capabilities.** Every one (`engines.CAPABILITIES`), each written as the reference writes
+  it: a `NULL` of a type is `Nullable`; a running total and a bridge's weighted sum accumulate
+  in 256 bits, `NULL` over `NULL`s, checked into their type; a metric over metrics carries its
+  operands in 76 digits; a pivot table's rows are ordered in the statement that converts them;
+  an instant is cut in its zone (`zones`); a detail page's position is read back exactly; an
+  as-of guard counts with a join, never a correlated `count` (ClickHouse gives `NULL` for no
+  row). `LOWER` and `UPPER` are refused: ClickHouse's Unicode case mapping is not DuckDB's.
 
 The engine's profile is verified at connection by the store (`join_use_nulls = 1`,
 `transform_null_in = 0`, `cast_keep_nullable = 1`, and the rest of its table); this adapter
@@ -39,6 +43,7 @@ import re
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from orvex.semantic.adapters.clickhouse import zones
 from orvex.semantic.adapters.clickhouse.allowlist import check_statement
 from orvex.semantic.adapters.clickhouse.exact import (
     DECIMAL,
@@ -65,6 +70,7 @@ from orvex.semantic.catalog.building import _logical
 from orvex.semantic.compiler.catalog import LogicalType, column_key
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.compiler.typecheck import NodeType, TypedNode
+from orvex.semantic.engines import CAPABILITIES as ENGINE_CAPABILITIES
 from orvex.semantic.engines import required
 from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.ossie import sql
@@ -73,8 +79,8 @@ from orvex.semantic.result import ColumnSpec
 
 NAME = "clickhouse"
 VERSION = "1"
-# What this adapter runs (`engines.CAPABILITIES`); the rest lands with #225 PR 3.
-CAPABILITIES = frozenset({"count_distinct", "exact_decimal"})
+# What this adapter runs: every capability (`engines.CAPABILITIES`).
+CAPABILITIES = ENGINE_CAPABILITIES
 
 _EXACT = frozenset({"Integer", "Decimal"})
 _DATE_BUCKETS = {
@@ -107,6 +113,7 @@ class _ClickHouse(_Writer):
         values: Mapping[int, PolicyValues],
     ) -> None:
         super().__init__(plan, values)
+        self.levels: list[tuple[str, str]] = []  # a pivot table's sort keys (`by_level`)
         # Each table's columns, by DuckDB's identity of a name (the compiler's), exact.
         self.names: dict[str, dict[str, str]] = {}
         for source, names in columns.items():
@@ -171,6 +178,28 @@ class _ClickHouse(_Writer):
     def latest_first(self, axis: str) -> str:
         return f"{axis} DESC NULLS LAST"
 
+    def null_of(self, kind: str) -> str:
+        return f"CAST(NULL AS Nullable({engine_type(kind)}))"  # a plain type refuses `NULL`
+
+    def running_sum(self, column: str, window: str, kind: str) -> str:
+        """In 256 bits, and `NULL` while every value so far is `NULL`."""
+        found = DECIMAL.fullmatch(canonical(kind))
+        summed = self.accumulated(
+            column,
+            "Decimal" if found else "Integer" if exact_kind(kind) else None,
+            int(found.group(2)) if found else 0,
+        )
+        return f"if(count({column}) OVER ({window}) = 0, NULL, sum({summed}) OVER ({window}))"
+
+    def weighted_sum(self, value: str, weight: str, scales: tuple[int, int]) -> str:
+        """Each product in 76 digits, checked into the reference's `DECIMAL(38, s)` as each row's
+        product is there, then summed in 256 bits and checked into it again."""
+        scale = sum(scales)
+        product = checked(
+            f"({wide(value, scales[0])} * {wide(weight, scales[1])})", f"DECIMAL(38,{scale})"
+        )
+        return checked(self.total(wide(product, scale), None), f"DECIMAL(38,{scale})")
+
     def list_text(self, values: Any) -> str:  # noqa: ANN401
         return json.dumps([None if v is None else str(v) for v in values])
 
@@ -220,6 +249,7 @@ class _ClickHouse(_Writer):
         names = [(c.name, c.encoding) for c in columns] + [(n, "BOOLEAN") for n, _ in checks]
         names += [(n, "BIGINT") for n, _ in [*self.weights, *self.as_of]]
         names += [(LEVEL, "INTEGER")] if self.plan.totals is not None else []
+        names += self.hidden  # a detail page's sort columns not shown
         row = quote("#r")
         for name, _ in names:
             if "\\" in name:
@@ -234,6 +264,8 @@ class _ClickHouse(_Writer):
                 f"NULLS {'FIRST' if s.nulls_first else 'LAST'}"
                 for s in order
             )
+        elif self.levels:  # a pivot table's order (`by_level`)
+            text += " ORDER BY " + ", ".join(f"{row}.{quote(n)} {d}" for n, d in self.levels)
         if limit is not None:
             text += f" LIMIT {int(limit) + 1}"
         return text
@@ -362,11 +394,92 @@ class _ClickHouse(_Writer):
         raise _unsupported()  # LOWER and UPPER included: ClickHouse's case mapping differs
 
     def cut(self, unit: str, value: str, zone: str | None) -> str:
-        if zone is not None:
-            raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "time_zone"})
+        """A date's bucket, or an instant's in its zone (`zones`)."""
+        if zone is not None and (unit in _DATE_BUCKETS or zones.clock_unit(unit)):
+            self.zones.add(zone)
+            bound = self.bind("VARCHAR", zone)
+            if zones.clock_unit(unit):
+                return zones.clock_start(unit, value, bound)
+            value = zones.local_date(value, bound)
         if unit not in _DATE_BUCKETS:
             raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "bucket"})
         return _DATE_BUCKETS[unit].format(d=value)
+
+    # the other capabilities
+
+    def allocated(self, aggregate: Any) -> tuple[str, int]:  # noqa: ANN401
+        """A bridge's weighted sum (C7); refused when a product could pass 76 digits."""
+        tree = self.compiled.require(aggregate.metric).typed.tree
+        call = tree.node if tree is not None else None
+        value = self.types.get(id(call.arguments[0])) if isinstance(call, sql.Call) else None
+        weight = self.compiled.require(aggregate.allocation.weight).typed.type
+        if value is None or _scale(value) is None or _scale(weight) is None:
+            raise _unsupported()
+        if _bits(value) + _bits(weight) > WIDE_BITS:
+            raise _unsupported()
+        return super().allocated(aggregate)
+
+    def unmatched(self, join: Any, rows: str, conditions: list[str]) -> str:  # noqa: ANN401
+        """How many left rows the question reads match not exactly one valid right row (C6),
+        counted with a join: ClickHouse answers a correlated `count` with no row as `NULL`."""
+        as_of = join.as_of
+        values = [self.field(r, join.left) for r in as_of.rows]
+        n = len(values)
+        values += [self.field(a, join.left) for a, _ in join.pairs]
+        values.append(self.field(as_of.event, join.left))
+        read = ", ".join(f"{v} AS {quote(f'#r{i}')}" for i, v in enumerate(values))
+        table = self.relation(next(s.dataset for s in self.plan.sources if s.alias == join.right))
+        row = quote("#u")
+        on = " AND ".join(
+            f"{self.field(b, '#h')} = {row}.{quote(f'#r{n + i}')}"
+            for i, (_, b) in enumerate(join.pairs)
+        )
+        moment = f"{row}.{quote(f'#r{len(values) - 1}')}"
+        start, end = self.field(as_of.valid_from, "#h"), self.field(as_of.valid_to, "#h")
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        grouped = ", ".join(f"{row}.{quote(f'#r{i}')}" for i in range(len(values)))
+        matches = (
+            f"SELECT countIf({start} <= {moment} AND {moment} < {end}) AS {quote('#m')}"
+            f" FROM (SELECT DISTINCT {read}{rows}{where}) AS {row}"
+            f" LEFT JOIN {table} AS {quote('#h')} ON {on} GROUP BY {grouped}"
+        )
+        return f"(SELECT count() FROM ({matches}) AS {quote('#c')} WHERE {quote('#m')} <> 1)"
+
+    def over(self, node: sql.Node, step: Any) -> str:  # noqa: ANN401
+        """`+` and `-` of aligned aggregates, each exact operand in 76 digits; the result is
+        checked into its declared type by `cast_to`."""
+        written = super().over(node, step)
+        if not isinstance(node, sql.Ref):
+            return written
+        for aggregate in self.plan.aggregates:
+            if quote(aggregate.name) == written:
+                scale = _scale(self.compiled.require(aggregate.metric).typed.type)
+                return written if scale is None else wide(written, scale)
+        raise _unsupported()
+
+    def typed(self, value: object, encoding: str) -> str:
+        """A page position, bound as text and read back exactly into its column's type."""
+        if value is None:
+            return self.null_of(encoding)
+        kind = canonical(encoding)
+        text = ("true" if value else "false") if isinstance(value, bool) else str(value)
+        bound = self.bind("VARCHAR", text)
+        found = DECIMAL.fullmatch(kind)
+        if found is not None or exact_kind(kind):
+            return checked(wide(bound, int(found.group(2)) if found else 0), kind)
+        if kind == "TIMESTAMP WITH TIME ZONE":
+            return f"parseDateTime64BestEffort({bound}, 6, 'UTC')"
+        return f"CAST({bound} AS {engine_type(kind)})"
+
+    def by_level(self, inner: str, columns: list[ColumnSpec], checks: list[tuple[str, str]]) -> str:
+        """The rows with their pivot-table sort keys (`level_order`), ordered last, in the
+        statement that converts them (`ordered`): an order inside a subquery is not kept."""
+        keys, directions = self.level_order(columns)
+        names = [c.name for c in columns] + [n for n, _ in checks]
+        names += [n for n, _ in self.weights] + [n for n, _ in self.as_of] + [LEVEL]
+        self.levels = [(f"#o{n}", d) for n, d in enumerate(directions)]
+        kept = [quote(n) for n in names] + [f"{k} AS {quote(f'#o{n}')}" for n, k in enumerate(keys)]
+        return f"SELECT {', '.join(kept)} FROM ({inner}) AS {quote('o')}"
 
 
 _LITERALS = (32, 64, 128)  # DuckDB's integer literal types, narrowest first
