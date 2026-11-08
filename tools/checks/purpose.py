@@ -4,8 +4,9 @@
 
 FILE_PURPOSE_MISSING (a failure): a Python module of a package (`packages/*/src`), of `tools/`
 or of `conformance/runners/` without a module docstring whose first line says what the file is
-for. Generated contract modules are exempt (`structure.generated`), and so is an empty
-`__init__.py`, which only marks a package. Whether a file keeps to that one purpose is the
+for. Generated contract modules are exempt (`structure.generated`: their place, name and
+generator header), and so is an empty `__init__.py`, which only marks a package. Tests live
+outside these roots (`tests/`, `packages/*/tests/`). Whether a file keeps to that one purpose is the
 Reviewer's call (`docs/process/review.md`); this check makes the purpose explicit, so a file that
 grows a second one is visible against its own first line.
 """
@@ -38,7 +39,7 @@ def _modules(root: Path) -> Iterator[Path]:
     for pattern in ROOTS:
         for path in sorted(root.glob(pattern)):
             relative = path.relative_to(root).as_posix()
-            if path in seen or generated(relative) or "/tests/" in f"/{relative}":
+            if path in seen or generated(relative, root):
                 continue
             seen.add(path)
             yield path

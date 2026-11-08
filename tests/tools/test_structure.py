@@ -40,18 +40,44 @@ def test_a_listed_file_may_not_grow_past_its_ceiling(tmp_path: Path) -> None:
     assert (finding.level, finding.code) == ("error", "FILE_GREW")
 
 
-def test_a_shrunk_file_is_warned_to_lower_its_ceiling(tmp_path: Path) -> None:
+def test_a_shrunk_file_fails_until_its_ceiling_is_lowered(tmp_path: Path) -> None:
+    # Otherwise a file that shrank could grow back to its old ceiling (#409 review).
     exceptions = '[size]\n"packages/store/src/pkg/store/big.py" = { most = 900, reason = "#1" }\n'
     root = _package(tmp_path, {"__init__.py": "", "big.py": "x = 1\n" * 850}, exceptions)
     (finding,) = structure.sizes(root)
-    assert (finding.level, "lower `most`" in finding.text) == ("warning", True)
+    assert (finding.level, finding.code) == ("error", "FILE_CEILING_STALE")
+    assert "lower `most` from 900 to 850" in finding.text
 
 
-def test_an_entry_without_a_ceiling_fails(tmp_path: Path) -> None:
-    exceptions = '[size]\n"packages/store/src/pkg/store/big.py" = "reason only"\n'
+@pytest.mark.parametrize(
+    "entry",
+    [
+        '"reason only"',
+        "{ most = 900 }",
+        '{ most = 900, reason = " " }',
+        '{ most = 900, reason = "no issue named" }',
+        '{ most = 900.0, reason = "#1" }',
+        '{ most = "900", reason = "#1" }',
+        '{ most = true, reason = "#1" }',
+        '{ most = -1, reason = "#1" }',
+    ],
+    ids=["string", "no-reason", "blank-reason", "no-issue", "float", "text", "bool", "negative"],
+)
+def test_an_entry_without_a_valid_ceiling_fails(tmp_path: Path, entry: str) -> None:
+    exceptions = f'[size]\n"packages/store/src/pkg/store/big.py" = {entry}\n'
     root = _package(tmp_path, {"__init__.py": "", "big.py": "x = 1\n" * 801}, exceptions)
     (finding,) = structure.sizes(root)
     assert (finding.level, finding.code) == ("error", "FILE_TOO_LARGE")
+
+
+@pytest.mark.parametrize("relative", ["tools/big.py", "conformance/runners/big.py"])
+def test_tools_and_runners_are_size_checked_too(tmp_path: Path, relative: str) -> None:
+    root = _package(tmp_path, {"__init__.py": ""})
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("x = 1\n" * 801, "utf-8")
+    (finding,) = structure.sizes(root)
+    assert (finding.code, finding.path) == ("FILE_TOO_LARGE", relative)
 
 
 def test_a_stale_entry_is_warned(tmp_path: Path) -> None:
@@ -66,6 +92,26 @@ def test_generated_contract_modules_are_not_checked() -> None:
     assert structure.generated("packages/contracts/src/orvex/contracts/semantic_error/v1.py")
     assert not structure.generated("packages/contracts/src/orvex/contracts/__init__.py")
     assert not structure.generated("packages/store/src/orvex/store/v1.py")
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        ("v1.py", "x = 1\n"),  # the generator's name, without its header
+        ("v0.py", structure.GENERATED_HEADER + "x\n"),  # a name the generator never writes
+        ("v01.py", structure.GENERATED_HEADER + "x\n"),
+        ("v\u00b2.py", structure.GENERATED_HEADER + "x\n"),
+    ],
+    ids=["no-header", "v0", "leading-zero", "superscript"],
+)
+def test_a_hand_written_file_named_like_a_generated_one_is_still_checked(
+    tmp_path: Path, name: str, text: str
+) -> None:
+    relative = f"packages/contracts/src/orvex/contracts/hand/{name}"
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    path.write_text(text + "x = 1\n" * 801, "utf-8")
+    assert not structure.generated(relative, tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -156,7 +202,7 @@ def test_warnings_and_errors_are_ci_annotations(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     exceptions = '[size]\n"packages/store/src/pkg/store/big.py" = { most = 900, reason = "#1" }\n'
-    files = {"__init__.py": "", "big.py": "x = 1\n" * 801, "a.py": "from . import b\n"}
+    files = {"__init__.py": "", "big.py": "x = 1\n" * 10, "a.py": "from . import b\n"}
     root = _package(tmp_path, {**files, "b.py": "from . import a\n"}, exceptions)
     assert structure.main(root) == 1
     out = capsys.readouterr().out
