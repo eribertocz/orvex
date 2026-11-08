@@ -23,6 +23,33 @@
 #   when not the repository root), and `local`: true when the local full verification runs
 #   it; false with the `reason` it can run only in CI.
 
+# Profiles (#375, #373 §2), run by `python -m tools.ci.verify <profile>`:
+# - `fast`: while working: the quick checks and the tests of the changed packages;
+# - `pr`: locally before a push: the quick checks, the critical checks and tests below, and the
+#   tests the change affects (`tools/ci/impact.py`), in parallel parts;
+# - `full`: the whole suite on every Python of the matrix: required in CI on every pull request
+#   before a merge, and the local run for a tier A pull request before it is marked ready;
+# - `nightly`: the extensive runs, on a schedule (`property-nightly.yml`); never blocks a merge.
+# The critical sets run in `pr` and `full` whatever a change touches.
+[profiles]
+critical_checks = ["semantic-corpus", "contracts-validate", "governance-scripts", "boundaries", "product-name"]
+critical_tests = [
+  # Security: access, contexts and policies, the HTTP boundary, source isolation.
+  "packages/access/tests",
+  "packages/semantic/tests/test_policies.py",
+  "packages/server/tests/test_semantic_http.py",
+  "packages/store/tests/test_source_isolation.py",
+  "tests/conformance/test_row_policies.py",
+  "tests/conformance/test_security_context_reuse.py",
+  "tests/conformance/test_direct_query.py",
+  # Exactness and the semantic engine's contract with its corpus.
+  "tests/conformance/test_semantic_corpus.py",
+  "tests/conformance/test_execution.py",
+  "tests/properties",
+  # Contracts and their examples.
+  "tests/contracts",
+]
+
 [[job]]
 workflow = "checks.yml"
 job = "product-name"
@@ -147,7 +174,7 @@ contexts = [
   "python-tests-3.14-part-8",
   "python-tests-3.14-part-9",
 ]
-digest = "d628012ea6e16adc"
+digest = "0bbadbd557515bcd"
 pythons = ["3.15", "3.14"]
 setup = [
   "python -m pip install --quiet pip==26.2.2",
@@ -160,7 +187,7 @@ reports = ["python -m tools.ci.junit_annotations junit.xml"]
 # Locally: the whole suite on each Python of the matrix, in one part. Tests that need the
 # PostgreSQL, ClickHouse or Azurite services CI starts are reported as not run, by reason.
 name = "python-tests"
-run = "python -m pytest -p tools.ci.shard --junitxml=junit.xml"
+run = "python -m pytest -p tools.ci.shard -p tools.ci.timing --junitxml=junit.xml"
 local = true
 
 [[job]]

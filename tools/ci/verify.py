@@ -1,7 +1,10 @@
-"""Run the mandatory checks locally before pushing (#240): CI only confirms.
+"""Run the mandatory checks locally (#240, #375 profiles): CI only confirms.
 
     python -m tools.ci.verify fast   # while working: quick checks and the changed modules' tests
-    python -m tools.ci.verify full   # once before pushing: every check this machine can run
+    python -m tools.ci.verify pr     # before pushing: + critical checks and tests, + what the
+                                     # change affects (tools/ci/impact.py), in parallel parts
+    python -m tools.ci.verify full   # every check this machine can run: CI runs it on every
+                                     # pull request; locally for a tier A pull request
 
 `full` refuses a working tree with uncommitted changes, checks out HEAD in a temporary
 directory, builds one environment per Python of the CI matrix from its lock file, installs the
@@ -22,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import xml.etree.ElementTree as ElementTree
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
@@ -29,7 +33,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tools.ci import checks
+from tools.ci import checks, impact
 from tools.repository import REPOSITORY_ROOT
 
 TESTS = "python-tests"
@@ -56,6 +60,7 @@ class Step:
     directory: str | None
     command: tuple[str, ...]
     junit: str | None = None
+    variables: tuple[tuple[str, str], ...] = ()  # set for this step only (a part's PYTEST_SHARD)
 
 
 @dataclass
@@ -68,8 +73,41 @@ class Result:
     tests: int = 0
 
 
-def plan(root: Path, pythons: Sequence[str], junit_dir: Path) -> tuple[list[Step], list[Result]]:
-    """The steps of `full`, and the checks it does not run with their reasons."""
+def parts(workers: int, pythons: int) -> int:
+    """Test parts per Python: the workers shared by the Pythons (at least one each). Each part
+    is a process with the suite's own DuckDB limits; the count is chosen from measurement
+    (benchmarks/test-durations.md), not from the CPU count alone."""
+    return max(1, workers // max(1, pythons))
+
+
+def _parted(
+    name: str, python: str, command: tuple[str, ...], junit: Path, total: int
+) -> list[Step]:
+    """The test step as `total` disjoint parts (`PYTEST_SHARD`), each with its own report."""
+    if total == 1:
+        return [Step(name, python, None, command, str(junit))]
+    found = []
+    for index in range(total):
+        report = junit.with_name(f"{junit.stem}-part-{index}.xml")
+        text = command[-1].replace(f"--junitxml={junit}", f"--junitxml={report}")
+        found.append(
+            Step(
+                f"{name}-part-{index}",
+                python,
+                None,
+                (*command[:-1], text),
+                str(report),
+                (("PYTEST_SHARD", f"{index}/{total}"),),
+            )
+        )
+    return found
+
+
+def plan(
+    root: Path, pythons: Sequence[str], junit_dir: Path, total: int = 1
+) -> tuple[list[Step], list[Result]]:
+    """The steps of `full`, and the checks it does not run with their reasons. `total`: the
+    test parts per Python."""
     steps: list[Step] = []
     skipped: list[Result] = []
     for check in checks.load(root):
@@ -77,11 +115,9 @@ def plan(root: Path, pythons: Sequence[str], junit_dir: Path) -> tuple[list[Step
             skipped.append(Result(check.name, "not run", check.reason or ""))
         elif check.name == TESTS:
             for python in check.pythons:
-                junit = str(junit_dir / f"junit-{python}.xml")
-                command = _with_report(checks.script(root, check), junit)
-                steps.append(
-                    Step(f"{TESTS}-{python}", python, None, ("bash", "-c", command), junit)
-                )
+                junit = junit_dir / f"junit-{python}.xml"
+                command = _with_report(checks.script(root, check), str(junit))
+                steps += _parted(f"{TESTS}-{python}", python, ("bash", "-c", command), junit, total)
         else:
             steps.append(
                 Step(
@@ -134,7 +170,11 @@ def run_step(step: Step, cwd: Path, environment: dict[str, str]) -> Result:
     start = time.monotonic()
     directory = cwd / step.directory if step.directory else cwd
     process = subprocess.run(
-        step.command, cwd=directory, env=environment, capture_output=True, text=True
+        step.command,
+        cwd=directory,
+        env={**environment, **dict(step.variables)},
+        capture_output=True,
+        text=True,
     )
     result = Result(step.name, "passed" if process.returncode == 0 else "failed")
     result.seconds = time.monotonic() - start
@@ -237,7 +277,10 @@ def _environment_for(venv: Path) -> dict[str, str]:
 
 
 def full(
-    root: Path, workers: int, run: Callable[[Step, Path, dict[str, str]], Result] = run_step
+    root: Path,
+    workers: int,
+    run: Callable[[Step, Path, dict[str, str]], Result] = run_step,
+    total: int | None = None,
 ) -> int:
     if dirty := uncommitted(root):
         print("verify full: commit or remove these changes first (it checks HEAD):")
@@ -247,7 +290,7 @@ def full(
     with tempfile.TemporaryDirectory(prefix="verify-") as scratch:
         base = Path(scratch)
         pythons = next(c.pythons for c in checks.load(root) if c.name == TESTS)
-        steps, results = plan(root, pythons, base)
+        steps, results = plan(root, pythons, base, total or parts(workers, len(pythons)))
         # One checkout per Python, so the runs at the same time share no files.
         checkouts = {}
         for python in pythons:
@@ -319,13 +362,70 @@ def fast(
     return status
 
 
+def profiles(root: Path) -> dict[str, list[str]]:
+    """The critical checks and tests (`checks.toml`, `[profiles]`)."""
+    document = tomllib.loads((root / checks.LIST).read_text(encoding="utf-8"))
+    found = document.get("profiles", {})
+    return {
+        "checks": [str(name) for name in found.get("critical_checks", [])],
+        "tests": [str(path) for path in found.get("critical_tests", [])],
+    }
+
+
+def pr_tests(root: Path, changed: Sequence[str]) -> tuple[list[str], list[str]]:
+    """What `pr` tests: the critical tests and those the change affects (everything when the
+    impact is uncertain), and the reasons."""
+    selection = impact.select(root, changed)
+    if selection.full:
+        return ["."], selection.reasons
+    critical = profiles(root)["tests"]
+    return sorted(set(critical) | selection.tests), selection.reasons
+
+
+def pr(
+    root: Path,
+    workers: int,
+    run: Callable[[Step, Path, dict[str, str]], Result] = run_step,
+) -> int:
+    """Before a push (#375): the quick checks, the critical checks, and the critical and
+    affected tests in parallel parts, on this interpreter, in the working tree as it is. The
+    full suite runs in CI on every pull request before a merge."""
+    changed = impact.changed_files(root)
+    wanted = set(FAST) | set(profiles(root)["checks"])
+    steps = [
+        Step(c.name, "", c.directory, ("bash", "-eo", "pipefail", "-c", checks.script(root, c)))
+        for c in checks.load(root)
+        if c.name in wanted and c.local
+    ]
+    tests, reasons = pr_tests(root, changed)
+    print("pr: tests selected")
+    print("\n".join(f"  {reason}" for reason in reasons) or "  (no change)")
+    print("  " + " ".join(tests))
+    variables = dict(os.environ)
+    variables["PATH"] = f"{Path(sys.executable).parent}{os.pathsep}{variables.get('PATH', '')}"
+    variables.pop("PYTEST_SHARD", None)
+    with tempfile.TemporaryDirectory(prefix="verify-") as scratch:
+        junit = Path(scratch) / "junit.xml"
+        text = (
+            f"{sys.executable} -m pytest -q -p tools.ci.shard -p tools.ci.timing "
+            f"--junitxml={junit} " + " ".join(tests)
+        )
+        steps += _parted(TESTS, "", ("bash", "-c", text), junit, max(1, workers))
+        with ThreadPoolExecutor(max_workers=workers + 2) as pool:
+            results = list(pool.map(lambda s: run(s, root, variables), steps))
+    text, status = summary(results)
+    print(text)
+    return status
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m tools.ci.verify")
-    parser.add_argument("mode", choices=("fast", "full"))
+    parser.add_argument("mode", choices=("fast", "pr", "full"))
     parser.add_argument("--workers", type=int, default=max(2, os.cpu_count() or 2))
     arguments = parser.parse_args(argv)
+    modes = {"fast": fast, "pr": pr, "full": full}
     try:
-        return (full if arguments.mode == "full" else fast)(REPOSITORY_ROOT, arguments.workers)
+        return modes[arguments.mode](REPOSITORY_ROOT, arguments.workers)
     except (RuntimeError, subprocess.CalledProcessError) as error:
         print(f"verify {arguments.mode}: {error}")
         return 1

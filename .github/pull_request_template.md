@@ -36,7 +36,7 @@ Closes #<!-- n -->
 ## Risks
 
 ## Checklist
-- [ ] The full local verification passed on a clean checkout of the commit
+- [ ] The `pr` local verification passed on a clean checkout of the commit (`full` runs in CI)
 - [ ] Tests were written first and fail without the change; no existing test or criterion was lowered
 - [ ] No decisions outside the issue's specification (any open question is on the issue)
 - [ ] Tests protect this change from regression, including rejection cases

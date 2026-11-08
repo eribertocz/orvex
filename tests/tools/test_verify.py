@@ -140,3 +140,38 @@ def test_the_planned_test_command_is_the_whole_workflow_step(tmp_path: Path) -> 
     assert step.command[-1] == verify._with_report(
         checks.script(REPOSITORY_ROOT, check), step.junit or ""
     )
+
+
+# --- profiles (#375) ----------------------------------------------------------------------------
+
+
+def test_the_critical_sets_name_real_tests_and_local_checks() -> None:
+    critical = verify.profiles(REPOSITORY_ROOT)
+    assert critical["tests"]
+    assert all((REPOSITORY_ROOT / path).exists() for path in critical["tests"])
+    local = {c.name for c in checks.load(REPOSITORY_ROOT) if c.local}
+    assert set(critical["checks"]) <= local
+
+
+def test_pr_always_runs_the_critical_tests_and_everything_when_unsure() -> None:
+    critical = set(verify.profiles(REPOSITORY_ROOT)["tests"])
+    tests, reasons = verify.pr_tests(REPOSITORY_ROOT, ["docs/roadmap.md"])
+    assert critical <= set(tests)
+    assert reasons
+    assert verify.pr_tests(REPOSITORY_ROOT, ["unknown/file.txt"])[0] == ["."]
+    assert verify.pr_tests(REPOSITORY_ROOT, [])[0] == sorted(critical)
+
+
+def test_the_full_suite_runs_in_disjoint_parts_with_their_own_reports(tmp_path: Path) -> None:
+    steps, _ = verify.plan(REPOSITORY_ROOT, ("3.15", "3.14"), tmp_path, total=3)
+    for python in ("3.15", "3.14"):
+        parts = [s for s in steps if s.junit and s.python == python]
+        assert [dict(s.variables)["PYTEST_SHARD"] for s in parts] == ["0/3", "1/3", "2/3"]
+        assert len({s.junit for s in parts}) == 3
+        assert all(f"--junitxml={s.junit}" in s.command[-1] for s in parts)
+
+
+def test_parts_are_sized_by_the_workers_shared_by_the_pythons() -> None:
+    assert verify.parts(2, 2) == 1
+    assert verify.parts(8, 2) == 4
+    assert verify.parts(1, 2) == 1
