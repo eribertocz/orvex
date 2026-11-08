@@ -26,6 +26,7 @@ from orvex.transform.model_tests import (
     number_text,
 )
 from orvex.transform.models import Model, problem
+from orvex.transform.sql_parser import parser
 
 _DECIMAL_TYPE = re.compile(r"DECIMAL\((\d+),(\d+)\)")
 _REFUSED_CLASSES = frozenset({"SUBQUERY", "WINDOW", "PARAMETER", "STAR"})
@@ -64,9 +65,8 @@ def _walk(node: object) -> Iterator[dict[str, Any]]:
 def expression(text: str) -> str | None:
     """DuckDB's rendering of `text` when it is exactly one expression that reads no table and
     has no subquery, window, parameter or alias; None otherwise."""
-    connection = duckdb.connect()
+    connection = parser()
     try:
-        connection.execute("SET enable_external_access = false")
         row = connection.execute("SELECT json_serialize_sql($sql)", {"sql": f"SELECT {text}"})
         tree: dict[str, Any] = json.loads(str(row.fetchone()[0]))  # type: ignore[index]
         if tree.get("error") or len(tree.get("statements", [])) != 1:

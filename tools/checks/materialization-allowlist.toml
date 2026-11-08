@@ -45,9 +45,19 @@ call = "fetchall"
 reason = "The catalog of aggregate function names on a data-less connection, never data rows"
 
 [[allow]]
-file = "packages/transform/src/orvex/transform/incremental.py"
+file = "packages/transform/src/orvex/transform/incremental_since.py"
 call = "fetchone"
 reason = "SQL parsing on a data-less connection: one serialized statement (the $since rule, #155), never data rows"
+
+[[allow]]
+file = "packages/transform/src/orvex/transform/incremental_append.py"
+call = "fetchone"
+reason = "SQL parsing on a data-less connection: one serialized statement (the append row path, #194), never data rows"
+
+[[allow]]
+file = "packages/transform/src/orvex/transform/incremental_functions.py"
+call = "fetchone"
+reason = "The catalog of function names on a data-less connection, one aggregated row, never data rows"
 
 [[allow]]
 file = "packages/transform/src/orvex/transform/auto_filter.py"
