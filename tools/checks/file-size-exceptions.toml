@@ -27,3 +27,5 @@
 "orvex.server.maintenance" = "#246 PR 3"
 "orvex.server.scheduler" = "#246 PR 3"
 "orvex.store.source_worker" = "#246 PR 2"
+"orvex.store.existing_lake_guard" = "reuses the read checks and binding of lake.py; they move out in #246 PR 2"
+"orvex.store.existing_lake_reads" = "reuses the read guard and the Arrow form of lake.py; they move out in #246 PR 2"

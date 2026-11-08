@@ -701,7 +701,7 @@ def test_a_postgres_lake_snapshot_is_verified_and_a_file_outside_is_not_served(
     duckdb.connect().execute(f"COPY (SELECT 1::BIGINT AS reading_id) TO '{outside}'")
     with ExistingLake(catalog.attachment(), memory_limit=MEMORY, threads=1) as lake:
         snapshot = lake.latest_snapshot()
-        assert lake.verify(snapshot) == snapshot
+        assert lake.verify(snapshot, lake.attachment) == snapshot
         catalog.execute(
             "INSERT INTO cat.ducklake_data_file (data_file_id, table_id, begin_snapshot, path, "
             "path_is_relative, file_format, record_count, file_size_bytes, footer_size, "
@@ -709,4 +709,4 @@ def test_a_postgres_lake_snapshot_is_verified_and_a_file_outside_is_not_served(
             "FROM cat.ducklake_table"
         )
         with pytest.raises(StoreError, match="outside its data location"):
-            lake.verify(snapshot)
+            lake.verify(snapshot, lake.attachment)

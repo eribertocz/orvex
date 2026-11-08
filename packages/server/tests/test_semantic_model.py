@@ -297,7 +297,8 @@ def test_compiling_takes_no_caller_and_grants_nothing() -> None:
         "audience",
         "groups",
         "experimental",
-        "connections",  # names only, from `connections.yaml` (P2-29): never a caller
+        "connections",  # from `connections.yaml` (P2-29): never a caller
+        "external",  # an enabled existing lake's tables (P2-30 PR 3): never a caller
     ]
     assert list(SemanticModel.__dataclass_fields__) == [
         "compiled",

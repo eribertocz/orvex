@@ -62,6 +62,7 @@ from orvex.contracts.store.v1 import (
     TableStatistics,
 )
 from orvex.store import nested_types, source_worker
+from orvex.store.catalog_tables import tables_at, tables_with_columns
 from orvex.store.errors import StoreError, register_secret
 from orvex.store.file_sources import view_query
 from orvex.store.locations import (
@@ -1761,22 +1762,13 @@ class Lake:
         self, snapshot: int, cursor: duckdb.DuckDBPyConnection | None = None
     ) -> set[tuple[str, str]]:
         """(schema, table) of every lake table alive at `snapshot`, lower-cased."""
-        row = self._one(
-            f"SELECT string_agg(lower(s.schema_name) || '.' || lower(t.table_name), '|') "
-            f"FROM {self._metadata}.ducklake_table AS t "
-            f"JOIN {self._metadata}.ducklake_schema AS s USING (schema_id) "
-            "WHERE t.begin_snapshot <= $n AND (t.end_snapshot IS NULL OR t.end_snapshot > $n) "
-            "AND s.begin_snapshot <= $n AND (s.end_snapshot IS NULL OR s.end_snapshot > $n)",
-            {"n": snapshot},
-            cursor,
-        )
-        text = str(row[0]) if row and row[0] is not None else ""
-        found: set[tuple[str, str]] = set()
-        for item in text.split("|"):
-            schema, _, table = item.partition(".")
-            if table:
-                found.add((schema, table))
-        return found
+        if cursor is not None:
+            return tables_at(cursor, self._metadata, snapshot)
+        own = self._cursor()
+        try:
+            return tables_at(own, self._metadata, snapshot)
+        finally:
+            own.close()
 
     def _pinned(
         self, tree: dict[str, Any], snapshot: int, cursor: duckdb.DuckDBPyConnection
@@ -2127,7 +2119,7 @@ class Lake:
             try:
                 if self._snapshot(request.snapshot, cursor) is None:
                     raise self._missing_snapshot(request.snapshot, cursor)
-                tables = self._tables_with_columns(request.snapshot, cursor)
+                tables = tables_with_columns(cursor, self._metadata, LAKE, request.snapshot)
             except duckdb.Error as error:
                 raise guard.error(error) from error
             finally:
@@ -2138,50 +2130,6 @@ class Lake:
         return TablesResult.model_validate(
             {"kind": "tables_result", "snapshot": request.snapshot, "tables": tables}
         )
-
-    def _tables_with_columns(
-        self, snapshot: int, cursor: duckdb.DuckDBPyConnection
-    ) -> list[dict[str, Any]]:
-        meta = self._metadata
-        alive = "{0}.begin_snapshot <= $n AND ({0}.end_snapshot IS NULL OR {0}.end_snapshot > $n)"
-        row = self._one(
-            "SELECT CAST(to_json(list({'schema': s.schema_name, 'table': t.table_name, "
-            "'nullable': (SELECT list({'name': c.column_name, 'nullable': c.nulls_allowed} "
-            f"ORDER BY c.column_order) FROM {meta}.ducklake_column AS c "
-            f"WHERE c.table_id = t.table_id AND c.parent_column IS NULL AND {alive.format('c')})}} "
-            "ORDER BY s.schema_name, t.table_name)) AS VARCHAR) "
-            f"FROM {meta}.ducklake_table AS t JOIN {meta}.ducklake_schema AS s USING (schema_id) "
-            f"WHERE {alive.format('t')} AND {alive.format('s')}",
-            {"n": snapshot},
-            cursor,
-        )
-        found = json.loads(str(row[0])) if row is not None and row[0] is not None else []
-        tables = []
-        for entry in found:
-            # The table bound at that version: its types as DuckDB reads it there. Names come
-            # from the catalog and are quoted as identifiers; the version is an integer.
-            relation = cursor.sql(
-                f"SELECT * FROM {LAKE}.{_identifier(entry['schema'])}."
-                f"{_identifier(entry['table'])} AT (VERSION => {int(snapshot)}) LIMIT 0"
-            )
-            nullable = {
-                str(c["name"]).casefold(): bool(c["nullable"]) for c in entry["nullable"] or ()
-            }
-            tables.append(
-                {
-                    "schema": entry["schema"],
-                    "table": entry["table"],
-                    "columns": [
-                        {
-                            "name": str(name),
-                            "type": str(kind),
-                            "nullable": nullable.get(str(name).casefold(), True),
-                        }
-                        for name, kind in zip(relation.columns, relation.types, strict=True)
-                    ],
-                }
-            )
-        return tables
 
     def _table_statistics(
         self, name: str, snapshot: int, cursor: duckdb.DuckDBPyConnection

@@ -51,6 +51,7 @@ import os
 import shutil
 import stat
 import tempfile
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -64,7 +65,7 @@ from orvex.contracts.store.v1 import (
     Snapshot,
     SqliteLakeLocation,
 )
-from orvex.store import locations, separation
+from orvex.store import existing_lake_guard, locations, separation
 from orvex.store.errors import StoreError, register_secret
 from orvex.store.sql_text import literal as _quote
 
@@ -195,6 +196,8 @@ class ExistingLake:
     ) -> None:
         location = attachment.location
         self.name = attachment.name
+        self.attachment = attachment  # as attached; `verify` is given the set as it stands then
+        self.busy = threading.Lock()  # one statement at a time on the instance's connection
         if location.encrypted is not None:
             raise StoreError(
                 "STORE_LOCATION_INVALID",
@@ -217,6 +220,7 @@ class ExistingLake:
             self._metadata = f'{METADATA}."{self._schema}"'
         data_path = _with_slash(location.data_path)
         storage = locations._storage_credentials(location.storage, data_path)
+        self._storage = storage
         if storage is not None:
             self._check_credentials(storage, attachment.credentials_in_use)
         self._data_path = data_path
@@ -272,6 +276,7 @@ class ExistingLake:
                 self._check_sqlite_files(after_attach=True)
                 catalog = self._catalog_path
                 files = [catalog, *(catalog + suffix for suffix in SQLITE_COMPANIONS)]
+            self.table_functions = existing_lake_guard.table_functions(self._connection)
             self._lock(locations._sandbox_folder(data_path), files)
         except BaseException:
             self.close()
@@ -530,12 +535,30 @@ class ExistingLake:
                 self.name, "its data folder was replaced after it was attached"
             )
 
-    def verify(self, snapshot: Snapshot) -> Snapshot:
-        """`snapshot`, once shown fit to be served: the catalog still lists it with the same
-        commit time; the lake is still apart from the protected set as it stands now, its SQLite
-        catalog files still pass their checks; and every data and delete file the snapshot
-        references passes the file rule (`separation`, rule 3). Otherwise `STORE_SOURCE_INVALID`
-        (`details.reason`), and the snapshot must not be served."""
+    def _take(self, current: ExistingLakeAttachment) -> None:
+        """The protected set, roles and credentials in use as `current` gives them now; refused
+        when it is another lake's attachment or carries no protected set."""
+        if current.name != self.name or current.location != self.attachment.location:
+            raise separation.refused(self.name, "the attachment given is not this lake's")
+        if current.protected_locations is None:
+            raise separation.refused(self.name, "the instance's protected locations were not given")
+        if isinstance(current.location, PostgresLakeLocation):
+            self._catalog_connection(current.location, current.roles_in_use)
+        if self._storage is not None:
+            self._check_credentials(self._storage, current.credentials_in_use)
+        self._protected_locations = [item.root for item in current.protected_locations]
+        self._protected_files = [item.root for item in current.protected_files]
+
+    def verify(self, snapshot: Snapshot, current: ExistingLakeAttachment) -> Snapshot:
+        """`snapshot`, once shown fit to be served, against `current`: this lake's attachment
+        rebuilt from the instance as it stands now, so a project registered after the attach is
+        protected too (P2-30 PR 3). The roles and credentials in use are checked again; the
+        catalog still lists the snapshot with the same commit time; the lake is still apart from
+        the protected set, its SQLite catalog files still pass their checks; and every data and
+        delete file the snapshot references passes the file rule (`separation`, rule 3).
+        Otherwise `STORE_SOURCE_INVALID` (`details.reason`), and the snapshot must not be
+        served."""
+        self._take(current)
         self._check_apart()
         if self._catalog is not None:
             self._check_sqlite_files(after_attach=True, keep=False)
