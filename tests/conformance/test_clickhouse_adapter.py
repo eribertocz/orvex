@@ -36,19 +36,22 @@ from orvex.contracts.store.v1 import Parameter, ParameterType, StatementRequest
 from orvex.semantic import execution
 from orvex.semantic.adapters import clickhouse as ch
 from orvex.semantic.adapters.duckdb import PhysicalQuery, PolicyValues, mapping_queries
+from orvex.semantic.adapters.duckdb import compile_plan as duckdb_compile
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.correctness import analyze
 from orvex.semantic.engines import EngineEntry, Routing
-from orvex.semantic.errors import SemanticError
+from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.execution import answer
 from orvex.semantic.ossie.reader import read
-from orvex.semantic.planning import PlanError, SemanticPlan, plan
+from orvex.semantic.planning import SemanticPlan, plan
 from orvex.semantic.policies import PolicyModel
+from orvex.semantic.query.binding import Limits as QueryLimits
 from orvex.semantic.query.binding import bind_query
 from orvex.semantic.result.descriptors import arrow_type
 from orvex.store.lake import Lake
 
+from conformance.runners import bi_platform_adapter
 from conformance.runners import corpus_execution as ce
 from tests.conformance import test_direct_query as dq
 from tests.conformance import test_row_policies as rp
@@ -60,7 +63,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CORPUS = ROOT / "conformance/semantic-corpus/bi-platform"
 MANIFEST = json.loads((CORPUS / "corpus/manifest.json").read_text("utf-8"))
 # The corpus cases this pull request answers; the others need a capability of PR 3.
-ANSWERED = ("CASE-001", "CASE-002", "CASE-003", "CASE-005", "CASE-006", "CASE-007")
+ANSWERED: tuple[str, ...] = ("CASE-001", "CASE-002", "CASE-003", "CASE-005", "CASE-006", "CASE-007")
 ANSWERED += ("CASE-014", "CASE-015", "CASE-018")
 LATER = {
     "CASE-004": "multi_fact",
@@ -89,17 +92,39 @@ DIALECT = {
         "qty": SourceColumn("INTEGER", True),
         "day": SourceColumn("DATE", False),
         "label": SourceColumn("VARCHAR", True),
+        "huge": SourceColumn("HUGEINT", False),
     }
 }
-ROWS = {
+ROWS: dict[str, list[list[str | None]]] = {
     "m": [
-        # 2^62 twice: the sum leaves BIGINT. 9 digits by 9: ClickHouse's own product stays in
-        # a Decimal32 and overflows; DuckDB's is a DECIMAL(18).
-        ["1", "9999999999999999.99", "99999.9999", "9999999.99", "4611686018427387904", "3",
-         "1969-12-31", "a"],
-        ["2", None, "0.0001", "0.01", "4611686018427387904", None, "1970-01-05", None],
-        ["3", "-0.01", "1.2345", "-3.50", "4611686018427387904", "7", "2024-02-29", "b"],
-        ["4", "0.00", "2.0000", "0.00", "-5", "0", "2024-03-03", "B"],
+        # 2^62 three times: the sum leaves BIGINT. 9 digits by 9: ClickHouse's own product
+        # stays in a Decimal32 and overflows; DuckDB's is a DECIMAL(18). 36 digits: HUGEINT.
+        [
+            "1",
+            "9999999999999999.99",
+            "99999.9999",
+            "9999999.99",
+            "4611686018427387904",
+            "3",
+            "1969-12-31",
+            "a",
+            "999999999999999999999999999999999999",
+        ],
+        ["2", None, "0.0001", "0.01", "4611686018427387904", None, "1970-01-05", None, "-1"],
+        [
+            "3",
+            "-0.01",
+            "1.2345",
+            "-3.50",
+            "4611686018427387904",
+            "7",
+            "2024-02-29",
+            "b",
+            "170141183460469231731687303715884105",
+        ],
+        ["4", "0.00", "2.0000", "0.00", "-5", "0", "2024-03-03", "B", "0"],
+        # An empty label: a value of its own, never NULL, ordered first in byte order.
+        ["5", "0.01", "0.5000", "1.00", "1", None, "2025-12-31", "", "1"],
     ]
 }
 FIELDS = {
@@ -109,6 +134,7 @@ FIELDS = {
     "year": "DATE_TRUNC('YEAR', day)",
     "scaled": "price * 1.15",  # 1.15 as a float is 1.1499...
     "doubled": "qty * 2",
+    "huge_next": "huge + 1",  # an Int128 operand, which ClickHouse cannot CAST to a Decimal
     "small": "qty IN (0, 3)",
     "unlisted": "qty NOT IN (0, NULL)",  # never true in SQL: NULL is in the list
     "shouting": "UPPER(label)",
@@ -119,11 +145,14 @@ METRICS = {
     "product": "SUM(m.price * m.rate)",
     "scaled_total": "SUM(m.scaled)",
     "doubled_total": "SUM(m.doubled)",
+    "huge_total": "SUM(m.huge_next)",
     "labelled": "COUNT(m.label)",
     "rows": "COUNT(*)",
     "labels": "COUNT(DISTINCT m.label)",
     "a_total": "SUM(m.amount) FILTER (WHERE m.label = 'a')",
     "a_rows": "COUNT(*) FILTER (WHERE m.label = 'a')",
+    # A column with no NULL: ClickHouse's sum of a Nullable one is already NULL over no value.
+    "a_big_total": "SUM(m.big) FILTER (WHERE m.label = 'a')",
 }
 
 
@@ -172,8 +201,7 @@ def label_filter(op: str, *values: str, **flags: bool) -> Document:
     return {
         "scope": "board",
         "member": "m.label",
-        "predicate": {"op": op, "values": [{"type": "text", "value": v} for v in values]}
-        | flags,
+        "predicate": {"op": op, "values": [{"type": "text", "value": v} for v in values]} | flags,
     }
 
 
@@ -187,7 +215,7 @@ def plan_of(
         compiled,
         json.dumps(document),
         instant=ce.INSTANT,
-        limits=ce.QueryLimits(detail_page_size=1000),
+        limits=QueryLimits(detail_page_size=1000),
         hidden=lambda _: False,
     )
     policies = policies or no_policies(compiled)
@@ -212,7 +240,8 @@ def placeholders(statement: str) -> set[str]:
 def test_a_column_is_written_with_its_exact_name_in_the_engine() -> None:
     statement = written(question("total")).sql
     assert '"t0"."Amount"' in statement
-    assert '"AMOUNT"' not in statement and '"amount"' not in statement
+    assert '"AMOUNT"' not in statement
+    assert '"amount"' not in statement
     with pytest.raises(PlanError):  # a catalog without the column: never a guessed name
         ch.compile_plan(plan_of(question("total")), {"m": ["id"]}, {})
     with pytest.raises(PlanError):  # two names that differ only in case
@@ -221,7 +250,8 @@ def test_a_column_is_written_with_its_exact_name_in_the_engine() -> None:
 
 def test_every_value_is_a_typed_placeholder() -> None:
     query = written(question("total", filters=[label_filter("in", "a", "'); DROP TABLE m; --")]))
-    assert "$p" not in query.sql and "DROP" not in query.sql
+    assert "$p" not in query.sql
+    assert "DROP" not in query.sql
     assert placeholders(query.sql) == {p["name"] for p in query.parameters}
     assert "{p0:String}" in query.sql
     assert all(p["value"] is not None for p in query.parameters)
@@ -230,9 +260,7 @@ def test_every_value_is_a_typed_placeholder() -> None:
 def test_exact_arithmetic_is_widened_and_never_divided_by_slash() -> None:
     statement = written(question("product", "scaled_total", "doubled_total")).sql
     # Each exact operand widened to 38 digits first: a native product keeps the narrower one.
-    assert 'CAST("t0"."price" AS Decimal(38, 4)) * CAST("t0"."rate" AS Decimal(38, 2))' in (
-        statement
-    )
+    assert 'toDecimal128("t0"."price", 4) * toDecimal128("t0"."rate", 2)' in statement
     assert "CAST('1.15' AS Decimal(3, 2))" in statement  # never the float literal 1.15
     assert re.search(r"[^']1\.15", statement) is None
     assert " / " not in statement
@@ -243,9 +271,11 @@ def test_a_ratio_is_an_exact_integer_division_rounded_once() -> None:
     compiled = ce.compiled_case(model)
     found = plan_of(ce.QUERIES["CASE-006"], compiled)
     statement = ch.compile_plan(found, names_of(ce.catalog_of(model)), {}).sql
-    assert 'intDiv("#a0", "#b0")' in statement and "//" not in statement
+    assert 'intDiv("#a0", "#b0")' in statement
+    assert "//" not in statement
     assert "CAST('0.01' AS Decimal(38, 2))" in statement  # never the float 0.01
-    assert "trunc(" not in statement and " / " not in statement
+    assert "trunc(" not in statement
+    assert " / " not in statement
 
 
 def test_a_sum_is_null_over_no_row_and_an_integer_sum_is_int128() -> None:
@@ -253,12 +283,27 @@ def test_a_sum_is_null_over_no_row_and_an_integer_sum_is_int128() -> None:
     assert 'if(count("t0"."Amount") = 0, NULL, sum("t0"."Amount"))' in statement
     assert 'sum(CAST("t0"."big" AS Int128))' in statement
     assert "SUM(" not in statement
+    filtered = written(question("a_total")).sql  # a filtered sum: NULL when no row passes
+    assert re.search(
+        r'if\(countIf\("t0"\."Amount", (.+)\) = 0, NULL, sumIf\("t0"\."Amount", \1\)\)', filtered
+    )
+
+
+def test_the_latest_row_of_a_semi_additive_metric_puts_null_last_explicitly() -> None:
+    model = CORPUS / "models" / "CASE-007.yaml"
+    compiled = ce.compiled_case(model)
+    found = plan_of(ce.QUERIES["CASE-007"], compiled)
+    statement = ch.compile_plan(found, names_of(ce.catalog_of(model)), {}).sql
+    assert re.search(
+        r"QUALIFY row_number\(\) OVER \(PARTITION BY .+ ORDER BY \S+ DESC NULLS LAST\)", statement
+    )
 
 
 def test_a_filtered_aggregate_is_an_if_combinator() -> None:
     statement = written(question("a_total", "a_rows", "labels")).sql
     assert "FILTER" not in statement
-    assert "sumIf(" in statement and "countIf((" in statement
+    assert "sumIf(" in statement
+    assert "countIf((" in statement
     assert 'uniqExact("t0"."label")' in statement
 
 
@@ -273,7 +318,8 @@ def test_a_date_bucket_stays_a_date32() -> None:
     statement = written(question("total", group_by=["month", "week", "quarter", "year"])).sql
     assert 'makeDate32(toYear("t0"."day"), toMonth("t0"."day"), 1)' in statement
     assert '("t0"."day" - (toDayOfWeek("t0"."day") - 1))' in statement
-    assert "toStartOf" not in statement and "date_trunc" not in statement
+    assert "toStartOf" not in statement
+    assert "date_trunc" not in statement
 
 
 def test_each_result_column_is_converted_to_its_exact_store_form_after_ordering() -> None:
@@ -335,7 +381,7 @@ def test_a_statement_outside_the_allow_lists_is_never_sent(statement: str) -> No
 
 def test_a_name_with_a_quote_or_a_backslash_is_quoted_for_clickhouse() -> None:
     assert ch.quote_name('a"b\\c') == '"a""b\\\\c"'
-    ch.check_statement(f"SELECT 1 FROM {ch.quote_name('a\"b\\c')} AS \"x\"", {'a"b\\c'})
+    ch.check_statement(f'SELECT 1 FROM {ch.quote_name('a"b\\c')} AS "x"', {'a"b\\c'})
 
 
 @pytest.mark.parametrize("case", [c["id"] for c in MANIFEST["cases"]])
@@ -346,7 +392,7 @@ def test_every_corpus_statement_passes_the_allow_lists(
     allow-lists, or is refused naming the capability PR 3 brings."""
     model = CORPUS / "models" / f"{case}.yaml"
     outcomes: list[str] = []
-    real = execution.compile_plan
+    real = duckdb_compile
 
     def both(found: SemanticPlan, values: Mapping[int, PolicyValues] | None = None) -> Any:  # noqa: ANN401
         try:
@@ -360,7 +406,8 @@ def test_every_corpus_statement_passes_the_allow_lists(
     entry = next(c for c in MANIFEST["cases"] if c["id"] == case)
     ce.run_case(case, CORPUS / "corpus/cases" / case, model, entry.get("error_code"))
     if case in ANSWERED:
-        assert outcomes and set(outcomes) == {"compiled"}
+        assert outcomes
+        assert set(outcomes) == {"compiled"}
     elif case in LATER:
         assert set(outcomes) == {LATER[case]}
     else:  # refused when the model is compiled, or not run: nothing is planned
@@ -373,10 +420,13 @@ def test_a_mapping_set_is_bound_as_one_array_with_null_membership_explicit() -> 
     values = {q.key: PolicyValues("BIGINT", ("7", None)) for q in mapping_queries(found)}
     query = ch.compile_plan(found, names_of(rp.CATALOG), values)
     assert "multiIf(empty(CAST(JSONExtract({p" in query.sql
-    assert "has(CAST(JSONExtract(" in query.sql and "NULL), NULL, false)" in query.sql
-    assert '"security"' not in query.sql and "u-1" not in query.sql and "7" not in query.sql
+    assert "has(CAST(JSONExtract(" in query.sql
+    assert "NULL), NULL, false)" in query.sql
+    assert '"security"' not in query.sql
+    assert "u-1" not in query.sql
+    assert "7" not in query.sql
     assert placeholders(query.sql) == {p["name"] for p in query.parameters}
-    assert ['["7", null]'] == [p["value"] for p in query.parameters if p["value"] == '["7", null]']
+    assert [p["value"] for p in query.parameters if p["value"] == '["7", null]'] == ['["7", null]']
 
 
 def test_a_rows_scanned_estimate_counts_every_read_and_needs_every_table() -> None:
@@ -482,14 +532,18 @@ def load(
     """Each table, replaced, in the mapped ClickHouse types, with the same rows as the lake."""
     for table, columns in catalog.items():
         types = {
-            name: ch.engine_type(c.type) if not c.nullable else f"Nullable({ch.engine_type(c.type)})"
+            name: ch.engine_type(c.type)
+            if not c.nullable
+            else f"Nullable({ch.engine_type(c.type)})"
             for name, c in columns.items()
         }
         listed = ", ".join(f"{ch.quote_name(n)} {t}" for n, t in types.items())
         server.run(f"DROP TABLE IF EXISTS {ch.quote_name(table)}")
         server.run(f"CREATE TABLE {ch.quote_name(table)} ({listed}) ENGINE = {engine}")
         if rows.get(table):
-            body = "\n".join(json.dumps(dict(zip(columns, row, strict=True))) for row in rows[table])
+            body = "\n".join(
+                json.dumps(dict(zip(columns, row, strict=True))) for row in rows[table]
+            )
             server.run(
                 f"INSERT INTO {ch.quote_name(table)} SETTINGS input_format_null_as_default = 0"
                 f" FORMAT JSONEachRow\n{body}"
@@ -544,9 +598,7 @@ class OnClickHouse:
     engine: str = "clickhouse"
     engine_version: str = "test"
     compiled: dict[str, PhysicalQuery] = field(default_factory=dict)
-    statements: list[tuple[str, tuple[Mapping[str, str | None], ...]]] = field(
-        default_factory=list
-    )
+    statements: list[tuple[str, tuple[Mapping[str, str | None], ...]]] = field(default_factory=list)
 
     @property
     def connection(self) -> str:
@@ -586,7 +638,9 @@ class OnClickHouse:
 
 def everywhere(compiled: CompiledModel) -> Routing:
     datasets = compiled.ossie.document.get("datasets", ())
-    return Routing({str(d["name"]): ENTRY for d in datasets})  # type: ignore[union-attr]
+    listed = datasets if isinstance(datasets, tuple) else ()
+    names = [str(d["name"]) for d in listed if isinstance(d, Mapping)]
+    return Routing(dict.fromkeys(names, ENTRY))
 
 
 @contextmanager
@@ -628,21 +682,25 @@ def envelope_and_rows(found: execution.Answer) -> tuple[Any, Any]:
 DIALECT_QUESTIONS = {
     "exact sums, products, literals and counts": question(*METRICS),
     "an empty set's sum is NULL": question(
-        "total", "big_total", "rows", filters=[label_filter("in", "zzz")]
+        "total", "big_total", "a_total", "rows", filters=[label_filter("in", "zzz")]
+    ),
+    "a filtered sum with no row passing is NULL": question(
+        "a_total", "a_big_total", "a_rows", group_by=["label"]
     ),
     "every bucket of dates before 1970": question(
         "total", "rows", group_by=["month", "week", "quarter", "year"]
     ),
     "text in byte order, NULL last": question("rows", "total", group_by=["label"]),
+    "NULL first when asked": question(
+        "rows", group_by=["label"], order=[{"by": "m.label", "direction": "desc", "nulls": "first"}]
+    ),
     "NOT IN keeps NULL rows only when asked": question(
         "rows", filters=[label_filter("not_in", "a")]
     ),
     "NOT IN excluding NULL": question(
         "rows", filters=[label_filter("not_in", "a", exclude_null=True)]
     ),
-    "IN with NULL included": question(
-        "rows", filters=[label_filter("in", "b", include_null=True)]
-    ),
+    "IN with NULL included": question("rows", filters=[label_filter("in", "b", include_null=True)]),
     "an IN list in an expression": question("rows", group_by=["small"]),
     "a NOT IN list holding NULL": question("rows", group_by=["unlisted"]),
 }
@@ -673,7 +731,7 @@ def test_explain_estimate_drives_the_budget_on_mergetree_and_not_on_memory(
     server: Server,
 ) -> None:
     query = written(question("total"))
-    for engine, expected in (("MergeTree ORDER BY id", 4), ("Memory", None)):
+    for engine, expected in (("MergeTree ORDER BY id", len(ROWS["m"])), ("Memory", None)):
         load(server, DIALECT, ROWS, engine)
         body = server.run(
             ch.estimate_statement(query) + "\nFORMAT JSONEachRow",
@@ -689,7 +747,7 @@ def test_explain_estimate_drives_the_budget_on_mergetree_and_not_on_memory(
 
 # Policies: the managed lake resolves each mapping set; ClickHouse runs the restriction.
 
-POLICY_ROWS = {
+POLICY_ROWS: dict[str, list[list[str | None]]] = {
     table: [[v or None for v in row] for row in rows] for table, rows in rp.DATA.items()
 }
 
@@ -702,7 +760,9 @@ def ask_policy(
     load(server, rp.CATALOG, POLICY_ROWS)
     adapter = OnClickHouse(server, names_of(rp.CATALOG))
     with rp.lake_of(mappings=rp.MAPPINGS | changed) as lake:
-        reference = answer(json.dumps(rp.query()), rp.COMPILED, policy, context, ce.engine_for(lake))
+        reference = answer(
+            json.dumps(rp.query()), rp.COMPILED, policy, context, ce.engine_for(lake)
+        )
         found = answer(
             json.dumps(rp.query()),
             rp.COMPILED,
@@ -728,7 +788,8 @@ def test_a_row_policy_restricts_on_clickhouse_as_on_the_managed_lake(
     found, reference, adapter = ask_policy(server, rules, attributes, changed)
     assert found == reference
     for statement, parameters in adapter.statements:
-        assert '"security"' not in statement and "u-1" not in statement
+        assert '"security"' not in statement
+        assert "u-1" not in statement
         assert placeholders(statement) == {p["name"] for p in parameters}
 
 
@@ -758,17 +819,16 @@ def test_values_over_the_cap_are_refused_without_their_count(server: Server) -> 
     load(server, rp.CATALOG, POLICY_ROWS)
     adapter = OnClickHouse(server, names_of(rp.CATALOG))
     many = {"security.user_zone": [("u-1", 1), ("u-1", 2), ("u-1", 3)]}
-    with rp.lake_of(mappings=rp.MAPPINGS | many) as lake:
-        with pytest.raises(SemanticError) as caught:
-            answer(
-                json.dumps(rp.query()),
-                rp.COMPILED,
-                rp.policies(dq.ZONE, limits={"policy_values": 2}),
-                rp.caller(user_id="u-1"),
-                ce.engine_for(
-                    lake, routing=everywhere(rp.COMPILED), adapters={adapter.connection: adapter}
-                ),
-            )
+    with rp.lake_of(mappings=rp.MAPPINGS | many) as lake, pytest.raises(SemanticError) as caught:
+        answer(
+            json.dumps(rp.query()),
+            rp.COMPILED,
+            rp.policies(dq.ZONE, limits={"policy_values": 2}),
+            rp.caller(user_id="u-1"),
+            ce.engine_for(
+                lake, routing=everywhere(rp.COMPILED), adapters={adapter.connection: adapter}
+            ),
+        )
     assert caught.value.code == "POLICY_NOT_SUPPORTED_ON_ENGINE"
     assert dict(caught.value.details) == {
         "dataset": "sales",
@@ -787,7 +847,7 @@ def test_a_corpus_case_answers_on_clickhouse_as_on_the_managed_lake(
     rows = {
         path.stem: [
             [ce._month_start(row[name], catalog[path.stem][name].type) for name in row]
-            for row in ce.adapter.read_csv(path)
+            for row in bi_platform_adapter.read_csv(path)
         ]
         for path in (CORPUS / "corpus/cases" / case / "input").glob("*.csv")
         if path.stem in catalog
@@ -812,6 +872,8 @@ def test_a_corpus_case_answers_on_clickhouse_as_on_the_managed_lake(
         return ce.Answered(found.result.envelope(), ce.rows_of(found))
 
     entry = next(c for c in MANIFEST["cases"] if c["id"] == case)
-    outcome = ce.run_case(case, CORPUS / "corpus/cases" / case, model, entry.get("error_code"), ask=both)
+    outcome = ce.run_case(
+        case, CORPUS / "corpus/cases" / case, model, entry.get("error_code"), ask=both
+    )
     assert (outcome.status, compared) == ("pass", [True]), outcome.reason
     assert adapter.statements

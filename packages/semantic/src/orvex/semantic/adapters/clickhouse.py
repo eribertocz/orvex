@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 from orvex.semantic.adapters.duckdb import (
@@ -54,9 +54,9 @@ from orvex.semantic.compiler.catalog import column_key
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.compiler.typecheck import NodeType, TypedNode
 from orvex.semantic.engines import required
-from orvex.semantic.errors import SemanticError
+from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.ossie import sql
-from orvex.semantic.planning import ISSUED_PLAN, PlanError, SemanticPlan
+from orvex.semantic.planning import ISSUED_PLAN, SemanticPlan
 from orvex.semantic.result import ColumnSpec
 
 NAME = "clickhouse"
@@ -361,14 +361,16 @@ class _ClickHouse(_Writer):
 
     def cast(self, node: sql.Cast, again: Any, dataset: str, context: str) -> str:  # noqa: ANN401
         super().cast(node, again, dataset, context)  # the one cast with an exact meaning
-        return self.cast_to(again(node.operand), f"DECIMAL({int(node.arguments[0])},{int(node.arguments[1])})")
+        return self.cast_to(
+            again(node.operand), f"DECIMAL({int(node.arguments[0])},{int(node.arguments[1])})"
+        )
 
-    def exact(self, node: sql.Node, again: Any) -> str:  # noqa: ANN401
+    def exact(self, node: sql.Node, again: Callable[[sql.Node], str]) -> str:
         """An exact value widened to `Decimal(38, s)`, so no step narrows or wraps it."""
         scale = _scale(self.types.get(id(node)))
         if scale is None:
             return again(node)
-        return f"CAST({again(node)} AS Decimal(38, {scale}))"
+        return f"toDecimal128({again(node)}, {scale})"  # an `Int128` too, which CAST refuses
 
     def call(self, node: sql.Call, again: Any, context: str, dataset: str) -> str:  # noqa: ANN401
         name = node.name.upper()
@@ -471,10 +473,10 @@ def check_statement(statement: str, tables: Iterable[str]) -> None:
             raise PlanError("a ClickHouse statement is one statement")
         if kind == "word" and text.upper() in ("SETTINGS", "FORMAT", "INTO"):
             raise PlanError(f"a ClickHouse statement never has {text.upper()}")
-        if kind == "word" and following == "(" and text not in FUNCTIONS | _TYPE_NAMES:
-            if text.upper() not in _KEYWORDS:
-                raise PlanError(f"a function outside the allow-list: {text}")
-        if kind == "word" and text.upper() in ("FROM", "JOIN") or (kind, text) == ("other", ","):
+        called = kind == "word" and following == "("
+        if called and text not in FUNCTIONS | _TYPE_NAMES and text.upper() not in _KEYWORDS:
+            raise PlanError(f"a function outside the allow-list: {text}")
+        if (kind == "word" and text.upper() in ("FROM", "JOIN")) or (kind, text) == ("other", ","):
             if kind == "other" and not _in_from(tokens, at):
                 continue
             target = _table_at(tokens, at + 1)

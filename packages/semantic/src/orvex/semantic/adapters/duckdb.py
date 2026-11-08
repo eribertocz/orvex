@@ -1275,7 +1275,9 @@ class _Writer:
             division = aggregate.division
             a, b = quote(f"#a{k}"), quote(f"#b{k}")
             scale = int(str(column.logical["scale"])) if column.logical else 0
-            value = self.shifted(self.cast_to(self.rounded(a, b, division.mode), "DECIMAL(38,0)"), scale)
+            value = self.shifted(
+                self.cast_to(self.rounded(a, b, division.mode), "DECIMAL(38,0)"), scale
+            )
             outer.append(
                 f"CASE WHEN {b} = 0 THEN NULL ELSE {self.cast_to(value, column.encoding)} END"
                 f" AS {quote(column.name)}"
