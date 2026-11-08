@@ -8,7 +8,8 @@ The parts are balanced by measured time (#375): `tools/ci/test-durations.json`, 
 tests are placed longest first, each in the part with the least time so far (ties to the lowest
 part), with a test the record does not know counted at the record's median. The placement
 depends only on the collected tests and the record, so every part computes the same one. With
-no record, every n-th collected test is kept, starting at the i-th.
+no usable record (missing, corrupt, or knowing none of the collected tests), every n-th
+collected test is kept, starting at the i-th.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import heapq
 import json
+import math
 import os
 import statistics
 from collections.abc import Mapping, Sequence
@@ -36,16 +38,28 @@ def key(nodeid: str) -> str:
 
 
 def durations(path: Path = RECORD) -> dict[str, float]:
-    if not path.is_file():
+    """The record's seconds per test, or nothing when it is missing or corrupt (#261): a record
+    that is not an object of finite, non-negative seconds says nothing reliable."""
+    try:
+        found = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
         return {}
-    found = json.loads(path.read_text("utf-8"))
-    return {str(test): float(seconds) for test, seconds in found.items()}
+    if not isinstance(found, dict):
+        return {}
+    record: dict[str, float] = {}
+    for test, seconds in found.items():
+        if isinstance(seconds, bool) or not isinstance(seconds, int | float):
+            return {}
+        if not math.isfinite(seconds) or seconds < 0:
+            return {}
+        record[test] = float(seconds)
+    return record
 
 
 def assign(tests: Sequence[str], total: int, known: Mapping[str, float]) -> list[int]:
     """The part of each test, in the order given: balanced by `known` seconds, or round robin
-    when nothing is known."""
-    if not known:
+    when nothing is known about the tests given (no record, or a stale one, #261)."""
+    if not any(key(test) in known for test in tests):
         return [position % total for position in range(len(tests))]
     default = statistics.median(known.values())
     cost = [known.get(key(test), default) for test in tests]
