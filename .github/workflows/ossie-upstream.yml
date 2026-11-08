@@ -1,0 +1,36 @@
+# Weekly read-only watch of apache/ossie (#285, ADR-0030 §7): reports and classifies what changed
+# upstream since the active registry entry, as warnings in the job summary and a JSON artifact.
+# It never runs on a pull request or a push, so it blocks nothing and is not a required check.
+# It succeeds whatever it finds and fails only when it cannot run. It writes nothing: no issue,
+# comment, commit or version; adopting a revision is an owner-reviewed issue.
+name: ossie-upstream
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "37 4 * * 1"  # Mondays 04:37 UTC, outside the busy CI hours
+
+permissions:
+  contents: read
+
+jobs:
+  ossie-upstream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Compare with upstream
+        env:
+          # The default token, read-only, for the public API's rate limit.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -m tools.ossie.watch --json ossie-upstream.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ossie-upstream
+          path: ossie-upstream.json
+          if-no-files-found: error

@@ -13,6 +13,7 @@ from jsonschema import Draft202012Validator
 from orvex.contracts.ossie_extensions.v1 import OssieExtensionPayload
 from pydantic import ValidationError
 
+from tools.contracts.compat import incompatible
 from tools.repository import REPOSITORY_ROOT
 
 CONTRACT = REPOSITORY_ROOT / "contracts" / "ossie-extensions" / "v1"
@@ -183,59 +184,7 @@ def test_the_schema_never_names_a_vendor() -> None:
 # exist in the current schema and accept at least what it accepted: the only allowed changes are a
 # new optional member, a new enum value, a new `$defs` entry and documentation. Below `if` and
 # `not` a looser subschema makes the schema stricter, so there nothing may change at all.
-
-DOCUMENTATION = ("description", "title", "$comment", "examples")
-
-
-# Keywords whose subschema counts against the instance (or only selects a rule): loosening it
-# tightens the schema, so their subtrees must stay identical.
-INVERTED = ("if", "not")
-
-
-def incompatible(old: Any, new: Any, pointer: str = "#", names: bool = False) -> list[str]:  # noqa: ANN401
-    """Every way `new` accepts less than `old`, node by node. `names` marks a map of member or
-    definition names in which a new name is compatible."""
-    parent, _, key = pointer.rpartition("/")
-    if key in INVERTED and not parent.endswith(("/properties", "/$defs")):
-        return [] if old == new else [f"{pointer} changed (inverted subschema)"]
-    is_name_map = pointer.endswith(("/properties", "/$defs"))
-    if isinstance(old, dict) and isinstance(new, dict):
-        problems: list[str] = []
-        for key, before in old.items():
-            here = f"{pointer}/{key}"
-            if key in DOCUMENTATION and not is_name_map:
-                continue
-            if key not in new:
-                problems.append(f"{here} removed")
-            elif key == "enum" and not is_name_map:
-                if {json.dumps(v) for v in before} - {json.dumps(v) for v in new[key]}:
-                    problems.append(f"{here} lost values")
-            elif key == "required" and not is_name_map:
-                if set(new[key]) - set(before):
-                    problems.append(f"{here} gained {sorted(set(new[key]) - set(before))}")
-            else:
-                # A new definition is always compatible. A new property is a new optional member
-                # only where the object was closed (it refused that name before); elsewhere, as in
-                # a `then` or an `allOf` branch, it constrains a member that already exists.
-                opens = not is_name_map and (
-                    key == "$defs"
-                    or (key == "properties" and old.get("additionalProperties") is False)
-                )
-                problems.extend(incompatible(before, new[key], here, names=opens))
-        added = set(new) - set(old) - (set() if is_name_map else set(DOCUMENTATION))
-        if not (is_name_map and names):
-            problems.extend(f"{pointer}/{key} added (a new constraint)" for key in sorted(added))
-        return problems
-    if isinstance(old, list) and isinstance(new, list):
-        if len(new) != len(old):
-            return [f"{pointer} changed length"]
-        return [
-            problem
-            for index, item in enumerate(old)
-            for problem in incompatible(item, new[index], f"{pointer}/{index}")
-        ]
-    return [] if old == new else [f"{pointer} changed"]
-
+# The checker is `tools/contracts/compat.py`, shared with the upstream watch (#285).
 
 FROZEN = json.loads(SURFACE.read_text(encoding="utf-8"))
 

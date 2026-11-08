@@ -1,0 +1,33 @@
+# What the weekly upstream watch reads (#285, ADR-0030 §7): `tools/ossie/watch.py` compares
+# upstream `main` with the active registry entry (`vendor/apache-ossie/PIN.toml`) on these
+# paths and proposals. It only reports: changing this list, the pin or a vendored file is an
+# owner-reviewed issue. This file stays out of `vendor/`, which holds only hashed files.
+
+repository = "https://github.com/apache/ossie"
+api = "https://api.github.com/repos/apache/ossie"
+branch = "main"
+
+# Upstream paths: a trailing `/` watches a whole folder.
+paths = [
+  "core-spec/",
+  "validation/",
+  "compliance/",
+  "extensions/dialects.md",
+  "extensions/vendors.md",
+  "ontology/",
+  "ROADMAP.md",
+]
+
+# Upstream proposals by number, with the state last reviewed: `open`, `closed` or `merged`, or
+# `unrecorded` when it could not be read; the watch reports each one whose state differs. Read
+# on 2026-11-08 from the public API, except #529, which the API did not answer then.
+[proposals]
+246 = "closed"
+287 = "open"
+522 = "open"
+529 = "unrecorded"
+568 = "open"
+573 = "open"
+587 = "merged"
+633 = "merged"
+647 = "open"
