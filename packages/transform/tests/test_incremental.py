@@ -1658,15 +1658,21 @@ def test_a_select_list_subquery_at_the_bound_filtered_above_is_refused(tmp_path:
 DATED = [("id", "BIGINT"), ("read_at", "DATE")]
 
 
-@pytest.mark.parametrize("lookback", ["12h", "36h", "86401s", "90m"])
+@pytest.mark.parametrize(
+    ("lookback", "suggested"),
+    [("12h", "0s or 1d"), ("36h", "1d or 2d"), ("86401s", "1d or 2d"), ("90m", "0s or 1d")],
+)
 def test_a_lookback_that_is_not_whole_days_is_refused_on_a_date_column(
-    tmp_path: Path, lookback: str
+    tmp_path: Path, lookback: str, suggested: str
 ) -> None:
+    # `86401s` stands for the issue's `1d1s`, which is not a valid Duration.
     merge = model(tmp_path, MERGE.replace("[id]}", f"[id], lookback: {lookback}}}"))
     (item,) = column_problems(merge, DATED)
     assert (item.code.root, item.details.path) == ("MODEL_CONFIG_INVALID", "/incremental/lookback")
     assert "DATE" in item.message
-    assert column_problems(merge, COLUMNS) == []  # on a timestamp it reads to the microsecond
+    assert f"(use {suggested})" in item.message
+    for kind in ("TIMESTAMP", "TIMESTAMP WITH TIME ZONE"):  # read to the microsecond there
+        assert column_problems(merge, [("id", "BIGINT"), ("read_at", kind)]) == []
 
 
 @pytest.mark.parametrize(("lookback", "days"), [("0s", 0), ("24h", 1), ("1d", 1), ("2d", 2)])
