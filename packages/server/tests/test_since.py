@@ -76,7 +76,7 @@ def last_record(folder: Path) -> tuple[object, ...]:
     (row,) = lake_value(
         folder,
         "SELECT trigger, since, watermark, CAST(rows_written AS VARCHAR) "
-        "FROM lake._meta.run_records WHERE model = 's.m' ORDER BY started_at DESC LIMIT 1",
+        "FROM lake._meta.run_records_v2 WHERE model = 's.m' ORDER BY started_at DESC LIMIT 1",
     )
     return row
 
@@ -244,18 +244,26 @@ def test_since_rules_are_checked_before_anything_runs(
 
 
 def broken_records(*_: object) -> list[StatementRequest]:
-    """Run-record statements that fail: the records transaction rolls back."""
+    """Run-record statements that fail: the run's transaction rolls back."""
     return [StatementRequest(kind="statement", sql="INSERT INTO nowhere VALUES (1)", parameters=[])]
 
 
+def stored_tables(folder: Path) -> list[tuple[object, ...]]:
+    return lake_value(
+        folder,
+        "SELECT table_name FROM duckdb_tables() WHERE database_name = 'lake' AND schema_name = 's'",
+    )
+
+
 @pytest.mark.parametrize("first_run_fails", [True, False])
-def test_a_failed_record_write_never_reloads_rows(
+def test_a_failed_record_write_commits_neither_rows_nor_watermark(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
     first_run_fails: bool,
 ) -> None:
-    """The watermark is stored with the rows, not in the run records written afterwards."""
+    """The rows, their watermark and the run's records commit together (#394): when the records
+    cannot be written, nothing of the run is, and the next run loads the same rows again."""
     project(tmp_path, APPEND)
     feed(tmp_path, (1, "1.0000", "2024-01-01 10:00:00+00"))
     if not first_run_fails:
@@ -268,14 +276,17 @@ def test_a_failed_record_write_never_reloads_rows(
     with monkeypatch.context() as patch:
         patch.setattr(commands, "record_statements", broken_records)
         code, out = command(capsys, "run", str(tmp_path))
-    assert code == 1  # the rows committed; the records could not be written
+    assert code == 1  # rolled back; the failed records could not be written either
     assert "run records were not written" in out
-    expected = [1] if first_run_fails else [1, 2]
-    assert ids(tmp_path) == expected
+    if first_run_fails:
+        assert stored_tables(tmp_path) == []
+    else:
+        assert ids(tmp_path) == [1]
     code, out = command(capsys, "run", str(tmp_path))  # same source again
     assert code == 0, out
-    assert f"built s.m: 0 new rows ({len(expected)} in table)" in out  # #257
-    assert ids(tmp_path) == expected
+    total = 1 if first_run_fails else 2
+    assert f"built s.m: 1 new rows ({total} in table)" in out  # #257
+    assert ids(tmp_path) == list(range(1, total + 1))
 
 
 def test_watermarks_progress_with_a_frozen_clock(
@@ -315,17 +326,19 @@ def test_a_table_without_a_stored_watermark_continues_from_its_rows(
     assert ids(tmp_path) == [1, 2]
 
 
-def test_an_incremental_total_that_cannot_be_read_says_so_and_the_run_succeeds(
+def test_an_incremental_total_that_cannot_be_read_rolls_the_run_back(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # #257: the table's total is read after the commit; when it cannot be, the line says so.
+    # #257, #394: the table's total is read in the run's transaction; when it cannot be, the
+    # run rolls back and is recorded failed, rather than committing without it.
     project(tmp_path, APPEND)
     feed(tmp_path, (1, "1.0000", "2024-01-01 10:00:00+00"))
 
-    def failing(*_arguments: object) -> int:
+    def failing(*_arguments: object) -> str:
         raise StoreError("STORE_TIMEOUT", "The statement exceeded its time limit.", {})
 
     monkeypatch.setattr(commands, "_count", failing)
     code, out = command(capsys, "run", str(tmp_path))
-    assert code == 0, out
-    assert "built s.m: 1 new rows (table total unknown)" in out
+    assert code == 1, out
+    assert "STORE_TIMEOUT" in out
+    assert stored_tables(tmp_path) == []

@@ -87,7 +87,7 @@ from orvex.transform.incremental import (
 from orvex.transform.model_tests import ModelTest
 from orvex.transform.models import NAME, Discovery, Model, discover_models
 from orvex.transform.reconciliation import Comparison, Reconcile
-from orvex.transform.run_records import history_request, record_statements
+from orvex.transform.run_records import committed_request, history_request, record_statements
 from orvex.transform.sources import Attachment, source_attachments
 
 LOCK_FILE = "lake.lock"
@@ -1034,8 +1034,15 @@ def _run_locked(
             print(_load_problem(error), file=out)
             return 1
     interrupted = False
+    recorded = False  # the success records committed with the run's data (#394)
+    warning: Problem | None = None
+
+    def records() -> list[RunRecord]:
+        return _records(outcomes, run_id, commit, dirty, identity, refreshed, selection)
+
     try:
         current: _Outcome | None = None
+        finished = False  # the block ran to its end: what fails after it is the commit
         try:
             control = selection.control if selection is not None else None
             with lake.transaction() as transaction, _controlled(control, transaction):
@@ -1056,98 +1063,46 @@ def _run_locked(
                 if drop_leftovers:
                     for statement in _drop_statements(leftovers):
                         transaction.execute(statement)
+                # The records commit with the data, so a stop at any point leaves both or
+                # neither (#394). Rows are counted here, in the transaction that wrote them.
+                for item in outcomes:
+                    if item.rows_written is None and item.model.config.materialized != "view":
+                        item.rows_written = _count(transaction, item.model)
+                    if item.model.config.materialized == "incremental":
+                        item.total = _count(transaction, item.model)
+                    item.outcome = "success"
+                for statement in record_statements(records()):
+                    transaction.execute(statement)
+                finished = True
+            recorded = True
         except _NothingToCommit:
             pass
         except (StoreError, _StepFailed, KeyboardInterrupt) as error:
-            for item in outcomes:
-                if item.outcome == "ran":
-                    item.outcome = "failed"  # rolled back with the run
-            if isinstance(error, KeyboardInterrupt):
-                # Ctrl-C: the transaction rolled back; the run is recorded, then the
-                # interruption goes on.
-                interrupted = True
-                reason = RunError(
-                    code="STORE_CANCELLED",
-                    message="The run was interrupted; it rolled back and nothing was written.",
-                )
-            elif isinstance(error, _StepFailed):
-                reason = RunError(code=error.code, message=error.message)
+            # Ctrl-C: the run is recorded, then the interruption goes on.
+            interrupted = isinstance(error, KeyboardInterrupt)
+            committed = _committed_snapshot(lake, run_id) if finished else None
+            if committed is not None:
+                # Stopped after the commit (the token lookup, say): the run and its records
+                # are committed, so no failed record is added.
+                recorded, snapshot = True, committed
+                if isinstance(error, StoreError):
+                    warning = _store_problem(error, ".", "after the commit")
             else:
-                reason = RunError(code=error.code, message=_store_message(error))
-            if current is not None:
-                current.finished_at = _now()
-                current.outcome = "failed"
-                current.error = reason
-                if isinstance(error, _StepFailed) and error.problems:
-                    failures = list(error.problems)
-                else:
-                    failures = [
-                        Problem(
-                            reason.code,
-                            current.model.sql_file,
-                            None,
-                            f"{current.model.name}: {reason.message}"
-                            if isinstance(error, StoreError)
-                            else reason.message,
-                        )
-                    ]
+                failures = _rolled_back(error, outcomes, current)
+        if recorded and snapshot is None:
+            # The snapshot this run committed, found by its token, never the latest one:
+            # another clone sharing the lake may have committed since (#255).
+            result = transaction.result
+            if result is not None and result.snapshot is not None:
+                snapshot = result.snapshot.id
             else:
-                # Not a model's fault (the transaction could not start or commit): every
-                # model failed for the same reason.
-                for item in outcomes:
-                    item.outcome = "failed"
-                    item.error = reason
-                failures = [Problem(reason.code, ".", None, reason.message)]
-        warning: Problem | None = None
-        if not failures:
-            for item in outcomes:
-                item.outcome = "success"
-            try:
-                # The snapshot this run committed, never the latest one: another clone sharing
-                # the lake may have committed since (#255). A run that changed nothing names the
-                # snapshot its transaction read.
-                result = transaction.result
-                committed = result.snapshot if result is not None else None
-                found = committed if committed is not None else transaction.started
-                if found is None:
-                    raise StoreError(
+                warning = _store_problem(
+                    StoreError(
                         "STORE_SNAPSHOT_NOT_FOUND", "The run's snapshot could not be read.", {}
-                    )
-                snapshot = found.id
-                for item in outcomes:
-                    if item.rows_written is None and item.model.config.materialized != "view":
-                        item.rows_written = str(_count(lake, item.model, snapshot))
-                for item in outcomes:
-                    if item.model.config.materialized == "incremental":
-                        item.total = str(_count(lake, item.model, snapshot))
-            except StoreError as error:
-                # The run is committed: it is recorded as such, without what could not be read.
-                warning = _store_problem(error, ".", "after the commit")
-        records = [
-            RunRecord(
-                run_id=run_id,
-                model=item.model.name,
-                trigger=_trigger(item.model.name, refreshed, selection),
-                materialized=item.model.config.materialized or "table",
-                project_commit=commit,
-                project_dirty=dirty,
-                versions=_versions(identity),
-                since=item.since,
-                rows_read=None if item.rows_read is None else RowsRead(item.rows_read),
-                rows_written=None
-                if item.rows_written is None or item.outcome != "success"
-                else RowsWritten(item.rows_written),
-                watermark=item.watermark if item.outcome == "success" else None,
-                tests=item.tests,
-                reconciliation=item.reconciliation,
-                snapshot_id=snapshot if item.outcome == "success" else None,
-                started_at=item.started_at,
-                finished_at=item.finished_at,
-                outcome=item.outcome,  # type: ignore[arg-type]  # success, failed or not_run
-                error=item.error,
-            )
-            for item in outcomes
-        ]
+                    ),
+                    ".",
+                    "after the commit",
+                )
         events: list[lineage.Event] = []
         lineage_failure: Problem | None = None
         try:
@@ -1160,12 +1115,14 @@ def _run_locked(
                 f"lineage events could not be built ({type(error).__name__}).",
             )
         records_error: StoreError | None = None
-        try:
-            with lake.transaction() as transaction:
-                for statement in record_statements(records):
-                    transaction.execute(statement)
-        except StoreError as error:
-            records_error = error
+        if not recorded:
+            # Nothing of the run committed: it is recorded in a transaction of its own.
+            try:
+                with lake.transaction() as transaction:
+                    for statement in record_statements(records()):
+                        transaction.execute(statement)
+            except StoreError as error:
+                records_error = error
         evidence: list[str] = []
         if not failures and not interrupted and records_error is None and snapshot is not None:
             written = [
@@ -1649,16 +1606,110 @@ def _store_problem(error: StoreError, file: str, model: str) -> Problem:
     return Problem(error.code, file, None, prefix + _store_message(error))
 
 
-def _count(lake: Lake, model: Model, snapshot: int) -> int:
-    request = ReadRequest(
-        kind="read",
-        sql=f'SELECT count(*) AS n FROM "{model.schema}"."{model.table}"',
-        parameters=[],
-        snapshot=snapshot,
-        batch_size=1,
+def _count(transaction: Transaction, model: Model) -> str | None:
+    """The rows of `model`'s table as this transaction leaves them, exact digits (#394)."""
+    return transaction.value(
+        StatementRequest(
+            kind="statement",
+            sql=f'SELECT count(*) FROM "{model.schema}"."{model.table}"',
+            parameters=[],
+        )
     )
-    count: int = lake.read(request).read_all().column("n")[0].as_py()
-    return count
+
+
+def _committed_snapshot(lake: Lake, run_id: str) -> int | None:
+    """The snapshot holding run `run_id`'s success records, or None when it committed none: a
+    run stopped after its block ran learns from its own records whether the commit happened
+    (#394). None too when that cannot be read: the run is then recorded as rolled back."""
+    try:
+        tables = lake.tables()  # before the snapshot: record tables are never dropped
+        if ("_meta", "run_records_v2") not in tables:
+            return None
+        request = committed_request(lake.current_snapshot().id, run_id)
+        found: int | None = lake.read(request).read_all().column("snapshot")[0].as_py()
+    except StoreError:
+        return None
+    return found
+
+
+def _rolled_back(
+    error: StoreError | _StepFailed | KeyboardInterrupt,
+    outcomes: Sequence[_Outcome],
+    current: _Outcome | None,
+) -> list[Problem]:
+    """Mark the models of a run that rolled back, with the reason; the run's problems."""
+    for item in outcomes:
+        if item.outcome in {"ran", "success"}:
+            item.outcome = "failed"  # rolled back with the run
+    if isinstance(error, KeyboardInterrupt):
+        reason = RunError(
+            code="STORE_CANCELLED",
+            message="The run was interrupted; it rolled back and nothing was written.",
+        )
+    elif isinstance(error, _StepFailed):
+        reason = RunError(code=error.code, message=error.message)
+    else:
+        reason = RunError(code=error.code, message=_store_message(error))
+    if current is not None:
+        current.finished_at = _now()
+        current.outcome = "failed"
+        current.error = reason
+        if isinstance(error, _StepFailed) and error.problems:
+            return list(error.problems)
+        return [
+            Problem(
+                reason.code,
+                current.model.sql_file,
+                None,
+                f"{current.model.name}: {reason.message}"
+                if isinstance(error, StoreError)
+                else reason.message,
+            )
+        ]
+    # Not a model's fault (the transaction could not start or commit, or the records could not
+    # be written): every model failed for the same reason.
+    for item in outcomes:
+        item.outcome = "failed"
+        item.error = reason
+    return [Problem(reason.code, ".", None, reason.message)]
+
+
+def _records(
+    outcomes: Sequence[_Outcome],
+    run_id: str,
+    commit: str | None,
+    dirty: bool | None,
+    identity: Identity,
+    refreshed: frozenset[str],
+    selection: Selection | None,
+) -> list[RunRecord]:
+    """One record per model. `snapshot_id` is not stored: it is the snapshot the records
+    commit in, resolved when they are read (#394)."""
+    return [
+        RunRecord(
+            run_id=run_id,
+            model=item.model.name,
+            trigger=_trigger(item.model.name, refreshed, selection),
+            materialized=item.model.config.materialized or "table",
+            project_commit=commit,
+            project_dirty=dirty,
+            versions=_versions(identity),
+            since=item.since,
+            rows_read=None if item.rows_read is None else RowsRead(item.rows_read),
+            rows_written=None
+            if item.rows_written is None or item.outcome != "success"
+            else RowsWritten(item.rows_written),
+            watermark=item.watermark if item.outcome == "success" else None,
+            tests=item.tests,
+            reconciliation=item.reconciliation,
+            snapshot_id=None,
+            started_at=item.started_at,
+            finished_at=item.finished_at,
+            outcome=item.outcome,  # type: ignore[arg-type]  # success, failed or not_run
+            error=item.error,
+        )
+        for item in outcomes
+    ]
 
 
 def runs(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
@@ -1679,14 +1730,13 @@ def runs(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
         with project_lock(home):
             lake = open_existing(home, place)
             try:
+                # The tables before the snapshot: record tables are never dropped, so each one
+                # listed exists at the snapshot read after them (#394).
+                tables = lake.tables()
                 snapshot = lake.current_snapshot().id
-                request = history_request(snapshot, zone, limit)
-                try:
-                    rows = lake.read(request).read_all().to_pylist()
-                except StoreError as error:
-                    if error.code != "STORE_STATEMENT_INVALID":
-                        raise
-                    rows = []  # the records table does not exist yet
+                request = history_request(snapshot, zone, limit, tables)
+                # No request: the lake has no record table yet.
+                rows = [] if request is None else lake.read(request).read_all().to_pylist()
             finally:
                 lake.close()
     except ProjectLocked:

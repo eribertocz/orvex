@@ -93,7 +93,7 @@ def days_by_month(folder: Path) -> list[tuple[object, ...]]:
 def last_record(folder: Path) -> tuple[object, ...]:
     (row,) = lake_value(
         folder,
-        "SELECT outcome, error_code, error_message FROM lake._meta.run_records "
+        "SELECT outcome, error_code, error_message FROM lake._meta.run_records_v2 "
         "WHERE model = 's.m' ORDER BY started_at DESC LIMIT 1",
     )
     return row
