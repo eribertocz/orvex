@@ -23,6 +23,7 @@ from orvex.transform.incremental import Columns, Land, Step
 from orvex.transform.model_tests import ModelTest
 from orvex.transform.models import Model, problem
 from orvex.transform.reconciliation import Comparison, Reconcile
+from orvex.transform.sql_parser import parser
 
 LAKE_CATALOG = "lake"
 
@@ -40,14 +41,6 @@ class Graph:
     # The database source (DuckDB, SQLite, PostgreSQL) each model reading one reads (#372):
     # such a model reads that connection alone, and is landed by its worker.
     lands: Mapping[str, str] = field(default_factory=dict)
-
-
-def _parser() -> duckdb.DuckDBPyConnection:
-    """A connection that can only parse: no files, no extensions."""
-    connection = duckdb.connect()
-    connection.execute("SET enable_external_access = false")
-    connection.execute("SET autoload_known_extensions = false")
-    return connection
 
 
 def _tree(connection: duckdb.DuckDBPyConnection, sql: str) -> Tree:
@@ -108,7 +101,7 @@ def build_graph(
     used_sources: dict[str, tuple[str, ...]] = {}
     lands: dict[str, str] = {}
     problems: list[ModelError] = []
-    connection = _parser()
+    connection = parser()
     try:
         for model in models:
             tree = _tree(connection, model.sql)
@@ -281,7 +274,7 @@ def _cycles(remaining: dict[str, set[str]]) -> list[list[str]]:
 def compiled_sql(model: Model, models: Mapping[str, Model], sql: str | None = None) -> str:
     """The model's SQL (or `sql`, its rewritten form) with every `view` model it reads inlined
     as a subquery (recursively)."""
-    connection = _parser()
+    connection = parser()
     try:
         tree = _inline(connection, sql or model.sql, models, frozenset({model.name}))
         row = connection.execute(
@@ -482,7 +475,7 @@ def known_output_names(sql: str) -> list[str] | None:
     order; None when only binding can (an unnamed expression, a star next to other items or over
     a join, `COLUMNS(…)`, a star that renames). A star over one table alone gives [], since a
     table holds no repeated name. Names are the text's spelling."""
-    connection = _parser()
+    connection = parser()
     try:
         tree = _tree(connection, sql)
     except duckdb.Error:

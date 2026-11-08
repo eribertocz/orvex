@@ -18,6 +18,7 @@ import duckdb
 from orvex.contracts.model_config.v1 import ModelConfig, ModelError, ModelErrorDetails
 from orvex.transform.config_file import ConfigFile, ConfigProblem
 from orvex.transform.sources import Connection
+from orvex.transform.sql_parser import parser
 
 MODELS_FOLDER = "models"
 SUPPORTED_VERSION = 1
@@ -317,14 +318,17 @@ def _check_select(sql: str, relative: str, name: str) -> ModelError | None:
     """None when `sql` is exactly one SELECT for DuckDB's parser (no binding, no data)."""
     message: str | None = None
     line: int | None = None
+    connection = parser()
     try:
-        statements = duckdb.extract_statements(sql)
+        statements = connection.extract_statements(sql)
     except duckdb.Error as error:
         text = str(error)
         found = _PARSER_LINE.search(text)
         line = int(found.group(1)) if found else None
         message = f"{relative}: {text.splitlines()[0] if text else 'the SQL cannot be parsed'}"
         statements = []
+    finally:
+        connection.close()
     if message is None and len(statements) != 1:
         message = f"{relative}: a model is exactly one SELECT statement; found {len(statements)}."
     elif message is None and statements[0].type != duckdb.StatementType.SELECT:

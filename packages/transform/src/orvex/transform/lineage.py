@@ -21,8 +21,9 @@ from orvex.contracts.project.v1 import (
     PostgresConnection,
     SqliteConnection,
 )
-from orvex.transform.graph import LAKE_CATALOG, _cte_names, _parser, _path, _tree, _walk
+from orvex.transform.graph import LAKE_CATALOG, _cte_names, _path, _tree, _walk
 from orvex.transform.models import Model
+from orvex.transform.sql_parser import parser
 
 type Connection = (
     ParquetConnection | CsvConnection | DuckdbConnection | SqliteConnection | PostgresConnection
@@ -105,7 +106,7 @@ def inputs(
     model: Model, models: Mapping[str, Model], connections: Mapping[str, Connection], lake: str
 ) -> list[Dataset]:
     """The datasets a model reads, in order of first appearance, without repeats."""
-    connection = _parser()
+    connection = parser()
     try:
         tree = _tree(connection, model.sql)
     finally:
@@ -122,7 +123,7 @@ def inputs(
 
 
 def _aggregates() -> frozenset[str]:
-    connection = _parser()
+    connection = parser()
     try:
         rows = connection.execute(
             "SELECT DISTINCT function_name FROM duckdb_functions() "
@@ -147,7 +148,7 @@ def column_lineage(
     `["staging", "readings"]`), or None when unknown: an unqualified name counts only when it
     is a real column of the single table read, never a lateral alias or a lambda parameter.
     """
-    connection = _parser()
+    connection = parser()
     try:
         tree = _tree(connection, model.sql)
     finally:

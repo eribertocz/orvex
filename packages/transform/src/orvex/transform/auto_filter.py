@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import duckdb
+from orvex.transform.sql_parser import parser
 
 type Tree = dict[str, Any]
 type ColumnsOf = Callable[[list[str]], Collection[str] | None]
@@ -47,16 +48,9 @@ class _Found:
     column: str
 
 
-def _parser() -> duckdb.DuckDBPyConnection:
-    connection = duckdb.connect()
-    connection.execute("SET enable_external_access = false")
-    connection.execute("SET autoload_known_extensions = false")
-    return connection
-
-
 @functools.cache
 def _aggregates() -> frozenset[str]:
-    connection = _parser()
+    connection = parser()
     try:
         rows = connection.execute(
             "SELECT DISTINCT function_name FROM duckdb_functions() "
@@ -462,7 +456,7 @@ def _tree(connection: duckdb.DuckDBPyConnection, sql: str) -> Tree:
 
 def prove(sql: str, time_column: str, columns_of: ColumnsOf) -> Tree | Refusal:
     """The rewritten parse tree with `<table>.<time_column> > $since`, or why not."""
-    connection = _parser()
+    connection = parser()
     try:
         tree = _tree(connection, sql)
     finally:
@@ -534,7 +528,7 @@ def _inject(found: _Found) -> None:
 
 def render(tree: Tree) -> str:
     """The SQL text of a parse tree (DuckDB's own rendering: deterministic)."""
-    connection = _parser()
+    connection = parser()
     try:
         row = connection.execute(
             "SELECT json_deserialize_sql($tree)", {"tree": json.dumps(tree)}
