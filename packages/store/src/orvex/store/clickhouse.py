@@ -479,9 +479,9 @@ def _column(values: pa.Array, got: pa.Field, want: pa.Field) -> pa.Array:
             source = values.type
         if pa.types.is_string(source) and source == target:
             values.validate(full=True)  # valid UTF-8 only
-            if kind == "UHUGEINT" and not pc.all(
+            if kind == "UHUGEINT" and pc.all(
                 pc.match_substring_regex(values, r"^[0-9]{1,39}$"), skip_nulls=True
-            ).as_py() in (True, None):
+            ).as_py() not in (True, None):
                 raise pa.ArrowInvalid("a value is not unsigned decimal digits")
             return values
         if pa.types.is_timestamp(target) and pa.types.is_timestamp(source):
