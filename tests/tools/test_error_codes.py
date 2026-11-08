@@ -44,7 +44,12 @@ def test_a_code_in_a_conformance_case_counts_as_tested(tmp_path: Path) -> None:
 
 
 def test_a_code_only_inside_a_longer_name_is_not_tested(tmp_path: Path) -> None:
-    root = _repository(tmp_path, 'raise E("STORE_A")\n', "STORE_A_LIKE = 1\n")
+    root = _repository(tmp_path, 'raise E("STORE_A")\n', 'NAME = "STORE_A_LIKE"\n')
+    assert [f.split()[1] for f in error_codes.problems(root)[0]] == ["STORE_A"]
+
+
+def test_a_code_only_in_a_comment_is_not_tested(tmp_path: Path) -> None:
+    root = _repository(tmp_path, 'raise E("STORE_A")\n', "# STORE_A is covered elsewhere\n")
     assert [f.split()[1] for f in error_codes.problems(root)[0]] == ["STORE_A"]
 
 

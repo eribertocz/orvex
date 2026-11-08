@@ -3,12 +3,12 @@
     python -m tools.checks.error_codes
 
 The codes are the `*ErrorCode` enumerations of `contracts/*/v1/schema.json`. A code is used when
-a string constant of module code (`packages/*/src`, the generated `contracts` package aside)
-is exactly that code. It is tested when it
-appears as a whole word in a test file (`packages/*/tests`, `tests/`) or in a conformance case
-(`conformance/`). Every used code without a test is reported (`ERROR_CODE_UNTESTED`), and the
-check fails. Codes the contracts define but no code raises are listed as a note, not a failure:
-a contract may reserve a code before the module that raises it exists.
+a string constant of module code (`packages/*/src`, the generated `contracts` package aside) is
+exactly that code. It is tested when a string constant of a test module (`packages/*/tests`,
+`tests/`) holds it as a whole word, or a conformance case (`conformance/`: YAML, JSON or SQL)
+names it; comments and prose do not count. Every used code without a test is reported
+(`ERROR_CODE_UNTESTED`), and the check fails. Codes the contracts define but no code raises are
+listed as a note, not a failure: a contract may reserve a code before the module that raises it.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from pathlib import Path
 from tools.repository import REPOSITORY_ROOT
 
 TEST_GLOBS = ("packages/*/tests/**/*.py", "tests/**/*.py", "conformance/**/*")
-TEXT_SUFFIXES = {".py", ".yaml", ".yml", ".json", ".sql", ".md", ".txt"}
+TEXT_SUFFIXES = {".py", ".yaml", ".yml", ".json", ".sql"}
 
 
 def contract_codes(root: Path) -> dict[str, str]:
@@ -57,12 +57,19 @@ def used_codes(root: Path, codes: Iterable[str]) -> dict[str, list[str]]:
 
 
 def tested_codes(root: Path, codes: Iterable[str]) -> set[str]:
-    texts = []
+    """The codes a test asserts: a string constant of a test module that holds the code as a
+    whole word, or a word of a conformance case (YAML, JSON or SQL data, never prose)."""
+    words: set[str] = set()
     for pattern in TEST_GLOBS:
         for path in root.glob(pattern):
-            if path.is_file() and path.suffix in TEXT_SUFFIXES:
-                texts.append(path.read_text("utf-8", errors="replace"))
-    words = set(re.findall(r"[A-Z][A-Z0-9_]+", "\n".join(texts)))
+            if not path.is_file() or path.suffix not in TEXT_SUFFIXES:
+                continue
+            if path.suffix == ".py":
+                texts: Iterable[str] = _constants(path)
+            else:
+                texts = [path.read_text("utf-8", errors="replace")]
+            for text in texts:
+                words.update(re.findall(r"[A-Z][A-Z0-9_]+", text))
     return set(codes) & words
 
 
