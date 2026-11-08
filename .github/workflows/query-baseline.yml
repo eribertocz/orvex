@@ -22,10 +22,11 @@ on:
   # request gets the `query-baseline` result (#267).
   pull_request:
 
-# A newer commit on a pull request cancels the pull request's older runs (#386); any other
-# run has a group of its own, so it is never cancelled.
+# A newer commit on a pull request cancels the pull request's older runs (#386). Pushes to one
+# branch (main) share a group: a running one is never cancelled, and only the newest waiting
+# one is kept, since it tests everything the older ones would (#391).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

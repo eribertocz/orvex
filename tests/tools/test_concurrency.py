@@ -13,7 +13,7 @@ from tools.repository import REPOSITORY_ROOT
 WORKFLOWS = sorted((REPOSITORY_ROOT / ".github" / "workflows").glob("*.yml"))
 # Workflows that act on the repository: cancelling one could leave its action half done.
 ACTING = {"dependabot-auto-merge.yml", "issue-status.yml"}
-GROUP = "${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}"
+GROUP = "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
 CANCEL = "${{ github.event_name == 'pull_request' }}"
 
 
