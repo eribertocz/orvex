@@ -2717,6 +2717,8 @@ class Lake:
                 self._land if self._databases else None,
             )
             try:
+                # The snapshot this transaction reads: what a run that changes nothing ran on.
+                handle.started = handle.bounded(lambda: self._snapshot(None, cursor))
                 yield handle
                 # A statement interrupted inside the block decides the outcome, even when
                 # the block caught its error (#77).
@@ -2753,6 +2755,8 @@ class Lake:
                 # committed is found by the token, never as the latest one (#255).
                 token = uuid.uuid4().hex
                 handle.bounded(lambda: _tag(cursor, token))
+                if handle.cancelled:  # a cancel that came while tagging still stops the commit
+                    raise StoreError("STORE_CANCELLED", "The transaction was cancelled.", {})
             except BaseException:
                 cursor.rollback()
                 raise
@@ -2974,6 +2978,8 @@ class Transaction:
         # outcome, even if the block catches the error (#77).
         self.interrupted: StoreError | None = None
         self.result: CommitResult | None = None
+        # The snapshot the transaction reads (#255): set when it begins.
+        self.started: Snapshot | None = None
 
     def _interrupted(self, error: StoreError) -> StoreError:
         if error.code in {"STORE_TIMEOUT", "STORE_CANCELLED"} and self.interrupted is None:

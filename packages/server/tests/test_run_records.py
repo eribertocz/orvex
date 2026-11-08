@@ -7,6 +7,7 @@ import datetime as dt
 import json
 import re
 import subprocess
+import types
 import zoneinfo
 from collections.abc import Iterator
 from pathlib import Path
@@ -252,7 +253,8 @@ def test_password_never_reaches_a_record(
 class FakeTransaction:
     def __init__(self, lake: FakeLake) -> None:
         self.lake = lake
-        self.result: object = None  # a commit that reports no snapshot: the current one is read
+        self.result: object = None  # a commit that changed nothing
+        self.started = types.SimpleNamespace(id=1)  # the snapshot it read
 
     def execute(self, request: object) -> None:
         self.lake.executed.append(request)
@@ -280,11 +282,11 @@ class FakeLake:
         return set()  # no leftovers (#88)
 
     def current_snapshot(self) -> object:
-        if self.fail == "count":
-            raise StoreError("STORE_TIMEOUT", "The statement exceeded its time limit.", {})
-        raise AssertionError("not reached in these tests")
+        raise AssertionError("the latest snapshot is never read after a run's commit (#255)")
 
     def read(self, request: object) -> object:
+        if self.fail == "count":
+            raise StoreError("STORE_TIMEOUT", "The statement exceeded its time limit.", {})
         raise AssertionError("not reached in these tests")
 
     def close(self) -> None:
@@ -379,3 +381,18 @@ def test_the_record_names_the_run_s_own_snapshot_when_another_writer_commits_rig
     reader.close()
     assert changes[recorded]["tables_created"] == ["s.a", "s.b", "s.c"]  # the run's commit
     assert changes[recorded + 1]["tables_created"] == ["main.other_clone"]  # the other writer
+
+
+def test_a_run_that_changes_nothing_names_the_snapshot_it_read_not_the_latest(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Reviewer (#393): a run with no new rows commits nothing (`result.snapshot` is None). It is
+    # recorded on the snapshot its transaction read; the latest one, possibly another clone's,
+    # is never asked for (the fake fails if it is).
+    project(tmp_path, MODELS)
+    lake = FakeLake("count")
+    monkeypatch.setattr(commands, "open_lake", lambda *args, **kwargs: lake)
+    exit_code, out = command(capsys, "run", str(tmp_path))
+    assert exit_code == 0, out
+    assert "snapshot 1" in out.splitlines()
+    assert {r["p_snapshot_id"] for r in recorded(lake)} == {"1"}

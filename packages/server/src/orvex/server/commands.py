@@ -1103,10 +1103,16 @@ def _run_locked(
                 item.outcome = "success"
             try:
                 # The snapshot this run committed, never the latest one: another clone sharing
-                # the lake may have committed since (#255). None only when nothing changed.
+                # the lake may have committed since (#255). A run that changed nothing names the
+                # snapshot its transaction read.
                 result = transaction.result
                 committed = result.snapshot if result is not None else None
-                snapshot = committed.id if committed is not None else lake.current_snapshot().id
+                found = committed if committed is not None else transaction.started
+                if found is None:
+                    raise StoreError(
+                        "STORE_SNAPSHOT_NOT_FOUND", "The run's snapshot could not be read.", {}
+                    )
+                snapshot = found.id
                 for item in outcomes:
                     if item.rows_written is None and item.model.config.materialized != "view":
                         item.rows_written = str(_count(lake, item.model, snapshot))
