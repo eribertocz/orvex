@@ -4,7 +4,9 @@ passed, and fails on any failure."""
 
 from __future__ import annotations
 
+import os
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -140,3 +142,83 @@ def test_the_planned_test_command_is_the_whole_workflow_step(tmp_path: Path) -> 
     assert step.command[-1] == verify._with_report(
         checks.script(REPOSITORY_ROOT, check), step.junit or ""
     )
+
+
+# --- profiles (#375) ----------------------------------------------------------------------------
+
+
+def test_the_critical_sets_name_real_tests_and_local_checks() -> None:
+    critical = verify.profiles(REPOSITORY_ROOT)
+    assert critical["tests"]
+    assert all((REPOSITORY_ROOT / path).exists() for path in critical["tests"])
+    local = {c.name for c in checks.load(REPOSITORY_ROOT) if c.local}
+    assert set(critical["checks"]) <= local
+
+
+def test_pr_always_runs_the_critical_tests_and_everything_when_unsure() -> None:
+    critical = set(verify.profiles(REPOSITORY_ROOT)["tests"])
+    tests, reasons = verify.pr_tests(REPOSITORY_ROOT, ["docs/roadmap.md"])
+    assert critical <= set(tests)
+    assert reasons
+    assert verify.pr_tests(REPOSITORY_ROOT, ["unknown/file.txt"])[0] == ["."]
+    assert verify.pr_tests(REPOSITORY_ROOT, [])[0] == sorted(critical)
+
+
+def test_the_full_suite_runs_in_disjoint_parts_with_their_own_reports(tmp_path: Path) -> None:
+    steps, _ = verify.plan(REPOSITORY_ROOT, ("3.15", "3.14"), tmp_path, total=3)
+    for python in ("3.15", "3.14"):
+        parts = [s for s in steps if s.junit and s.python == python]
+        assert [dict(s.variables)["PYTEST_SHARD"] for s in parts] == ["0/3", "1/3", "2/3"]
+        assert len({s.junit for s in parts}) == 3
+        assert all(f"--junitxml={s.junit}" in s.command[-1] for s in parts)
+
+
+def test_parts_are_sized_by_the_workers_shared_by_the_pythons() -> None:
+    assert verify.parts(2, 2) == 1
+    assert verify.parts(8, 2) == 4
+    assert verify.parts(1, 2) == 1
+
+
+def test_every_test_file_belongs_to_full(tmp_path: Path) -> None:
+    # #373 §2: no test is in no profile. pytest collects its `testpaths` whole (nothing ignores
+    # or deselects a path) and `governance-scripts` discovers the workflow scripts' tests; `full`
+    # runs both.
+    configuration = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text("utf-8"))
+    options = configuration["tool"]["pytest"]["ini_options"]
+    assert not {"norecursedirs", "collect_ignore"} & set(options)
+    assert not any(o.startswith(("--ignore", "--deselect", "-k", "-m")) for o in options["addopts"])
+    roots = [f"{p}/" for p in options["testpaths"]]
+    scripts = next(c for c in checks.load(REPOSITORY_ROOT) if c.name == "governance-scripts")
+    assert scripts.local
+    assert "discover -p 'test_*.py'" in scripts.run
+    discovered = f"{scripts.directory}/"
+    tracked = subprocess.run(
+        ["git", "ls-files", "*test_*.py"],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    outside = [t for t in tracked if not t.startswith((*roots, discovered))]
+    assert not outside, outside
+    steps, _ = verify.plan(REPOSITORY_ROOT, ("3.15", "3.14"), tmp_path, total=3)
+    names = {s.name for s in steps}
+    assert "governance-scripts" in names
+    for step in steps:
+        if step.junit:  # the test parts run the configured suite, with no paths of their own
+            assert "pytest" in step.command[-1]
+            assert not any(r.rstrip("/") in step.command[-1].split() for r in roots)
+
+
+def test_nightly_is_full_with_the_extensive_variants(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[str | None] = []
+
+    def fake_full(root: Path, workers: int, run: object = None) -> int:
+        seen.append(os.environ.get("PROPERTY_PROFILE"))
+        return 0
+
+    monkeypatch.delenv("PROPERTY_PROFILE", raising=False)
+    monkeypatch.setattr(verify, "full", fake_full)
+    assert verify.main(["nightly", "--workers", "2"]) == 0
+    assert seen == ["nightly"]
+    assert "PROPERTY_PROFILE" not in os.environ

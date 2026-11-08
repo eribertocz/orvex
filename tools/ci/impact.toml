@@ -1,0 +1,63 @@
+# What a change affects (#375, #373 §3): `tools/ci/impact.py` reads this map with the import
+# graph of the packages (their `pyproject.toml` dependencies) and the contracts each module
+# produces and consumes (its `contracts.toml`). The map is conservative: a path it does not
+# know selects the full suite, and `tests/tools/test_impact.py` checks it against the real
+# imports of every test folder.
+
+# Test folders outside the packages, and the packages they exercise (by folder name). A change
+# to any of these packages, or to a package they depend on, selects the folder.
+[tests]
+"tests/conformance" = ["access", "contracts", "semantic", "server", "store", "transform"]
+"tests/properties" = ["access", "contracts", "semantic", "server", "store"]
+"tests/contracts" = ["contracts", "semantic"]
+"tests/workspace" = ["access", "contracts", "semantic", "server", "store", "transform", "dashboards", "mcp"]
+"tests/tools" = ["server"]
+
+# Paths whose change selects the full suite: shared test support, the runners, the build, the
+# CI itself and everything every test depends on.
+[full]
+paths = [
+  "conformance/",
+  "tests/support/",
+  "tests/__init__.py",
+  "tools/ci/",
+  "tools/repository.py",
+  ".github/",
+  "pyproject.toml",
+  "pylock.toml",
+  "pylock.py314.toml",
+  "versions.toml",
+  "identity.toml",
+  "packages/contracts/",
+  "contracts/",
+]
+
+# Paths with a known, narrower effect: each selects the listed test folders (and nothing is
+# guessed beyond them). `modules` adds those packages as if they had changed.
+[[narrow]]
+paths = ["docs/", "AGENTS.md", "CLAUDE.md", "README.md", "CONTRIBUTING.md", "CHANGELOG.md", "NOTICE", "LICENSE"]
+tests = ["tests/tools", "tests/workspace"]
+
+[[narrow]]
+paths = ["benchmarks/", "tools/benchmarks/"]
+tests = ["tests/tools"]
+
+[[narrow]]
+paths = ["tools/checks/", "tools/licenses/", "tools/rename/", "tools/synthetic/"]
+tests = ["tests/tools", "tests/workspace"]
+
+[[narrow]]
+paths = ["tools/contracts/"]
+tests = ["tests/tools", "tests/contracts"]
+
+[[narrow]]
+paths = ["vendor/apache-ossie/", "vendor/iso-4217/"]
+modules = ["semantic"]
+
+[[narrow]]
+paths = ["vendor/json-canonicalization/"]
+modules = ["semantic", "contracts"]
+
+[[narrow]]
+paths = ["web/"]
+tests = []  # the web checks run in CI only (Node 24)
