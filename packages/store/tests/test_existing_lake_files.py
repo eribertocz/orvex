@@ -548,18 +548,30 @@ def test_an_overlay_file_system_is_refused_for_local_data_in_both_directions(
     # protected file passes any device comparison. Mounted in a mount namespace of its own.
     if shutil.which("unshare") is None:
         pytest.skip("no unshare here")
-    command = ["unshare", "-m"] if os.geteuid() == 0 else ["unshare", "-rm"]
-    environment = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
-    result = subprocess.run(
-        [*command, sys.executable, "-c", OVERLAY, str(tmp_path)],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=environment,
-        timeout=120,
-    )
-    if result.returncode != 0 and "mount" in result.stderr.lower():
-        pytest.skip("no overlay mount allowed here")
+    python = [
+        "env",
+        f"PYTHONPATH={os.pathsep.join(sys.path)}",
+        sys.executable,
+        "-c",
+        OVERLAY,
+        str(tmp_path),
+    ]
+    # A mount namespace of its own: as root; else as an unprivileged user namespace; else,
+    # where those are not allowed (GitHub's Ubuntu runners), through passwordless sudo.
+    if os.geteuid() == 0:
+        attempts = [["unshare", "-m"]]
+    else:
+        attempts = [["unshare", "-rm"], ["sudo", "-n", "unshare", "-m"]]
+    result = None
+    for command in attempts:
+        result = subprocess.run(
+            [*command, *python], capture_output=True, text=True, check=False, timeout=120
+        )
+        if result.returncode == 0:
+            break
+    assert result is not None
+    if result.returncode != 0 and not os.environ.get("CI"):
+        pytest.skip(f"no mount namespace allowed here: {result.stderr.strip()[:200]}")
     assert result.returncode == 0, result.stderr
     found = json.loads(result.stdout.strip().splitlines()[-1])
     assert all("overlay" in reason for reason in found.values()), found
