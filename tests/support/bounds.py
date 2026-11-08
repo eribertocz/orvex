@@ -24,9 +24,9 @@ FACTOR = 4
 LIMIT = 8.0
 
 
-def _best(run: Callable[[int], object], size: int) -> float:
+def _best(run: Callable[[int], object], size: int, tries: int = 3) -> float:
     best = SAFETY_NET
-    for _ in range(3):  # the fastest of three: noise only ever adds time
+    for _ in range(tries):  # the fastest: noise only ever adds time
         started = time.perf_counter()
         run(size)
         best = min(best, time.perf_counter() - started)
@@ -38,6 +38,7 @@ def _best(run: Callable[[int], object], size: int) -> float:
 # small run takes at least this long (or reaches `size * GROWTH`), so the ratio measures work.
 MEASURABLE = 0.02  # seconds
 GROWTH = 16
+ROUNDS = 5  # turns of one small and one large run each
 
 
 def linear(run: Callable[[int], object], size: int) -> None:
@@ -47,8 +48,13 @@ def linear(run: Callable[[int], object], size: int) -> None:
     while small < MEASURABLE and n < size * GROWTH:
         n *= 2
         small = _best(run, n)
+    # Both sizes are timed in turns, so a burst of load on a shared runner (another job, a
+    # garbage collection) falls on both rather than on one: noise never decides the ratio.
+    small, large = SAFETY_NET, SAFETY_NET
+    for _ in range(ROUNDS):
+        small = min(small, _best(run, n, 1))
+        large = min(large, _best(run, FACTOR * n, 1))
     small = max(small, 1e-4)  # below the clock's useful resolution, use its floor
-    large = _best(run, FACTOR * n)
     assert large / small < LIMIT, f"{n}: {small:.4f}s; {FACTOR * n}: {large:.4f}s"
 
 

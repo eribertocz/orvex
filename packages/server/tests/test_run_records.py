@@ -379,7 +379,9 @@ def test_the_record_names_the_run_s_own_snapshot_when_another_writer_commits_rig
         reader.execute("SELECT snapshot_id, changes FROM ducklake_snapshots('lake')").fetchall()
     )
     reader.close()
-    assert changes[recorded]["tables_created"] == ["s.a", "s.b", "s.c"]  # the run's commit
+    # The run's commit; DuckLake lists the tables in creation order, which models of one level
+    # need not keep (the suite runs in a random order on 3.15).
+    assert sorted(changes[recorded]["tables_created"]) == ["s.a", "s.b", "s.c"]
     assert changes[recorded + 1]["tables_created"] == ["main.other_clone"]  # the other writer
 
 

@@ -192,11 +192,8 @@ contexts = [
   "python-tests-3.14-part-8",
   "python-tests-3.14-part-9",
 ]
-digest = "e5ac4b18ab552456"
+digest = "8ff21ee9b32c190d"
 pythons = ["3.15", "3.14"]
-# A pull request's 3.14 parts beyond the second run nothing when the change selects only some
-# tests (#391, tools/ci/select.py); 3.15 and main always run the whole suite.
-conditions = ["env.PYTEST_SKIP != 'true'"]
 setup = [
   "python -m pip install --quiet pip==26.2.2",
   "python -m tools.ci.select",
