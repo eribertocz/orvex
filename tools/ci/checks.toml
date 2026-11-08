@@ -174,7 +174,7 @@ contexts = [
   "python-tests-3.14-part-8",
   "python-tests-3.14-part-9",
 ]
-digest = "0bbadbd557515bcd"
+digest = "98efce254dd6a81c"
 pythons = ["3.15", "3.14"]
 setup = [
   "python -m pip install --quiet pip==26.2.2",
@@ -187,7 +187,7 @@ reports = ["python -m tools.ci.junit_annotations junit.xml"]
 # Locally: the whole suite on each Python of the matrix, in one part. Tests that need the
 # PostgreSQL, ClickHouse or Azurite services CI starts are reported as not run, by reason.
 name = "python-tests"
-run = "python -m pytest -p tools.ci.shard -p tools.ci.timing --junitxml=junit.xml"
+run = "python -m pytest -p tools.ci.shard -p tools.ci.timing -p tools.ci.order --junitxml=junit.xml"
 local = true
 
 [[job]]
@@ -200,6 +200,20 @@ digest = "6d1a12821c8f372d"
 pythons = ["3.15", "3.14"]
 setup = ['test "$RESULT" = success']
 # Reports the parts of python-tests-part as the required checks; nothing to run locally.
+
+[[job]]
+workflow = "python.yml"
+job = "python-tests-windows"
+kind = "check"
+required = false
+contexts = ["python-tests-windows"]
+digest = "78d68bdb18595baa"
+setup = ["python -m pip install --quiet pip==26.2.2"]
+[[job.check]]
+name = "python-tests-windows"
+run = "python -m pytest -p tools.ci.order tests/tools/test_fixtures.py tests/tools/test_order.py tests/tools/test_shard.py tests/tools/test_pins.py tests/tools/test_synthetic.py"
+local = false
+reason = "runs on a Windows runner; the same tests run on Linux in python-tests"
 
 [[job]]
 workflow = "python.yml"

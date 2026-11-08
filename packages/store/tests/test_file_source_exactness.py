@@ -13,6 +13,7 @@ import datetime as dt
 import decimal
 import itertools
 import urllib.parse
+from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -22,6 +23,8 @@ import pyarrow.parquet as pq
 import pytest
 from orvex.store.errors import StoreError
 from orvex.store.file_sources import view_query
+
+from tests.support.fixtures import frozen
 
 D = decimal.Decimal
 UTC = dt.UTC
@@ -154,8 +157,10 @@ def _texts(connection: duckdb.DuckDBPyConnection, file: Path) -> dict[int, str]:
 
 
 @pytest.fixture(scope="module")
-def parquet_files(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[Written]]:
-    """Two files per type (sides a and b), with distinct row keys."""
+def parquet_files(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[dict[str, list[Written]]]:
+    """Two files per type (sides a and b), with distinct row keys, read-only for every test."""
     folder = tmp_path_factory.mktemp("types")
     connection = duckdb.connect()
     files: dict[str, list[Written]] = {}
@@ -164,7 +169,9 @@ def parquet_files(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[Wr
         for side, start in (("a", index * 1000), ("b", index * 1000 + 500)):
             path, values = _write(folder, name, start, side)
             files[name].append(Written(path, values, _texts(connection, path)))
-    return files
+    connection.close()
+    for _ in frozen(folder):
+        yield files
 
 
 def test_every_parquet_type_alone_is_exact_except_a_wide_decimal(

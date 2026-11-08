@@ -5,21 +5,23 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import duckdb
 import pytest
 
+from tests.support.fixtures import frozen
 from tools.synthetic.generate import PRICES, TABLES, SyntheticError, generate
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(scope="module")
-def dataset(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def dataset(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     out = tmp_path_factory.mktemp("small")
     generate("small", 42, out)
-    return out
+    yield from frozen(out)
 
 
 def scalar(dataset: Path, sql: str) -> object:
