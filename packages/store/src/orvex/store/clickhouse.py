@@ -66,10 +66,10 @@ _TIMEOUT_CODES = frozenset({"159"})  # TIMEOUT_EXCEEDED
 # line, and `/* */`; its strings take `\\` escapes and doubled quotes.
 _SCAN = re.compile(
     r"(?P<comment>--[^\n]*|#[^\n]*|/\*.*?\*/)"
-    r"|(?P<string>'(?:[^'\\]|\\.|'')*')"
+    r"|(?P<string>'(?:[^'\\]|\\.|'')*'|\$(?P<tag>\w*)\$.*?\$(?P=tag)\$)"
     r"|(?P<name>`(?:[^`\\]|\\.|``)*`|\"(?:[^\"\\]|\\.|\"\")*\")"
     r"|\{(?P<parameter>[A-Za-z_][A-Za-z0-9_]*):(?P<type>[^{}]+)\}"
-    r"|(?P<open>/\*|['`\"])",  # a comment or quote never closed
+    r"|(?P<open>/\*|['`\"]|\$\w*\$)",  # a comment, quote or heredoc never closed
     re.S,
 )
 _FORBIDDEN_WORDS = re.compile(r"\b(SETTINGS|FORMAT|INTO\s+OUTFILE)\b", re.I)
@@ -305,7 +305,14 @@ class ClickHouse:
             body = response.read().decode("utf-8")
         finally:
             connection.close()
-        return [json.loads(line) for line in body.splitlines() if line]
+        try:
+            rows = [json.loads(line) for line in body.splitlines() if line]
+        except ValueError:
+            rows = None
+        if rows is None or not all(isinstance(row, dict) for row in rows):
+            # Only a changed output-format setting reshapes JSONEachRow.
+            raise _setting("output_format_*", "the defaults", "a changed output format")
+        return rows
 
     # --- verification --------------------------------------------------------------------------
 

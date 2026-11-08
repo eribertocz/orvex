@@ -295,7 +295,7 @@ Preconditions:
   | `cancel_http_readonly_queries_on_client_close` | `1` |
 
 - **Limits.** `max_execution_time`, `max_memory_usage` and `max_result_rows` must each be set, and must not exceed the caller's budget (`ENGINE_SETTING_REQUIRED`).
-- **No other setting changed.** The profile may change only the settings above and `database`, `max_threads`, `log_queries`, `log_comment` and `priority`. Any other changed setting is `ENGINE_SETTING_REQUIRED`, naming every one of them. Settings such as `result_overflow_mode`, `read_overflow_mode`, `timeout_overflow_mode`, `max_rows_to_read`, `additional_table_filters`, `use_query_cache`, `limit`, `offset` and `session_timezone` cut, filter, cache or reshape a result without an error. The check reads them in one aggregated row, so neither `limit` nor `offset` can hide one.
+- **No other setting changed.** The profile may change only the settings above and `database`, `max_threads`, `log_queries`, `log_comment` and `priority`. Any other changed setting is `ENGINE_SETTING_REQUIRED`, naming every one of them. Settings such as `result_overflow_mode`, `read_overflow_mode`, `timeout_overflow_mode`, `max_rows_to_read`, `additional_table_filters`, `use_query_cache`, `limit`, `offset` and `session_timezone` cut, filter, cache or reshape a result without an error. The check reads them in one aggregated row, so neither `limit` nor `offset` can hide one. A changed output-format setting that reshapes that row is refused the same way (`output_format_*`).
 
 **Tables.** A table's columns are read from `system.columns` and mapped exactly; an unmapped column is `UNSUPPORTED_SOURCE_TYPE`, naming it. A table this user cannot see is `SOURCE_NOT_FOUND`. `Nullable(T)`, `LowCardinality(T)` and `LowCardinality(Nullable(T))` map as `T`.
 
@@ -317,7 +317,7 @@ Everything else has no exact type: `Int256`, `UInt256`, `Decimal` with P > 38, `
 
 - **The statement.**
   - It is one `SELECT` or `WITH`, with no `;`, `SETTINGS`, `FORMAT` or `INTO OUTFILE`, and no unclosed quote or comment (`STORE_STATEMENT_INVALID`). The store appends `FORMAT ArrowStream`.
-  - The statement is read in one pass from left to right: strings (`'…'`), quoted names (`` `…` ``, `"…"`) and comments (`--`, `#`, `#!`, `/* */`) are skipped as a whole. So a word, a quote or a `{` inside one is never read as a clause or a placeholder.
+  - The statement is read in one pass from left to right: strings (`'…'` and `$tag$…$tag$`), quoted names (`` `…` ``, `"…"`) and comments (`--`, `#`, `#!`, `/* */`) are skipped as a whole. So a word, a quote or a `{` inside one is never read as a clause or a placeholder.
   - Values are bound as `{name:Type}` placeholders, where `Type` is the ClickHouse type of the parameter's DuckDB type, or `Nullable(Type)`: `Bool`, `Int8`–`Int128`, `UInt8`–`UInt128`, `Float64`, `String`, `Date32`, `DateTime64(6, 'UTC')`, `Decimal(P, S)`.
   - A placeholder without a parameter, a parameter without a placeholder, a type that differs, or a `NULL` bound to a non-`Nullable` placeholder is `STORE_PARAMETER_INVALID`. So is a `TIMESTAMPTZ` value without an offset, or a `TIMESTAMP` (no ClickHouse type is a local time).
 - **The result.**

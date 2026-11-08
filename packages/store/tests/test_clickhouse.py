@@ -207,6 +207,7 @@ SILENT = {
     "limit": "5",
     "offset": "1",
     "session_timezone": "America/La_Paz",
+    "output_format_json_array_of_rows": "1",
 }
 
 
@@ -215,7 +216,8 @@ def test_any_other_changed_setting_is_refused(connect: Connect, name: str, value
     with pytest.raises(StoreError) as caught:
         connect({**SAFE, name: value})
     assert caught.value.code == "ENGINE_SETTING_REQUIRED"
-    assert name in caught.value.details["setting"].split(",")
+    named = caught.value.details["setting"]
+    assert name in named.split(",") or (named == "output_format_*" and name.startswith("output_"))
 
 
 def test_a_harmless_setting_may_be_changed(connect: Connect) -> None:
@@ -451,6 +453,8 @@ def test_a_parameter_that_does_not_fit_its_placeholder_is_refused(
         "SELECT 1 AS v /* unclosed",
         "SELECT 'unclosed",
         "SELECT 1;",
+        "SELECT $$'$$ AS a SETTINGS max_threads = 1, b = $$'$$",
+        "SELECT $x$ unclosed",
     ],
 )
 def test_only_one_plain_select_is_run(connect: Connect, sql: str) -> None:
