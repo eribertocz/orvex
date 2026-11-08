@@ -101,7 +101,7 @@ def refused_at_attach(made: ExistingLakeAttachment) -> StoreError:
 
 def refused_at_verify(lake: ExistingLake, snapshot: Snapshot | None = None) -> StoreError:
     with pytest.raises(StoreError) as caught:
-        lake.verify(snapshot or lake.latest_snapshot())
+        lake.verify(snapshot or lake.latest_snapshot(), lake.attachment)
     assert caught.value.code == "STORE_SOURCE_INVALID"
     return caught.value
 
@@ -154,7 +154,7 @@ def test_a_lake_apart_from_the_protected_set_attaches_and_its_snapshot_is_verifi
     catalog, data = make_lake(lake_root)
     with open_lake(attachment(catalog, data, *protected)) as lake:
         snapshot = lake.latest_snapshot()
-        assert lake.verify(snapshot) == snapshot
+        assert lake.verify(snapshot, lake.attachment) == snapshot
         found = lake._connection.execute("SELECT sum(reading_id) FROM lake.readings").fetchone()
         assert found == (9,)
 
@@ -316,7 +316,7 @@ def test_a_snapshot_referencing_a_file_outside_the_location_is_not_served(
     table = "ducklake_data_file" if kind == "data" else "ducklake_delete_file"
     with open_lake(attachment(catalog, data, protected)) as lake:
         snapshot = lake.latest_snapshot()
-        lake.verify(snapshot)
+        lake.verify(snapshot, lake.attachment)
         edit_catalog(catalog, f"UPDATE {table} SET path = ?, path_is_relative = 0", str(path))
         assert "outside its data location" in refused_at_verify(lake, snapshot).message
 
@@ -354,7 +354,7 @@ def test_a_symbolic_link_swapped_in_after_verification_is_refused_at_read(
     # (measured for #399, PR 2).
     catalog, data = make_lake(lake_root)
     with open_lake(attachment(catalog, data)) as lake:
-        lake.verify(lake.latest_snapshot())
+        lake.verify(lake.latest_snapshot(), lake.attachment)
         data_file, _ = files_of(lake)
         data_file.unlink()
         data_file.symlink_to(outside_parquet(other_device / "elsewhere"))
@@ -438,7 +438,7 @@ def test_the_protected_set_is_checked_again_as_it_stands_at_verification(
     (tmp_path / "elsewhere").mkdir()
     alias.symlink_to(tmp_path / "elsewhere")
     with open_lake(attachment(catalog, data, [alias])) as lake:
-        lake.verify(lake.latest_snapshot())
+        lake.verify(lake.latest_snapshot(), lake.attachment)
         alias.unlink()
         (other_device / "now-here").mkdir()
         alias.symlink_to(other_device / "now-here")

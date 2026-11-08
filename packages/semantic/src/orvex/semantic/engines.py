@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
+from orvex.semantic.ossie.model import OssieModel
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -145,16 +146,26 @@ def _items(node: Mapping[str, Any], key: str) -> list[Mapping[str, Any]]:
     )
 
 
+def dataset_connections(ossie: OssieModel) -> dict[str, str]:
+    """Each dataset's written connection, by normalized name: what `server` must know before
+    it compiles, since a dataset's columns come from its own engine."""
+    return {dataset: connection for dataset, (connection, _) in _written(ossie).items()}
+
+
 def _connections(compiled: CompiledModel) -> dict[str, tuple[str, str]]:
     """Each dataset's written connection, with the pointer it is written at."""
+    return _written(compiled.ossie)
+
+
+def _written(ossie: OssieModel) -> dict[str, tuple[str, str]]:
     found: dict[str, tuple[str, str]] = {}
-    for extension in compiled.ossie.product_extensions:
+    for extension in ossie.product_extensions:
         payload = extension.payload
         if payload.get("element") != "dataset" or "connection" not in payload:
             continue
         owner = extension.pointer.rsplit("/custom_extensions/", 1)[0]
         index = int(owner.rsplit("/", 1)[1])
-        dataset = _items(compiled.ossie.document, "datasets")[index]
+        dataset = _items(ossie.document, "datasets")[index]
         found[sql.normalize(str(dataset["name"]))] = (str(payload["connection"]), extension.pointer)
     return found
 

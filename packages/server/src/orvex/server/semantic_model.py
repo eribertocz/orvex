@@ -12,7 +12,7 @@ checked through `access`), and one never carries over to the other.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -21,10 +21,12 @@ import yaml
 from orvex.contracts.store.v1 import TablesRequest, TablesResult
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
-from orvex.semantic.engines import ALL_MANAGED, EngineCatalog, Routing, route_model
+from orvex.semantic.engines import ALL_MANAGED, Routing, dataset_connections, route_model
 from orvex.semantic.errors import SemanticError
+from orvex.semantic.ossie import sql
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies import PolicyModel, read_policies
+from orvex.server.engine_catalog import engine_catalog
 from orvex.server.problems import Problem
 from orvex.server.regular_file import read_regular_file
 from orvex.store.errors import StoreError
@@ -49,6 +51,15 @@ class SemanticModel:
 class Loaded:
     model: SemanticModel | None  # none: no semantic model, or problems
     problems: tuple[Problem, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalTables:
+    """An existing lake's tables and views at its served snapshot (P2-30 PR 3): what the
+    datasets on that connection are compiled against. Given only when its engine is enabled."""
+
+    tables: TablesResult
+    views: frozenset[str]  # `schema.view`, lower-cased: no dataset may read one
 
 
 def model_files(folder: Path) -> list[Path]:
@@ -83,20 +94,37 @@ def _problems(error: SemanticError, file: str, audience: Audience) -> list[Probl
 
 
 def _catalog(
-    document: Mapping[str, object], tables: TablesResult, file: str
+    document: Mapping[str, object],
+    tables: TablesResult,
+    file: str,
+    only: Callable[[str], bool] = lambda _: True,
+    views: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, dict[str, SourceColumn]], list[Problem]]:
     """Each dataset's source table as of the snapshot, by its `source` text: `table` (schema
     `main`) or `schema.table`, matched as DuckDB matches a name (case aside). A source with no
-    such table is a problem naming the dataset, never a guess."""
+    such table is a problem naming the dataset, never a guess. Only the datasets `only` keeps
+    (by normalized name) are read here; a source that is one of `views` is refused: an existing
+    lake's datasets read its tables only (ADR-0027 §3)."""
     known = {(t.schema_.casefold(), t.table.casefold()): t for t in tables.tables}
     datasets = document.get("datasets", ())
     catalog: dict[str, dict[str, SourceColumn]] = {}
     problems: list[Problem] = []
     for at, dataset in enumerate(datasets if isinstance(datasets, Sequence) else ()):
-        if not isinstance(dataset, Mapping):
+        if not isinstance(dataset, Mapping) or not only(sql.normalize(str(dataset.get("name")))):
             continue
         source = str(dataset.get("source", dataset.get("name", "")))
         schema, _, name = source.rpartition(".")
+        if f"{schema or 'main'}.{name}".casefold() in views:
+            problems.append(
+                Problem(
+                    "STORE_SOURCE_INVALID",
+                    file,
+                    None,
+                    f"reference at /datasets/{at}/source: dataset {dataset.get('name')!r} reads "
+                    f"{source!r}, a view of an existing lake; only its tables can be read",
+                )
+            )
+            continue
         table = known.get(((schema or "main").casefold(), name.casefold()))
         if table is None:
             problems.append(
@@ -111,6 +139,32 @@ def _catalog(
             continue
         catalog[source] = {c.name: SourceColumn(c.type, c.nullable) for c in table.columns}
     return catalog, problems
+
+
+def _on(datasets: Mapping[str, str], connection: str) -> Callable[[str], bool]:
+    """Whether a dataset (normalized name) is on `connection`."""
+    return lambda dataset: datasets.get(dataset) == connection
+
+
+def _route_refused(file: str, connections: Sequence[str]) -> Problem:
+    """Datasets on an existing lake whose engine is not enabled in this process."""
+    return Problem(
+        "UNSUPPORTED_OPERATION",
+        file,
+        None,
+        f"operation: route; datasets read the existing DuckLake {', '.join(connections)}, an "
+        "engine enabled only for development",
+    )
+
+
+def _two_engines(file: str, source: str) -> Problem:
+    """One source text read on two engines: which table's columns it has would be ambiguous."""
+    return Problem(
+        "OSSIE_INVALID",
+        file,
+        None,
+        f"source {source!r} is read by datasets on two engines; name each lake's table apart",
+    )
 
 
 def _named_groups(text: bytes) -> set[str]:
@@ -129,13 +183,6 @@ def _named_groups(text: bytes) -> set[str]:
     return found
 
 
-def engine_catalog(connections: Collection[str]) -> EngineCatalog:
-    """The project's Direct Query engines, from `connections.yaml` (P2-29): every connection
-    kind this release knows is a Route A source, extracted into the managed lake, so the
-    catalog lists none, and a dataset naming any connection is a problem of the model."""
-    return EngineCatalog({}, frozenset(connections))
-
-
 def load_semantic(
     folder: Path,
     lake: Lake,
@@ -145,13 +192,17 @@ def load_semantic(
     audience: Audience,
     groups: Collection[str] | None = None,
     experimental: bool = False,
-    connections: Collection[str] = (),
+    connections: Mapping[str, object] | Collection[str] = (),
+    external: Mapping[str, ExternalTables] | None = None,
 ) -> Loaded:
     """The project's semantic model compiled against `lake` as of `snapshot`, or its problems,
     written for `audience`. `groups`: the project's groups as `access` knows them; none in local
     mode (Owner decision on #358), where the groups `security.yaml` names are taken as they
     are and nobody belongs to any, so no exemption ever applies (fail closed). `connections`:
-    the names in `connections.yaml`, which a dataset's `connection` must be one of (P2-29)."""
+    the names in `connections.yaml`, which a dataset's `connection` must be one of (P2-29).
+    `external`: the tables of each existing lake whose engine is enabled in this process (P2-30
+    PR 3); a dataset on an existing lake whose engine is not is `UNSUPPORTED_OPERATION`
+    (`operation: route`), and the model is not compiled."""
     files = model_files(folder)
     if not files:
         return Loaded(None)
@@ -179,11 +230,22 @@ def load_semantic(
         model = read(content, file, vendor_names)
     except SemanticError as error:
         return Loaded(None, tuple(_problems(error, file, audience)))
+    engines = engine_catalog(connections)
+    on = {d: c for d, c in dataset_connections(model).items() if c in engines.entries}
+    disabled = sorted({c for c in on.values() if external is None or c not in external})
+    if disabled:
+        return Loaded(None, (_route_refused(file, disabled),))
     try:
         tables = lake.table_columns(TablesRequest(kind="tables", snapshot=snapshot))
     except StoreError as error:
         return Loaded(None, (Problem(error.code, file, None, error.message),))
-    catalog, problems = _catalog(model.document, tables, file)
+    catalog, problems = _catalog(model.document, tables, file, lambda d: d not in on)
+    for connection in sorted(set(on.values())):
+        given = (external or {})[connection]
+        found, more = _catalog(model.document, given.tables, file, _on(on, connection), given.views)
+        problems += more
+        problems += [_two_engines(file, source) for source in sorted(set(found) & set(catalog))]
+        catalog.update(found)
     if problems:
         return Loaded(None, tuple(problems))
     try:
@@ -191,7 +253,7 @@ def load_semantic(
     except SemanticError as error:
         return Loaded(None, tuple(_problems(error, file, audience)))
     try:
-        routing = route_model(compiled, engine_catalog(connections), file)
+        routing = route_model(compiled, engines, file)
     except SemanticError as error:
         return Loaded(None, tuple(_problems(error, file, audience)))
     policies: PolicyModel | None = None
