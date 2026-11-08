@@ -242,3 +242,89 @@ def test_validation_with_the_instance_reports_an_overlap(
     checked = check_project(second, instance=instance)
     assert [problem.code for problem in checked.problems] == ["STORE_SOURCE_INVALID"]
     assert check_project(second).problems == ()
+
+
+# --- Reviewer pass 1 on #407 -----------------------------------------------------------------
+
+S3 = (
+    "    s3:\n      region: us-east-1\n      key_id: ${{env:{key}}}\n"
+    "      secret: ${{env:{secret}}}\n"
+)
+
+
+def test_an_object_storage_credential_shared_with_another_connection_is_refused_both_ways(
+    tmp_path: Path, instance: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SHARED_KEY", "test-key")
+    monkeypatch.setenv("MANAGED_SECRET", "test-secret")
+    lake_s3 = S3.format(key="SHARED_KEY", secret="LAKE_SECRET")
+    first = make_project(tmp_path / "a", lake("billing", "s3://lakes/billing/") + lake_s3)
+    second = make_project(
+        tmp_path / "b",
+        settings="lake:\n  data:\n    path: s3://managed/b/\n    s3:\n      region: us-east-1\n"
+        "      key_id: ${env:SHARED_KEY}\n      secret: ${env:MANAGED_SECRET}\n",
+    )
+    for folder in (first, second):
+        found = problems_of(instance, folder, [first, second])
+        assert [problem.code for problem in found] == ["STORE_SOURCE_INVALID"]
+        assert "credential" in found[0].message
+    protection = lake_separation.protection(
+        lake_separation.instance(instance, [first, second], SLUG), first, "billing"
+    )
+    variables = {item.root for item in protection.credentials_in_use}
+    assert {"SHARED_KEY", "MANAGED_SECRET"} <= variables
+    assert "LAKE_SECRET" not in variables
+
+
+def test_an_object_storage_lake_with_a_credential_of_its_own_is_accepted(
+    tmp_path: Path, instance: Path
+) -> None:
+    first = make_project(
+        tmp_path / "a",
+        lake("billing", "s3://lakes/billing/") + S3.format(key="LAKE_KEY", secret="LAKE_SECRET"),
+    )
+    second = make_project(
+        tmp_path / "b",
+        lake("coll", "s3://lakes/coll/", "coll") + S3.format(key="COLL_KEY", secret="COLL_SECRET"),
+    )
+    for folder in (first, second):
+        assert problems_of(instance, folder, [first, second]) == []
+
+
+def test_an_azure_location_spelled_with_its_account_is_refused(
+    tmp_path: Path, instance: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "AZ_MANAGED", "DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=a2V5"
+    )
+    azure = "    azure:\n      connection_string: ${env:AZ_LAKE}\n"
+    first = make_project(tmp_path / "a", lake("billing", "az://managed/data/") + azure)
+    second = make_project(
+        tmp_path / "b",
+        settings="lake:\n  data:\n    path: az://acct.blob.core.windows.net/managed/data/\n"
+        "    azure:\n      connection_string: ${env:AZ_MANAGED}\n",
+    )
+    found = problems_of(instance, first, [first, second])
+    assert [problem.code for problem in found] == ["STORE_SOURCE_INVALID"]
+    assert "account" in found[0].message
+
+
+def test_a_file_source_reading_from_the_root_folder_is_refused_not_raised(
+    tmp_path: Path, instance: Path
+) -> None:
+    s3 = S3.format(key="LAKE_KEY", secret="LAKE_SECRET")
+    first = make_project(
+        tmp_path / "a",
+        lake("billing", "s3://lakes/billing/") + s3,
+        "  everything:\n    type: parquet\n    path: /*.parquet\n",
+    )
+    found = lake_separation.instance(instance, [first], SLUG)
+    with pytest.raises(StoreError) as caught:
+        lake_separation.protection(found, first, "billing")
+    assert caught.value.code == "STORE_SOURCE_INVALID"
+
+
+def test_a_nul_character_in_a_path_is_refused_not_raised(tmp_path: Path, instance: Path) -> None:
+    first = make_project(tmp_path / "a", lake("billing", '"/srv/lake\\0data/"'))
+    found = problems_of(instance, first, [first])
+    assert [problem.code for problem in found] == ["STORE_SOURCE_INVALID"]

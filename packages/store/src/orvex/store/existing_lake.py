@@ -37,7 +37,9 @@ instance's protected set: no overlapping location, and no shared file system for
 location or a SQLite catalog (`separation`). `verify` shows whether a snapshot may be served:
 every file it references lies under the data location, reached without a link, and is none of
 the protected files. The PostgreSQL role check also covers large objects and, while `dblink` or
-`postgres_fdw` is installed, the cluster's other databases, and refuses `CREATE` on the database.
+`postgres_fdw` is installed, the cluster's other databases, and refuses `CREATE` on the database
+and the monitoring roles. On object storage the lake's credential must be its own
+(`separation.check_credentials`): there DuckDB's allow-list does not hold at read.
 """
 
 from __future__ import annotations
@@ -54,6 +56,8 @@ from pathlib import Path
 
 import duckdb
 from orvex.contracts.store.v1 import (
+    AzureStorage,
+    CredentialsInUseItem,
     ExistingLakeAttachment,
     PostgresLakeLocation,
     RolesInUseItem,
@@ -61,7 +65,7 @@ from orvex.contracts.store.v1 import (
     SqliteLakeLocation,
 )
 from orvex.store import locations, separation
-from orvex.store.errors import StoreError
+from orvex.store.errors import StoreError, register_secret
 from orvex.store.sql_text import literal as _quote
 
 LAKE = "lake"
@@ -82,6 +86,12 @@ PRIVILEGED_ROLES = (
     "pg_read_server_files",
     "pg_execute_server_program",
     "pg_write_all_data",
+    # What the server and its other sessions are doing: other databases' statements, settings
+    # and file paths (PR 2, Reviewer pass 1 finding 7).
+    "pg_monitor",
+    "pg_read_all_settings",
+    "pg_read_all_stats",
+    "pg_stat_scan_tables",
 )
 SQLITE_COMPANIONS = ("-wal", "-shm", "-journal")
 # A protected catalog's companion files: SQLite's, and a DuckDB-file catalog's write-ahead log.
@@ -207,6 +217,8 @@ class ExistingLake:
             self._metadata = f'{METADATA}."{self._schema}"'
         data_path = _with_slash(location.data_path)
         storage = locations._storage_credentials(location.storage, data_path)
+        if storage is not None:
+            self._check_credentials(storage, attachment.credentials_in_use)
         self._data_path = data_path
         self._protected_locations = [item.root for item in attachment.protected_locations]
         self._protected_files = [item.root for item in attachment.protected_files]
@@ -479,6 +491,26 @@ class ExistingLake:
         )
 
     # --- apart from the protected set (PR 2) ---------------------------------------------------
+
+    def _check_credentials(
+        self, storage: locations._Storage, in_use: Sequence[CredentialsInUseItem] | None
+    ) -> None:
+        """Object storage: the credential is the lake's own (`separation.check_credentials`);
+        the other connections' values are read to compare and registered as secrets."""
+        settings = storage.settings
+        own = (
+            {settings.connection_string_env: storage.key_id}
+            if isinstance(settings, AzureStorage)
+            else {settings.key_id_env: storage.key_id, settings.secret_env: storage.secret}
+        )
+        names = None if in_use is None else [item.root for item in in_use]
+        values: dict[str, str] = {}
+        for variable in names or []:
+            value = os.environ.get(variable, "")
+            if value:
+                register_secret(value)
+                values[variable] = value
+        separation.check_credentials(self.name, own, names, values)
 
     def _check_apart(self) -> None:
         """The lake's data location and SQLite catalog apart from the protected set as it stands

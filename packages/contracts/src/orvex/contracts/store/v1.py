@@ -471,6 +471,10 @@ class ProtectedFile(RootModel[str]):
     root: Annotated[str, Field(max_length=4096, min_length=2, pattern="^(/|[A-Za-z]:[\\\\/])")]
 
 
+class CredentialsInUseItem(RootModel[str]):
+    root: Annotated[str, Field(pattern="^[A-Z_][A-Z0-9_]*$")]
+
+
 class ProtectedLocation(RootModel[str]):
     root: Annotated[
         str,
@@ -647,6 +651,10 @@ class ExistingLakeAttachment(BaseModel):
     protected_files: list[ProtectedFile]
     """
     Absolute paths of the files no SQLite catalog may be a hard link to (the protected set). Each one's -wal, -shm, -journal and .wal files are protected with it.
+    """
+    credentials_in_use: list[CredentialsInUseItem] | None = None
+    """
+    Every environment variable another connection of the instance, or a managed lake, takes a secret from (P2-30 PR 2): its object-storage credentials, catalog and source passwords. An existing lake on object storage is refused when one of its own credential variables is listed, or when its credential (a key id, a secret, an Azure account key or shared access signature) is the value of one: DuckDB signs every object-storage request with the lake's credential, and resolves `..` after the allow-list check, so for object storage the boundary at read is the credential's own reach. Optional in the schema (compatible), required by the store for object storage.
     """
     protected_locations: list[ProtectedLocation] | None = None
     """

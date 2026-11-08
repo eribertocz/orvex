@@ -546,6 +546,9 @@ def test_a_role_in_use_elsewhere_is_refused(catalog: Catalog) -> None:
         (["CREATE EXTENSION dblink SCHEMA cat"], "database"),
         (["CREATE EXTENSION postgres_fdw SCHEMA cat"], "database"),
         (["GRANT CREATE ON DATABASE {database} TO {reader}"], "write in the catalog database"),
+        (["GRANT pg_monitor TO {reader}"], "role pg_monitor"),
+        (["GRANT pg_read_all_stats TO {reader}"], "role pg_read_all_stats"),
+        (["GRANT pg_read_all_settings TO {reader}"], "role pg_read_all_settings"),
     ],
 )
 def test_a_role_that_can_use_anything_beyond_the_catalog_schema_is_refused(

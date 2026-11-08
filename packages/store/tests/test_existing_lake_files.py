@@ -9,18 +9,24 @@ as an owner able to write it could.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import shutil
 import sqlite3
+import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 import duckdb
 import pytest
 from orvex.contracts.store.v1 import (
+    CredentialsInUseItem,
     ExistingLakeAttachment,
+    ObjectStorage,
     ProtectedFile,
     ProtectedLocation,
+    S3Storage,
     Snapshot,
     SqliteLakeLocation,
 )
@@ -176,6 +182,7 @@ def test_an_attachment_without_the_protected_locations_is_refused(lake_root: Pat
         # One store can be reached through another scheme: the bucket and key decide.
         ("s3://lakes/billing/", "gs://lakes/billing/x/", True),
         ("az://lakes/billing/", "s3://other/billing/", False),
+        ("az://lakes/billing/", "az://lakes/billing/2024/", True),
         ("s3://lakes/billing/", "/lakes/billing", False),
     ],
 )
@@ -187,7 +194,17 @@ def test_locations_overlap_by_whole_components_after_resolving(
 
 
 @pytest.mark.parametrize(
-    "text", ["s3://lakes/a/../b/", "s3://lakes//b/", "s3://", "relative/path", "http://x/y"]
+    "text",
+    [
+        "s3://lakes/a/../b/",
+        "s3://lakes//b/",
+        "s3://",
+        "relative/path",
+        "http://x/y",
+        # The same container as az://managed/data/, spelled with its account (Reviewer pass 1).
+        "az://acct.blob.core.windows.net/managed/data/",
+        "/srv/lake\x00/x",
+    ],
 )
 def test_a_location_that_cannot_be_compared_is_refused(text: str) -> None:
     with pytest.raises(StoreError) as caught:
@@ -267,14 +284,17 @@ def test_the_devices_under_a_location_include_every_mount_below_it(tmp_path: Pat
     devices = separation._devices_under("billing", str(tmp_path / "project"), table)
     assert os.makedev(0, 44) in devices
     assert os.makedev(0, 45) not in devices
-    assert (os.makedev(0, 46), tmp_path / "sp ace") in table
+    assert (os.makedev(0, 46), tmp_path / "sp ace", "xfs") in table
 
 
 def test_a_data_folder_its_mount_does_not_identify_is_refused(other_device: Path) -> None:
     # A nested subvolume or an overlay shows another device than its mount: ambiguous.
     folder = other_device / "data"
     folder.mkdir()
-    table = [(os.makedev(9, 9), Path("/")), (os.makedev(9, 8), other_device.parent)]
+    table = [
+        (os.makedev(9, 9), Path("/"), "ext4"),
+        (os.makedev(9, 8), other_device.parent, "tmpfs"),
+    ]
     with pytest.raises(StoreError, match="cannot be identified"):
         separation.own_device("billing", str(folder), table)
 
@@ -458,3 +478,215 @@ def test_sqlite_refuses_companion_files_that_are_symbolic_links(tmp_path: Path) 
             reader.execute("SELECT * FROM c.x").fetchall()
         reader.close()
         assert target.read_bytes() == b"protected"
+
+
+# --- Reviewer pass 1 on #407 -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "kind", ["overlay", "nfs4", "cifs", "9p", "virtiofs", "fuse.sshfs", "btrfs"]
+)
+def test_a_file_system_whose_devices_do_not_tell_disks_apart_is_refused_on_every_side(
+    tmp_path: Path, kind: str
+) -> None:
+    # Overlay shows its own device for a file of a lower layer; a network or FUSE file system
+    # lets the server link files; btrfs gives subvolumes devices of their own. Refused for the
+    # data folder, the SQLite catalog and every protected location.
+    folder = tmp_path / "data"
+    folder.mkdir()
+    device = folder.stat().st_dev
+    stacked = [(device, Path("/"), kind)]
+    with pytest.raises(StoreError, match=kind):
+        separation.own_device("billing", str(folder), stacked)
+    with pytest.raises(StoreError, match=kind):
+        separation._devices_under("billing", str(folder), stacked)
+    below = [(device, Path("/"), "ext4"), (device + 1, folder / "mnt", kind)]
+    with pytest.raises(StoreError, match=kind):
+        separation._devices_under("billing", str(folder), below)
+    assert separation.own_device("billing", str(folder), [(device, Path("/"), "ext4")]) == device
+
+
+def test_the_mount_table_gives_each_mounts_type() -> None:
+    table = separation.parse_mounts(
+        "25 24 0:23 / /dev/shm rw,relatime - tmpfs tmpfs rw\n"
+        "30 22 0:44 / /var/lib/docker/overlay2/x/merged rw shared:1 - overlay overlay rw\n"
+    )
+    assert [kind for _, _, kind in table] == ["tmpfs", "overlay"]
+
+
+OVERLAY = """
+import json, os, subprocess, sys
+from pathlib import Path
+from orvex.store import separation
+from orvex.store.errors import StoreError
+root = Path(sys.argv[1])
+for name in ("lower", "upper", "work", "merged", "project"):
+    (root / name).mkdir()
+subprocess.run(["mount", "-t", "overlay", "overlay", "-o",
+    f"lowerdir={root}/lower,upperdir={root}/upper,workdir={root}/work", str(root / "merged")],
+    check=True)
+(root / "merged" / "data").mkdir()
+(root / "project" / "secret.parquet").write_bytes(b"protected")
+found = {}
+for side, data, protected in (
+    ("data on overlay", root / "merged" / "data", root / "project"),
+    ("protected on overlay", root / "project", root / "merged" / "data"),
+):
+    try:
+        separation.check_apart("billing", f"{data}/", None, [str(protected)])
+        found[side] = "accepted"
+    except StoreError as error:
+        found[side] = error.details["reason"]
+print(json.dumps(found))
+"""
+
+
+def test_an_overlay_file_system_is_refused_for_local_data_in_both_directions(
+    tmp_path: Path,
+) -> None:
+    # Measured by the Reviewer: through an overlay, a hard link made in the upper layer to a
+    # protected file passes any device comparison. Mounted in a mount namespace of its own.
+    if shutil.which("unshare") is None:
+        pytest.skip("no unshare here")
+    command = ["unshare", "-m"] if os.geteuid() == 0 else ["unshare", "-rm"]
+    environment = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+    result = subprocess.run(
+        [*command, sys.executable, "-c", OVERLAY, str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+        timeout=120,
+    )
+    if result.returncode != 0 and "mount" in result.stderr.lower():
+        pytest.skip("no overlay mount allowed here")
+    assert result.returncode == 0, result.stderr
+    found = json.loads(result.stdout.strip().splitlines()[-1])
+    assert all("overlay" in reason for reason in found.values()), found
+
+
+def s3_attachment(
+    in_use: list[str] | None, key: str = "LAKE_KEY", secret: str = "LAKE_SECRET"
+) -> ExistingLakeAttachment:
+    return ExistingLakeAttachment(
+        kind="existing_lake_attachment",
+        name="billing",
+        location=SqliteLakeLocation(
+            kind="lake_location",
+            catalog="sqlite",
+            path="/srv/lakes/billing.sqlite",
+            data_path="s3://lakes/billing/",
+            storage=ObjectStorage(
+                S3Storage(
+                    type="s3", region="us-east-1", use_ssl=True, key_id_env=key, secret_env=secret
+                )
+            ),
+        ),
+        roles_in_use=[],
+        protected_files=[],
+        protected_locations=[],
+        credentials_in_use=None if in_use is None else [CredentialsInUseItem(v) for v in in_use],
+    )
+
+
+@pytest.mark.parametrize(
+    ("in_use", "reason"),
+    [
+        (None, "credentials in use were not given"),
+        (["LAKE_KEY"], "another connection's variable"),
+        (["MANAGED_KEY"], "another connection's"),  # the same key id under another name
+        (["MANAGED_SECRET"], "another connection's"),
+    ],
+)
+def test_an_object_storage_lake_needs_a_credential_of_its_own(
+    monkeypatch: pytest.MonkeyPatch, in_use: list[str] | None, reason: str
+) -> None:
+    monkeypatch.setenv("LAKE_KEY", "AKIALAKE")
+    monkeypatch.setenv("LAKE_SECRET", "lake-secret")
+    monkeypatch.setenv("MANAGED_KEY", "AKIALAKE")
+    monkeypatch.setenv("MANAGED_SECRET", "lake-secret")
+    error = refused_at_attach(s3_attachment(in_use))
+    assert reason in error.message
+    assert "AKIALAKE" not in error.message
+    assert "lake-secret" not in error.message
+
+
+def test_a_credential_check_compares_azure_account_keys_and_passes_a_credential_of_its_own() -> (
+    None
+):
+    lake = "DefaultEndpointsProtocol=https;AccountName=a;AccountKey=a2V5;EndpointSuffix=x"
+    other = "AccountName=a;AccountKey=a2V5;DefaultEndpointsProtocol=https"
+    with pytest.raises(StoreError, match="another connection's"):
+        separation.check_credentials("billing", {"AZ_LAKE": lake}, ["AZ"], {"AZ": other})
+    separation.check_credentials(
+        "billing", {"K": "AKIALAKE", "S": "s"}, ["M"], {"M": "AKIAMANAGED"}
+    )
+    with pytest.raises(StoreError, match="no credential of its own"):
+        separation.check_credentials("billing", {"AZ_LAKE": ""}, [], {})
+
+
+S3_SERVER = """
+import duckdb, http.server, json, socketserver, sys, threading
+hits = []
+class Handler(http.server.BaseHTTPRequestHandler):
+    def answer(self):
+        hits.append([self.path, bool(self.headers.get("Authorization"))])
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+    do_GET = do_HEAD = answer
+    def log_message(self, *arguments):
+        pass
+server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+port = server.server_address[1]
+c = duckdb.connect()
+c.load_extension("httpfs")
+c.execute(
+    "CREATE TEMPORARY SECRET (TYPE s3, KEY_ID 'k', SECRET 's', REGION 'us-east-1', "
+    f"ENDPOINT '127.0.0.1:{port}', USE_SSL false, URL_STYLE 'path', SCOPE 's3://lakebucket/lake/')"
+)
+for statement in (
+    "SET allowed_directories = ['s3://lakebucket/lake/']",
+    "SET enable_external_access = false",
+    "SET lock_configuration = true",
+):
+    c.execute(statement)
+for url in ("s3://lakebucket/lake/../../otherbucket/x.parquet", "s3://otherbucket/x.parquet"):
+    try:
+        c.execute(f"SELECT * FROM read_parquet('{url}')").fetchall()
+    except duckdb.Error as error:
+        hits.append([url, type(error).__name__])
+print(json.dumps(hits))
+sys.stdout.flush()
+"""
+
+
+def test_duckdb_resolves_dot_dot_in_object_storage_after_the_allow_list() -> None:
+    # Measured on DuckDB 2.0.0 (Reviewer pass 1 on #407): an address under the allowed prefix
+    # passes the check, then `..` is resolved and the request is signed with the lake's
+    # credential for another bucket. So for object storage the boundary at read is the
+    # credential, not the allow-list. This test fails once DuckDB checks the resolved address.
+    result = subprocess.run(
+        [sys.executable, "-c", S3_SERVER],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+    )
+    if "httpfs" in result.stderr and "not found" in result.stderr.lower():
+        pytest.skip("the httpfs extension is not installed here")
+    found = json.loads(result.stdout.strip().splitlines()[-1])
+    assert ["/otherbucket/x.parquet", True] in found  # signed, outside the prefix
+    assert ["s3://otherbucket/x.parquet", "PermissionException"] in found  # as written: refused
+
+
+def test_a_nul_character_in_a_path_is_refused_not_raised(lake_root: Path) -> None:
+    _, data = make_lake(lake_root)
+    with pytest.raises(StoreError):
+        separation.check_apart("billing", f"{data}/", None, [], ["/srv/a\x00b"])
+    with pytest.raises(StoreError):
+        separation.check_apart("billing", f"{data}\x00/", None, [])
+    with pytest.raises(StoreError):
+        separation.check_files("billing", f"{data}/", [f"{data}/a\x00b"], (1, 1), frozenset())

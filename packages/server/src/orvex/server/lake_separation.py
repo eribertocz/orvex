@@ -1,8 +1,8 @@
 """The instance's protected set, and every existing DuckLake kept apart from it (P2-30 PR 2,
 #399; ADR-0027 §3, "Separate locations").
 
-An existing lake's catalog decides which files it reads, so no lake may reach a file Orvex reads
-for any other purpose, in any project of the instance. The **protected set** holds:
+An existing lake's catalog decides which files it reads, so no lake may reach a file read for
+any other purpose, in any project of the instance. The **protected set** holds:
 
 - the instance folder (and its project registry);
 - for every registered project: its folder; its managed lake's data location and catalog file;
@@ -25,6 +25,7 @@ and nothing is written.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from collections.abc import Iterable
@@ -42,6 +43,7 @@ from orvex.contracts.project.v1 import (
     SqliteConnection,
 )
 from orvex.contracts.store.v1 import (
+    CredentialsInUseItem,
     LocalLakeLocation,
     ProtectedFile,
     ProtectedLocation,
@@ -51,9 +53,16 @@ from orvex.contracts.store.v1 import (
 from orvex.server import lake_place
 from orvex.server.instance import REGISTRY_FILE, ProjectRegistry
 from orvex.server.problems import Problem
-from orvex.server.project import CONNECTIONS_FILE, PROJECT_FILE, ProjectLoadError, load_project
+from orvex.server.project import (
+    CONNECTIONS_FILE,
+    PROJECT_FILE,
+    SECRET_REFERENCE,
+    ProjectLoadError,
+    load_project,
+)
 from orvex.store import separation
 from orvex.store.errors import StoreError
+from pydantic import BaseModel, ValidationError
 
 CODE = "STORE_SOURCE_INVALID"
 _GLOB_MARK = re.compile(r"[*?\[{]")
@@ -70,6 +79,7 @@ class Lake:
     catalog_file: str | None
     identity: tuple[object, ...]
     role: str | None
+    password: frozenset[str] = frozenset()  # the catalog password's variable
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +101,8 @@ class Instance:
     lakes: tuple[Lake, ...]
     roles: tuple[tuple[Path, str | None, str], ...]
     unreadable: tuple[Path, ...]
+    # Every `${env:NAME}` a connection (or, with None, the managed lake) takes a secret from.
+    secrets: tuple[tuple[Path, str | None, frozenset[str]], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +112,7 @@ class Protection:
     roles_in_use: list[RolesInUseItem]
     protected_files: list[ProtectedFile]
     protected_locations: list[ProtectedLocation]
+    credentials_in_use: list[CredentialsInUseItem]
 
 
 def registered(directory: Path, folder: Path) -> list[Path]:
@@ -124,15 +137,19 @@ def instance(directory: Path, folders: Iterable[Path], slug: str) -> Instance:
     ]
     lakes: list[Lake] = []
     roles: list[tuple[Path, str | None, str]] = []
+    secrets: list[tuple[Path, str | None, frozenset[str]]] = []
     unreadable: list[Path] = []
     for folder in dict.fromkeys(Path(item).resolve() for item in folders):
         places.append(Place(folder, PROJECT_FILE, "the project folder", str(folder), False))
         try:
             project = load_project(folder)
             chosen = lake_place.place(project, folder / f".{slug}")
-        except ProjectLoadError:
+        except ProjectLoadError, ValueError:
+            # ValueError: a path no file system can hold (a NUL character).
             unreadable.append(folder)
             continue
+        if project.settings.lake is not None:
+            secrets.append((folder, None, _variables(project.settings.lake)))
         places += _managed(folder, chosen.location)
         lake_settings = project.settings.lake
         catalog = lake_settings.catalog if lake_settings is not None else None
@@ -140,6 +157,7 @@ def instance(directory: Path, folders: Iterable[Path], slug: str) -> Instance:
         if isinstance(managed, PostgresLakeCatalog):
             roles.append((folder, None, managed.user))
         for name, connection in project.connections.items():
+            secrets.append((folder, name, _variables(connection)))
             what = f"the files of connection {name}"
             if isinstance(connection, ParquetConnection | CsvConnection):
                 places.append(Place(folder, CONNECTIONS_FILE, what, _read_root(connection), False))
@@ -166,7 +184,7 @@ def instance(directory: Path, folders: Iterable[Path], slug: str) -> Instance:
                             lake=lake,
                         )
                     )
-    return Instance(tuple(places), tuple(lakes), tuple(roles), tuple(unreadable))
+    return Instance(tuple(places), tuple(lakes), tuple(roles), tuple(unreadable), tuple(secrets))
 
 
 def problems(found: Instance, folder: Path) -> list[Problem]:
@@ -203,7 +221,48 @@ def problems(found: Instance, folder: Path) -> list[Problem]:
                 reason = _reason(lake, place, devices=devices)
                 if reason is not None and key not in reported:
                     reported[key] = _problem(lake, place, folder, reason)
+        if key not in reported:
+            shared = _shared_credential(found, lake, folder)
+            if shared is not None:
+                reported[key] = shared
     return list(reported.values())
+
+
+def _own_credentials(found: Instance, lake: Lake) -> frozenset[str]:
+    """The variables an object-storage lake's credential comes from (its catalog password
+    aside)."""
+    if separation.is_object_storage(lake.data):
+        for where, which, variables in found.secrets:
+            if (where, which) == (lake.folder, lake.name):
+                return variables - lake.password
+    return frozenset()
+
+
+def _shared_credential(found: Instance, lake: Lake, folder: Path) -> Problem | None:
+    """A lake whose object-storage credential variable another connection also uses, reported
+    to either project (the store also compares the values)."""
+    own = _own_credentials(found, lake)
+    for where, which, variables in found.secrets:
+        if (where, which) == (lake.folder, lake.name) or not own & variables:
+            continue
+        if lake.folder == folder:
+            return Problem(
+                CODE,
+                CONNECTIONS_FILE,
+                None,
+                f"Connection {lake.name}: its object-storage credential is used by another "
+                "connection of this instance; an existing lake needs a credential of its own.",
+            )
+        if where == folder:
+            return Problem(
+                CODE,
+                CONNECTIONS_FILE if which is not None else PROJECT_FILE,
+                None,
+                f"{'Connection ' + which if which is not None else 'The managed lake'}: its "
+                "secret is the object-storage credential of an existing lake of another project "
+                "of this instance.",
+            )
+    return None
 
 
 def protection(found: Instance, folder: Path, name: str) -> Protection:
@@ -215,11 +274,23 @@ def protection(found: Instance, folder: Path, name: str) -> Protection:
         raise separation.refused(name, "another project of this instance cannot be read")
     places = [p for p in found.places if p.lake is None or not _one_lake(lake, p.lake)]
     roles = sorted({role for where, which, role in found.roles if (where, which) != (folder, name)})
-    return Protection(
-        roles_in_use=[RolesInUseItem(role) for role in roles],
-        protected_files=[ProtectedFile(p.location) for p in places if p.is_file],
-        protected_locations=[ProtectedLocation(p.location) for p in places],
+    variables = sorted(
+        set().union(
+            *(found_ for where, which, found_ in found.secrets if (where, which) != (folder, name))
+        )
     )
+    try:
+        return Protection(
+            roles_in_use=[RolesInUseItem(role) for role in roles],
+            protected_files=[ProtectedFile(p.location) for p in places if p.is_file],
+            protected_locations=[ProtectedLocation(p.location) for p in places],
+            credentials_in_use=[CredentialsInUseItem(variable) for variable in variables],
+        )
+    except ValidationError:
+        # The root folder (a file source's glob there) or a location the contract cannot hold.
+        raise separation.refused(
+            name, "a protected location is the root folder or cannot be compared"
+        ) from None
 
 
 def _managed(folder: Path, location: lake_place.Location) -> list[Place]:
@@ -257,14 +328,22 @@ def _lake(folder: Path, name: str, connection: DucklakeConnection) -> Lake:
             catalog.schema_ or "public",
         )
         catalog_file, role = None, catalog.user
+        password = _variables(catalog.password)
     else:
+        password = frozenset()
         catalog_file, role = catalog.path.root, None
         try:
             status = os.stat(catalog_file)
             identity = ("sqlite", status.st_dev, status.st_ino)
-        except OSError:
+        except OSError, ValueError:
             identity = ("sqlite", "unidentified", folder, name)  # never the same as another
-    return Lake(folder, name, data, catalog_file, (*identity, *_store(connection)), role)
+    return Lake(folder, name, data, catalog_file, (*identity, *_store(connection)), role, password)
+
+
+def _variables(model: BaseModel) -> frozenset[str]:
+    """Every `${env:NAME}` in a configuration model."""
+    text = json.dumps(model.model_dump(mode="json"))
+    return frozenset(SECRET_REFERENCE.findall(text))
 
 
 def _store(connection: DucklakeConnection) -> tuple[str, ...]:
