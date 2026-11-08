@@ -251,7 +251,7 @@ def _check_zones(physical: PhysicalQuery, run: Run, owner: object) -> None:
         return
 
     def count(zone: str) -> int:
-        table = run(zonedata.CHECK_SQL, zonedata.parameters(zone)).read_all()
+        table = run(zonedata.check_sql(physical.adapter), zonedata.parameters(zone)).read_all()
         if [(f.name, f.type) for f in table.schema] != [("#different", pa.int64())]:
             raise PlanError("the zone check returned another shape")
         found = pc.max(table.column("#different")).as_py()  # one scalar: a count

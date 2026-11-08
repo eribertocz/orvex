@@ -82,6 +82,23 @@ class DuckDBDialect:
         """The sum of a stored column `member` (C8)."""
         return f"SUM({expression})"
 
+    def null_of(self, kind: str) -> str:
+        """A `NULL` of the store type `kind`."""
+        return f"CAST(NULL AS {kind})"
+
+    def running_sum(self, column: str, window: str, kind: str) -> str:
+        """The sum of the aggregated column `column` (of the store type `kind`) over `window`."""
+        return f"SUM({column}) OVER ({window})"
+
+    def weighted_sum(self, value: str, weight: str, scales: tuple[int, int]) -> str:
+        """`SUM(value * weight)`, exact: each operand widened first, the product at both scales
+        (C7); an overflow is an error."""
+        left, right = (
+            f"CAST(({v}) AS DECIMAL(38,{s}))" for v, s in zip((value, weight), scales, strict=True)
+        )
+        product = f"{left} * {right}"
+        return f"SUM(CAST({product} AS DECIMAL(38,{sum(scales)})))"
+
     def latest_first(self, axis: str) -> str:
         return f"{axis} DESC"
 

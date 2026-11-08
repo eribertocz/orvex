@@ -152,6 +152,7 @@ class _Writer(DuckDBDialect):
         self.zones: set[str] = set()  # every zone the statement converts to
         self.weights: list[tuple[str, str]] = []  # (column, bridge): invalid weight groups
         self.as_of: list[tuple[str, str]] = []  # (column, relationship): rows not matched once
+        self.hidden: list[tuple[str, str]] = []  # a detail page's sort columns not shown
 
     def bind(self, kind: str, value: str | None) -> str:
         name = f"p{len(self.parameters)}"
@@ -622,9 +623,8 @@ class _Writer(DuckDBDialect):
                 spec = replace(spec, nullable=True)
             if row.name in masks:
                 spec = replace(spec, encoding="VARCHAR", nullable=False, mask=masks[row.name])
-                select.append(
-                    f"CAST({self.bind('VARCHAR', masks[row.name])} AS VARCHAR) AS {quote(row.name)}"
-                )
+                mask = self.cast_to(self.bind("VARCHAR", masks[row.name]), "VARCHAR")
+                select.append(f"{mask} AS {quote(row.name)}")
             else:
                 select.append(f"{self.field(row.member, row.source)} AS {quote(row.name)}")
             columns.append(spec)
@@ -651,14 +651,10 @@ class _Writer(DuckDBDialect):
             text += " WHERE " + " AND ".join(conditions)
         if plan.start is not None:
             text = f"SELECT * FROM ({text}) AS {quote('d')} WHERE {self.after_position(encodings)}"
-        text += " ORDER BY " + ", ".join(
-            f"{quote(s.name)} {'DESC' if s.descending else 'ASC'} "
-            f"NULLS {'FIRST' if s.nulls_first else 'LAST'}"
-            for s in plan.order
-        )
         if plan.page is None:
             raise PlanError("a detail page has a size")
-        text += f" LIMIT {int(plan.page) + 1}"
+        self.hidden = hidden  # the sort columns not shown, after the columns
+        text = self.ordered(text, columns, [], plan.order, plan.page)
         return PhysicalQuery(
             text,
             tuple(self.parameters),
@@ -699,7 +695,7 @@ class _Writer(DuckDBDialect):
     def typed(self, value: object, encoding: str) -> str:
         """A position value, bound as text and cast to its column's type, so it is exact."""
         if value is None:
-            return f"CAST(NULL AS {encoding})"
+            return self.null_of(encoding)
         text = ("true" if value else "false") if isinstance(value, bool) else str(value)
         return f"CAST({self.bind('VARCHAR', text)} AS {encoding})"
 
@@ -768,7 +764,22 @@ class _Writer(DuckDBDialect):
         return f"{text} UNION ALL {other}", columns, checks
 
     def by_level(self, inner: str, columns: list[ColumnSpec], checks: list[tuple[str, str]]) -> str:
-        """The rows in the order of a pivot table (P2-23, Owner decision): at each level, the
+        """The rows in the order of a pivot table (P2-23, Owner decision), `level_order`."""
+        keys, directions = self.level_order(columns)
+        names = [c.name for c in columns] + [n for n, _ in checks]
+        names += [n for n, _ in self.weights] + [n for n, _ in self.as_of] + [LEVEL]
+        kept = ", ".join(quote(n) for n in names)
+        if not keys:
+            return f"SELECT {kept} FROM ({inner}) AS {quote('o')}"
+        ordered = ", ".join(f"{key} AS {quote(f'#o{n}')}" for n, key in enumerate(keys))
+        by = ", ".join(f"{quote(f'#o{n}')} {d}" for n, d in enumerate(directions))
+        return (
+            f"SELECT {kept} FROM (SELECT *, {ordered} FROM ({inner}) AS {quote('o')})"
+            f" AS {quote('p')} ORDER BY {by}"
+        )
+
+    def level_order(self, columns: list[ColumnSpec]) -> tuple[list[str], list[str]]:
+        """The sort keys of a pivot table's rows, with their directions: at each level, the
         groups by the question's order on its own value (a metric's value at that level, or the
         level's own member), each subtotal after its group's rows, the grand total last."""
         dimensions = [c.name for c in columns if c.role == "dimension"]
@@ -792,17 +803,7 @@ class _Writer(DuckDBDialect):
                 elif sort.name == dimensions[i - 1]:
                     keys.append(quote(sort.name))
                     directions.append(direction)
-        names = [c.name for c in columns] + [n for n, _ in checks]
-        names += [n for n, _ in self.weights] + [n for n, _ in self.as_of] + [LEVEL]
-        kept = ", ".join(quote(n) for n in names)
-        if not keys:
-            return f"SELECT {kept} FROM ({inner}) AS {quote('o')}"
-        ordered = ", ".join(f"{key} AS {quote(f'#o{n}')}" for n, key in enumerate(keys))
-        by = ", ".join(f"{quote(f'#o{n}')} {d}" for n, d in enumerate(directions))
-        return (
-            f"SELECT {kept} FROM (SELECT *, {ordered} FROM ({inner}) AS {quote('o')})"
-            f" AS {quote('p')} ORDER BY {by}"
-        )
+        return keys, directions
 
     def members(self, fact: str) -> set[str]:
         """The sources of one fact: its own, and every source its joins reach."""
@@ -830,7 +831,7 @@ class _Writer(DuckDBDialect):
             column = self.column(group.member, group.name, "dimension", group.bucket)
             columns.append(column)
             if widest is not None and at >= widest:  # a group no level here keeps: rolled up
-                select.append(f"CAST(NULL AS {column.encoding}) AS {quote(group.name)}")
+                select.append(f"{self.null_of(column.encoding)} AS {quote(group.name)}")
                 continue
             expression = self.field(group.member, group.source)  # written, so bound, once used
             if group.bucket is not None:
@@ -905,7 +906,8 @@ class _Writer(DuckDBDialect):
             self.as_of.append((name, self.relationship_name(join.relationship)))
         if sets is not None:  # how many groups the row keeps: the detail rows keep them all
             ungrouped = " + ".join(f"GROUPING({g})" for g in grouped) or "0"
-            select.append(f"CAST({len(grouped)} - ({ungrouped}) AS INTEGER) AS {quote(LEVEL)}")
+            level = self.cast_to(f"{len(grouped)} - ({ungrouped})", "INTEGER")
+            select.append(f"{level} AS {quote(LEVEL)}")
             if any(n > len(grouped) for n in sets):
                 raise PlanError("a level keeps more groups than the aggregation has")
             weights.append(quote(LEVEL))
@@ -973,12 +975,7 @@ class _Writer(DuckDBDialect):
         scale = sum(scales)
         if scale > 38:
             raise _unsupported()
-        # Each operand widened first: the product is exact up to 38 digits, never narrower.
-        product = (
-            f"CAST(({value}) AS DECIMAL(38,{scales[0]}))"
-            f" * CAST(({weight}) AS DECIMAL(38,{scales[1]}))"
-        )
-        return f"SUM(CAST({product} AS DECIMAL(38,{scale})))", scale
+        return self.weighted_sum(value, weight, scales), scale
 
     def invalid_groups(self, allocation: Any, rows: str, conditions: list[str]) -> str:  # noqa: ANN401
         """How many normalization groups the query reads have weights that are missing, `NULL`
@@ -997,7 +994,8 @@ class _Writer(DuckDBDialect):
         )
         sums = (
             f"(SELECT {', '.join(f'{c} AS {quote(f"#k{i}")}' for i, c in enumerate(own))}, "
-            f"SUM({weight}) AS {quote('#s')}, count(*) - count({weight}) AS {quote('#n')} "
+            f"{self.sum_of(weight, allocation.weight)} AS {quote('#s')}, "
+            f"count(*) - count({weight}) AS {quote('#n')} "
             f"FROM {table} AS {quote('#b')} GROUP BY {', '.join(own)})"
         )
         on = " AND ".join(f"{k} = {quote('#v')}.{quote(f'#k{i}')}" for i, k in enumerate(keys))
@@ -1079,7 +1077,7 @@ class _Writer(DuckDBDialect):
             if step.division is None:
                 tree = dict(self.compiled.require(step.metric).typed.payload)["over_metrics"]
                 written = self.over(tree.node, step)
-                middle.append(f"CAST({written} AS {column.encoding}) AS {quote(name)}")
+                middle.append(f"{self.cast_to(written, column.encoding)} AS {quote(name)}")
                 continue
             k = self.ratios
             self.ratios += 1
@@ -1129,14 +1127,12 @@ class _Writer(DuckDBDialect):
             keys = [quote(LEVEL)] * totals + [quote(p) for p in partitions]
             within = f"PARTITION BY {', '.join(keys)} " if keys else ""
             order = ", ".join(f"{quote(o)} ASC NULLS LAST" for o in ordered)
-            total = (
-                f"SUM({quote(step.over)}) OVER ({within}ORDER BY {order}"
-                " ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)"
-            )
+            window = f"{within}ORDER BY {order} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
+            total = self.running_sum(quote(step.over), window, by_name[step.over].encoding)
             if totals:  # summed over the detail rows only; undefined at every total (S9)
                 detail = len(dimensions)
                 total = f"CASE WHEN {quote(LEVEL)} = {detail} THEN {total} END"
-            select.append(f"CAST({total} AS {column.encoding}) AS {quote(name)}")
+            select.append(f"{self.cast_to(total, column.encoding)} AS {quote(name)}")
         extra = [n for n, _ in checks] + [n for n, _ in self.weights] + [n for n, _ in self.as_of]
         extra += [LEVEL] if self.plan.totals is not None else []
         select += [quote(n) for n in extra]
