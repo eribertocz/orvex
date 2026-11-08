@@ -15,6 +15,7 @@ from orvex.contracts.store.v1 import (
     StatementRequest,
 )
 from orvex.store import lake as lake_module
+from orvex.store import read_stream
 from orvex.store.errors import StoreError
 from orvex.store.lake import Admission, Lake, Limits, open_lake
 
@@ -297,12 +298,12 @@ def test_timeout_during_setup_frees_the_slot(lake: Lake, monkeypatch: pytest.Mon
         time.sleep(0.2)  # the limit expires while the read is being set up
         return original(*args)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(lake_module, "exact_select", slow_setup)
+    monkeypatch.setattr(read_stream, "exact_select", slow_setup)
     for _ in range(3):
         assert code_of(lambda: lake.start_read(request("SELECT 1 AS x", lake, 50))) == (
             "STORE_TIMEOUT"
         )
-    monkeypatch.setattr(lake_module, "exact_select", original)
+    monkeypatch.setattr(read_stream, "exact_select", original)
     first = lake.start_read(request("SELECT 1 AS x", lake))
     second = lake.start_read(request("SELECT 2 AS x", lake))
     assert first.reader.read_all().to_pylist() == [{"x": 1}]

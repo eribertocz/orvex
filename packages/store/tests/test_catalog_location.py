@@ -23,7 +23,8 @@ from orvex.contracts.store.v1 import (
     StatementRequest,
 )
 from orvex.store.errors import StoreError
-from orvex.store.lake import Lake, Limits, _sandbox_entries, open_lake
+from orvex.store.isolation import _sandbox_entries
+from orvex.store.lake import Lake, Limits, open_lake
 from orvex.store.locations import (
     AnyLakeLocation,
     _conninfo,

@@ -11,9 +11,9 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from orvex.contracts.store.v1 import ResultJson
+from orvex.store.arrow_exact import _with_duckdb_types, exact_select
 from orvex.store.errors import StoreError
 from orvex.store.json_encoding import arrow_to_json
-from orvex.store.lake import _with_duckdb_types, exact_select
 
 CASES = {
     "BOOLEAN": ["true", "false"],

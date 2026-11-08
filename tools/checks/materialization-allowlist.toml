@@ -22,7 +22,37 @@ reason = "Lake metadata and SQL rewriting: one snapshot row or one serialized st
 [[allow]]
 file = "packages/store/src/orvex/store/source_worker.py"
 call = "fetchone"
-reason = "The source worker's own setup (#372): one setting, one list of table function names, one list of inexact column names; never data rows"
+reason = "The source worker's limits (#372): one setting, the memory limit as DuckDB parses it; never data rows"
+
+[[allow]]
+file = "packages/store/src/orvex/store/source_reader.py"
+call = "fetchone"
+reason = "The source worker's own setup (#372): one list of table function names, one list of inexact column names; never data rows"
+
+[[allow]]
+file = "packages/store/src/orvex/store/source_exactness.py"
+call = "fetchone"
+reason = "Whether a source statement reads an inexact column (#372): one serialized plan, never data rows"
+
+[[allow]]
+file = "packages/store/src/orvex/store/file_names.py"
+call = "fetchone"
+reason = "The value of one E'…' string constant, read by the store's data-less parser database; never data rows"
+
+[[allow]]
+file = "packages/store/src/orvex/store/read_tree.py"
+call = "fetchone"
+reason = "A read's parse tree, serialized by the store's data-less parser database: one statement, never data rows"
+
+[[allow]]
+file = "packages/store/src/orvex/store/catalog_values.py"
+call = "fetchone"
+reason = "One value of a one-row catalog query on the lake (a count, a snapshot), never data rows"
+
+[[allow]]
+file = "packages/store/src/orvex/store/transaction.py"
+call = "fetchone"
+reason = "A transaction's own checks: one value of a SELECT (Transaction.value), one row count, one catalog count; never data rows"
 
 [[allow]]
 file = "packages/store/src/orvex/store/file_sources.py"

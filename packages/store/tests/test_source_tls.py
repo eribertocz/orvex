@@ -19,8 +19,9 @@ from orvex.contracts.store.v1 import (
     PostgresSourceAttachment,
     ReadRequest,
 )
+from orvex.store.credentials import _require_source_tls, _source_tls
 from orvex.store.errors import StoreError
-from orvex.store.lake import Lake, Limits, _require_source_tls, _source_tls, open_lake
+from orvex.store.lake import Lake, Limits, open_lake
 
 LIMITS = Limits(
     memory_limit="512MB", threads=1, max_concurrent=4, queue_size=16, default_timeout_ms=600_000

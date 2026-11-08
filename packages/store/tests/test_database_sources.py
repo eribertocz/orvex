@@ -526,7 +526,7 @@ def test_the_sqlite_copy_reads_only_schema_names_in_python(
     # The reason of the one non-DuckDB reader allowed in store (data-reader-allowlist.toml):
     # the backup API copies the file, and Python reads only schema names, in the source's
     # worker (#372); DuckDB reads the rows.
-    from orvex.store import source_worker
+    from orvex.store import sqlite_copy
 
     traced: list[str] = []
     connect = sqlite3.connect
@@ -537,7 +537,7 @@ def test_the_sqlite_copy_reads_only_schema_names_in_python(
         return connection
 
     monkeypatch.setattr(sqlite3, "connect", tracing)
-    columns = source_worker._sqlite_copy(sqlite_source(sqlite_file), tmp_path / "copy.sqlite")
+    columns = sqlite_copy._sqlite_copy(sqlite_source(sqlite_file), tmp_path / "copy.sqlite")
     assert ("consumers", "id", "INTEGER") in columns
     assert traced, "the copy ran no statement"
     schema_only = (

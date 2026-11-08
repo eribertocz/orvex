@@ -6,7 +6,12 @@ import json
 import threading
 import urllib.parse
 
-from orvex.contracts.store.v1 import ErrorCode, ErrorDetail
+from orvex.contracts.store.v1 import (
+    ErrorCode,
+    ErrorDetail,
+    FileSourceAttachment,
+    SqliteSourceAttachment,
+)
 from orvex.contracts.store.v1 import StoreError as StoreErrorMessage
 
 _SECRETS: set[str] = set()
@@ -64,3 +69,11 @@ class StoreError(Exception):
             message=self.message,
             details=[ErrorDetail(name=name, value=value) for name, value in self.details.items()],
         )
+
+
+def _source_not_found(source: FileSourceAttachment | SqliteSourceAttachment) -> StoreError:
+    return StoreError(
+        "SOURCE_NOT_FOUND",
+        f"No file matches the path of source {source.name}.",
+        {"source": source.name},
+    )

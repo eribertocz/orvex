@@ -21,6 +21,7 @@ from orvex.contracts.store.v1 import (
     StatementRequest,
 )
 from orvex.store import lake as lake_module
+from orvex.store import read_stream
 from orvex.store.errors import StoreError
 from orvex.store.lake import Guard, Lake, Limits, ReadHandle, open_lake
 
@@ -130,14 +131,14 @@ def test_a_read_that_times_out_in_setup_frees_its_slot_first(
         return original(*args)  # type: ignore[arg-type]
 
     monkeypatch.setattr(Guard, "__init__", keep)
-    monkeypatch.setattr(lake_module, "exact_select", expires_in_setup)
+    monkeypatch.setattr(read_stream, "exact_select", expires_in_setup)
     for _ in range(ROUNDS):
         assert code_of(lambda: single.start_read(request("SELECT 2 AS y", single))) == (
             "STORE_TIMEOUT"
         )
-        monkeypatch.setattr(lake_module, "exact_select", original)
+        monkeypatch.setattr(read_stream, "exact_select", original)
         assert one(single) == [{"x": 1}]
-        monkeypatch.setattr(lake_module, "exact_select", expires_in_setup)
+        monkeypatch.setattr(read_stream, "exact_select", expires_in_setup)
 
 
 # --- 2a. nothing runs before admission ---------------------------------------------------------

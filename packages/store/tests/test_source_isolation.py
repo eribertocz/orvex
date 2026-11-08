@@ -24,7 +24,7 @@ from orvex.contracts.store.v1 import (
     SqliteSourceAttachment,
     StatementRequest,
 )
-from orvex.store import source_worker
+from orvex.store import source_reader, source_worker
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, open_lake
 
@@ -564,7 +564,7 @@ def test_a_malformed_stream_lands_nothing(
     real = subprocess.Popen
 
     def garbage(args: list[str], **kwargs: object) -> subprocess.Popen[bytes]:
-        if "-m" in args and source_worker.__name__ in args:
+        if "-m" in args and source_worker.WORKER_MODULE in args:
             return real(  # type: ignore[call-overload,no-any-return]
                 ["/bin/sh", "-c", "cat > /dev/null; printf 'not an arrow stream'"], **kwargs
             )
@@ -680,7 +680,7 @@ def test_the_configuration_is_applied_in_order(
     monkeypatch.setattr(duckdb, "connect", recording)
     folder = tmp_path / "worker"
     folder.mkdir()
-    connection, _, _ = source_worker._open(duckdb_source(path), "", "1GB", 1, folder)
+    connection, _, _ = source_reader._open(duckdb_source(path), "", "1GB", 1, folder)
     connection.close()
 
     def at(prefix: str) -> int:
@@ -706,11 +706,12 @@ def test_a_failure_before_the_guard_still_ends_the_worker(
 ) -> None:
     """Anything raised between starting the worker and guarding the read (a Ctrl-C, say) ends
     the worker and frees its slot: the next read starts at once."""
-    from orvex.store import lake as lake_module
+    from orvex.store import transaction as transaction_module
+    from orvex.store.lake import Guard
 
     source = file_with(tmp_path / "ventas.duckdb")
     lake = opened(lake_folder, duckdb_source(source))
-    real = lake_module.Guard
+    real = Guard
 
     class Interrupted(Exception):
         pass
@@ -719,10 +720,10 @@ def test_a_failure_before_the_guard_still_ends_the_worker(
         raise Interrupted
 
     try:
-        monkeypatch.setattr(lake_module, "Guard", failing)
+        monkeypatch.setattr(transaction_module, "Guard", failing)
         with pytest.raises(Interrupted):
             land(lake, "SELECT * FROM ventas.base")
-        monkeypatch.setattr(lake_module, "Guard", real)
+        monkeypatch.setattr(transaction_module, "Guard", real)
         assert left_behind(lake) == []
         started = time.monotonic()
         land(lake, "SELECT * FROM ventas.base")

@@ -7,9 +7,9 @@ connection, `COPY … TO` into the data folder (which the allow-list must keep r
 generates is run there:
 
 - exactly one `SELECT`, every value bound as a `$name` of its declared type;
-- the checks of a managed-lake read (`lake._single_statement`, `lake._read_tree`): no statement
-  of another kind, no file read, no SQL given as text, no `SHOW`/`DESCRIBE`, no table function
-  but the generators, nothing of the catalog database or the engine's own settings;
+- the checks of a managed-lake read (`sql_guard._single_statement`, `read_tree._read_tree`): no
+  statement of another kind, no file read, no SQL given as text, no `SHOW`/`DESCRIBE`, no table
+  function but the generators, nothing of the catalog database or the engine's own settings;
 - every table it reads is a table of the lake alive at the snapshot read (never a view), named
   through the lake's own catalog and pinned there with `AT (VERSION => n)`; the lake is never on
   the instance's search path;
@@ -27,19 +27,11 @@ from typing import Any
 import duckdb
 from orvex.contracts.store.v1 import Parameter
 from orvex.store.errors import StoreError
-from orvex.store.lake import (
-    LAKE,
-    SHARED_HARMLESS_FUNCTIONS,
-    TABLE_FUNCTIONS_SQL,
-    _bound,
-    _cte_names,
-    _is_lake_table,
-    _plain,
-    _read_tree,
-    _single_statement,
-    _typed,
-    _walk,
-)
+from orvex.store.lake_names import LAKE
+from orvex.store.parameters import _bound, _typed
+from orvex.store.read_tree import _cte_names, _is_lake_table, _read_tree, _walk
+from orvex.store.sql_guard import SHARED_HARMLESS_FUNCTIONS, TABLE_FUNCTIONS_SQL, _single_statement
+from orvex.store.sql_parser import _plain
 
 
 def guarded(

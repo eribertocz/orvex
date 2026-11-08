@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
-import orvex.store.lake as store_lake
+import orvex.store.transaction as store_transaction
 import pytest
 from orvex.contracts.run_record.v1 import RunRecord
 from orvex.contracts.store.v1 import StatementRequest
@@ -27,7 +27,7 @@ from orvex.server.identity import load_identity
 from orvex.server.project import load_project
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Transaction
-from orvex.store.lake import _typed as typed
+from orvex.store.parameters import _typed as typed
 from orvex.transform.run_records import (
     history_request,
     last_run_request,
@@ -450,7 +450,7 @@ def test_the_record_names_the_run_s_own_snapshot_when_another_writer_commits_rig
     # #255: two clones sharing one lake; the other commits right after this run's commit. The
     # records name the run's snapshot, and rows are counted on it.
     project(tmp_path, MODELS)
-    real = store_lake._commit
+    real = store_transaction._commit
     injected: list[int] = []
 
     def commit_then_another_writer(cursor: duckdb.DuckDBPyConnection) -> None:
@@ -459,7 +459,7 @@ def test_the_record_names_the_run_s_own_snapshot_when_another_writer_commits_rig
             injected.append(1)
             cursor.execute("CREATE TABLE lake.main.other_clone AS SELECT 1 AS x")  # own commit
 
-    monkeypatch.setattr(store_lake, "_commit", commit_then_another_writer)
+    monkeypatch.setattr(store_transaction, "_commit", commit_then_another_writer)
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 0, out
     recorded = printed_snapshot(out)
@@ -482,6 +482,7 @@ CHILD = textwrap.dedent(
     """
     import os, sys
     import orvex.store.lake as store_lake
+    import orvex.store.transaction as store_transaction
     from orvex.server import commands
     from orvex.server.cli import main
 
@@ -502,7 +503,7 @@ CHILD = textwrap.dedent(
             os._exit(3)
         return committed(self, token)
 
-    commit = store_lake._commit
+    commit = store_transaction._commit
 
     def another_writer_first(cursor):
         if len(armed) == 1:  # the run's block ran: another writer commits the same table
@@ -515,7 +516,7 @@ CHILD = textwrap.dedent(
     if mode == "kill":
         store_lake.Lake._committed = killed
     else:
-        store_lake._commit = another_writer_first
+        store_transaction._commit = another_writer_first
     code = main(["run", folder])
     with open(token_file, "w", encoding="utf-8") as handle:
         handle.write(f"{code} {len(armed)}")
@@ -589,14 +590,14 @@ def test_ctrl_c_before_the_commit_commits_nothing_and_records_the_run_failed(
     # Criterion 2.
     project(tmp_path, MODELS)
     armed = armed_on_records(monkeypatch)
-    real = store_lake._commit
+    real = store_transaction._commit
 
     def interrupted(cursor: duckdb.DuckDBPyConnection) -> None:
         if armed and len(armed) == 1:
             raise KeyboardInterrupt
         real(cursor)
 
-    monkeypatch.setattr(store_lake, "_commit", interrupted)
+    monkeypatch.setattr(store_transaction, "_commit", interrupted)
     with pytest.raises(KeyboardInterrupt):
         main(["run", str(tmp_path)])
     capsys.readouterr()

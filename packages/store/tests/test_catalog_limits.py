@@ -17,7 +17,8 @@ from orvex.contracts.store.v1 import (
     ReadRequest,
     StatementRequest,
 )
-from orvex.store import lake as lake_module
+from orvex.store import read_tree
+from orvex.store import transaction as transaction_module
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, Transaction, open_lake
 
@@ -99,7 +100,7 @@ def test_the_checks_before_commit_stop_at_the_limit(
     lake: Lake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     before = lake.current_snapshot().id
-    monkeypatch.setattr(lake_module, "_unpinnable_objects", slow_on)
+    monkeypatch.setattr(transaction_module, "_unpinnable_objects", slow_on)
 
     def block() -> None:
         with lake.transaction() as transaction:
@@ -131,7 +132,7 @@ def test_a_cancel_during_the_checks_before_commit_rolls_back(
             checking.set()
             return slow_on(cursor)
 
-        monkeypatch.setattr(lake_module, "_unpinnable_objects", slow_after_signal)
+        monkeypatch.setattr(transaction_module, "_unpinnable_objects", slow_after_signal)
 
         def cancel() -> None:
             if checking.wait(10):
@@ -177,13 +178,13 @@ def test_a_commit_that_starts_in_time_is_never_reported_as_failed(
     lake = open_with(location, timeout_ms=3000)
     try:
         before = lake.current_snapshot().id
-        real = lake_module._commit
+        real = transaction_module._commit
 
         def slow_commit(cursor: duckdb.DuckDBPyConnection) -> None:
             time.sleep(3.5)  # the transaction's limit passes while it commits
             real(cursor)
 
-        monkeypatch.setattr(lake_module, "_commit", slow_commit)
+        monkeypatch.setattr(transaction_module, "_commit", slow_commit)
         with lake.transaction() as transaction:
             transaction.execute(statement("CREATE TABLE c AS SELECT 1 AS n"))
         assert transaction.result is not None
@@ -231,7 +232,7 @@ def test_the_checks_before_begin_stop_at_the_limit(
     lake: Lake, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     before = lake.current_snapshot().id
-    real = lake_module._outside_inventory
+    real = transaction_module._outside_inventory
     calls: list[int] = []
 
     def slow_first(cursor: duckdb.DuckDBPyConnection) -> str:
@@ -240,7 +241,7 @@ def test_the_checks_before_begin_stop_at_the_limit(
             slow_on(cursor)
         return real(cursor)
 
-    monkeypatch.setattr(lake_module, "_outside_inventory", slow_first)
+    monkeypatch.setattr(transaction_module, "_outside_inventory", slow_first)
 
     def block() -> None:
         with lake.transaction() as transaction:
@@ -267,11 +268,11 @@ def test_the_checks_before_begin_stop_at_the_limit(
 def test_the_parse_tree_check_needs_no_lake(sql: str) -> None:
     # #160: what `_read_tree` refuses, with no lake at all (it runs before admission).
     with pytest.raises(StoreError) as raised:
-        lake_module._read_tree(sql)
+        read_tree._read_tree(sql)
     assert raised.value.code == "STORE_STATEMENT_INVALID"
 
 
 def test_the_parse_tree_check_reports_sql_that_does_not_parse() -> None:
     with pytest.raises(StoreError) as raised:
-        lake_module._read_tree("SELEC 1")
+        read_tree._read_tree("SELEC 1")
     assert raised.value.code == "STORE_QUERY_FAILED"

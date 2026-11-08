@@ -30,11 +30,12 @@ from typing import Any
 import duckdb
 import pyarrow as pa
 from orvex.contracts.store.v1 import ExistingLakeAttachment, ReadRequest, Snapshot, TablesResult
+from orvex.store.arrow_exact import _utc_schema, _with_duckdb_types, exact_select
 from orvex.store.catalog_tables import one_row, tables_at, tables_with_columns
 from orvex.store.errors import StoreError
 from orvex.store.existing_lake import _EPOCH, LAKE, ExistingLake
 from orvex.store.existing_lake_guard import guarded
-from orvex.store.lake import Guard, _utc_schema, _with_duckdb_types, exact_select
+from orvex.store.limits import Guard
 from orvex.store.nested_types import refuse_nested_uhugeint
 from orvex.store.sql_text import literal as _quote
 

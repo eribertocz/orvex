@@ -27,7 +27,9 @@ from orvex.contracts.store.v1 import (
     StatementRequest,
 )
 from orvex.store.errors import StoreError
-from orvex.store.lake import Lake, Limits, _guarded, _sandbox_entries, open_lake
+from orvex.store.isolation import _sandbox_entries
+from orvex.store.lake import Lake, Limits, open_lake
+from orvex.store.sql_guard import _guarded
 
 LIMITS = Limits(
     memory_limit="512MB", threads=1, max_concurrent=4, queue_size=16, default_timeout_ms=600_000
