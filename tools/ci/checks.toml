@@ -82,11 +82,16 @@ job = "boundaries"
 kind = "check"
 required = true
 contexts = ["boundaries"]
-digest = "1f51fdbcd7302f8e"
+digest = "f3490b264b7670a5"
 setup = []
 [[job.check]]
 name = "boundaries"
 run = "python -m tools.checks.boundaries"
+local = true
+[[job.check]]
+# Every contract error code the product raises has a test (#241).
+name = "error-codes"
+run = "python -m tools.checks.error_codes"
 local = true
 
 [[job]]
