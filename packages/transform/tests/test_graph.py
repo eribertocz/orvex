@@ -8,6 +8,7 @@ import duckdb
 import pytest
 from orvex.contracts.store.v1 import StatementRequest
 from orvex.transform.graph import build_graph, compiled_sql, known_output_names, plan_run
+from orvex.transform.incremental import Land
 from orvex.transform.models import Discovery, discover_models
 
 
@@ -238,3 +239,56 @@ def test_every_independent_cycle_is_reported(tmp_path: Path) -> None:
 def test_known_output_names(sql: str, expected: list[str] | None) -> None:
     # #113: the names a model's text alone decides; None when only binding can tell.
     assert known_output_names(sql) == expected
+
+
+# --- database sources are read alone, in their worker (#372) ----------------------------------
+
+DATABASE_FILES = {
+    "models/staging/bills.sql": (
+        "SELECT b.id, b.amount, c.name FROM billing.bills AS b JOIN billing.customers AS c "
+        "ON c.id = b.customer"
+    ),
+    "models/staging/readings.sql": "SELECT reading_id, kwh FROM archive.data",
+}
+
+
+def test_a_model_may_read_several_relations_of_one_database_source(tmp_path: Path) -> None:
+    found = project(tmp_path, DATABASE_FILES)
+    graph = build_graph(found.models, {"archive", "billing"}, frozenset({"billing"}))
+    assert graph.problems == ()
+    assert graph.lands == {"staging.bills": "billing"}
+    by_name = {model.name: steps for model, steps in plan_run(found.models, graph)}
+    (land,) = [step for step in by_name["staging.bills"] if isinstance(step, Land)]
+    assert (land.source, land.schema, land.table) == ("billing", "staging", "bills")
+    assert "billing.bills" in land.sql  # the model's own SELECT, run in the worker
+    assert not any(
+        isinstance(step, StatementRequest) and "billing." in step.sql
+        for step in by_name["staging.bills"]
+    )
+    assert not any(isinstance(step, Land) for step in by_name["staging.readings"])
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM billing.bills, archive.data",  # another source
+        "SELECT * FROM billing.bills, other.things",  # another database source
+        "SELECT * FROM billing.bills JOIN staging.readings ON true",  # a model of the lake
+    ],
+)
+def test_a_database_source_read_with_anything_else_is_refused(tmp_path: Path, sql: str) -> None:
+    found = project(tmp_path, DATABASE_FILES | {"models/marts/mixed.sql": sql})
+    graph = build_graph(
+        found.models, {"archive", "billing", "other"}, frozenset({"billing", "other"})
+    )
+    codes = [(p.code.root, p.details.model) for p in graph.problems]
+    assert ("SOURCE_MODEL_MIXED", "marts.mixed") in codes
+
+
+def test_a_view_of_a_database_source_is_refused(tmp_path: Path) -> None:
+    files = DATABASE_FILES | {"models/staging/bills.yaml": "version: 1\nmaterialized: view\n"}
+    found = project(tmp_path, files)
+    graph = build_graph(found.models, {"archive", "billing"}, frozenset({"billing"}))
+    assert [(p.code.root, p.details.model) for p in graph.problems] == [
+        ("SOURCE_MODEL_VIEW", "staging.bills")
+    ]

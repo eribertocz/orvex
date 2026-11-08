@@ -18,6 +18,7 @@ from typing import Any
 import duckdb
 from orvex.contracts.model_config.v1 import ModelError, Reconciliation
 from orvex.contracts.store.v1 import Parameter, ParameterType, StatementRequest
+from orvex.transform.incremental import Land
 from orvex.transform.model_tests import (
     INTEGER_RANGES,
     decimal_bound,
@@ -42,10 +43,12 @@ class Comparison:
 
 @dataclass(frozen=True, slots=True)
 class Reconcile:
-    """One reconciliation check: `request` counts the failing groups (0 passes)."""
+    """One reconciliation check: `request` counts the failing groups (0 passes). `land`: for a
+    database source, its side landed first from its worker (#372), dropped after the check."""
 
     name: str
     request: StatementRequest
+    land: Land | None = None
 
 
 def _walk(node: object) -> Iterator[dict[str, Any]]:
@@ -147,6 +150,20 @@ def tolerance_text(model: Model, index: int, check: Reconciliation) -> str | Non
     return number_text(model, f"/reconciliation/{index}/tolerance", value)
 
 
+STAGE_SCHEMA = "_stage"
+
+
+def staged_name(model: Model, index: int) -> str:
+    """The lake table a database source's side of check `index` is landed in (#372)."""
+    return f"__reconcile__{model.schema}__{model.table}__{index}"
+
+
+def source_side(check: Reconciliation, text_groups: frozenset[int] = frozenset()) -> str:
+    """The source's side of a check alone: grouped and measured on the source, so a database
+    source computes it in its own worker and only the groups land in the lake (#372)."""
+    return _sides(check, "", text_groups)[1]
+
+
 def _sides(check: Reconciliation, relation: str, text_groups: frozenset[int]) -> tuple[str, str]:
     groups = [expression(item.root) for item in check.group_by or []]
     measure = expression(check.measure)
@@ -181,9 +198,13 @@ def _query(
     select: str,
     where: str = "",
     text_groups: frozenset[int] = frozenset(),
+    staged: str | None = None,
 ) -> str:
-    """Both sides grouped alike, full-outer-joined on their groups (`NULL` is a group)."""
+    """Both sides grouped alike, full-outer-joined on their groups (`NULL` is a group). With
+    `staged`, the source's side is that lake table, landed from a database source."""
     model_side, source_side = _sides(check, relation, text_groups)
+    if staged is not None:
+        source_side = f"SELECT * FROM {staged}"
 
     def key(side: str, i: int) -> str:
         # Also on the join: the binary collation must hold where the keys are compared.
@@ -201,14 +222,20 @@ def _query(
     )
 
 
-def measures_sql(check: Reconciliation, relation: str) -> str:
+def measures_sql(check: Reconciliation, relation: str, staged: str | None = None) -> str:
     """A query whose columns have the types of the model's and the source's measure, then of
     each group on the model and on the source (for binding)."""
     groups = [
         f"model.{_identifier(f'g{i}')}, source.{_identifier(f'g{i}')}"
         for i in range(len(check.group_by or []))
     ]
-    return _query(check, relation, ", ".join(["model.m", "source.m", *groups]))
+    return _query(check, relation, ", ".join(["model.m", "source.m", *groups]), staged=staged)
+
+
+def database_of(check: Reconciliation, databases: frozenset[str]) -> str | None:
+    """The database source a check compares with, when it is one (#372)."""
+    connection = _source(check.source)[0]
+    return connection if connection in databases else None
 
 
 def exact_difference(kind: str) -> bool:
@@ -241,9 +268,15 @@ def _difference(kind: str) -> tuple[str, str]:
     return difference, f"({model} IS NULL OR {source} IS NULL OR {difference} IS NULL)"
 
 
-def steps(model: Model, relation: str, comparisons: Sequence[Comparison]) -> list[Reconcile]:
+def steps(
+    model: Model,
+    relation: str,
+    comparisons: Sequence[Comparison],
+    databases: frozenset[str] = frozenset(),
+) -> list[Reconcile]:
     """The reconciliation checks of a model whose rows are `relation`, compared as the binder
-    found (`comparisons`, one per check)."""
+    found (`comparisons`, one per check). A check against a database source lands the source's
+    groups from its worker first (#372, `Reconcile.land`)."""
     found: list[Reconcile] = []
     for index, (check, comparison) in enumerate(
         zip(model.config.reconciliation or [], comparisons, strict=True)
@@ -274,6 +307,19 @@ def steps(model: Model, relation: str, comparisons: Sequence[Comparison]) -> lis
         )
         # A group matched more than once on either side (a collation hidden inside a list or
         # struct key, say) is never compared one-to-one: every such joined row fails.
+        database = database_of(check, databases)
+        staged = f"{STAGE_SCHEMA}.{_identifier(staged_name(model, index))}" if database else None
+        landing = (
+            Land(
+                database,
+                source_side(check, comparison.text_groups),
+                (),
+                STAGE_SCHEMA,
+                staged_name(model, index),
+            )
+            if database is not None
+            else None
+        )
         joined = _query(
             check,
             relation,
@@ -282,6 +328,7 @@ def steps(model: Model, relation: str, comparisons: Sequence[Comparison]) -> lis
             "count(*) OVER (PARTITION BY source.rid) AS source_matches",
             "",
             comparison.text_groups,
+            staged,
         )
         sql = (
             f"SELECT count(*) FROM ({joined}) WHERE bad "
@@ -290,7 +337,9 @@ def steps(model: Model, relation: str, comparisons: Sequence[Comparison]) -> lis
         )
         found.append(
             Reconcile(
-                check.name, StatementRequest(kind="statement", sql=sql, parameters=parameters)
+                check.name,
+                StatementRequest(kind="statement", sql=sql, parameters=parameters),
+                landing,
             )
         )
     return found

@@ -18,10 +18,9 @@ from orvex.contracts.store.v1 import (
     LocalLakeLocation,
     PostgresSourceAttachment,
     ReadRequest,
-    StatementRequest,
 )
 from orvex.store.errors import StoreError
-from orvex.store.lake import Limits, _require_source_tls, _source_tls, open_lake
+from orvex.store.lake import Lake, Limits, _require_source_tls, _source_tls, open_lake
 
 LIMITS = Limits(
     memory_limit="512MB", threads=1, max_concurrent=4, queue_size=16, default_timeout_ms=600_000
@@ -188,13 +187,9 @@ def test_a_remote_source_over_verified_tls_is_read(
     )
     lake = open_lake(lake_location(tmp_path), LIMITS, [attachment])
     try:
-        with lake.transaction() as transaction:
-            transaction.execute(
-                StatementRequest(
-                    kind="statement",
-                    sql=f"CREATE TABLE copied AS SELECT * FROM production.{readings}.readings",
-                    parameters=[],
-                )
+        with lake.transaction() as transaction:  # read in the source's worker (#372)
+            transaction.land(
+                "production", f"SELECT * FROM production.{readings}.readings", [], "main", "copied"
             )
         request = ReadRequest(
             kind="read",
@@ -208,12 +203,21 @@ def test_a_remote_source_over_verified_tls_is_read(
         lake.close()
 
 
+def landed_from(lake: Lake) -> None:
+    with lake.transaction() as transaction:
+        transaction.land("production", "SELECT 1 AS one", [], "main", "x")
+
+
 def test_verify_full_against_a_server_without_tls_fails_closed(tmp_path: Path) -> None:
     tls_service()
     plain = dict(item.split("=", 1) for item in os.environ["STORE_TEST_POSTGRES"].split())
     attachment = source("127.0.0.2", int(plain.get("port", "5432")), sslmode="verify-full")
-    with pytest.raises(StoreError) as refused:
-        open_lake(lake_location(tmp_path), LIMITS, [attachment])
+    lake = open_lake(lake_location(tmp_path), LIMITS, [attachment])  # reached only when read
+    try:
+        with pytest.raises(StoreError) as refused:
+            landed_from(lake)
+    finally:
+        lake.close()
     assert refused.value.code == "STORE_CONNECTION_FAILED"
     assert "SSL" in refused.value.details["duckdb"]  # refused for TLS, not unreachable
     assert os.environ[PASSWORD_ENV] not in str(refused.value)

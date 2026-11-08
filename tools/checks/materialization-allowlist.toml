@@ -20,6 +20,11 @@ call = "fetchone"
 reason = "Lake metadata and SQL rewriting: one snapshot row or one serialized statement, never data rows"
 
 [[allow]]
+file = "packages/store/src/orvex/store/source_worker.py"
+call = "fetchone"
+reason = "The source worker's own setup (#372): one setting, one list of table function names, one list of inexact column names; never data rows"
+
+[[allow]]
 file = "packages/store/src/orvex/store/file_sources.py"
 call = "fetchone"
 reason = "File-source checks: one metadata row (DESCRIBE, parquet_schema) or one row of booleans per check, never data rows"

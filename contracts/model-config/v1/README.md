@@ -34,6 +34,8 @@ New cross-field rules are added by the issues that implement those behaviors, as
 | `MODEL_CONFIG_INVALID` | A sidecar that is not valid YAML or does not match `ModelConfig`, or an incremental model with `filter: auto` whose SQL already uses `$since` (`path` `/incremental/filter`) |
 | `MODEL_REFERENCE_UNKNOWN` | A model reads a table that is neither a model (`<folder>.<name>`) nor a source (`<connection>.<table>`) |
 | `DEPENDENCY_CYCLE` | Models depend on each other in a cycle (the message lists it in order) |
+| `SOURCE_MODEL_MIXED` | A model reads a database source (`duckdb`, `sqlite`, `postgres`) with another connection or a lake model; such a model reads only that connection (ADR-0031) |
+| `SOURCE_MODEL_VIEW` | A model reading a database source is `materialized: view`; it must be stored (ADR-0031) |
 | `PROJECT_LOCKED` | Another process holds the project's local lake (`orvex run`) |
 | `SCHEDULER_ALREADY_RUNNING` | Another `orvex schedule` keeps the project; the message names its process id. One scheduler per project, held by an OS lock released when that process ends (#69) |
 | `MISSING_UNIQUE_KEY` | `merge` (or `delete_insert`) without `unique_key` |

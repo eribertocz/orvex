@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import decimal
 import hashlib
+import re
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -44,10 +45,19 @@ def statement(sql: str) -> StatementRequest:
     return StatementRequest(kind="statement", sql=sql, parameters=[])
 
 
+LANDED = re.compile(r"CREATE (?:OR REPLACE )?TABLE (\w+) AS (SELECT .+)", re.DOTALL)
+
+
 def write(lake: Lake, *sqls: str) -> None:
+    """Each statement in one transaction. `CREATE TABLE t AS SELECT …` reading the DuckDB source
+    `legacy` lands through its worker (#372), as a model does; anything else runs as written."""
     with lake.transaction() as transaction:
         for sql in sqls:
-            transaction.execute(statement(sql))
+            found = LANDED.fullmatch(sql)
+            if found and "legacy." in found[2]:
+                transaction.land("legacy", found[2], [], "main", found[1])
+            else:
+                transaction.execute(statement(sql))
 
 
 def read(lake: Lake, sql: str) -> list[dict[str, object]]:
@@ -260,20 +270,28 @@ def test_reserved_source_names_are_refused(location: Location, files: Path, name
 
 
 @pytest.mark.parametrize(
-    "definition",
-    ["CREATE MACRO twice(x) AS x * 2", "CREATE VIEW everything AS SELECT 1 AS x"],
+    ("definition", "query", "expected"),
+    [
+        ("CREATE MACRO twice(x) AS x * 2", "SELECT twice(21) AS x", 42),
+        ("CREATE VIEW everything AS SELECT 1 AS x", "SELECT x FROM legacy.everything", 1),
+    ],
     ids=["macro", "view"],
 )
-def test_duckdb_source_with_macros_or_views_is_refused(
-    location: Location, files: Path, definition: str
+def test_duckdb_source_macros_and_views_run_in_the_worker(
+    location: Location, files: Path, definition: str, query: str, expected: int
 ) -> None:
+    """#372: a DuckDB file's views and macros are read, in the source's worker."""
     with_object = files / "objects.duckdb"
     connection = duckdb.connect(str(with_object))
     connection.sql(definition)
     connection.close()
-    with pytest.raises(StoreError) as raised:
-        open_lake(location, LIMITS, [source("legacy", "duckdb", with_object)])
-    assert raised.value.code == "STORE_SOURCE_INVALID"
+    lake = open_lake(location, LIMITS, [source("legacy", "duckdb", with_object)])
+    try:
+        with lake.transaction() as transaction:
+            transaction.land("legacy", query, [], "main", "t")
+        assert read(lake, "SELECT x FROM t") == [{"x": expected}]
+    finally:
+        lake.close()
 
 
 # A generated column's expression runs where the column is read (#268). The canary is the
@@ -300,23 +318,24 @@ def test_duckdb_runs_a_generated_column_in_the_reading_session(tmp_path: Path) -
         ]
 
 
-def test_duckdb_source_with_a_generated_column_is_refused_before_any_read(
+def test_a_generated_column_runs_in_the_worker_never_in_the_lake_session(
     location: Location, files: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """#268, now read (#372): the column's expression runs in the source's worker, so what it
+    sees is the worker's own spill folder, never the lake session's."""
     with_column = files / "generated.duckdb"
     with duckdb.connect(str(with_column)) as writer:
         writer.sql(LEAKING_COLUMN)
         writer.sql("INSERT INTO ventas (id) VALUES (1)")
-    # On main this source attached, and `SELECT info FROM legacy.ventas` returned the lake's
-    # spill folder (the first test shows the mechanism).
-    with pytest.raises(StoreError) as raised:
-        open_lake(location, LIMITS, [source("legacy", "duckdb", with_column)])
-    assert raised.value.code == "STORE_SOURCE_INVALID"
-    assert "generated columns" in str(raised.value)
-    # The refusal comes from the catalog alone: nothing of the source ran, so the lake session's
-    # spill folder (tempfile prefix "lake-spill-") appears in no error and no log.
-    for text in (str(raised.value), str(raised.value.details), caplog.text):
-        assert "lake-spill-" not in text
+    lake = open_lake(location, LIMITS, [source("legacy", "duckdb", with_column)])
+    try:
+        write(lake, "CREATE TABLE v AS SELECT id, info FROM legacy.ventas")
+        (row,) = read(lake, "SELECT info FROM v")
+    finally:
+        lake.close()
+    assert "lake-spill-" not in str(row["info"])  # the lake session's folder (tempfile prefix)
+    assert "source-" in str(row["info"])  # the worker's own
+    assert "lake-spill-" not in caplog.text
 
 
 def test_column_defaults_and_checks_of_a_duckdb_source_never_run_on_read(tmp_path: Path) -> None:

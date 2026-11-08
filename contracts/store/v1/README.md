@@ -63,7 +63,7 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 | `type` | Tables |
 |---|---|
 | `parquet`, `csv` | one table `<name>.data`: every file matching `path` (a glob is allowed), columns united by name, every value carried exactly or refused (law 11, #252; see [Exact file sources](#exact-file-sources)). A matched file whose name has `*`, `?` or `[` is `STORE_SOURCE_INVALID` (`details.file`): DuckDB's readers would expand it again and read another file (#82) |
-| `duckdb` | the file attached `READ_ONLY`: `<name>.<schema>.<table>`, and `<name>.<table>` for schema `main` |
+| `duckdb` | a database source, read only in its worker (below): `<name>.<schema>.<table>`, and `<name>.<table>` for schema `main` |
 
 - Only **write transactions** read sources; a read (`ReadRequest`) still sees only the lake (`STORE_STATEMENT_INVALID`).
 - The file sandbox gains exactly the declared files: for a glob, the files it matches when the lake opens (a file added later, or any other file in the same folder, stays unreadable).
@@ -74,7 +74,6 @@ How every other module reads and writes analytical data in the lake (DuckLake), 
 - SQL that DuckDB cannot parse fails with `STORE_QUERY_FAILED` (the parser's message in `details.duckdb`) before any other check: parsing runs nothing.
 - A table read at another snapshot (`… AT (VERSION => n)`, `AT (TIMESTAMP => t)`) is refused in every statement (`STORE_STATEMENT_INVALID`, `details.clause` `AT`; #147, decision #182): a model reads the current data, so rows deleted since never come back through it. A read is pinned to its snapshot by the store itself. A name or label `at` stays allowed.
 - `SUMMARIZE`, `DESCRIBE` (`DESC`) and `SHOW` are refused wherever DuckDB could read them as a statement: at the start, in a subquery, after a set operator, as an `INSERT` source or after `CREATE … AS` (`STORE_STATEMENT_INVALID`). DuckDB reads a quoted `SUMMARIZE` target as a file, and these reads would not be pinned to their snapshot. The words remain allowed as a column label after `AS` (`SELECT a AS desc`), as part of a qualified name (`t.desc`), and `DESC` as an ordering in `ORDER BY`. Quoted names (`"describe"`) are ordinary names. A read is also refused when DuckDB's parse tree contains such a statement.
-- A DuckDB source that defines views or macros is refused (`STORE_SOURCE_INVALID`): they would run with the lake's connection.
 - Nothing can be written to a source; a DuckDB source file is never modified.
 - A path that matches no file → `SOURCE_NOT_FOUND`, naming the source, when the lake opens. Two sources with the same name → `STORE_SOURCE_INVALID`.
 
@@ -86,7 +85,22 @@ Every column carries the files' values exactly, or reading it fails with a messa
 - **Parquet:** a column holding, at any depth (directly, or in a struct field, list element or map key or value), a `DECIMAL` wider than 38 digits in any matched file cannot be read. So is a column whose types differ between files when the type DuckDB unites them in cannot hold every file's values exactly. For example, `DECIMAL(38,2)` and `DECIMAL(38,10)` unite as `DECIMAL(38,2)` and would round; a `DECIMAL` beside a `DOUBLE` unites as `DOUBLE`. Only proven-exact unions pass (same type, wider integer, integer or decimal into a decimal with enough digits, `FLOAT` into `DOUBLE`, `DATE` into `TIMESTAMP`, a column of only NULLs into any type, anything into `VARCHAR`); a struct whose fields differ between files is refused. Also refused: an `INT96` timestamp at any depth (DuckDB reads it only to the microsecond), A file with two columns of the same name (ignoring case) or a column without a name makes the source `STORE_SOURCE_INVALID`: DuckDB would rename them, and a made-up name could be another file's column. Each file's Parquet schema is read by DuckDB (`parquet_schema`, footer metadata only), under both of Parquet's decimal annotations; Arrow metadata stored in a file never hides a column.
 - **Folders:** a `name=value` folder in a file's path (Hive partitioning) becomes a column, with the value as DuckDB decodes it (`%20` is a space). It keeps the type DuckDB gives it (`year=2026` as `BIGINT`) only when that type gives back the decoded text in every file; otherwise it arrives as text (so `k=NULL` beside `k=5` is the text `NULL`). A file column with the same name cannot be read when some file holds another value than its folder's, because DuckDB would serve the folder's.
 
-## Database sources (`SqliteSourceAttachment`, `PostgresSourceAttachment`)
+## Database sources (`duckdb`, `SqliteSourceAttachment`, `PostgresSourceAttachment`)
+
+**The source isolation boundary (ADR-0031, #372).** A DuckDB file, a SQLite file and a PostgreSQL database can carry SQL of their own: views, macros, generated columns. None of them is attached to the lake's connection.
+- **A worker per read.** Each read runs in a worker process of its own, spawned fresh, with one DuckDB instance holding only that source, read-only. The instance is configured, then locked, before any SQL of the source runs, in this order:
+  1. limits and a private spill folder;
+  2. UTC and lossless Arrow export;
+  3. only the source's own extension;
+  4. the source attached;
+  5. the file sandbox (the source file alone), external access off, and the configuration locked.
+- **Inside the worker,** the source's views and macros work as the source defines them; the lake, its catalog and its secrets do not exist there.
+- **Limits.** A lake with a database source splits its limits: one worker runs at a time, with half the memory and half the threads, and the lake keeps the rest. The worker's folder is the lake's, apart from its spill folder, and the lake removes it in every outcome.
+- **`Transaction.land(source, sql, parameters, schema, table)`** replaces `schema.table`, inside the transaction, with what one `SELECT` returns on that source. The rows arrive as one Arrow stream, batch by batch, and types are checked at both ends: the stream's, then the landed table's, must be the source's own, with `ENUM` landing as `VARCHAR`. Any other difference is `UNSUPPORTED_SOURCE_TYPE`, and nothing is kept.
+- **`Lake.describe_source(source, sql, parameters)`** binds such a `SELECT` in the worker and returns the columns and the types they land with; no row is read.
+- **Database sources are not readable in lake statements.** A lake statement naming a database source fails, because the source is not there.
+- **One failure fails one read.** A worker that dies, hangs or sends a malformed stream ends the read with `STORE_SOURCE_FAILED`; at the time limit it is `STORE_TIMEOUT`, and on cancel `STORE_CANCELLED`. The worker is killed, nothing is kept, and nothing is left behind.
+- **The source is reached only when it is read:** an unreachable PostgreSQL source fails the read, not `open_lake`.
 
 | `type` | Attached as | Tables |
 |---|---|---|
@@ -94,8 +108,8 @@ Every column carries the files' values exactly, or reading it fails with a messa
 | `postgres` | DuckDB `postgres` extension, `READ_ONLY`, and the session set `default_transaction_read_only = on`; password from `password_env` | `<name>.<table>` with `schema`, otherwise `<name>.<schema>.<table>` |
 
 - Nothing can be written to a database source, even when its user could write.
-- A SQLite source is copied when the lake opens (SQLite's backup, WAL included) and the copy is attached: later changes to the file do not reach the lake until it is opened again. A SQLite file that defines views is refused (`STORE_SOURCE_INVALID`): DuckDB would run a view's SQL with the lake's connection.
-- Functions that run SQL on a source (`postgres_query`, `postgres_execute`, `sqlite_query`, …) and `ATTACH`/`DETACH` are refused in statements (`STORE_STATEMENT_INVALID`).
+- A SQLite source is copied when the lake opens (SQLite's backup, WAL included), and each worker reads that copy: later changes to the file do not reach the lake until it is opened again. Its views are read, in the worker.
+- Functions that run SQL on a source (`postgres_query`, `postgres_execute`, `sqlite_query`, …) and `ATTACH`/`DETACH` are refused in the statements of a model, in the worker too (`STORE_STATEMENT_INVALID`).
 - **Exact types (law 11):** a column DuckDB cannot carry exactly — PostgreSQL `numeric` without precision, with more than 38 digits or with a negative scale or one above its precision, `money` and arrays of either, in tables, views and materialized views; SQLite columns whose declared type contains `DEC` or `NUM` (`DECIMAL`, `NUMERIC`, `NUMBER`; DuckDB reads them as floating point, and SQLite stores them so) — is refused when a write reads it: `UNSUPPORTED_SOURCE_TYPE` naming `<source>.<table>.<column>`. Columns a write does not read do not matter.
 - **TLS (#122).** A PostgreSQL source on a host other than the local machine must have `sslmode: verify-full`. The local machine is decided as for a catalog: the host is `localhost`, `127.0.0.1` or `::1`, `PGHOSTADDR` (when set) is local too, and no `PGSERVICE` is set, since libpq reads both from the environment; otherwise it is refused before anything is opened (`STORE_TLS_REQUIRED`). `sslrootcert` is `system` (the default) or `${env:NAME}`, a variable holding a CA file's path, read by the store. `sslmode: disable` is for the local machine only.
 - A connection or credential failure is `STORE_CONNECTION_FAILED` naming the source, with the password redacted; an unset variable (password or CA) is `STORE_SECRET_MISSING`.
@@ -250,8 +264,9 @@ Preconditions:
 | `STORE_CATALOG_UNAVAILABLE` | The lake cannot be opened: its catalog (a DuckDB or SQLite file, or PostgreSQL) cannot be reached or refused the credentials, its data files cannot be reached, or DuckDB refused the object storage settings; DuckDB's message is in `details`, never a credential |
 | `STORE_LOCATION_INVALID` | The data location is not a local path or an `s3://` prefix, or an `s3://` path and the storage settings do not come together (new in #126, compatible) |
 | `SOURCE_NOT_FOUND` | A declared file source matches no file, or a SQLite source file does not exist, when the lake opens; `details` names the source |
-| `STORE_SOURCE_INVALID` | A source the lake cannot attach safely: two sources with the same name, a DuckDB source that defines views or macros, a SQLite source that defines views; `details` names the source |
-| `STORE_CONNECTION_FAILED` | A database source (PostgreSQL, SQLite) cannot be reached or refuses the credentials; `details` names the source, the password redacted |
+| `STORE_SOURCE_INVALID` | A source the lake cannot attach safely: two sources with the same name, a file that is not a readable database, a view that needs a capability the worker refuses; `details` names the source |
+| `STORE_SOURCE_FAILED` | The worker reading a database source ended early: it died, hung or sent a malformed stream (ADR-0031); nothing was kept |
+| `STORE_CONNECTION_FAILED` | A database source (PostgreSQL) cannot be reached or refuses the credentials when it is read; `details` names the source, the password redacted |
 | `UNSUPPORTED_SOURCE_TYPE` | A write reads a source column DuckDB cannot carry exactly (see "Exact types" above); the message names `<source>.<table>.<column>` |
 
 ## Compatibility

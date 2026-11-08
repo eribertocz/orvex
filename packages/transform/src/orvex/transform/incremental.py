@@ -110,7 +110,20 @@ class Watermark:
     reset: bool  # a full refresh: the previous watermark is dropped even if nothing loads
 
 
-type Step = StatementRequest | Check | Count | Refuse | Watermark
+@dataclass(frozen=True, slots=True)
+class Land:
+    """Replace `schema.table` with what `sql` returns on the database source `source`, read in
+    its own worker, never in the lake's session (#372): the one way a model reads a DuckDB,
+    SQLite or PostgreSQL source."""
+
+    source: str
+    sql: str
+    parameters: tuple[Parameter, ...]
+    schema: str
+    table: str
+
+
+type Step = StatementRequest | Check | Count | Refuse | Watermark | Land
 
 
 def _identifier(name: str) -> str:
@@ -1367,12 +1380,14 @@ def steps(
     since: str = LOWEST,
     full_refresh: bool = False,
     previous: str | None = None,
+    land: str | None = None,
 ) -> list[Step]:
     """The run steps of one incremental model.
 
     `existing`: its table's columns (None if absent); `since`: the `$since` value (text of the
     time column's type); `full_refresh`: replace the table with every loaded row; `previous`:
-    the stored watermark (ignored on a full refresh).
+    the stored watermark (ignored on a full refresh); `land`: the database source the model
+    reads, whose rows (`$since` bound there) are landed in the stage by its worker.
     """
     incremental = model.config.incremental
     assert incremental is not None  # only incremental models get here
@@ -1412,7 +1427,9 @@ def steps(
     )
     result: list[Step] = [
         _statement(f"CREATE SCHEMA IF NOT EXISTS {STAGE_SCHEMA}"),
-        _statement(f"CREATE OR REPLACE TABLE {stage} AS {sql}", parameters),
+        Land(land, sql, tuple(parameters), STAGE_SCHEMA, stage_table)
+        if land is not None
+        else _statement(f"CREATE OR REPLACE TABLE {stage} AS {sql}", parameters),
         Count(f"SELECT count(*) FROM {stage}"),
         _watermark(model, _identifier(time_column), kind, stage, previous),
     ]
