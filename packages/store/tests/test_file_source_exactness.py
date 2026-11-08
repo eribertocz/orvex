@@ -701,3 +701,22 @@ def test_a_decimal_with_both_annotations_still_reads_exactly(tmp_path: Path) -> 
     connection = duckdb.connect()
     _view(connection, "parquet", [path])
     assert connection.execute("SELECT small FROM data").fetchall() == [(decimal.Decimal("1.10"),)]
+
+
+def test_an_ordinary_file_with_logical_only_types_duckdb_honors_reads(tmp_path: Path) -> None:
+    # pyarrow writes these with the logical annotation only: each is read as its own type.
+    path = tmp_path / "f.parquet"
+    table = pa.table(
+        {
+            "half": pa.array([1.5], pa.float16()),
+            "nothing": pa.array([None], pa.null()),
+            "nanos": pa.array([1767261600123456789], pa.timestamp("ns")),
+            "id": pa.array([b"0123456789abcdef"], pa.uuid()),
+        }
+    )
+    pq.write_table(table, path)
+    connection = duckdb.connect()
+    _view(connection, "parquet", [path])
+    assert connection.execute(
+        "SELECT half, nothing, epoch_ns(nanos), CAST(id AS VARCHAR) FROM data"
+    ).fetchall() == [(1.5, None, 1767261600123456789, "30313233-3435-3637-3839-616263646566")]

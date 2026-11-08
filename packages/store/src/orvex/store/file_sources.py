@@ -179,7 +179,7 @@ def _parquet_schema(
         "CAST(coalesce(precision, TRY_CAST(regexp_extract(logical_type, 'precision=(\\d+)', 1) "
         "AS INTEGER), 0) AS VARCHAR), CAST((converted_type = 'DECIMAL' "
         "OR logical_type LIKE 'DecimalType(%') IS TRUE AS VARCHAR), coalesce(duckdb_type, ''), "
-        "coalesce(type, ''), coalesce(regexp_extract(logical_type, '^([A-Za-z]+)', 1), ''), "
+        "coalesce(type, ''), coalesce(regexp_extract(logical_type, '^([A-Za-z0-9]+)', 1), ''), "
         "CAST(converted_type IS NULL AS VARCHAR)] "
         f"ORDER BY column_id) AS nodes FROM parquet_schema([{listed}]) GROUP BY file_name)",
     )
