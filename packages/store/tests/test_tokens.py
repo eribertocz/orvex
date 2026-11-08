@@ -637,10 +637,20 @@ def test_a_pattern_under_the_home_folder_is_expanded_as_before(
 
 def test_parser_spaces_are_every_character_duckdb_reads_as_whitespace() -> None:
     # #213: measured over every code point; a DuckDB upgrade that changes the set fails here.
+    # The same text, `SELECT<c>1`, goes through the same parser (`Parser::ParseQuery` with the
+    # connection's options) inside one vectorized query, `json_serialize_sql`, instead of one
+    # Python call per code point (#373). Only a syntax error rules a code point out; every
+    # other code point is parsed again one by one by `duckdb.extract_statements`.
+    parsed = "json_serialize_sql('SELECT' || chr(point::INTEGER) || '1')::JSON"
+    connection = duckdb.connect()
+    candidates = connection.execute(
+        "SELECT point FROM range(128, 1114112) AS points(point) "
+        "WHERE point NOT BETWEEN 55296 AND 57343 "
+        f"AND {parsed}->>'error_type' IS DISTINCT FROM 'parser' ORDER BY point"
+    ).fetchall()
+    connection.close()
     found = set()
-    for point in range(0x80, 0x110000):
-        if 0xD800 <= point <= 0xDFFF:
-            continue
+    for (point,) in candidates:
         try:
             duckdb.extract_statements(f"SELECT{chr(point)}1")
         except duckdb.Error:

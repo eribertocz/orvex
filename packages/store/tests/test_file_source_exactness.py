@@ -327,15 +327,20 @@ def _literal(text: str) -> str:
 def test_every_csv_text_alone_and_in_pairs_comes_back_unchanged(tmp_path: Path) -> None:
     connection = duckdb.connect()
     changed = {}
-    for left, right in itertools.product(CSV_TEXTS, repeat=2):
-        first, second = tmp_path / "a.csv", tmp_path / "b.csv"
-        first.write_text(f"k,v\n1,{left}\n")
-        second.write_text(f"k,v\n2,{right}\n")
-        for files, texts in (([first], [left]), ([first, second], [left, right])):
-            _view(connection, "csv", files)
-            bad = _csv_changes(connection, texts)
-            if bad:
-                changed[tuple(texts)] = bad
+    first, second = tmp_path / "a.csv", tmp_path / "b.csv"
+    # Each text alone once, then every ordered pair (#373: alone, not once per pair).
+    cases: list[tuple[list[str], str | None]] = [([left], None) for left in CSV_TEXTS]
+    cases += [([left, right], right) for left, right in itertools.product(CSV_TEXTS, repeat=2)]
+    for texts, right in cases:
+        first.write_text(f"k,v\n1,{texts[0]}\n")
+        files = [first]
+        if right is not None:
+            second.write_text(f"k,v\n2,{right}\n")
+            files.append(second)
+        _view(connection, "csv", files)
+        bad = _csv_changes(connection, texts)
+        if bad:
+            changed[tuple(texts)] = bad
     assert not changed, changed
 
 
