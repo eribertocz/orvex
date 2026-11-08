@@ -292,3 +292,12 @@ def test_a_view_of_a_database_source_is_refused(tmp_path: Path) -> None:
     assert [(p.code.root, p.details.model) for p in graph.problems] == [
         ("SOURCE_MODEL_VIEW", "staging.bills")
     ]
+
+
+def test_a_model_reading_a_direct_query_connection_is_refused(tmp_path: Path) -> None:
+    found = project(tmp_path, {"models/s/m.sql": "SELECT *\nFROM warehouse.sales"})
+    graph = build_graph(found.models, {"archive"}, direct=frozenset({"warehouse"}))
+    (item,) = graph.problems
+    assert item.code.root == "MODEL_REFERENCE_UNKNOWN"
+    assert "Direct Query" in item.message
+    assert item.details.line == 2

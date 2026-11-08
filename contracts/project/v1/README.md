@@ -19,6 +19,9 @@ Connection types (`type`):
 | `parquet`, `csv` | `path` (glob allowed) |
 | `duckdb`, `sqlite` | `path`, `read_only` |
 | `postgres` | `host`, `port`, `database`, `user`, `password`, `read_only`, optional `schema`, `ssl_mode` (`verify-full`, or `disable` on the local machine), `ssl_root_cert` (`system`, the default, or `${env:NAME}` holding a CA file's path) |
+| `clickhouse` | `host`, `port` (its HTTP or HTTPS interface), `database`, `user`, `password`, `read_only`, optional `tls` (default `true`; `false` only on the local machine), `tls_root_cert` (`system`, the default, or `${env:NAME}`), `evidence_schedule` (`<n>h` or `<n>d`, at least `1h`, default `1d`) |
+
+A `clickhouse` connection is **Direct Query** (ADR-0027, ADR-0028): the semantic model's datasets name it as their `connection`, and the semantic engine queries it in place. A transformation model never reads it; `check` reports such a model with `MODEL_REFERENCE_UNKNOWN`, naming the connection. The connection's own checks (a read-only profile, the settings that decide a result's meaning, limits, version) are made by the store when it connects (`contracts/store/v1`, "ClickHouse Direct Query").
 
 Relative `path` values are resolved against the project folder by the loader.
 
@@ -117,7 +120,7 @@ A `postgres` connection on a host other than the local machine (`localhost`, `12
 | `PROJECT_VERSION_UNSUPPORTED` | `version` is an integer other than 1 |
 | `PROJECT_SCHEMA_INVALID` | the file does not match its message, `time_zone` is not a zone of the bundled IANA database (system-only names such as `localtime` and the placeholder `Factory` are refused), or a connection name appears twice; a key YAML does not read as text (`null`, `1`, `true`) is named as written, with its line. An unknown top-level key is found before the document is built, so an oversized file of unknown keys is refused at once |
 | `SOURCE_NOT_READ_ONLY` | a database connection declares `read_only: false` |
-| `SOURCE_TLS_REQUIRED` | a `postgres` connection on another machine without `ssl_mode: verify-full` |
+| `SOURCE_TLS_REQUIRED` | a `postgres` connection on another machine without `ssl_mode: verify-full`, or a `clickhouse` connection on another machine with `tls: false` |
 | `PROJECT_SECRET_MISSING` | a referenced environment variable is not set when the secret is resolved (for `lake.catalog`, when the project is validated) |
 | `LAKE_LOCATION_INVALID` | a `duckdb` or `sqlite` catalog `path` that is a URL, on a network or remote file system, or not the default where the file system cannot be read; an `ssl_root_cert` variable that does not name a file; a `lake.data.path` that is neither a local folder nor `s3://`, `gs://` or `az://` with its own settings block, or a local data folder shared with the project, `.<slug>/` or a file connection |
 | `LAKE_TLS_REQUIRED` | a `postgres` catalog on a host other than the local machine without `ssl_mode: verify-full`; object storage with `use_ssl: false` on an endpoint other than the local machine; an Azure connection string over plain HTTP to another machine |

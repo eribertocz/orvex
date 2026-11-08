@@ -20,7 +20,12 @@ export type CatalogPath = string;
  * via the `patternProperty` "^[a-z][a-z0-9_]{0,62}$".
  */
 export type Connection =
-	ParquetConnection | CsvConnection | DuckdbConnection | SqliteConnection | PostgresConnection;
+	| ParquetConnection
+	| CsvConnection
+	| DuckdbConnection
+	| SqliteConnection
+	| PostgresConnection
+	| ClickhouseConnection;
 /**
  * A file path; relative paths are resolved against the project folder. Globs are allowed for `parquet` and `csv`.
  */
@@ -221,6 +226,30 @@ export interface PostgresConnection {
 	 * Certificate authorities that verify the server with `verify-full`: `system` (the operating system's store, the default) or `${env:NAME}`, a variable holding the path of a CA file.
 	 */
 	ssl_root_cert?: string;
+}
+/**
+ * A ClickHouse database queried in place (Direct Query, ADR-0028): datasets of the semantic model name it as their `connection`; transformation models never read it. A host other than the local machine (`localhost`, `127.0.0.1`, `::1`) needs `tls: true`; the loader refuses it otherwise with `SOURCE_TLS_REQUIRED`.
+ */
+export interface ClickhouseConnection {
+	type: 'clickhouse';
+	host: string;
+	port: number;
+	database: string;
+	user: string;
+	password: SecretReference;
+	read_only: ReadOnly;
+	/**
+	 * HTTPS that checks the server's certificate and name (default). `false` is accepted for the local machine only.
+	 */
+	tls?: boolean;
+	/**
+	 * `system` (the operating system's authorities) or `${env:NAME}`, a variable holding a CA file's path.
+	 */
+	tls_root_cert?: string;
+	/**
+	 * How often the evidence the model relies on is verified on this live engine (ADR-0027 §7): `<n>h` or `<n>d`, at least `1h`.
+	 */
+	evidence_schedule?: string;
 }
 /**
  * A project that cannot be loaded or a secret that cannot be resolved. `details` names the file, the location of the problem as a JSON pointer (`path`) and its `line` when known; never a secret value.

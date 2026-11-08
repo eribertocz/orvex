@@ -158,11 +158,11 @@ def check_project(folder: Path, identity: Identity | None = None) -> Checked:
         place = lake_location(project, home)
     except ProjectLoadError as error:
         problems.append(_load_problem(error))
-    discovery = discover_models(project.folder, project.connections)
-    sources = set(project.connections)
-    graph = build_graph(discovery.models, sources, databases(project))
+    discovery = discover_models(project.folder, project.sources)
+    sources = set(project.sources)
+    graph = build_graph(discovery.models, sources, databases(project), project.direct)
     problems += [_from_model_error(item) for item in (*discovery.problems, *graph.problems)]
-    kinds = {name: connection.type for name, connection in project.connections.items()}
+    kinds = {name: connection.type for name, connection in project.sources.items()}
     zone = project.settings.time_zone
     for model in discovery.models:
         problems += [_from_model_error(item) for item in schedule.config_problems(model, zone)]
@@ -228,7 +228,7 @@ def _bind(
     try:
         location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(scratch))
         try:
-            lake = open_lake(location, _limits(), source_attachments(project.connections))
+            lake = open_lake(location, _limits(), source_attachments(project.sources))
         except StoreError as error:
             return {}, {}, {}, [_store_problem(error, ".", "")]
         try:
@@ -966,7 +966,7 @@ def _run_locked(
         print(_load_problem(error), file=out)
         return 1
     try:
-        lake = _open_recorded(home, place, source_attachments(project.connections))
+        lake = _open_recorded(home, place, source_attachments(project.sources))
     except StoreError as error:
         open_error = error
     except ProjectLoadError as error:  # the lake record cannot be written (#192)
@@ -1369,14 +1369,12 @@ def _lineage_events(
                 finished_at=item.finished_at if item.outcome == "success" else ended,
                 outcome="success" if item.outcome == "success" else "failed",
                 output=output,
-                inputs=lineage.inputs(
-                    item.model, by_name, project.connections, scope.lake_namespace
-                ),
+                inputs=lineage.inputs(item.model, by_name, project.sources, scope.lake_namespace),
                 column_lineage=lineage.column_lineage(
                     item.model,
                     selected or output,
                     by_name,
-                    project.connections,
+                    project.sources,
                     scope.lake_namespace,
                     columns_of,
                 ),

@@ -16,6 +16,7 @@ from importlib import resources
 from pathlib import Path
 
 from orvex.contracts.project.v1 import (
+    ClickhouseConnection,
     CsvConnection,
     DuckdbConnection,
     ParquetConnection,
@@ -50,9 +51,20 @@ def is_local_host(host: str) -> bool:
 
 
 type Connection = (
+    ParquetConnection
+    | CsvConnection
+    | DuckdbConnection
+    | SqliteConnection
+    | PostgresConnection
+    | ClickhouseConnection
+)
+DATABASE_TYPES = (DuckdbConnection, SqliteConnection, PostgresConnection, ClickhouseConnection)
+type RouteAConnection = (
     ParquetConnection | CsvConnection | DuckdbConnection | SqliteConnection | PostgresConnection
 )
-DATABASE_TYPES = (DuckdbConnection, SqliteConnection, PostgresConnection)
+# Connections queried in place by the semantic engine (Direct Query, ADR-0027, ADR-0028): never
+# a source of a transformation model.
+DIRECT_QUERY_TYPES = (ClickhouseConnection,)
 FILE_TYPES = (ParquetConnection, CsvConnection, DuckdbConnection, SqliteConnection)
 
 CONNECTION_TYPES: dict[str, type[Connection]] = {
@@ -61,6 +73,7 @@ CONNECTION_TYPES: dict[str, type[Connection]] = {
     "duckdb": DuckdbConnection,
     "sqlite": SqliteConnection,
     "postgres": PostgresConnection,
+    "clickhouse": ClickhouseConnection,
 }
 CONNECTION_NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
 SECRET_REFERENCE = re.compile(r"\$\{env:([A-Z_][A-Z0-9_]*)\}")
@@ -104,6 +117,24 @@ class Project:
     folder: Path
     settings: ProjectFile
     connections: Mapping[str, Connection]
+
+    @property
+    def sources(self) -> Mapping[str, RouteAConnection]:
+        """The connections a transformation model reads (Route A, ADR-0027 §2)."""
+        return {
+            name: connection
+            for name, connection in self.connections.items()
+            if not isinstance(connection, DIRECT_QUERY_TYPES)
+        }
+
+    @property
+    def direct(self) -> frozenset[str]:
+        """The connections the semantic engine queries in place (Direct Query)."""
+        return frozenset(
+            name
+            for name, connection in self.connections.items()
+            if isinstance(connection, DIRECT_QUERY_TYPES)
+        )
 
 
 def load_project(folder: Path) -> Project:
@@ -250,6 +281,21 @@ def _load_connections(document: ConfigFile, folder: Path) -> dict[str, Connectio
                 file=document.file,
                 path=f"{pointer}/ssl_mode",
                 line=document.line(f"{pointer}/ssl_mode"),
+                connection=name,
+            )
+        if (
+            isinstance(connection, ClickhouseConnection)
+            and not connection.tls
+            and not is_local_host(connection.host)
+        ):
+            raise ProjectLoadError(
+                "SOURCE_TLS_REQUIRED",
+                f"Connection '{name}' is on another machine ({connection.host}) and must keep "
+                "tls: true, so its password and results travel only over TLS that checks the "
+                "server's certificate and name.",
+                file=document.file,
+                path=f"{pointer}/tls",
+                line=document.line(f"{pointer}/tls"),
                 connection=name,
             )
         if isinstance(connection, FILE_TYPES):

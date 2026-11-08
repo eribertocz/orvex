@@ -353,19 +353,16 @@ def test_factory_is_not_a_time_zone(tmp_path: Path) -> None:
     assert error.code == "PROJECT_SCHEMA_INVALID"
 
 
-def test_a_clickhouse_connection_is_refused(tmp_path: Path) -> None:
-    # ADR-0028: ClickHouse is no longer a connection type of `connections.yaml`.
+def test_a_clickhouse_connection_is_never_a_source_of_a_model(tmp_path: Path) -> None:
+    # ADR-0028: ClickHouse is queried in place; extraction into the lake is retired.
     text = (
         "version: 1\nconnections:\n  events:\n    type: clickhouse\n"
         "    host: ch.example.invalid\n    port: 8443\n    database: events\n"
         "    user: reader\n    password: ${env:TEST_SECRET_PASSWORD}\n    read_only: true\n"
     )
-    error = failure(project(tmp_path, connections=text))
-    assert error.code == "PROJECT_SCHEMA_INVALID"
-    assert error.error.details.file == "connections.yaml"
-    assert error.error.details.path == "/connections/events/type"
-    assert "Connection 'events' needs a type" in error.error.message
-    assert "clickhouse" not in error.error.message.split("one of ")[1]
+    loaded = load_project(project(tmp_path, connections=text))
+    assert "events" not in loaded.sources
+    assert loaded.direct == frozenset({"events"})
 
 
 @pytest.mark.parametrize("depth", [40, 500, 5000])
@@ -537,3 +534,91 @@ def test_a_connections_file_that_is_not_a_mapping_is_refused(
     error = failure(project(tmp_path, connections=connections))
     assert error.code == "PROJECT_SCHEMA_INVALID"
     assert "The file must be a mapping" in error.error.message
+
+
+# --- ClickHouse Direct Query connections (P2-31 PR 1, #225) ----------------------------------
+
+CLICKHOUSE = """version: 1
+connections:
+  warehouse:
+    type: clickhouse
+    host: {host}
+    port: 8443
+    database: sales
+    user: bi_reader
+    password: ${{env:WAREHOUSE_PASSWORD}}
+    read_only: {read_only}
+{extra}"""
+
+
+def clickhouse(host: str = "ch.example.com", read_only: str = "true", extra: str = "") -> str:
+    return CLICKHOUSE.format(host=host, read_only=read_only, extra=extra)
+
+
+def test_a_clickhouse_connection_loads_with_safe_defaults_and_is_direct_query_only(
+    tmp_path: Path,
+) -> None:
+    loaded = load_project(project(tmp_path, connections=clickhouse()))
+    connection = loaded.connections["warehouse"]
+    assert connection.type == "clickhouse"
+    assert (connection.tls, connection.tls_root_cert, connection.evidence_schedule) == (
+        True,
+        "system",
+        "1d",
+    )
+    assert loaded.direct == frozenset({"warehouse"})
+    assert dict(loaded.sources) == {}
+
+
+def test_a_clickhouse_connection_on_another_machine_without_tls_is_refused(
+    tmp_path: Path,
+) -> None:
+    error = failure(project(tmp_path, connections=clickhouse(extra="    tls: false\n")))
+    assert error.code == "SOURCE_TLS_REQUIRED"
+    assert error.error.details.path == "/connections/warehouse/tls"
+
+
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "::1"])
+def test_a_local_clickhouse_may_go_without_tls(tmp_path: Path, host: str) -> None:
+    text = clickhouse(host=f"'{host}'", extra="    tls: false\n")
+    assert load_project(project(tmp_path, connections=text)).direct == frozenset({"warehouse"})
+
+
+def test_a_clickhouse_connection_must_be_read_only(tmp_path: Path) -> None:
+    error = failure(project(tmp_path, connections=clickhouse(read_only="false")))
+    assert error.code == "SOURCE_NOT_READ_ONLY"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "    evidence_schedule: 30m\n",
+        "    evidence_schedule: 0h\n",
+        "    tls_root_cert: /etc/ca.pem\n",
+        "    host_list: a,b\n",
+    ],
+    ids=["below-an-hour", "zero", "literal-ca-path", "unknown-field"],
+)
+def test_a_clickhouse_connection_outside_its_schema_is_refused(tmp_path: Path, extra: str) -> None:
+    assert failure(project(tmp_path, connections=clickhouse(extra=extra))).code == (
+        "PROJECT_SCHEMA_INVALID"
+    )
+
+
+def test_a_clickhouse_password_must_be_a_reference(tmp_path: Path) -> None:
+    text = clickhouse().replace("${env:WAREHOUSE_PASSWORD}", "s3cret-value")
+    error = failure(project(tmp_path, connections=text))
+    assert error.code == "PROJECT_SCHEMA_INVALID"
+    assert "s3cret-value" not in str(error)
+
+
+def test_check_names_a_model_that_reads_a_clickhouse_connection(tmp_path: Path) -> None:
+    from orvex.server import commands
+
+    folder = project(tmp_path, connections=clickhouse())
+    (folder / "models" / "s").mkdir(parents=True)
+    (folder / "models" / "s" / "m.sql").write_text("SELECT * FROM warehouse.orders\n", "utf-8")
+    checked = commands.check_project(folder)
+    assert [(p.code, "Direct Query" in p.message) for p in checked.problems] == [
+        ("MODEL_REFERENCE_UNKNOWN", True)
+    ]

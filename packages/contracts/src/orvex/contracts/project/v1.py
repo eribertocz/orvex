@@ -294,13 +294,54 @@ class AzureStorage(BaseModel):
     connection_string: SecretReference
 
 
+class ClickhouseConnection(BaseModel):
+    """
+    A ClickHouse database queried in place (Direct Query, ADR-0028): datasets of the semantic model name it as their `connection`; transformation models never read it. A host other than the local machine (`localhost`, `127.0.0.1`, `::1`) needs `tls: true`; the loader refuses it otherwise with `SOURCE_TLS_REQUIRED`.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    type: Literal["clickhouse"]
+    host: Annotated[str, Field(max_length=253, min_length=1, pattern="^[^,/\\s]+$")]
+    port: Annotated[int, Field(ge=1, le=65535)]
+    database: Annotated[str, Field(max_length=128, min_length=1)]
+    user: Annotated[str, Field(max_length=128, min_length=1)]
+    password: SecretReference
+    read_only: ReadOnly
+    tls: bool | None = True
+    """
+    HTTPS that checks the server's certificate and name (default). `false` is accepted for the local machine only.
+    """
+    tls_root_cert: Annotated[
+        str | None, Field(pattern="^(system|\\$\\{env:[A-Z_][A-Z0-9_]*\\})$")
+    ] = "system"
+    """
+    `system` (the operating system's authorities) or `${env:NAME}`, a variable holding a CA file's path.
+    """
+    evidence_schedule: Annotated[str | None, Field(pattern="^([1-9][0-9]*)(h|d)$")] = "1d"
+    """
+    How often the evidence the model relies on is verified on this live engine (ADR-0027 §7): `<n>h` or `<n>d`, at least `1h`.
+    """
+
+
 class Connection(
     RootModel[
-        ParquetConnection | CsvConnection | DuckdbConnection | SqliteConnection | PostgresConnection
+        ParquetConnection
+        | CsvConnection
+        | DuckdbConnection
+        | SqliteConnection
+        | PostgresConnection
+        | ClickhouseConnection
     ]
 ):
     root: (
-        ParquetConnection | CsvConnection | DuckdbConnection | SqliteConnection | PostgresConnection
+        ParquetConnection
+        | CsvConnection
+        | DuckdbConnection
+        | SqliteConnection
+        | PostgresConnection
+        | ClickhouseConnection
     )
 
 
