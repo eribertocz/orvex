@@ -5,6 +5,12 @@ name: docker
 on:
   pull_request:
 
+# A newer commit on a pull request cancels the pull request's older runs (#386); any other
+# run has a group of its own, so it is never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
