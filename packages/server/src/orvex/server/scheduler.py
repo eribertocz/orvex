@@ -205,6 +205,7 @@ class _State:
     zone: str | None = None  # the project's, once it has been loaded
     decided: Callable[[], None] = lambda: None  # called after each printed decision
     kept: _Kept = field(default_factory=_Kept)  # the records, while the lake is unchanged
+    waiting: str | None = None  # the last "waiting: …" line printed (#257)
 
 
 def schedule(
@@ -452,6 +453,8 @@ def _watch_signals(stop: Callable[[int, FrameType | None], None]) -> Callable[[]
 def _say(state: _State, out: IO[str], zone: str, moment: dt.datetime, text: str) -> None:
     local = moment.astimezone(ZoneInfo(zone)).strftime("%Y-%m-%d %H:%M:%S")
     print(f"{local} {text}", file=out, flush=True)
+    if text != state.waiting:
+        state.waiting = None  # another line came between: the next wait is said again
     state.decision = (moment, text)
     state.decided()
 
@@ -464,6 +467,7 @@ def _report(out: IO[str], state: _State, lines: tuple[str, ...], moment: dt.date
         for line in lines:
             print(line, file=out, flush=True)
         state.reported = lines
+        state.waiting = None
         if lines:
             state.decision = (moment, lines[0])
             state.decided()
@@ -636,6 +640,7 @@ def _maybe_maintain(
         and lake_place.exists(checked.project.folder / f".{identity.slug}")
     )
     if not lake_exists:  # nothing to maintain before the first run
+        _waiting(state, out, zone, now, decided.next_run)
         return max(1.0, (decided.wake_at - now).total_seconds())
     due = records.maintained.due_at()
     waiting = state.maintenance_after is not None and monotonic() < state.maintenance_after
@@ -653,4 +658,19 @@ def _maybe_maintain(
     wake = decided.wake_at if due is None or waiting else min(decided.wake_at, due)
     if waiting and state.maintenance_after is not None:
         wake = min(wake, now + dt.timedelta(seconds=state.maintenance_after - monotonic()))
+    _waiting(state, out, zone, now, decided.next_run)
     return max(1.0, (wake - now).total_seconds())
+
+
+def _waiting(
+    state: _State, out: IO[str], zone: str, now: dt.datetime, due: dt.datetime | None
+) -> None:
+    """Say when the next model is due, once each time that changes (#257): an idle hour prints
+    one line, not sixty (the scheduler still looks again every minute)."""
+    if due is None:
+        line = "waiting: no model is due"
+    else:
+        line = f"waiting: next run at {due.astimezone(ZoneInfo(zone)):%Y-%m-%d %H:%M}"
+    if state.waiting != line:
+        state.waiting = line
+        _say(state, out, zone, now, line)

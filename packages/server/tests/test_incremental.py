@@ -113,7 +113,7 @@ def test_append_adds_loaded_rows_and_keeps_them_on_failure(
     feed(tmp_path, rows((4, "n", "4.0004"), (5, "s", "5.0005")))
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 0, out
-    assert "built s.m: 2 rows" in out
+    assert "built s.m: 2 new rows (5 in table)" in out
     assert [row[0] for row in table(tmp_path)] == [1, 2, 3, 4, 5]
     # Exact values survive (DECIMAL, a 38-digit DECIMAL(38,0), TIMESTAMPTZ as text).
     assert table(tmp_path)[0][2:] == (
@@ -139,7 +139,7 @@ def test_merge_updates_matched_keys_and_inserts_the_rest(
     feed(tmp_path, rows((2, "n", "2.5001"), (4, "s", "4.0000")))
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 0, out
-    assert "built s.m: 2 rows" in out
+    assert "built s.m: 2 new rows (4 in table)" in out
     assert [(row[0], row[2]) for row in table(tmp_path)] == [
         (1, "1.0000"),
         (2, "2.5001"),
@@ -332,7 +332,9 @@ def test_delete_insert_replaces_every_row_of_a_loaded_key(
     feed(tmp_path, rows((4, "n", "4.0001"), (5, "n", "5.0002"), (6, "n", "6.0003")))
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 0, out
-    assert "built s.m: 3 rows" in out  # rows inserted; the 2 deleted rows are not counted
+    assert (
+        "built s.m: 3 new rows (4 in table)" in out
+    )  # rows inserted; the 2 deleted rows are not counted
     assert [(row[0], row[1], row[2]) for row in table(tmp_path)] == [
         (3, "s", "3.0000"),
         (4, "n", "4.0001"),

@@ -99,7 +99,7 @@ def test_a_proven_filter_loads_only_newer_rows(
     )
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 0, out
-    assert "built s.m: 1 rows" in out
+    assert "built s.m: 1 new rows (3 in table)" in out
     assert ids(tmp_path) == [1, 2, 3]
     code, out = command(capsys, "validate", str(tmp_path), "--show-sql", "s.m")
     assert code == 0

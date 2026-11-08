@@ -10,6 +10,7 @@ from orvex.contracts.store.v1 import StatementRequest
 from orvex.server import commands
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
+from orvex.store.errors import StoreError
 
 SLUG = load_identity().slug
 PROJECT = "version: 1\nname: Test\ntime_zone: America/La_Paz\n"
@@ -112,7 +113,7 @@ def test_only_rows_newer_than_the_watermark_load(
     )
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 0, out
-    assert "built s.m: 3 rows" in out
+    assert "built s.m: 3 new rows (5 in table)" in out
     assert ids(tmp_path) == [1, 2, 3, 4, 5]
     assert last_record(tmp_path) == (
         "manual",
@@ -273,7 +274,7 @@ def test_a_failed_record_write_never_reloads_rows(
     assert ids(tmp_path) == expected
     code, out = command(capsys, "run", str(tmp_path))  # same source again
     assert code == 0, out
-    assert "built s.m: 0 rows" in out
+    assert f"built s.m: 0 new rows ({len(expected)} in table)" in out  # #257
     assert ids(tmp_path) == expected
 
 
@@ -288,7 +289,7 @@ def test_watermarks_progress_with_a_frozen_clock(
         feed(tmp_path, *rows)  # the source grows by one row each run
         code, out = command(capsys, "run", str(tmp_path))
         assert code == 0, out
-        assert "built s.m: 1 rows" in out
+        assert f"built s.m: 1 new rows ({day} in table)" in out  # #257
     assert ids(tmp_path) == [1, 2, 3, 4]
     (stored,) = lake_value(tmp_path, "SELECT watermark FROM lake._meta.watermarks")
     assert stored == ("2024-01-04T10:00:00.000000+00:00",)
@@ -312,3 +313,19 @@ def test_a_table_without_a_stored_watermark_continues_from_its_rows(
     assert code == 0, out
     assert last_record(tmp_path)[1] == "2024-01-01T10:00:00.000000+00:00"
     assert ids(tmp_path) == [1, 2]
+
+
+def test_an_incremental_total_that_cannot_be_read_says_so_and_the_run_succeeds(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #257: the table's total is read after the commit; when it cannot be, the line says so.
+    project(tmp_path, APPEND)
+    feed(tmp_path, (1, "1.0000", "2024-01-01 10:00:00+00"))
+
+    def failing(*_arguments: object) -> int:
+        raise StoreError("STORE_TIMEOUT", "The statement exceeded its time limit.", {})
+
+    monkeypatch.setattr(commands, "_count", failing)
+    code, out = command(capsys, "run", str(tmp_path))
+    assert code == 0, out
+    assert "built s.m: 1 new rows (table total unknown)" in out
