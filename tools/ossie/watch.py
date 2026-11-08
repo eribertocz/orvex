@@ -4,7 +4,7 @@
 
 It compares upstream `main` with the active registry entry (`vendor/apache-ossie/PIN.toml`, the
 byte-identical copy of the packaged entry) on the paths and proposals of
-`vendor/apache-ossie/watch.toml`, and reports:
+`tools/ossie/watch.toml`, and reports:
 
 1. each vendored file whose upstream SHA-256 differs from the entry;
 2. each commit since the pinned one that touches a watched path;
@@ -41,7 +41,10 @@ from typing import Any
 from tools.contracts.compat import incompatible
 from tools.repository import REPOSITORY_ROOT
 
-FOLDER = REPOSITORY_ROOT / "vendor" / "apache-ossie"
+# The watch list is configuration of this tool, never a file of the vendored folder, whose
+# every file must be one its PIN.toml hashes.
+WATCH_LIST = Path(__file__).with_name("watch.toml")
+PIN = REPOSITORY_ROOT / "vendor" / "apache-ossie" / "PIN.toml"
 
 INFORMATIONAL = "informational"
 COMPATIBLE = "compatible"
@@ -572,8 +575,8 @@ def _compare(git_dir: Path, watch_list: WatchList, pin: Pin, fetch: Fetch) -> Re
 
 def main(argv: Sequence[str] | None = None, fetch: Fetch | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m tools.ossie.watch", description=__doc__)
-    parser.add_argument("--watch", type=Path, default=FOLDER / "watch.toml")
-    parser.add_argument("--pin", type=Path, default=FOLDER / "PIN.toml")
+    parser.add_argument("--watch", type=Path, default=WATCH_LIST)
+    parser.add_argument("--pin", type=Path, default=PIN)
     parser.add_argument("--json", type=Path, help="where to write the JSON report")
     arguments = parser.parse_args(argv)
     try:

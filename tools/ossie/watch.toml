@@ -1,6 +1,7 @@
 # What the weekly upstream watch reads (#285, ADR-0030 §7): `tools/ossie/watch.py` compares
-# upstream `main` with the active registry entry (`PIN.toml`) on these paths and proposals. It
-# only reports: changing this list, the pin or a vendored file is an owner-reviewed issue.
+# upstream `main` with the active registry entry (`vendor/apache-ossie/PIN.toml`) on these
+# paths and proposals. It only reports: changing this list, the pin or a vendored file is an
+# owner-reviewed issue. This file stays out of `vendor/`, which holds only hashed files.
 
 repository = "https://github.com/apache/ossie"
 api = "https://api.github.com/repos/apache/ossie"

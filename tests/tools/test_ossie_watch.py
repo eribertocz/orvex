@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -586,13 +587,21 @@ def test_the_api_is_read_through_the_redirect_guard() -> None:
 
 
 def test_the_repository_watch_list_and_pin_load() -> None:
-    folder = REPOSITORY_ROOT / "vendor" / "apache-ossie"
-    watch_list = watch.load_watch_list(folder / "watch.toml")
-    pin = watch.load_pin(folder / "PIN.toml")
+    watch_list = watch.load_watch_list(watch.WATCH_LIST)
+    pin = watch.load_pin(watch.PIN)
     assert watch_list.repository == "https://github.com/apache/ossie"
     assert set(watch_list.proposals) == {246, 287, 522, 529, 568, 573, 587, 633, 647}
     assert "core-spec/" in watch_list.paths
     assert set(pin.files) == set(pin.sha256)
+
+
+def test_the_watch_list_is_not_in_a_vendored_folder() -> None:
+    # A vendored folder holds only the files its PIN.toml hashes (the corpus runner checks it).
+    vendor = REPOSITORY_ROOT / "vendor"
+    assert not watch.WATCH_LIST.resolve().is_relative_to(vendor)
+    assert watch.WATCH_LIST.is_file()
+    hashed = set(tomllib.loads(watch.PIN.read_text(encoding="utf-8"))["sha256"])
+    assert {path.name for path in watch.PIN.parent.iterdir()} == hashed | {"PIN.toml"}
 
 
 # --- Never -------------------------------------------------------------------------------------
