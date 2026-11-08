@@ -166,11 +166,13 @@ jobs:
           key="Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
           echo "STORE_TEST_AZURE_CONNECTION_STRING=DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=$key;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;" >> "$GITHUB_ENV"
       - run: |
-          python -m pytest -p tools.ci.shard -p tools.ci.timing --junitxml=junit.xml
+          python -m pytest -p tools.ci.shard -p tools.ci.timing -p tools.ci.order --junitxml=junit.xml
           # Each test's time to this log (#375): what tools/ci/durations.py reads back.
           python -m tools.ci.durations emit junit.xml
         env:
           PYTEST_SHARD: ${{ matrix.part }}/10
+          # 3.15 runs in a random order, seeded by the run and printed in the header (#376).
+          PYTEST_RANDOM_ORDER: ${{ matrix.python == '3.15' && github.run_id || '' }}
       - name: Report failures as annotations
         if: failure()
         run: python -m tools.ci.junit_annotations junit.xml
@@ -190,6 +192,29 @@ jobs:
         env:
           RESULT: ${{ needs.python-tests-part.result }}
         run: test "$RESULT" = success
+
+  python-tests-windows:
+    # Shared fixtures are read-only and private copies are writable on Windows too, where
+    # read-only is a file attribute and an open file cannot be removed (#376). The whole suite on
+    # Windows comes with local mode on Windows (P9-10, ADR-0005).
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Install the lock file's versions of what these tests need
+        # pylock.toml holds Linux wheels only; the same versions are installed from their Windows
+        # wheels, with colorama, pytest's Windows-only dependency.
+        shell: bash
+        run: |
+          python -m pip install --quiet pip==26.2.2
+          pins=$(python -m tools.ci.pins pylock.toml pytest pluggy iniconfig packaging pygments duckdb)
+          python -m pip install --quiet --only-binary=:all: --no-deps $pins colorama==0.4.6
+      - run: python -m pytest -p tools.ci.order tests/tools/test_fixtures.py tests/tools/test_order.py tests/tools/test_shard.py tests/tools/test_pins.py tests/tools/test_synthetic.py
+        env:
+          PYTEST_RANDOM_ORDER: ${{ github.run_id }}
 
   python-lock:
     runs-on: ubuntu-latest

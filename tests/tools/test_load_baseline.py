@@ -6,11 +6,13 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import duckdb
 import pytest
 
+from tests.support.fixtures import frozen, private_copy
 from tools.benchmarks.load_baseline import (
     APPENDED,
     Step,
@@ -28,25 +30,25 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(scope="module")
-def dataset(tmp_path_factory: pytest.TempPathFactory) -> Path:
+def dataset(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     out = tmp_path_factory.mktemp("small")
     generate("small", 42, out)
-    return out
+    yield from frozen(out)
 
 
-def test_one_more_day_of_readings_is_appended_after_the_last_period(dataset: Path) -> None:
-    try:
-        appended = append_day(dataset)
-        connection = duckdb.connect()
-        connection.execute("SET TimeZone = 'America/La_Paz'")
-        path = str(dataset / APPENDED)
-        row = connection.execute(
-            f"SELECT count(*), min(period), max(period), count(DISTINCT CAST(read_at AS DATE)), "
-            f"count(*) FILTER (WHERE reading_id NOT LIKE '%-202610') FROM read_parquet('{path}')"
-        ).fetchone()
-        connection.close()
-    finally:
-        (dataset / APPENDED).unlink(missing_ok=True)
+def test_one_more_day_of_readings_is_appended_after_the_last_period(
+    dataset: Path, tmp_path: Path
+) -> None:
+    own = private_copy(dataset, tmp_path / "small")  # appending writes: never to the shared one
+    appended = append_day(own)
+    connection = duckdb.connect()
+    connection.execute("SET TimeZone = 'America/La_Paz'")
+    path = str(own / APPENDED)
+    row = connection.execute(
+        f"SELECT count(*), min(period), max(period), count(DISTINCT CAST(read_at AS DATE)), "
+        f"count(*) FILTER (WHERE reading_id NOT LIKE '%-202610') FROM read_parquet('{path}')"
+    ).fetchone()
+    connection.close()
     assert row is not None
     count, first, last, days, other_ids = row
     assert count == appended > 0
@@ -95,6 +97,7 @@ def test_the_summary_keeps_only_successful_rounds() -> None:
 
 
 def test_the_baseline_runs_end_to_end_on_the_small_dataset(dataset: Path, tmp_path: Path) -> None:
+    dataset = private_copy(dataset, tmp_path / "small")  # the baseline appends a day to it
     completed = subprocess.run(
         [
             sys.executable,
