@@ -10,7 +10,6 @@ import datetime as dt
 import io
 import itertools
 import os
-import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -543,9 +542,40 @@ def test_a_catalog_that_cannot_be_stamped_is_read_every_time(
 
 
 def test_an_idle_scheduler_says_when_the_next_run_is_once_per_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # #257: one status line while it waits, in the project's zone (La Paz, UTC-4), not one per
+    # minute; `runs` shows it as the last decision.
+    feed(tmp_path, "valid")
+    write(
+        tmp_path,
+        {
+            "project.yaml": PROJECT.replace("UTC", "America/La_Paz"),
+            "connections.yaml": CONNECTIONS,
+            "models/s/m.sql": "SELECT * FROM feed.data",
+            "models/s/m.yaml": "version: 1\nfreshness: 1d\n",
+        },
+    )
+    seen: list[str] = []
+
+    def runs_while_waiting(now: dt.datetime) -> None:
+        if not seen and now >= START + dt.timedelta(hours=2):
+            capsys.readouterr()
+            assert main(["runs", str(tmp_path)]) == 0
+            seen.append(capsys.readouterr().out.splitlines()[0])
+
+    out = scheduled(tmp_path, monkeypatch, START + dt.timedelta(hours=3), runs_while_waiting)
+    waits = [line for line in out.splitlines() if " waiting: " in line]
+    assert waits, out
+    assert len(waits) <= 3  # three idle hours: a line when the next run changes, not 180
+    # The run started 09:50 UTC, 05:50 in La Paz; fresh for a day, due again the next day then.
+    assert waits[-1].endswith("waiting: next run at 2026-10-29 05:50"), waits
+    assert "waiting: next run at 2026-10-29 05:50" in seen[0]  # the heartbeat's last decision
+
+
+def test_a_scheduler_with_nothing_scheduled_says_no_model_is_due(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # #257: one status line while it waits, in the project's zone, not one per minute.
     feed(tmp_path, "valid")
     write(
         tmp_path,
@@ -553,12 +583,10 @@ def test_an_idle_scheduler_says_when_the_next_run_is_once_per_change(
             "project.yaml": PROJECT,
             "connections.yaml": CONNECTIONS,
             "models/s/m.sql": "SELECT * FROM feed.data",
-            "models/s/m.yaml": "version: 1\nfreshness: 1d\n",
+            "models/s/m.yaml": "version: 1\n",  # no freshness, no full refresh
         },
     )
-    out = scheduled(tmp_path, monkeypatch, START + dt.timedelta(hours=3))
+    out = scheduled(tmp_path, monkeypatch, START + dt.timedelta(hours=1))
     waits = [line for line in out.splitlines() if " waiting: " in line]
-    assert waits, out
-    assert len(waits) <= 3  # three idle hours: a line when the next run changes, not 180
-    # Fresh for a day after its run: due again at the same time tomorrow, in the project zone.
-    assert re.fullmatch(r"\S+ \S+ waiting: next run at 2026-10-29 \d\d:\d\d", waits[-1])
+    assert waits == [waits[0]]
+    assert waits[0].endswith("waiting: no model is due")
