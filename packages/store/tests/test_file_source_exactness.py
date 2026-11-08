@@ -720,3 +720,32 @@ def test_an_ordinary_file_with_logical_only_types_duckdb_honors_reads(tmp_path: 
     assert connection.execute(
         "SELECT half, nothing, epoch_ns(nanos), CAST(id AS VARCHAR) FROM data"
     ).fetchall() == [(1.5, None, 1767261600123456789, "30313233-3435-3637-3839-616263646566")]
+
+
+# The refusal above exists only because of DuckDB v2.0.0. This test measures DuckDB itself: when
+# an upgrade (ADR-0022 keeps it current) makes DuckDB honor a logical-only annotation, it fails,
+# naming the type, so its refusal is removed (`_HONORED_LOGICAL` in `file_sources.py`).
+MISREAD = {
+    "u8": "INTEGER",
+    "u64": "BIGINT",
+    "i16": "INTEGER",
+    "date": "INTEGER",
+    "text": "BLOB",
+    "money": "BLOB",
+}
+
+
+def test_duckdb_still_misreads_the_logical_only_types_refused(tmp_path: Path) -> None:
+    file = tmp_path / "f.parquet"
+    pq.write_table(_every_kind(), file)
+    parquet_footer.without_converted_types(file)
+    found = dict(
+        duckdb.connect()
+        .execute(f"SELECT name, duckdb_type FROM parquet_schema('{file}')")
+        .fetchall()
+    )
+    honored = [name for name, misread in MISREAD.items() if found[name] != misread]
+    assert not honored, (
+        f"DuckDB {duckdb.__version__} now reads {honored} correctly without the converted "
+        "annotation: add their logical types to _HONORED_LOGICAL and drop them from MISREAD"
+    )
