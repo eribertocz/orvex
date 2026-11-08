@@ -78,6 +78,7 @@ class ErrorCode(
             "STORE_BUSY",
             "SOURCE_NOT_FOUND",
             "STORE_SOURCE_INVALID",
+            "STORE_SOURCE_FAILED",
             "STORE_CONNECTION_FAILED",
             "UNSUPPORTED_SOURCE_TYPE",
         ]
@@ -103,6 +104,7 @@ class ErrorCode(
         "STORE_BUSY",
         "SOURCE_NOT_FOUND",
         "STORE_SOURCE_INVALID",
+        "STORE_SOURCE_FAILED",
         "STORE_CONNECTION_FAILED",
         "UNSUPPORTED_SOURCE_TYPE",
     ]

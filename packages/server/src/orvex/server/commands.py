@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Literal
 
-from orvex.contracts.model_config.v1 import ModelError
+from orvex.contracts.model_config.v1 import ModelError, Reconciliation
 from orvex.contracts.run_record.v1 import (
     CheckResult,
     ModuleVersion,
@@ -78,6 +78,7 @@ from orvex.transform.incremental import (
     WATERMARKS,
     Columns,
     Count,
+    Land,
     Refuse,
     Step,
     Watermark,
@@ -124,6 +125,18 @@ def _load_problem(error: ProjectLoadError) -> Problem:
     return Problem(error.code, details.file or ".", details.line, error.error.message)
 
 
+DATABASE_TYPES = frozenset({"duckdb", "sqlite", "postgres"})
+
+
+def databases(project: Project) -> frozenset[str]:
+    """The connections that carry SQL of their own, read only in a worker (#372)."""
+    return frozenset(
+        name
+        for name, connection in project.connections.items()
+        if connection.type in DATABASE_TYPES
+    )
+
+
 def lake_location(project: Project, home: Path) -> Place:
     """Where the project's lake is: the configured catalog, checked against the one the
     existing lake was created with (#120). Nothing is opened or created."""
@@ -147,7 +160,7 @@ def check_project(folder: Path, identity: Identity | None = None) -> Checked:
         problems.append(_load_problem(error))
     discovery = discover_models(project.folder, project.connections)
     sources = set(project.connections)
-    graph = build_graph(discovery.models, sources)
+    graph = build_graph(discovery.models, sources, databases(project))
     problems += [_from_model_error(item) for item in (*discovery.problems, *graph.problems)]
     kinds = {name: connection.type for name, connection in project.connections.items()}
     zone = project.settings.time_zone
@@ -205,6 +218,7 @@ def _bind(
     """
     by_name = {model.name: model for model in discovery.models}
     relations = test_relations(discovery.models)
+    known = databases(project)
     columns: dict[str, Columns] = {}
     differences: dict[str, list[Comparison]] = {}
     filtered: dict[str, str] = {}
@@ -224,7 +238,9 @@ def _bind(
                     failed.add(name)
                     continue
                 try:
-                    output = _describe(lake, model, compiled_sql(model, by_name))
+                    output = _describe(
+                        lake, model, compiled_sql(model, by_name), graph.lands.get(name)
+                    )
                 except StoreError as error:
                     failed.add(name)
                     problems.append(
@@ -244,13 +260,13 @@ def _bind(
                 columns[name] = output
                 # A computed time column bounded by its alias: only now are the tables'
                 # columns known (#162).
-                bounded = since_bound_problem(model, lambda parts: _columns_of(lake, parts))
+                bounded = since_bound_problem(model, lambda parts: _columns_of(lake, parts, known))
                 if bounded is not None:
                     failed.add(name)
                     problems.append(_from_model_error(bounded))
                     continue
                 if _automatic(model):
-                    proven = _prove_filter(lake, model, output, by_name)
+                    proven = _prove_filter(lake, model, output, by_name, graph.lands.get(name))
                     if isinstance(proven, Problem):
                         problems.append(proven)
                     else:
@@ -261,7 +277,7 @@ def _bind(
                 if model.config.tests:
                     problems += _bind_tests(lake, model, columns, by_name, relations)
                 if model.config.reconciliation:
-                    found, kinds = _bind_reconciliation(lake, model, relations[name])
+                    found, kinds = _bind_reconciliation(lake, model, relations[name], known)
                     problems += found
                     differences[name] = kinds
         finally:
@@ -292,12 +308,22 @@ def _repeated_names(model: Model, names: list[str]) -> list[Problem]:
     ]
 
 
-def _columns_of(lake: Lake, parts: tuple[str, ...]) -> frozenset[str] | None:
+def _columns_of(
+    lake: Lake, parts: tuple[str, ...], known: frozenset[str] = frozenset()
+) -> frozenset[str] | None:
     """The lowercase column names of a table or source table, as the binder sees it in the
-    scratch lake; None when it cannot be described."""
+    scratch lake (a database source's in its worker, #372); None when it cannot be described."""
+    found = _relation_columns(lake, list(parts), known)
+    return None if found is None else frozenset(name.lower() for name in found)
+
+
+def _relation_columns(lake: Lake, parts: list[str], known: frozenset[str]) -> list[str] | None:
     quoted = ".".join('"' + part.replace('"', '""') + '"' for part in parts)
+    sql = f"SELECT * FROM {quoted}"
     try:
-        return frozenset(name.lower() for name, _ in lake.describe(f"SELECT * FROM {quoted}"))
+        if parts and parts[0].lower() in known:
+            return [name for name, _ in lake.describe_source(parts[0].lower(), sql)]
+        return [name for name, _ in lake.describe(sql)]
     except StoreError:
         return None
 
@@ -312,7 +338,11 @@ def _automatic(model: Model) -> bool:
 
 
 def _prove_filter(
-    lake: Lake, model: Model, output: Columns, by_name: Mapping[str, Model]
+    lake: Lake,
+    model: Model,
+    output: Columns,
+    by_name: Mapping[str, Model],
+    land: str | None = None,
 ) -> str | Problem:
     """The model's SQL with the proven `> $since` filter, bound once to check it; or why the
     filter cannot be proven (`INCREMENTAL_FILTER_NOT_PROVABLE`, with the time column's line)."""
@@ -323,11 +353,9 @@ def _prove_filter(
     def columns_of(path: list[str]) -> list[str] | None:
         parts = tuple(path)
         if parts not in described:
-            relation = ".".join('"' + part.replace('"', '""') + '"' for part in parts)
-            try:
-                described[parts] = [name for name, _ in lake.describe(f"SELECT * FROM {relation}")]
-            except StoreError:
-                described[parts] = None
+            described[parts] = _relation_columns(
+                lake, list(parts), frozenset({land}) if land else frozenset()
+            )
         return described[parts]
 
     time_column = incremental_config.time_column.root
@@ -341,7 +369,7 @@ def _prove_filter(
             f"(reason: {result.reason}); set filter: manual and place $since in the SQL.",
         )
     try:
-        rewritten = _describe(lake, model, compiled_sql(model, by_name, result))
+        rewritten = _describe(lake, model, compiled_sql(model, by_name, result), land)
     except StoreError as error:
         return Problem(
             "INCREMENTAL_FILTER_NOT_PROVABLE",
@@ -364,17 +392,19 @@ def _prove_filter(
 
 
 def _bind_reconciliation(
-    lake: Lake, model: Model, relation: str
+    lake: Lake, model: Model, relation: str, known: frozenset[str] = frozenset()
 ) -> tuple[list[Problem], list[Comparison]]:
     """Each check bound on the model and its source: the type of its measure difference, which
-    must be an exact number (integers or DECIMAL, law 11)."""
+    must be an exact number (integers or DECIMAL, law 11). A database source's side is bound in
+    its worker and stood in by an empty table of its columns, as a run lands it (#372)."""
     file = model.config_file or model.sql_file
     problems: list[Problem] = []
     kinds: list[Comparison] = []
     for index, check in enumerate(model.config.reconciliation or []):
         pointer = f"/reconciliation/{index}"
         try:
-            described = lake.describe(reconciliation.measures_sql(check, relation))
+            staged = _stage_reconciliation(lake, model, index, check, known)
+            described = lake.describe(reconciliation.measures_sql(check, relation, staged))
         except StoreError as error:
             problems.append(
                 Problem(
@@ -430,6 +460,29 @@ def _bind_reconciliation(
     return problems, kinds
 
 
+def _stage_reconciliation(
+    lake: Lake, model: Model, index: int, check: Reconciliation, known: frozenset[str]
+) -> str | None:
+    """For a check against a database source: an empty lake table with the columns its side
+    lands with, so the comparison binds as a run will run it; None for any other source."""
+    database = reconciliation.database_of(check, known)
+    if database is None:
+        return None
+    output = lake.describe_source(database, reconciliation.source_side(check))
+    name = reconciliation.staged_name(model, index)
+    quoted = ", ".join(
+        f'"{column.replace(chr(34), chr(34) * 2)}" {kind}' for column, kind in output
+    )
+    staged = f'"{reconciliation.STAGE_SCHEMA}"."{name}"'
+    with lake.transaction() as transaction:
+        for sql in (
+            f'CREATE SCHEMA IF NOT EXISTS "{reconciliation.STAGE_SCHEMA}"',
+            f"CREATE OR REPLACE TABLE {staged} ({quoted})",
+        ):
+            transaction.execute(StatementRequest(kind="statement", sql=sql, parameters=[]))
+    return staged
+
+
 def _bind_tests(
     lake: Lake,
     model: Model,
@@ -459,22 +512,29 @@ def _bind_tests(
     return problems
 
 
-def _describe(lake: Lake, model: Model, sql: str) -> Columns:
-    """Output columns of a model's SQL. An incremental model's `$since` is bound as a NULL of
-    each temporal type in turn; the binding whose `time_column` has that type is the one a run
-    will use (any other model has no parameter to bind)."""
+def _describe(lake: Lake, model: Model, sql: str, land: str | None = None) -> Columns:
+    """Output columns of a model's SQL; for a model reading a database source (`land`), as its
+    worker binds them and they land (#372). An incremental model's `$since` is bound as a NULL
+    of each temporal type in turn; the binding whose `time_column` has that type is the one a
+    run will use (any other model has no parameter to bind)."""
+
+    def described(text: str, parameters: Sequence[Parameter] = ()) -> Columns:
+        if land is not None:
+            return lake.describe_source(land, text, parameters)
+        return lake.describe(text, parameters)
+
     incremental_config = model.config.incremental
     if model.config.materialized != "incremental" or incremental_config is None:
-        return lake.describe(sql)
+        return described(sql)
     if not incremental.uses_since(sql):
-        return lake.describe(sql)
+        return described(sql)
     time_column = incremental_config.time_column.root.lower()
     first: Columns | None = None
     error: StoreError | None = None
     for output_type, parameter_type in incremental.PARAMETER_TYPES.items():
         since = Parameter(name=incremental.SINCE, type=ParameterType(parameter_type), value=None)
         try:
-            output = lake.describe(sql, [since])
+            output = described(sql, [since])
         except StoreError as failed:
             error = error or failed
             continue
@@ -941,6 +1001,7 @@ def _run_locked(
         previous,
         checked.differences,
         checked.filtered,
+        databases(project),
     )
     if selection is not None:
         plan = [(model, steps) for model, steps in plan if model.name in selection.models]
@@ -1452,7 +1513,22 @@ def _check_tests(item: _Outcome) -> None:
 
 
 def _run_step(transaction: Transaction, step: Step | ModelTest | Reconcile, item: _Outcome) -> None:
-    if isinstance(step, ModelTest | Reconcile):
+    if isinstance(step, Reconcile) and step.land is not None:
+        # The database source's groups, landed from its worker, compared, then dropped (#372).
+        landing = step.land
+        transaction.land(landing.source, landing.sql, [], landing.schema, landing.table)
+        failing = transaction.value(step.request) or "0"
+        staged = f'"{landing.schema}"."{landing.table}"'
+        for sql in (f"DROP TABLE {staged}", f'DROP SCHEMA IF EXISTS "{landing.schema}"'):
+            transaction.execute(StatementRequest(kind="statement", sql=sql, parameters=[]))
+        item.reconciliation.append(
+            CheckResult(
+                name=step.name,
+                outcome="passed" if failing == "0" else "failed",
+                failing_rows=failing,
+            )
+        )
+    elif isinstance(step, ModelTest | Reconcile):
         failing = transaction.value(step.request) or "0"
         results = item.tests if isinstance(step, ModelTest) else item.reconciliation
         results.append(
@@ -1464,6 +1540,9 @@ def _run_step(transaction: Transaction, step: Step | ModelTest | Reconcile, item
         )
     elif isinstance(step, StatementRequest):
         transaction.execute(step)
+    elif isinstance(step, Land):
+        # A database source, read in its own worker and landed as one Arrow stream (#372).
+        transaction.land(step.source, step.sql, list(step.parameters), step.schema, step.table)
     elif isinstance(step, Refuse):
         raise _StepFailed(step.code, step.message)
     elif isinstance(step, Watermark):

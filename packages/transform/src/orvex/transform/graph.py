@@ -12,14 +12,14 @@ import copy
 import heapq
 import json
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import duckdb
 from orvex.contracts.model_config.v1 import ModelError, Relationship
 from orvex.contracts.store.v1 import StatementRequest
 from orvex.transform import incremental, model_tests, reconciliation
-from orvex.transform.incremental import Columns, Step
+from orvex.transform.incremental import Columns, Land, Step
 from orvex.transform.model_tests import ModelTest
 from orvex.transform.models import Model, problem
 from orvex.transform.reconciliation import Comparison, Reconcile
@@ -37,6 +37,9 @@ class Graph:
     dependencies: Mapping[str, tuple[str, ...]]
     sources: Mapping[str, tuple[str, ...]]
     problems: tuple[ModelError, ...]
+    # The database source (DuckDB, SQLite, PostgreSQL) each model reading one reads (#372):
+    # such a model reads that connection alone, and is landed by its worker.
+    lands: Mapping[str, str] = field(default_factory=dict)
 
 
 def _parser() -> duckdb.DuckDBPyConnection:
@@ -89,11 +92,16 @@ def _line(sql: str, location: object) -> int | None:
     return sql.count("\n", 0, location) + 1
 
 
-def build_graph(models: Sequence[Model], sources: set[str]) -> Graph:
-    """Dependencies of every model; unknown references and cycles are problems."""
+def build_graph(
+    models: Sequence[Model], sources: set[str], databases: frozenset[str] = frozenset()
+) -> Graph:
+    """Dependencies of every model; unknown references and cycles are problems. `databases`:
+    the sources that carry SQL of their own (DuckDB, SQLite, PostgreSQL), which a model reads
+    alone (`SOURCE_MODEL_MIXED`), and only into a stored table (`SOURCE_MODEL_VIEW`), #372."""
     by_name = {model.name: model for model in models}
     dependencies: dict[str, tuple[str, ...]] = {}
     used_sources: dict[str, tuple[str, ...]] = {}
+    lands: dict[str, str] = {}
     problems: list[ModelError] = []
     connection = _parser()
     try:
@@ -151,6 +159,10 @@ def build_graph(models: Sequence[Model], sources: set[str]) -> Graph:
             # run would otherwise read the table the previous run left).
             dependencies[model.name] = tuple(sorted(needs))
             used_sources[model.name] = tuple(sorted(reads))
+            database = sorted(reads & databases)
+            if database:
+                problems += _source_model_problems(model, database, reads, needs)
+                lands[model.name] = database[0]
     finally:
         connection.close()
     order, cycles = _order(dependencies)
@@ -164,7 +176,39 @@ def build_graph(models: Sequence[Model], sources: set[str]) -> Graph:
                 model=first.name,
             )
         )
-    return Graph(tuple(order), dependencies, used_sources, tuple(problems))
+    return Graph(tuple(order), dependencies, used_sources, tuple(problems), lands)
+
+
+def _source_model_problems(
+    model: Model, database: Sequence[str], reads: set[str], needs: set[str]
+) -> list[ModelError]:
+    """A model reading a database source reads that one connection alone (its tables and
+    views, any number of them), and is stored: a view would be inlined into the models that
+    read it, which then read the source with something else."""
+    found: list[ModelError] = []
+    others = sorted((reads - {database[0]}) | needs)
+    if others:
+        found.append(
+            problem(
+                "SOURCE_MODEL_MIXED",
+                f"{model.sql_file}: {model.name} reads the database source {database[0]} with "
+                f"{', '.join(others)}; a model reading a database source reads only that "
+                "connection. Land it in a model of its own, then join on that model.",
+                model.sql_file,
+                model=model.name,
+            )
+        )
+    if model.config.materialized == "view":
+        found.append(
+            problem(
+                "SOURCE_MODEL_VIEW",
+                f"{model.sql_file}: {model.name} reads the database source {database[0]} and is "
+                "a view; a model reading a database source is stored (table or incremental).",
+                model.sql_file,
+                model=model.name,
+            )
+        )
+    return found
 
 
 def _order(
@@ -329,6 +373,7 @@ def plan_run(
     previous: Mapping[str, str | None] | None = None,
     differences: Mapping[str, Sequence[Comparison]] | None = None,
     filtered: Mapping[str, str] | None = None,
+    databases: frozenset[str] = frozenset(),
 ) -> list[tuple[Model, list[Step | ModelTest | Reconcile]]]:
     """Steps that build every stored model, in run order (views are not stored).
 
@@ -352,7 +397,9 @@ def plan_run(
             tests += model_tests.steps(
                 model, relations[name], (outputs or {}).get(name, []), relations
             )
-            tests += reconciliation.steps(model, relations[name], (differences or {}).get(name, []))
+            tests += reconciliation.steps(
+                model, relations[name], (differences or {}).get(name, []), databases
+            )
         if model.config.materialized == "view":
             if tests:
                 plan.append((model, list(tests)))
@@ -372,6 +419,7 @@ def plan_run(
                             (since or {}).get(name, incremental.LOWEST),
                             name in full_refresh,
                             (previous or {}).get(name),
+                            graph.lands.get(name),
                         ),
                         *tests,
                     ],
@@ -386,7 +434,9 @@ def plan_run(
                     StatementRequest(
                         kind="statement", sql=f"CREATE SCHEMA IF NOT EXISTS {schema}", parameters=[]
                     ),
-                    StatementRequest(
+                    Land(graph.lands[name], sql, (), model.schema, model.table)
+                    if name in graph.lands
+                    else StatementRequest(
                         kind="statement",
                         sql=f"CREATE OR REPLACE TABLE {schema}.{table} AS {sql}",
                         parameters=[],

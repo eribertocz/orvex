@@ -10,11 +10,25 @@
 # test = "packages/<module>/tests/test_<x>.py::test_<name>"
 
 [[allow]]
-file = "packages/store/src/orvex/store/lake.py"
+file = "packages/store/src/orvex/store/source_worker.py"
 reader = "sqlite3"
-function = "_sqlite_snapshot"
-reason = "The SQLite snapshot copy (#83): the backup API copies the file byte for byte and Python reads only schema names (views, tables, column types); DuckDB reads every row from the copy. Reviewed under #259"
+function = "sqlite_backup"
+reason = "The SQLite snapshot copy (#83): the backup API copies the file page by page, running no statement on it; DuckDB reads every row from the copy, in the source's worker (#372)"
 test = "packages/store/tests/test_database_sources.py::test_the_sqlite_copy_reads_only_schema_names_in_python"
+
+[[allow]]
+file = "packages/store/src/orvex/store/source_worker.py"
+reader = "sqlite3"
+function = "_sqlite_copy"
+reason = "In the source's worker (#372): Python reads only schema names (tables, column types) of the copy, to find inexact columns; DuckDB reads every row"
+test = "packages/store/tests/test_database_sources.py::test_the_sqlite_copy_reads_only_schema_names_in_python"
+
+[[allow]]
+file = "packages/store/src/orvex/store/source_worker.py"
+reader = "pyarrow.ipc.open_stream"
+function = "open"
+reason = "The source isolation boundary (#372): the worker's Arrow IPC stream, handed to DuckDB batch by batch as a registered stream; Arrow carries the rows as transport (engineering.md §2), DuckDB reads them, and no row becomes a Python object"
+test = "packages/store/tests/test_source_isolation.py::test_streaming_stays_bounded_by_the_batch"
 
 [[allow]]
 file = "packages/transform/src/orvex/transform/models.py"

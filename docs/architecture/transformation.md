@@ -33,10 +33,15 @@ connections:
 | Type | Mechanism |
 |---|---|
 | `parquet`, `csv` | DuckDB native readers |
-| `duckdb` | `ATTACH ... (READ_ONLY)` |
-| `sqlite`, `postgres` | DuckDB official extensions, attached read-only |
+| `duckdb` | `ATTACH ... (READ_ONLY)`, in the source's own worker |
+| `sqlite`, `postgres` | DuckDB official extensions, attached read-only, in the source's own worker |
 
 A connection name becomes a SQL schema in DuckDB: `production.readings` reads table `readings` from connection `production`, and DuckDB pushes filters and projections down to the source. Raw sources are structured data read only through DuckDB's official native support (decision #226). ClickHouse is not a raw source: it is queried in place by Direct Query (ADR-0028).
+
+**Database sources are read in a worker of their own (ADR-0031).** A DuckDB, SQLite or PostgreSQL source can carry SQL of its own (views, macros, generated columns), so it is never attached to the lake's session.
+- **The worker:** each read runs in a separate process with one DuckDB instance holding only that source; there its views work as the source defines them, and the lake does not exist.
+- **What crosses into the lake:** only the model's result, as an Arrow stream whose types are checked at both ends.
+- **What a model may read:** a model that reads a database source reads only that connection, any of its tables and views. Mixing it with another connection or a lake model is `SOURCE_MODEL_MIXED`; a view model on one is `SOURCE_MODEL_VIEW`. Land the source in a model of its own, then join on that model.
 
 **One dialect per engine, no transpilation (ADR-0026).** Orvex never translates SQL between dialects. A model's SQL is DuckDB SQL.
 
@@ -173,6 +178,8 @@ Every run produces a **run record** (`contracts/run-record/v1`): run id, model, 
 | `ORPHAN_MODEL_CONFIG` | Sidecar without SQL file |
 | `INVALID_MODEL_SQL` | The SQL file is not a single valid SELECT statement |
 | `DEPENDENCY_CYCLE` | Models depend on each other circularly |
+| `SOURCE_MODEL_MIXED` | A model reads a database source (`duckdb`, `sqlite`, `postgres`) with another connection or a lake model (ADR-0031) |
+| `SOURCE_MODEL_VIEW` | A model reading a database source is a view; it must be stored (ADR-0031) |
 | `INCREMENTAL_FILTER_NOT_PROVABLE` | `filter: auto` cannot be applied safely |
 | `MISSING_SINCE_PARAMETER` | `filter: manual` without `$since` |
 | `MISSING_UNIQUE_KEY` | `merge` or `delete_insert` without `unique_key` |

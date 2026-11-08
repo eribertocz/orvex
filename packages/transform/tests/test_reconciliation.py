@@ -281,3 +281,22 @@ def test_a_group_matched_twice_always_fails(tmp_path: Path) -> None:
         "FROM (VALUES ('ab', 5), ('AB', 5)) AS t(meter, kwh)"
     )
     assert failing(chosen, connection) == [("by_meter", 2)]
+
+
+def test_a_database_source_side_is_landed_from_its_worker(tmp_path: Path) -> None:
+    """#372: against a database source, the check carries the source's grouped side to land
+    from its worker, and compares with that staged lake table, never with the source."""
+    chosen = model(tmp_path, f"  - {{name: exact, {MONTHLY}}}\n")
+    comparison = [Comparison("DECIMAL(38,4)")]
+    (plain,) = steps(chosen, RELATION, comparison)
+    assert plain.land is None
+    (landed,) = steps(chosen, RELATION, comparison, frozenset({"feed"}))
+    assert landed.land is not None
+    assert (landed.land.source, landed.land.schema) == ("feed", "_stage")
+    assert "feed.data" not in landed.request.sql.replace('"', "")
+    assert landed.land.table in landed.request.sql
+    assert '"feed"."data"' in landed.land.sql  # the source's side, run in the worker
+    # The source's side alone, as the worker runs it, gives the comparison's columns.
+    connection = lake()
+    described = connection.execute(f"DESCRIBE {landed.land.sql}").fetchall()
+    assert [row[0] for row in described] == ["g0", "m", "present", "rid"]

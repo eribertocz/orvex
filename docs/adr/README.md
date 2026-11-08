@@ -30,9 +30,10 @@ Records 0001–0026 were approved by the Owner during the design session of 2026
 | [0022](0022-latest-stable-dependencies.md) | Always the latest stable versions of dependencies | Accepted |
 | [0023](0023-python-models-and-ml-extension-path.md) | Extension path for Python models, ML predictions and Python visuals (after v1.0.0) | Accepted (direction only) |
 | [0024](0024-project-writer.md) | Project writer: code editors save text as typed; forms only for dashboards and metrics | Accepted |
-| [0025](0025-lazy-relations-no-python-materialization.md) | Data stays in DuckDB: lazy relations, no materialization in Python | Accepted; rule 6 applied to row-policy values by 0027; rule 1 amended in part by 0028 |
+| [0025](0025-lazy-relations-no-python-materialization.md) | Data stays in DuckDB: lazy relations, no materialization in Python | Accepted; rule 6 applied to row-policy values by 0027; rule 1 amended in part by 0028; made precise by 0031 (Arrow streams between DuckDB instances) |
 | [0026](0026-one-dialect-per-engine.md) | One SQL dialect per engine; no transpilation (no SQLGlot) | Accepted; rules 1, 3 and 4 superseded in part by 0028 |
 | [0027](0027-two-data-routes.md) | Two data routes: managed DuckLake and Direct Query, one semantic engine | Accepted; superseded in part by 0028 (ClickHouse); Quack: direction only, after v1.0.0 |
 | [0028](0028-clickhouse-by-direct-query-only.md) | ClickHouse by Direct Query only; extraction retired | Accepted |
 | [0029](0029-semantic-engine-scope-s1-s14.md) | Semantic engine scope for v1.0.0: S1–S14 (amends 0010) | Proposed |
 | [0030](0030-ossie-version-evolution.md) | Evolving with Apache Ossie: version registry, staged reading, three identities and the Ossie-first policy (amends 0009 and 0012) | Accepted |
+| [0031](0031-source-isolation-boundary.md) | Source isolation boundary: every external database read in a worker without the lake (makes 0025 precise) | Accepted |

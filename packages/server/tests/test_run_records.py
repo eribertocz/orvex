@@ -230,6 +230,9 @@ def test_password_never_reaches_a_record(
             + "  production:\n    type: postgres\n    host: 127.0.0.1\n    port: 1\n"
             "    database: x\n    user: y\n    password: ${env:RUN_RECORD_TEST_PASSWORD}\n"
             "    read_only: true\n",
+            # A database source is reached only by the models that read it, in a worker of its
+            # own (#372): this one fails the run.
+            "models/staging/billed.sql": "SELECT * FROM production.bills",
         },
     )
     code, out = command(capsys, "run", str(tmp_path))
@@ -238,7 +241,8 @@ def test_password_never_reaches_a_record(
     rows = records(tmp_path)
     assert rows
     assert {r["outcome"] for r in rows} == {"failed"}
-    assert {r["error_code"] for r in rows} == {"STORE_CONNECTION_FAILED"}
+    failed = {r["model"]: r["error_code"] for r in rows if r["error_code"]}
+    assert failed == {"staging.billed": "STORE_CONNECTION_FAILED"}
     assert secret not in json.dumps(rows, default=str)
 
 

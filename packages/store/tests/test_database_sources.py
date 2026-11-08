@@ -1,4 +1,5 @@
-"""P1-07: SQLite and PostgreSQL sources attached read-only, with exact types only."""
+"""P1-07: SQLite and PostgreSQL sources read-only, with exact types only; since #372 each is
+read only in a worker of its own, never in the lake's session."""
 
 from __future__ import annotations
 
@@ -35,10 +36,23 @@ PASSWORD_ENV = "STORE_TEST_POSTGRES_PASSWORD"
 type Location = LocalLakeLocation | PostgresLakeLocation
 
 
+LANDED = re.compile(r"CREATE (?:OR REPLACE )?TABLE (\w+) AS (SELECT .+)", re.DOTALL)
+
+
 def write(lake: Lake, *sqls: str) -> None:
+    """Each statement in one transaction. `CREATE TABLE t AS SELECT …` reading a database source
+    lands through the source's worker (#372), as a model does; anything else runs as written."""
     with lake.transaction() as transaction:
         for sql in sqls:
-            transaction.execute(StatementRequest(kind="statement", sql=sql, parameters=[]))
+            found = LANDED.fullmatch(sql)
+            source = next(
+                (name for name in ("field", "production") if found and f"{name}." in found[2]),
+                None,
+            )
+            if found and source:
+                transaction.land(source, found[2], [], "main", found[1])
+            else:
+                transaction.execute(StatementRequest(kind="statement", sql=sql, parameters=[]))
 
 
 def read(lake: Lake, sql: str) -> list[dict[str, object]]:
@@ -153,26 +167,40 @@ def test_sqlite_decimal_column_is_refused_only_when_read(sqlite_lake: Lake) -> N
     assert read(sqlite_lake, "SELECT count(*) AS n FROM ids") == [{"n": 1}]
 
 
-@pytest.mark.parametrize(
-    "definition",
-    [
-        "CREATE VIEW billed AS SELECT id, amount AS total FROM charges",
-        "CREATE VIEW wipe AS SELECT * FROM postgres_execute('production', 'DELETE FROM readings',"
-        " use_transaction = false)",
-    ],
-    ids=["view", "view-calling-a-function"],
-)
-def test_sqlite_file_with_views_is_refused(
-    location: Location, sqlite_file: Path, definition: str
-) -> None:
+def test_a_sqlite_view_is_read_in_the_worker(location: Location, sqlite_file: Path) -> None:
+    """#372: a SQLite file with views is read; the view runs in the source's worker, where
+    there is no lake."""
     connection = sqlite3.connect(sqlite_file)
-    connection.execute(definition)
+    connection.execute("CREATE VIEW named AS SELECT id, upper(name) AS name FROM consumers")
     connection.commit()
     connection.close()
-    with pytest.raises(StoreError) as raised:
-        open_lake(location, LIMITS, [sqlite_source(sqlite_file)])
-    assert raised.value.code == "STORE_SOURCE_INVALID"
-    assert raised.value.details["source"] == "field"
+    lake = open_lake(location, LIMITS, [sqlite_source(sqlite_file)])
+    try:
+        write(lake, "CREATE TABLE n AS SELECT * FROM field.named")
+        rows = read(lake, "SELECT CAST(id AS VARCHAR) AS id, name FROM n ORDER BY id")
+    finally:
+        lake.close()
+    assert rows == [{"id": "1", "name": "ANA"}, {"id": "9007199254740993", "name": "BEA"}]
+
+
+def test_a_sqlite_view_needing_a_refused_capability_fails(
+    location: Location, sqlite_file: Path
+) -> None:
+    connection = sqlite3.connect(sqlite_file)
+    connection.execute(
+        "CREATE VIEW wipe AS SELECT * FROM postgres_execute('production', 'DELETE FROM readings',"
+        " use_transaction = false)"
+    )
+    connection.commit()
+    connection.close()
+    lake = open_lake(location, LIMITS, [sqlite_source(sqlite_file)])
+    try:
+        assert code_of(lambda: write(lake, "CREATE TABLE w AS SELECT * FROM field.wipe")) in {
+            "STORE_QUERY_FAILED",
+            "STORE_STATEMENT_INVALID",
+        }
+    finally:
+        lake.close()
 
 
 def test_sqlite_trigger_is_harmless(location: Location, sqlite_file: Path) -> None:
@@ -423,8 +451,12 @@ def test_unreachable_host_fails_within_the_connect_timeout(location: Location) -
         update={"host": "192.0.2.1", "sslmode": "verify-full"}
     )
     started = time.monotonic()
-    with pytest.raises(StoreError) as raised:
-        open_lake(location, LIMITS, [unreachable])
+    lake = open_lake(location, LIMITS, [unreachable])  # a source is reached only when read
+    try:
+        with pytest.raises(StoreError) as raised:
+            write(lake, "CREATE TABLE r AS SELECT * FROM production.readings")
+    finally:
+        lake.close()
     assert raised.value.code == "STORE_CONNECTION_FAILED"
     assert time.monotonic() - started < 30
 
@@ -434,8 +466,14 @@ def test_postgres_credentials_never_appear(
 ) -> None:
     wrong = "wrong-password-very-recognizable"
     monkeypatch.setenv("SOURCE_WRONG_PASSWORD", wrong)
-    with pytest.raises(StoreError) as raised:
-        open_lake(location, LIMITS, [postgres_source(schema, password_env="SOURCE_WRONG_PASSWORD")])
+    lake = open_lake(
+        location, LIMITS, [postgres_source(schema, password_env="SOURCE_WRONG_PASSWORD")]
+    )
+    try:
+        with pytest.raises(StoreError) as raised:
+            write(lake, "CREATE TABLE r AS SELECT * FROM production.readings")
+    finally:
+        lake.close()
     assert raised.value.code == "STORE_CONNECTION_FAILED"
     assert raised.value.details["source"] == "production"
     assert wrong not in str(raised.value)
@@ -486,8 +524,9 @@ def test_the_sqlite_copy_reads_only_schema_names_in_python(
     sqlite_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The reason of the one non-DuckDB reader allowed in store (data-reader-allowlist.toml):
-    # the backup API copies the file, and Python reads only schema names; DuckDB reads the rows.
-    from orvex.store import lake as lake_module
+    # the backup API copies the file, and Python reads only schema names, in the source's
+    # worker (#372); DuckDB reads the rows.
+    from orvex.store import source_worker
 
     traced: list[str] = []
     connect = sqlite3.connect
@@ -498,11 +537,10 @@ def test_the_sqlite_copy_reads_only_schema_names_in_python(
         return connection
 
     monkeypatch.setattr(sqlite3, "connect", tracing)
-    columns = lake_module._sqlite_snapshot(sqlite_source(sqlite_file), tmp_path / "copy.sqlite")
+    columns = source_worker._sqlite_copy(sqlite_source(sqlite_file), tmp_path / "copy.sqlite")
     assert ("consumers", "id", "INTEGER") in columns
     assert traced, "the copy ran no statement"
     schema_only = (
-        r"SELECT count\(\*\) FROM sqlite_master WHERE type = 'view'",
         r"SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
         r"SELECT name, type FROM pragma_table_info\('[a-z_]+'\)",
         r"-- PRAGMA table_info='[a-z_]+'",  # SQLite's own trace of that table function
@@ -529,5 +567,34 @@ def test_a_sqlite_generated_column_never_reaches_the_lake_session(
     try:
         write(lake, "CREATE TABLE copied AS SELECT * FROM field.t")
         assert read(lake, "SELECT * FROM copied") == [{"a": 7}]
+    finally:
+        lake.close()
+
+
+def land_in(lake: Lake, sql: str) -> None:
+    with lake.transaction() as transaction:
+        transaction.land("production", sql, [], "main", "leaked")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM lake.main.canary",
+        "SELECT * FROM main.canary",
+        "SELECT * FROM __ducklake_metadata_lake.ducklake_table",
+        "SELECT * FROM duckdb_tables()",
+        "SELECT * FROM postgres_query('production', 'SELECT 1')",
+    ],
+)
+def test_a_postgres_model_never_reaches_the_lake(location: Location, schema: str, sql: str) -> None:
+    """#372: the model's SQL runs in the PostgreSQL source's worker, where the lake does not
+    exist (and DuckDB's catalog functions and the source's raw functions stay refused)."""
+    lake = open_lake(location, LIMITS, [postgres_source(schema)])
+    try:
+        write(lake, "CREATE TABLE canary AS SELECT 'canary-372' AS secret")
+        with pytest.raises(StoreError) as refused:
+            land_in(lake, sql)
+        assert refused.value.code in {"STORE_QUERY_FAILED", "STORE_STATEMENT_INVALID"}
+        assert "canary-372" not in str(refused.value.details)
     finally:
         lake.close()
