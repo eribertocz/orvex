@@ -120,11 +120,18 @@ def _edges(name: str, path: Path, known: set[str]) -> list[Edge]:
     package = name if path.name == "__init__.py" else name.rpartition(".")[0]
     found: list[Edge] = []
 
+    # Importing `a.b.c` runs `a` and `a.b` first, so each package on the way is an edge too;
+    # the importer's own packages are already running, so they are not.
+    own = {".".join(name.split(".")[:end]) for end in range(1, name.count(".") + 2)}
+
     def add(target: str, node: ast.AST) -> None:
         while target and target not in known:
             target = target.rpartition(".")[0]  # `a.b.c` names a function or class of `a.b`
-        if target and target != name:
-            found.append(Edge(target, id(node) in typing))
+        parts = target.split(".") if target else []
+        for end in range(1, len(parts) + 1):
+            step = ".".join(parts[:end])
+            if step in known and step not in own:
+                found.append(Edge(step, id(node) in typing))
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -227,7 +234,10 @@ def dynamic(root: Path) -> list[Finding]:
     for _, path in _sources(root):
         for node in ast.walk(ast.parse(path.read_text("utf-8"))):
             if isinstance(node, ast.Call) and (
-                (isinstance(node.func, ast.Name) and node.func.id == "__import__")
+                (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id in {"__import__", "import_module"}
+                )
                 or (isinstance(node.func, ast.Attribute) and node.func.attr == "import_module")
             ):
                 found.append(
@@ -241,11 +251,12 @@ def dynamic(root: Path) -> list[Finding]:
     return found
 
 
-def main() -> int:
-    findings = [*sizes(REPOSITORY_ROOT), *imports(REPOSITORY_ROOT), *dynamic(REPOSITORY_ROOT)]
+def main(root: Path = REPOSITORY_ROOT) -> int:
+    findings = [*sizes(root), *imports(root), *dynamic(root)]
     for finding in findings:
-        if finding.level == "warning":  # an annotation in CI, never a failure
-            print(f"::warning file={finding.path}::{finding.code} {finding.text}")
+        if finding.level in {"warning", "error"}:  # an annotation in CI; only errors fail
+            where = f" file={finding.path}" if finding.path.endswith(".py") else ""
+            print(f"::{finding.level}{where}::{finding.code} {finding.path}: {finding.text}")
         print(finding)
     return 1 if any(f.level == "error" for f in findings) else 0
 
