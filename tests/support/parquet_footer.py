@@ -1,5 +1,5 @@
 """A Parquet footer rewriter for tests (#260): it drops `converted_type` from every schema element
-that also carries a `logicalType`, as writers other than pyarrow do. pyarrow always writes both.
+that also carries a `logicalType`, as writers other than pyarrow do. pyarrow writes both.
 
 The footer is Thrift's compact protocol: it is read into plain tuples and written back with the
 one field removed; nothing else changes."""
@@ -139,8 +139,9 @@ class _Writer:
         self.out.append(0)
 
 
-def without_converted_decimals(path: Path) -> None:
-    """Rewrite `path`'s footer: schema elements keep their logical annotation only."""
+def without_converted_types(path: Path) -> None:
+    """Rewrite `path`'s footer: every schema element with a logical annotation (decimals, strings,
+    integers, dates, lists, maps…) loses its converted one, as some writers emit them."""
     data = path.read_bytes()
     size = struct.unpack("<I", data[-8:-4])[0]
     footer = data[-8 - size : -8]

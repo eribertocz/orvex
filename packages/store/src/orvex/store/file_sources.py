@@ -7,10 +7,10 @@ the source is attached, and its view expression checks it again on every read, s
 rewritten later fails instead of changing a value:
 
 - **Parquet.** A column holding, at any depth, a DECIMAL wider than 38 digits is refused (DuckDB
-  reads it as DOUBLE), and so is one holding a DECIMAL DuckDB does not read as one (only the
-  logical annotation, #260); so is a column whose types in different files unite (`union_by_name`)
-  into a type that cannot hold every file's values. Every other column is pinned to the type it
-  had when attached.
+  reads it as DOUBLE), and so is one holding a value whose type DuckDB would read as another (a
+  logical-only annotation it does not honor, #260); so is a column whose types in different files
+  unite (`union_by_name`) into a type that cannot hold every file's values. Every other column is
+  pinned to the type it had when attached.
 - **CSV.** Every value is read as its text. A column keeps a detected type (BOOLEAN, BIGINT,
   DATE, TIMESTAMP, or TIMESTAMPTZ with an explicit offset) only when that type gives back every
   value's text; otherwise it stays exact text, which the model casts explicitly.
@@ -31,6 +31,11 @@ from pathlib import Path
 import duckdb
 from orvex.store.errors import StoreError
 from orvex.store.sql_text import identifier, literal
+
+# Logical Parquet annotations DuckDB v2.0.0 reads correctly without a converted twin (measured,
+# #260): timestamps and times of every unit, UUID, NULL and half floats (as FLOAT, exactly); the
+# last three have no converted annotation at all. Any other logical-only annotation is refused.
+_HONORED_LOGICAL = frozenset({"TimestampType", "TimeType", "UUIDType", "NullType", "Float16Type"})
 
 # The types a CSV text column may take, in order: the first that gives back every value wins.
 _CSV_ORDER = ("BOOLEAN", "BIGINT", "DATE", "TIMESTAMP", "TIMESTAMPTZ")
@@ -106,11 +111,11 @@ def _parquet_view(
             f"UNSUPPORTED_SOURCE_TYPE: column {name} of source {source} holds a DECIMAL with "
             f"{digits} digits, which cannot be read exactly.",
         )
-    for key, name in undecoded.items():  # after the wide DECIMAL, whose message is precise
+    for key, (name, logical) in undecoded.items():  # after the wide DECIMAL, its message precise
         messages.setdefault(
             key,
-            f"UNSUPPORTED_SOURCE_TYPE: column {name} of source {source} holds a DECIMAL with only "
-            "the logical annotation, which DuckDB does not read as a decimal.",
+            f"UNSUPPORTED_SOURCE_TYPE: column {name} of source {source} holds a {logical} value "
+            "with only the logical annotation, which DuckDB does not read as that type.",
         )
     for key, (name, types) in kinds.items():
         target = union.get(key, "")
@@ -153,7 +158,7 @@ def _parquet_schema(
     dict[str, tuple[str, set[str]]],
     set[str],
     dict[str, str],
-    dict[str, str],
+    dict[str, tuple[str, str]],
 ]:
     """Per top-level column (by folded name): the widest DECIMAL wider than 38 digits at any
     depth (struct field, list element, map key or value), and its type in each file; the
@@ -174,19 +179,20 @@ def _parquet_schema(
         "CAST(coalesce(precision, TRY_CAST(regexp_extract(logical_type, 'precision=(\\d+)', 1) "
         "AS INTEGER), 0) AS VARCHAR), CAST((converted_type = 'DECIMAL' "
         "OR logical_type LIKE 'DecimalType(%') IS TRUE AS VARCHAR), coalesce(duckdb_type, ''), "
-        "coalesce(type, '')] "
+        "coalesce(type, ''), coalesce(regexp_extract(logical_type, '^([A-Za-z]+)', 1), ''), "
+        "CAST(converted_type IS NULL AS VARCHAR)] "
         f"ORDER BY column_id) AS nodes FROM parquet_schema([{listed}]) GROUP BY file_name)",
     )
     widest: dict[str, tuple[str, int]] = {}
     kinds: dict[str, tuple[str, set[str]]] = {}
     duplicated: set[str] = set()
     int96: dict[str, str] = {}
-    undecoded: dict[str, str] = {}
+    undecoded: dict[str, tuple[str, str]] = {}
     for nodes in row[0] if row and isinstance(row[0], list) else []:
         remaining = [int(nodes[0][1])]  # children still to visit, per open group (root first)
         top = ""
         in_file: set[str] = set()
-        for name, children, digits, is_decimal, kind, physical in nodes[1:]:
+        for name, children, digits, is_decimal, kind, physical, logical, unconverted in nodes[1:]:
             if len(remaining) == 1:
                 top = str(name)  # a child of the root: a top-level column
                 if fold(top) in in_file or not top:
@@ -197,8 +203,15 @@ def _parquet_schema(
                 widest[fold(top)] = (top, int(digits))
             if physical == "INT96":
                 int96[fold(top)] = top
-            if is_decimal == "true" and not str(kind).startswith("DECIMAL"):
-                undecoded[fold(top)] = top
+            # A logical annotation without its converted twin, of a type DuckDB does not honor
+            # from the logical one alone, is read as another type (#260): a decimal as BLOB or
+            # as its unscaled integer, an unsigned as a signed integer, a date as an INTEGER, a
+            # string as BLOB, a list or map as a struct. Only the logical types measured to be
+            # honored pass; any other is refused (fail closed).
+            if logical and unconverted == "true" and logical not in _HONORED_LOGICAL:
+                undecoded.setdefault(fold(top), (top, logical.removesuffix("Type") or logical))
+            elif is_decimal == "true" and not str(kind).startswith("DECIMAL"):
+                undecoded.setdefault(fold(top), (top, "Decimal"))
             remaining[-1] -= 1
             if int(children) > 0:
                 remaining.append(int(children))

@@ -24,8 +24,8 @@ import pytest
 from orvex.store.errors import StoreError
 from orvex.store.file_sources import view_query
 
+from tests.support import parquet_footer
 from tests.support.fixtures import frozen
-from tests.support.parquet_footer import without_converted_decimals
 
 D = decimal.Decimal
 UTC = dt.UTC
@@ -609,7 +609,7 @@ def _logical_only(tmp_path: Path, integers: bool) -> Path:
     )
     path = tmp_path / "f.parquet"
     pq.write_table(table, path, store_decimal_as_integer=integers)
-    without_converted_decimals(path)
+    parquet_footer.without_converted_types(path)
     return path
 
 
@@ -628,7 +628,7 @@ def test_a_decimal_duckdb_does_not_read_as_one_is_refused_at_any_depth(
     assert connection.execute("SELECT k FROM data ORDER BY k").fetchall() == [(1,), (2,)]
 
 
-def test_the_rewritten_file_keeps_its_values_and_loses_only_the_converted_annotation(
+def test_the_rewritten_footer_keeps_every_value_and_drops_only_converted_annotations(
     tmp_path: Path,
 ) -> None:
     path = _logical_only(tmp_path, integers=False)
@@ -637,14 +637,61 @@ def test_the_rewritten_file_keeps_its_values_and_loses_only_the_converted_annota
     assert read[0]["nested"] == {"v": decimal.Decimal("1.10")}
     rows = (
         duckdb.connect()
-        .execute(
-            f"SELECT name, converted_type, logical_type FROM parquet_schema('{path}') "
-            "WHERE logical_type LIKE 'DecimalType(%'"
-        )
+        .execute(f"SELECT converted_type, logical_type FROM parquet_schema('{path}')")
         .fetchall()
     )
-    assert len(rows) == 4
-    assert all(converted is None for _, converted, _ in rows)
+    assert sum(1 for _, logical in rows if logical and logical.startswith("DecimalType")) == 4
+    assert all(converted is None for converted, logical in rows if logical)
+
+
+@pytest.mark.parametrize("integers", [False, True])
+def test_the_footer_codec_gives_back_an_unchanged_footer_byte_for_byte(
+    tmp_path: Path, integers: bool
+) -> None:
+    path = tmp_path / "f.parquet"
+    pq.write_table(_every_kind(), path, store_decimal_as_integer=integers)
+    data = path.read_bytes()
+    size = int.from_bytes(data[-8:-4], "little")
+    footer = data[-8 - size : -8]
+    writer = parquet_footer._Writer()
+    writer.struct(parquet_footer._Reader(footer).struct())
+    assert bytes(writer.out) == footer
+
+
+def _every_kind() -> pa.Table:
+    return pa.table(
+        {
+            "u8": pa.array([255], pa.uint8()),
+            "u64": pa.array([2**64 - 1], pa.uint64()),
+            "i16": pa.array([-1], pa.int16()),
+            "date": pa.array([dt.date(2026, 1, 2)]),
+            "text": pa.array(["a"]),
+            "items": pa.array([[1]], pa.list_(pa.int64())),
+            "pairs": pa.array([[("k", 1)]], pa.map_(pa.string(), pa.int64())),
+            "money": pa.array([decimal.Decimal("1.10")], pa.decimal128(9, 2)),
+            "stamp": pa.array([1], pa.timestamp("us", tz="UTC")),
+            "clock": pa.array([1], pa.time64("us")),
+            "k": pa.array([7]),
+        }
+    )
+
+
+def test_every_logical_only_type_duckdb_misreads_is_refused_and_the_rest_read(
+    tmp_path: Path,
+) -> None:
+    # Measured on DuckDB v2.0.0: without the converted twin, an unsigned is read as signed
+    # (2^64-1 as -1), a date as its day number, a string as BLOB, a list or a map as a struct.
+    path = tmp_path / "f.parquet"
+    pq.write_table(_every_kind(), path)
+    parquet_footer.without_converted_types(path)
+    connection = duckdb.connect()
+    _view(connection, "parquet", [path])
+    for column in ("u8", "u64", "i16", "date", "text", "items", "pairs", "money"):
+        with pytest.raises(duckdb.Error, match=f"UNSUPPORTED_SOURCE_TYPE: column {column} "):
+            connection.execute(f"SELECT {column} FROM data").fetchall()
+    assert connection.execute("SELECT k, epoch_us(stamp), clock FROM data").fetchall() == [
+        (7, 1, dt.time(0, 0, 0, 1))
+    ]
 
 
 def test_a_decimal_with_both_annotations_still_reads_exactly(tmp_path: Path) -> None:
