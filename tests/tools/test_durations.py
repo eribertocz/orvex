@@ -140,3 +140,17 @@ def test_a_folder_or_class_named_like_a_test_still_maps_to_its_file(tmp_path: Pa
         durations.node_id("test_suite.test_x.test_Class", "test_y", tmp_path)
         == "test_suite/test_x.py::test_Class::test_y"
     )
+
+
+def test_a_log_carries_the_skipped_tests_by_reason(tmp_path: Path) -> None:
+    # #377: the trend report lists the tests that did not run, from the CI log alone.
+    junit, _ = run_sample(tmp_path)
+    log = [f"2026-11-08T01:40:39.4083139Z {line}" for line in durations.emit(junit)]
+    assert durations.skipped_from_log(log) == {"not here": 1}
+    # The skip lines are not timings.
+    assert all("skipped" not in t.test for t in durations.from_log(log))
+
+
+def test_a_skip_reason_stays_on_one_line() -> None:
+    assert durations.one_line("needs\tPostgreSQL\n  (CI only)") == "needs PostgreSQL (CI only)"
+    assert durations.one_line("") == "no reason given"

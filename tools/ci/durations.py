@@ -4,9 +4,10 @@
     python -m tools.ci.durations report LOGS_OR_JUNIT...      # the report, from logs or reports
 
 `emit` prints each test of a JUnit report as one tab-separated line (`test-duration`, total
-seconds, setup seconds, test id, fixtures), so a CI job's log carries its durations without an
-artifact. `report` reads such logs or JUnit files (the `setup_s` and `fixtures` properties come
-from `-p tools.ci.timing`) and writes:
+seconds, setup seconds, test id, fixtures), and each skipped test as one (`test-skipped`, reason,
+test id), so a CI job's log carries its durations and skips without an artifact. `report`
+reads such logs or JUnit files (the `setup_s` and `fixtures` properties come from
+`-p tools.ci.timing`) and writes:
 
 - `--markdown PATH`: the slowest tests and files, the totals per module and per Python, and the
   setup time per fixture;
@@ -25,7 +26,7 @@ import re
 import statistics
 import sys
 import xml.etree.ElementTree as ElementTree
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,7 @@ from tools.ci import shard
 from tools.repository import REPOSITORY_ROOT
 
 MARK = "test-duration"
+SKIPPED = "test-skipped"
 # A GitHub Actions log line starts with its timestamp.
 _STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ")
 # `python-tests-3.15-part-3` in a log's name, or `junit-3.14.xml`.
@@ -80,10 +82,26 @@ def from_junit(path: Path, python: str = "") -> Iterator[Timing]:
         )
 
 
+def one_line(reason: str) -> str:
+    """A skip reason on one line, as `verify` counts it ("no reason given" when empty)."""
+    return " ".join(reason.split()) or "no reason given"
+
+
+def skipped(path: Path) -> Iterator[tuple[str, str]]:
+    """Each skipped test of a JUnit report: its node id and its reason."""
+    for case in ElementTree.parse(path).getroot().iter("testcase"):
+        skip = case.find("skipped")
+        if skip is not None:
+            test = node_id(case.get("classname", ""), case.get("name", ""))
+            yield test, one_line(skip.get("message") or "")
+
+
 def emit(path: Path) -> Iterator[str]:
     for timing in from_junit(path):
         fixtures = ",".join(timing.fixtures)
         yield f"{MARK}\t{timing.total:.4f}\t{timing.setup:.4f}\t{timing.test}\t{fixtures}"
+    for test, reason in skipped(path):
+        yield f"{SKIPPED}\t{reason}\t{test}"
 
 
 def from_log(lines: Iterable[str], python: str = "") -> Iterator[Timing]:
@@ -98,6 +116,16 @@ def from_log(lines: Iterable[str], python: str = "") -> Iterator[Timing]:
         yield Timing(
             test, float(total), float(setup), tuple(f for f in fixtures.split(",") if f), python
         )
+
+
+def skipped_from_log(lines: Iterable[str]) -> Counter[str]:
+    """The skipped tests of a log, counted by reason."""
+    reasons: Counter[str] = Counter()
+    for raw in lines:
+        fields = _STAMP.sub("", raw.rstrip("\n")).split("\t")
+        if len(fields) == 3 and fields[0] == SKIPPED:
+            reasons[fields[1]] += 1
+    return reasons
 
 
 def load(paths: Sequence[Path]) -> list[Timing]:

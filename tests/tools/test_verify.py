@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.ci import checks, verify
+from tools.ci import checks, trends, verify
 from tools.repository import REPOSITORY_ROOT
 
 
@@ -155,6 +155,26 @@ def test_the_critical_sets_name_real_tests_and_local_checks() -> None:
     assert set(critical["checks"]) <= local
 
 
+def test_every_nightly_counterexample_is_a_pr_and_full_regression_test() -> None:
+    # #377, #373 §6: a counterexample a nightly run found is committed (`@example`) in a file
+    # listed as a regression, and every regression is in a critical set, so `pr` and `full` run
+    # it, never only nightly.
+    critical = verify.profiles(REPOSITORY_ROOT)
+    regressions = critical["regressions"]
+    assert regressions
+    for path in regressions:
+        assert (REPOSITORY_ROOT / path).is_file(), path
+        assert any(path == c or path.startswith(c.rstrip("/") + "/") for c in critical["tests"])
+    committed = subprocess.run(
+        ["git", "grep", "-l", "-E", r"^\s*@example\(", "--", "*test_*.py"],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert sorted(committed) == sorted(regressions)
+
+
 def test_pr_always_runs_the_critical_tests_and_everything_when_unsure() -> None:
     critical = set(verify.profiles(REPOSITORY_ROOT)["tests"])
     tests, reasons = verify.pr_tests(REPOSITORY_ROOT, ["docs/roadmap.md"])
@@ -191,16 +211,9 @@ def test_every_test_file_belongs_to_full(tmp_path: Path) -> None:
     scripts = next(c for c in checks.load(REPOSITORY_ROOT) if c.name == "governance-scripts")
     assert scripts.local
     assert "discover -p 'test_*.py'" in scripts.run
-    discovered = f"{scripts.directory}/"
-    tracked = subprocess.run(
-        ["git", "ls-files", "*test_*.py"],
-        cwd=REPOSITORY_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.splitlines()
-    outside = [t for t in tracked if not t.startswith((*roots, discovered))]
-    assert not outside, outside
+    assert scripts.directory == ".github/workflows/scripts"
+    # The same list the trend report shows on every main build (#377).
+    assert trends.unprofiled(REPOSITORY_ROOT) == []
     steps, _ = verify.plan(REPOSITORY_ROOT, ("3.15", "3.14"), tmp_path, total=3)
     names = {s.name for s in steps}
     assert "governance-scripts" in names
