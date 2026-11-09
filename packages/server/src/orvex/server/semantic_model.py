@@ -65,12 +65,16 @@ class Loaded:
 
 @dataclass(frozen=True, slots=True)
 class ExternalTables:
-    """An existing lake's tables and views at its served snapshot (P2-30 PR 3): what the
-    datasets on that connection are compiled against. Given only when its engine is enabled."""
+    """A Direct Query engine's tables: an existing lake's tables and views at its served
+    snapshot (P2-30 PR 3), or a ClickHouse database's tables now (P2-31 PR 4): what the datasets
+    on that connection are compiled against. Given only when its engine is enabled."""
 
     tables: TablesResult
     views: frozenset[str]  # `schema.view`, lower-cased: no dataset may read one
     adapter: ExternalAdapter | None = None  # its reads, pinned at the snapshot of `tables`
+    # `schema.table`, lower-cased: a table no dataset may read, as the error saying why (a
+    # ClickHouse column with no exact type, `UNSUPPORTED_SOURCE_TYPE`).
+    refused: Mapping[str, StoreError] = dataclasses.field(default_factory=dict)
 
 
 def model_files(folder: Path) -> list[Path]:
@@ -110,12 +114,13 @@ def _catalog(
     file: str,
     only: Callable[[str], bool] = lambda _: True,
     views: frozenset[str] = frozenset(),
+    refused: Mapping[str, StoreError] | None = None,
 ) -> tuple[dict[str, dict[str, SourceColumn]], list[Problem]]:
     """Each dataset's source table as of the snapshot, by its `source` text: `table` (schema
     `main`) or `schema.table`, matched as DuckDB matches a name (case aside). A source with no
     such table is a problem naming the dataset, never a guess. Only the datasets `only` keeps
     (by normalized name) are read here; a source that is one of `views` is refused: an existing
-    lake's datasets read its tables only (ADR-0027 §3)."""
+    lake's datasets read its tables only (ADR-0027 §3); one in `refused` is its error."""
     known = {(t.schema_.casefold(), t.table.casefold()): t for t in tables.tables}
     datasets = document.get("datasets", ())
     catalog: dict[str, dict[str, SourceColumn]] = {}
@@ -135,6 +140,10 @@ def _catalog(
                     f"{source!r}, a view of an existing lake; only its tables can be read",
                 )
             )
+            continue
+        why = (refused or {}).get(f"{schema or 'main'}.{name}".casefold())
+        if why is not None:
+            problems.append(Problem(why.code, file, None, why.message))
             continue
         table = known.get(((schema or "main").casefold(), name.casefold()))
         if table is None:
@@ -158,13 +167,13 @@ def _on(datasets: Mapping[str, str], connection: str) -> Callable[[str], bool]:
 
 
 def _route_refused(file: str, connections: Sequence[str]) -> Problem:
-    """Datasets on an existing lake whose engine is not enabled in this process."""
+    """Datasets on a Direct Query connection whose engine is not enabled in this process."""
     return Problem(
         "UNSUPPORTED_OPERATION",
         file,
         None,
-        f"operation: route; datasets read the existing DuckLake {', '.join(connections)}, an "
-        "engine enabled only for development",
+        f"operation: route; datasets read the Direct Query connection {', '.join(connections)},"
+        " an engine enabled only for development",
     )
 
 
@@ -260,7 +269,14 @@ def load_semantic(
             continue
         if given.adapter is not None:
             adapters[connection] = given.adapter
-        found, more = _catalog(model.document, given.tables, file, _on(on, connection), given.views)
+        found, more = _catalog(
+            model.document,
+            given.tables,
+            file,
+            _on(on, connection),
+            given.views,
+            given.refused,
+        )
         problems += more
         problems += [_two_engines(file, source) for source in sorted(set(found) & set(catalog))]
         catalog.update(found)

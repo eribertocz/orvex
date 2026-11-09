@@ -18,8 +18,9 @@ from pathlib import Path
 from types import FrameType
 
 import uvicorn
-from orvex.server import development_switch, existing_lakes
+from orvex.server import clickhouse_engines, development_switch, existing_lakes
 from orvex.server.app import LocalSemantic, create_app
+from orvex.server.clickhouse_engines import ClickHouseEngines, clickhouse_connections
 from orvex.server.evidence_command import evidence
 from orvex.server.existing_lakes import ExistingLakes, ducklake_connections, memory_share
 from orvex.server.history import runs
@@ -48,6 +49,7 @@ from orvex.server.semantic_http import (
     project_source,
     session_settings,
 )
+from orvex.server.semantic_model import ExternalTables
 from orvex.server.validate import validate
 from orvex.server.versions import (
     ContractVersionIncompatible,
@@ -128,18 +130,27 @@ def describe_versions(identity: Identity, versions: Versions) -> str:
 
 
 def served_project(
-    folder: Path, identity: Identity, lakes: ExistingLakes | None = None
+    folder: Path,
+    identity: Identity,
+    lakes: ExistingLakes | None = None,
+    clickhouse: ClickHouseEngines | None = None,
 ) -> ProjectSource:
     """The opened project for the HTTP API, with the lake's opening and the project lock; with
-    `lakes`, its existing lakes, and the managed lake's instance on its share of the memory."""
+    `lakes`, its existing lakes, and the managed lake's instance on its share of the memory;
+    with `clickhouse`, its ClickHouse connections (#225)."""
     memory = memory_share(memory_limit(), 1 + len(lakes)) if lakes else None
+    engines = [found.pinned for found in (lakes, clickhouse) if found]
+
+    def pinned() -> dict[str, ExternalTables | StoreError]:
+        return {name: tables for each in engines for name, tables in each().items()}
+
     return project_source(
         folder,
         identity,
         lambda project, home: open_existing(home, lake_location(project, home), memory),
         project_lock,
         ProjectLocked,
-        lakes.pinned if lakes else None,
+        pinned if engines else None,
     )
 
 
@@ -173,6 +184,26 @@ def attached_lakes(
         engine_version=version("duckdb"),
     ) as lakes:
         yield lakes
+
+
+@contextmanager
+def connected_clickhouse(folder: Path, identity: Identity) -> Iterator[ClickHouseEngines | None]:
+    """The project's ClickHouse connections, verified for the serve session when the
+    development switch is on and it has any (#225)."""
+    if not development_switch.clickhouse(identity):
+        yield None
+        return
+    try:
+        connections = load_project(folder).connections
+    except ProjectLoadError:  # every question then says the settings have problems
+        connections = {}
+    if not clickhouse_connections(connections):
+        yield None
+        return
+    with clickhouse_engines.opened(
+        connections, timeout_ms=QUERY_TIMEOUT_MS, memory_limit=memory_limit()
+    ) as engines:
+        yield engines
 
 
 def server_config(
@@ -320,14 +351,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (ProjectLoadError, StoreError) as error:
             print(error, file=sys.stderr)
             return 1
+        clickhouse = stack.enter_context(connected_clickhouse(project.path, identity))
         url = f"http://{LOCAL_HOST}:{port}/"
         access = new_access(identity.slug, port)
-        source = served_project(project.path, identity, lakes)
+        source = served_project(project.path, identity, lakes, clickhouse)
         local = LocalSemantic(
             project.id, access, Semantic(source, local_context, session_settings())
         )
         if lakes is not None:
             stack.enter_context(lakes.checking(source))
+        if clickhouse is not None:
+            stack.enter_context(clickhouse.checking(source))
         server = uvicorn.Server(server_config(port, versions, web_build_directory(), local))
         serve_folder = instance_directory(identity) / "serve"
         with serving(serve_folder, port, access, url) as private, stopping(server) as received:

@@ -56,7 +56,9 @@ REQUIRED_SETTINGS: Mapping[str, str] = {
     "aggregate_functions_null_for_empty": "0",  # empty-set results are written out by the adapter
     "cancel_http_readonly_queries_on_client_close": "1",  # closing the connection cancels
 }
-LIMIT_SETTINGS = ("max_execution_time", "max_memory_usage", "max_result_rows")
+# No result-rows or rows-read limit (Owner, 2026-11-08): every question reads all the rows it
+# needs, so a profile that sets one is refused as any other changed setting is.
+LIMIT_SETTINGS = ("max_execution_time", "max_memory_usage")
 # Settings a profile may also change: none of them changes a result. Any other changed setting
 # is refused, so no setting can silently cut, filter, cache or reshape a result
 # (`result_overflow_mode`, `additional_table_filters`, `use_query_cache`, `limit`, ...).
@@ -138,7 +140,6 @@ class Budget:
 
     timeout_ms: int
     memory_bytes: int
-    result_rows: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +195,15 @@ def duckdb_type(engine_type: str) -> str | None:
     return None
 
 
+_TSV_ESCAPES = {"b": "\b", "f": "\f", "r": "\r", "n": "\n", "t": "\t", "0": "\0"}
+
+
+def _unescaped(value: str) -> str:
+    """One TabSeparated value as written: ClickHouse escapes `\\`, `'`, tabs, newlines and
+    control characters with a backslash (`DateTime64(6, \\'UTC\\')`)."""
+    return re.sub(r"\\(.)", lambda m: _TSV_ESCAPES.get(m.group(1), m.group(1)), value)
+
+
 def _engine_error(body: bytes) -> tuple[str, str]:
     """ClickHouse's error code and message from a response body."""
     text = body.decode("utf-8", "replace").strip()
@@ -224,6 +234,11 @@ class ClickHouse:
         self._password = password
         self._budget = budget
         self.version = ""
+
+    @property
+    def database(self) -> str:
+        """The database every read names its tables in."""
+        return self._target.database
 
     @classmethod
     def connect(cls, target: ClickHouseTarget, budget: Budget) -> ClickHouse:
@@ -297,7 +312,7 @@ class ClickHouse:
             body = response.read().decode("utf-8")
         finally:
             connection.close()
-        return [line.split("\t") for line in body.splitlines() if line]
+        return [[_unescaped(v) for v in line.split("\t")] for line in body.split("\n") if line]
 
     def _json(self, sql: str, values: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
         """A small catalog query in JSON lines: schema and settings facts, never data rows."""
@@ -366,7 +381,6 @@ class ClickHouse:
         limits = {
             "max_execution_time": self._budget.timeout_ms / 1000,
             "max_memory_usage": self._budget.memory_bytes,
-            "max_result_rows": self._budget.result_rows,
         }
         for name, most in limits.items():
             value = Decimal(current.get(name, "0") or "0")
@@ -399,6 +413,36 @@ class ClickHouse:
                 )
             found.append(SourceColumn(name, engine_type, mapped))
         return tuple(found)
+
+    def catalog(self) -> tuple[dict[str, tuple[SourceColumn, ...]], dict[str, StoreError]]:
+        """Every table of the database with its columns' exact types, in order; apart, each
+        table holding a column with no exact type, as the error naming that column."""
+        rows = self._text(
+            "SELECT table, name, type FROM system.columns WHERE database = {database:String} "
+            "ORDER BY table, position",
+            {"param_database": _escape(self._target.database)},
+        )
+        tables: dict[str, list[SourceColumn]] = {}
+        refused: dict[str, StoreError] = {}
+        for table, name, engine_type in rows:
+            mapped = duckdb_type(engine_type)
+            if mapped is None:
+                refused.setdefault(
+                    table,
+                    StoreError(
+                        "UNSUPPORTED_SOURCE_TYPE",
+                        f"Column {table}.{name} has type {engine_type}, which has no exact type.",
+                        {"table": table, "column": name, "type": engine_type},
+                    ),
+                )
+                continue
+            tables.setdefault(table, []).append(SourceColumn(name, engine_type, mapped))
+        return {t: tuple(c) for t, c in tables.items() if t not in refused}, refused
+
+    def estimate(self, sql: str, parameters: Sequence[Parameter]) -> list[dict[str, Any]]:
+        """`EXPLAIN ESTIMATE` of one read, checked and bound as the read is: one row per
+        MergeTree-family table it reads (`database`, `table`, `parts`, `rows`, `marks`)."""
+        return self._json("EXPLAIN ESTIMATE " + sql, _bound(sql, parameters))
 
     def now(self) -> datetime:
         """The server's clock: a live read's instant (ADR-0027 §5)."""

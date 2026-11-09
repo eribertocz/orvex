@@ -23,13 +23,12 @@ from orvex.store import clickhouse
 from orvex.store.clickhouse import Budget, ClickHouse, ClickHouseTarget, duckdb_type
 from orvex.store.errors import StoreError
 
-BUDGET = Budget(timeout_ms=30_000, memory_bytes=2_000_000_000, result_rows=1_000_000)
+BUDGET = Budget(timeout_ms=30_000, memory_bytes=2_000_000_000)
 SAFE = {
     "readonly": "1",
     **clickhouse.REQUIRED_SETTINGS,
     "max_execution_time": "30",
     "max_memory_usage": "1000000000",
-    "max_result_rows": "1000000",
 }
 
 
@@ -152,7 +151,6 @@ def test_each_setting_that_decides_meaning_must_have_its_value(
 @pytest.mark.parametrize("value", ["0", "above"])
 def test_each_limit_must_be_set_within_the_budget(connect: Connect, name: str, value: str) -> None:
     above = {"max_execution_time": "31", "max_memory_usage": "3000000000"}
-    above["max_result_rows"] = "2000000"
     settings = {**SAFE, name: above[name] if value == "above" else value}
     with pytest.raises(StoreError) as caught:
         connect(settings)
@@ -202,6 +200,8 @@ SILENT = {
     "read_overflow_mode": "break",
     "timeout_overflow_mode": "break",
     "max_rows_to_read": "1000",
+    # No result-rows limit (Owner, 2026-11-08): every question reads all the rows it needs.
+    "max_result_rows": "1000",
     "additional_table_filters": "{\\'t\\': \\'k < 7\\'}",
     "use_query_cache": "1",
     "limit": "5",
@@ -290,6 +290,43 @@ def test_table_columns_are_mapped_and_an_unmappable_one_is_named(
         "tags",
     )
     assert code_of(lambda: engine.columns("missing")) == "SOURCE_NOT_FOUND"
+
+
+def test_the_catalog_reads_a_quoted_type_exactly_and_lists_an_unmappable_table_apart(
+    server: Server, database: str, connect: Connect
+) -> None:
+    server.run(
+        f"CREATE TABLE {database}.ok (a Int64, at Nullable(DateTime64(6, 'America/La_Paz')), "
+        "z DateTime('Asia/Kolkata')) ENGINE = Memory"
+    )
+    server.run(f"CREATE TABLE {database}.bad (a Int64, tags Array(String)) ENGINE = Memory")
+    engine = connect()
+    found, refused = engine.catalog()
+    assert [(c.name, c.engine_type, c.type) for c in found["ok"]] == [
+        ("a", "Int64", "BIGINT"),
+        ("at", "Nullable(DateTime64(6, 'America/La_Paz'))", "TIMESTAMPTZ"),
+        ("z", "DateTime('Asia/Kolkata')", "TIMESTAMPTZ"),
+    ]
+    assert [(c.name, c.type) for c in engine.columns("ok")][1] == ("at", "TIMESTAMPTZ")
+    assert set(found) == {"ok"}
+    assert (refused["bad"].code, refused["bad"].details["column"]) == (
+        "UNSUPPORTED_SOURCE_TYPE",
+        "tags",
+    )
+
+
+def test_explain_estimate_counts_a_mergetree_read_and_is_checked_as_a_read(
+    server: Server, database: str, connect: Connect
+) -> None:
+    server.run(f"CREATE TABLE {database}.m (a Int64) ENGINE = MergeTree ORDER BY a")
+    server.run(f"INSERT INTO {database}.m SELECT number FROM numbers(5)")
+    server.run(f"CREATE TABLE {database}.k (a Int64) ENGINE = Memory")
+    engine = connect()
+    bound = [Parameter.model_validate({"name": "p0", "type": "BIGINT", "value": "1"})]
+    rows = engine.estimate("SELECT a FROM m WHERE a >= {p0:Int64}", bound)
+    assert [(r["table"], int(r["rows"])) for r in rows] == [("m", 5)]
+    assert engine.estimate("SELECT a FROM k", []) == []  # not MergeTree: no estimate
+    assert code_of(lambda: engine.estimate("SELECT 1; SELECT 2", [])) == "STORE_STATEMENT_INVALID"
 
 
 EXTREMES = (
@@ -560,7 +597,7 @@ def test_a_nested_uhugeint_is_refused_before_the_query_is_sent(
     """#410: the same check as every other Arrow export, before anything reaches the server."""
     monkeypatch.setenv("STORE_TEST_NESTED_PASSWORD", "unused")
     target = ClickHouseTarget("localhost", 8123, "sales", "reader", "STORE_TEST_NESTED_PASSWORD")
-    engine = ClickHouse(target, Budget(timeout_ms=1_000, memory_bytes=1 << 30, result_rows=10))
+    engine = ClickHouse(target, Budget(timeout_ms=1_000, memory_bytes=1 << 30))
 
     def sent(*_: object, **__: object) -> object:
         raise AssertionError("the statement was sent")

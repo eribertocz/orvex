@@ -10,17 +10,20 @@
 - `read`: the store's read of that statement at the pinned snapshot (`existing_lake_reads`),
   behind its statement guard, under the question's time limit. A read that finds the pinned
   snapshot changed tells the schedule, which treats the lake as new, before the error goes on.
+- `estimate` and `evidence`: none, as before ClickHouse's (#225): the lake's statistics and
+  evidence records are the managed lake's concern; a violating snapshot is held back instead.
 """
 
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 import pyarrow as pa
 from orvex.contracts.store.v1 import Parameter, ReadRequest, Snapshot
 from orvex.semantic.adapters.duckdb import PhysicalQuery, PolicyValues, compile_plan
+from orvex.semantic.evidence import EvidenceRecord
 from orvex.server.existing_lake_snapshots import SnapshotSchedule
 from orvex.store.errors import StoreError
 from orvex.store.existing_lake_reads import SNAPSHOT_CHANGED, LakeReads
@@ -87,3 +90,11 @@ class ExistingLakeAdapter:
             if error.details.get("reason") == SNAPSHOT_CHANGED:
                 self._schedule.restored()
             raise
+
+    def estimate(self, query: PhysicalQuery) -> Mapping[str, int] | None:
+        """None: the lake's file statistics are not read for another engine's question."""
+        return None
+
+    def evidence(self) -> Iterable[EvidenceRecord]:
+        """None: a snapshot whose evidence is violated is never served (`violated`)."""
+        return ()

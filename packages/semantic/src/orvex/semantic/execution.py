@@ -20,7 +20,6 @@ encoder and the snapshot it fixed when the question arrived.
 from __future__ import annotations
 
 import json
-import re
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -37,7 +36,6 @@ from orvex.semantic.adapters.duckdb import (
     PhysicalQuery,
     PolicyValues,
     compile_plan,
-    mapping_queries,
 )
 from orvex.semantic.canonical import fingerprint
 from orvex.semantic.compiler.compiled import CompiledModel
@@ -46,15 +44,13 @@ from orvex.semantic.correctness import CorrectnessReport, analyze
 from orvex.semantic.correctness.discharge import verify_physical
 from orvex.semantic.engines import (
     ALL_MANAGED,
-    EngineEntry,
     ExternalAdapter,
     Routing,
-    refuse_mixed,
-    refuse_unable,
 )
 from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.estimates import estimate
 from orvex.semantic.evidence import CONSISTENT, EvidenceRecord, Ledger, relied
+from orvex.semantic.external import External, external_of, resolve
 from orvex.semantic.ossie import sql
 from orvex.semantic.planning import SemanticPlan, plan
 from orvex.semantic.policies import PolicyModel, read_caller
@@ -115,7 +111,7 @@ class Engine:
     clock: Callable[[], float] = time.monotonic
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
     # Direct Query (P2-29): every dataset's engine, from `connections.yaml`, and the adapter of
-    # each enabled connection, by name; none is enabled in this release (`engines`).
+    # each enabled connection, by name; only with its development switch on (`engines`).
     routing: Routing = ALL_MANAGED
     adapters: Mapping[str, ExternalAdapter] = field(default_factory=dict)
 
@@ -418,11 +414,11 @@ def _execute(
     if external is not None:
         # The policies' values first, on the managed lake: a refusal asks nothing of the other
         # engine. Then its version, fixed once for every read of the question.
-        values, resolved = _resolve(external.queries, engine, external.policies)
+        values, resolved = resolve(external.queries, _managed(engine), external.policies)
         external = replace(external, version=external.adapter.pin())
         physical = external.adapter.compile(plan_, values)
         evidence = verify_physical(plan_, physical)  # the bound statement, checked again (C9)
-        run = external.runner()
+        run = external.runner(BATCH_SIZE)
         _check_zones(physical, run, external.adapter)
     else:
         _check_zones(physical, _managed(engine), getattr(engine.read, "__self__", engine.read))
@@ -440,7 +436,10 @@ def _execute(
     estimated = (  # an upper bound, recorded only: it never refuses (#352)
         estimate(plan_, physical, report.compiled, engine.statistics, snapshot)
         if isinstance(snapshot, int) and not isinstance(snapshot, bool) and external is None
-        else None  # the store's statistics describe the managed lake only
+        # Another engine's own estimate, recorded only (law 7).
+        else external.estimate(physical)
+        if external is not None
+        else None
     )
     table = _read(physical, engine, budgeted=plan_.mode == "detail", run=run)
     duration = max(0, round((engine.clock() - clock) * 1000))
@@ -540,98 +539,6 @@ def _execute(
     )
     referenced = result.with_receipt(record.receipt_id, record.reproducibility["class"])
     return Answer(referenced, record, report, plan_, physical)
-
-
-@dataclass(frozen=True)
-class External:
-    """A plan another engine runs (P2-29): its connection, adapter and pinned data version,
-    and the mapping subqueries of its policies, read on the managed lake first."""
-
-    entry: EngineEntry
-    adapter: ExternalAdapter
-    version: Mapping[str, object]  # pinned by `_execute`, never by `prepare`, which reads nothing
-    queries: tuple[MappingQuery, ...]
-    policies: Mapping[str, int]  # the caps: `policy_values`, `policy_value_bytes`
-    timeout_ms: int | None
-
-    def runner(self) -> Run:
-        def run(
-            statement: str, parameters: Sequence[Mapping[str, str | None]]
-        ) -> pa.RecordBatchReader:
-            return self.adapter.read(
-                statement, parameters, self.version, BATCH_SIZE, self.timeout_ms
-            )
-
-        return run
-
-    def read(self, name: str, entry: EngineEntry | None) -> DataRead:
-        """The dataset's data version on this engine, through its own connection (two names
-        may share one environment): a snapshot, or a live read instant."""
-        version = self.version
-        connection = (entry or self.entry).connection
-        if self.entry.route == "live":
-            return DataRead(
-                name=name,
-                route="live",
-                retained=False,
-                read_at=_instant(datetime.fromisoformat(str(version["read_at"]))),
-                connection=connection,
-            )
-        return DataRead(
-            name=name,
-            route=self.entry.route,
-            retained=True,
-            snapshot_id=int(str(version["id"])),
-            committed_at=_instant(datetime.fromisoformat(str(version["committed_at"]))),
-            project=str(version["project"]),
-            connection=connection,
-        )
-
-
-# The types a mapping value keeps exactly as text, and is cast back from, on any engine.
-_EXACT_TEXT = re.compile(
-    r"(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|UHUGEINT"
-    r"|VARCHAR|BOOLEAN|DATE|UUID|DECIMAL\(\d+,\d+\))"
-)
-
-
-def _resolve(
-    queries: Sequence[MappingQuery], engine: Engine, caps: Mapping[str, int]
-) -> tuple[dict[int, PolicyValues], list[MappingQuery]]:
-    """Each mapping subquery's values, read on the managed lake at the question's snapshot
-    (ADR-0027 §6), as exact text, with the mapping column's type. Every value counts towards
-    the caps on the values and bytes bound for another engine; past either, the question is
-    refused with `POLICY_NOT_SUPPORTED_ON_ENGINE` (`value_cap`), naming the policy and never a
-    size, and nothing more is read. A type whose text is not exact everywhere is refused."""
-    run = _managed(engine)
-    count_cap, byte_cap = int(caps["policy_values"]), int(caps["policy_value_bytes"])
-    counted = sized = 0
-    values: dict[int, PolicyValues] = {}
-
-    def refused(query: MappingQuery, reason: str) -> SemanticError:
-        details = {"dataset": query.dataset, "policy": query.policy, "reason": reason}
-        return SemanticError("POLICY_NOT_SUPPORTED_ON_ENGINE", details)
-
-    for query in queries:
-        # The column's declared type, with no row needed: a scalar subquery's type.
-        typed = f'SELECT typeof((SELECT "value" FROM ({query.sql}) AS "#q" LIMIT 1)) AS "#type"'
-        kind = str(run(typed, query.parameters).read_all().column("#type")[0].as_py())
-        if not query.exists and not _EXACT_TEXT.fullmatch(kind):
-            raise refused(query, "engine_unsupported")
-        statement = (
-            f'SELECT CAST("value" AS VARCHAR) AS "#value" FROM ({query.sql}) AS "#q" '
-            f"LIMIT {count_cap - counted + 1}"
-        )
-        found: list[str | None] = []
-        for batch in run(statement, query.parameters):
-            for value in batch.column("#value").to_pylist():
-                counted += 0 if query.exists else 1  # whether a row matched: one bound flag
-                sized += len(value.encode()) if value is not None else 0
-                if counted > count_cap or sized > byte_cap:
-                    raise refused(query, "value_cap")
-                found.append(value)
-        values[query.key] = PolicyValues(kind, tuple(found))
-    return values, list(queries)
 
 
 def _unregistered(placement: Any, engine: Engine) -> list[str]:  # noqa: ANN401
@@ -757,14 +664,19 @@ def prepare(
     # table of the managed lake, and the managed lake's evidence records say nothing of its
     # data, so its evidence stays declared (nothing unverified is shown as verified).
     unrolled = plan(report, start, None, routes)
-    external = _external(unrolled, report.compiled, policies, engine)
+    external = external_of(
+        unrolled, report.compiled, policies, engine.routing, engine.adapters, engine.timeout_ms
+    )
     snapshot = engine.snapshot.get("id")
-    consulted = engine.evidence is not None and external is None
-    ledger = Ledger(  # the records of the snapshot read, for the declarations as they are
-        compiled,
-        engine.evidence(engine.snapshot) if consulted and engine.evidence else (),
-        snapshot if isinstance(snapshot, int) and not isinstance(snapshot, bool) else -1,
-        engine.unchanged,
+    ledger = (  # the records of the snapshot read, for the declarations as they are
+        Ledger(
+            compiled,
+            engine.evidence(engine.snapshot) if engine.evidence else (),
+            snapshot if isinstance(snapshot, int) and not isinstance(snapshot, bool) else -1,
+            engine.unchanged,
+        )
+        if external is None
+        else external.ledger(compiled)  # another engine's own records (ADR-0027 §7)
     )
     progress.ledger = ledger
     rollup = next(  # the first proven table verified consistent on this snapshot (C8)
@@ -790,29 +702,6 @@ def prepare(
     uses = ledger.uses(relied(logical), raise_violated=raise_violated)
     progress.stage = "planned"
     return Prepared(report, logical, physical, evidence, uses, engine, binding, external)
-
-
-def _external(
-    logical: SemanticPlan, compiled: CompiledModel, policies: PolicyModel, engine: Engine
-) -> External | None:
-    """The other engine a plan runs on, or None for the managed lake; refused before any read
-    when its datasets are on two engines (`CROSS_ENGINE_QUERY`), its engine is not enabled
-    (`UNSUPPORTED_OPERATION`, `route`) or lacks a capability the plan needs, or a policy's
-    mapping subquery cannot be evaluated apart (`POLICY_NOT_SUPPORTED_ON_ENGINE`)."""
-    datasets = [source.dataset for source in logical.sources]
-    refuse_mixed(compiled, engine.routing, datasets)
-    entry = engine.routing.of(datasets[0]) if datasets else None
-    if entry is None:
-        return None
-    adapter = engine.adapters.get(entry.connection)
-    if adapter is None:
-        raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "route"})
-    refuse_unable(entry, logical)
-    queries = tuple(mapping_queries(logical))
-    caps = {k: int(str(v)) for k, v in policies.limits.items()}
-    if logical.mode == "detail":  # a cursor names a managed-lake snapshot: not yet elsewhere
-        raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "detail_pages"})
-    return External(entry, adapter, {}, queries, caps, engine.timeout_ms)
 
 
 def answer(

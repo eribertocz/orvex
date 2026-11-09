@@ -110,6 +110,12 @@ class Simulated:
         )
         return self.lake.read(request)
 
+    def estimate(self, query: PhysicalQuery) -> Mapping[str, int] | None:
+        return None
+
+    def evidence(self) -> tuple[()]:
+        return ()
+
 
 @contextmanager
 def lakes(**mappings: Any) -> Iterator[tuple[Lake, Lake]]:  # noqa: ANN401
