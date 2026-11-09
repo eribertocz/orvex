@@ -154,12 +154,59 @@ def test_case_007_takes_each_accounts_month_end_balance() -> None:
 def test_case_008_recomputes_distinct_counts_never_adding_them() -> None:
     compiled, _, _ = corpus_case("CASE-008")
     with lake_for("CASE-008") as lake:
-        by_region = ce.rows_of(ask(ce.QUERIES["CASE-008"], compiled, lake))
+        with_total = ce.rows_of(ask(ce.QUERIES["CASE-008"], compiled, lake))
         overall = ce.rows_of(ask(query("active_customers"), compiled, lake))
+    by_region = with_total[:-1]
     assert by_region == [["North", "2"], ["South", "2"]]
+    assert with_total[-1] == [None, "3"]
     assert overall == [["3"]]
     added = sum(int(str(r[1])) for r in by_region)
     assert (added, overall[0][0]) == (4, "3")  # the sum of the regions is never the answer
+
+
+def run_case_008(change: Any = None) -> ce.CaseRun:  # noqa: ANN401
+    """CASE-008 through the corpus runner; `change` alters what the library answered."""
+    _, folder, model = corpus_case("CASE-008")
+
+    def changed(*arguments: Any) -> ce.Answered:  # noqa: ANN401
+        found = ce.library(*arguments)
+        return found if change is None else change(found)
+
+    return ce.run_case("CASE-008", folder, model, None, ask=changed)
+
+
+def test_case_008_passes_through_the_corpus_runner_overall_count_included() -> None:
+    """#422: the per-region counts and the overall count, in one answer, equal the expected
+    file: the overall row is the grand total, written `ALL` by the corpus."""
+    assert ce.QUERIES["CASE-008"]["totals"] == "grand"
+    assert run_case_008() == ce.CaseRun("pass", "")
+
+
+def test_case_008_fails_when_the_overall_count_adds_the_regions() -> None:
+    def summed(found: ce.Answered) -> ce.Answered:
+        return ce.Answered(found.envelope, [*found.rows[:-1], [None, "4"]])
+
+    assert run_case_008(summed).status == "fail"
+
+
+def test_case_008_fails_when_the_overall_row_is_not_a_total() -> None:
+    """Only a row the result marks as a total stands for `ALL`: a detail row whose region is
+    `NULL` is a region of its own."""
+
+    def detail(found: ce.Answered) -> ce.Answered:
+        roles = [{"role": "detail", "level": 1}] * len(found.rows)
+        return ce.Answered({**found.envelope, "row_roles": roles}, found.rows)
+
+    assert run_case_008(detail).status == "fail"
+
+
+def test_case_008_fails_without_the_overall_row() -> None:
+    def regions(found: ce.Answered) -> ce.Answered:
+        envelope = dict(found.envelope)
+        envelope.pop("row_roles", None)
+        return ce.Answered(envelope, found.rows[:-1])
+
+    assert run_case_008(regions).status == "fail"
 
 
 def test_case_020_refuses_a_balance_without_its_time_axis() -> None:
