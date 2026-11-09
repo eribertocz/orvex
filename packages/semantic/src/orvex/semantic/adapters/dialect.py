@@ -5,6 +5,7 @@ statement, with the quoting and the exact division they write."""
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 from orvex.semantic.compiler.compiled import CompiledModel
@@ -86,13 +87,25 @@ class DuckDBDialect:
             self.types[id(tree.node)] = tree.type
             pending.extend(tree.children)
 
+    def binary(self, node: sql.Binary, op: str, again: Callable[[sql.Node], str]) -> str:
+        """`left op right`. An exact product is computed at 38 digits: DuckDB multiplies two
+        `DECIMAL(18)` values in 18-digit arithmetic and stops on a product its declared type
+        holds; widened first, it is exact up to that type, and stops only past it (#426)."""
+        left, right = again(node.left), again(node.right)
+        kinds = [self.types.get(id(n)) for n in (node.left, node.right)]
+        families = {k.logical.datatype if k is not None else None for k in kinds}
+        if op == "*" and "Decimal" in families and families <= {"Decimal", "Integer"}:
+            scales = [int(k.logical.scale or 0) if k is not None else 0 for k in kinds]
+            left, right = (
+                f"CAST({v} AS DECIMAL(38,{s}))" for v, s in zip((left, right), scales, strict=True)
+            )
+        return f"({left} {op} {right})"
+
     def divisible(self, node: sql.Binary) -> bool:
-        """`/` is written only between floats on every engine: an exact quotient is C2's one
-        division, with its declared scale and rounding, never the engine's `/` (#426)."""
-        if node.op != "/":
-            return True
-        sides = (self.types.get(id(node.left)), self.types.get(id(node.right)))
-        return all(side is not None and side.logical.datatype == "Float" for side in sides)
+        """`/` is written only for a float quotient on every engine (a bare literal takes its
+        partner's exactness): an exact quotient is C2's one division, never `/` (#426)."""
+        typed = self.types.get(id(node))
+        return node.op != "/" or (typed is not None and typed.logical.datatype == "Float")
 
     def column_ref(self, alias: str, dataset: str, name: str) -> str:
         """A source column of `dataset`, read from the row `alias`."""

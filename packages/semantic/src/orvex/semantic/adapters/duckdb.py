@@ -234,7 +234,7 @@ class _Writer(DuckDBDialect):
             op = node.op.upper()
             if op not in _ARITHMETIC | _COMPARISON | _LOGICAL or not self.divisible(node):
                 raise _unsupported()  # an exact quotient is C2's division, never `/`
-            return f"({again(node.left)} {op} {again(node.right)})"
+            return self.binary(node, op, again)
         if isinstance(node, sql.Not):
             return f"(NOT {again(node.operand)})"
         if isinstance(node, sql.IsNull):

@@ -130,6 +130,18 @@ class CompiledModel:
             pending.extend(reversed(self.require(current).parsed.depends_on))
         return tuple(found)
 
+    def lacking(
+        self, member: MemberId, besides: tuple[str, ...] = ()
+    ) -> tuple[tuple[MemberId, str], ...]:
+        """Each declaration `member` or anything it reads lacks, but those in `besides`, with
+        the member lacking it, in the order of `reads`."""
+        return tuple(
+            (read, missing)
+            for read in self.reads(member)
+            for missing in self.require(read).missing
+            if missing not in besides
+        )
+
 
 # --- JSON documents -------------------------------------------------------------------------
 

@@ -377,15 +377,15 @@ class _Analysis:
         return found
 
     def answerable(self, member: MemberId) -> None:
-        """A declaration the member or anything it reads lacks refuses it (#280 §3, #426)."""
-        for read in self.compiled.reads(member):  # binding refused all a hidden member feeds
-            for missing in self.compiled.require(read).missing:
-                if missing == "additivity":
-                    continue  # decided below, with what can be derived
-                raise SemanticError(
-                    "MISSING_EXTENSION_DECLARATION",
-                    {"element": read.kind, "name": self.label(read), "declaration": missing},
-                )
+        """A declaration it or anything it reads lacks refuses it; a Builder sees which (#426).
+        Additivity is decided below, with what can be derived; binding refused before all a
+        hidden member feeds, so `member` itself is one the caller may see."""
+        for read, missing in self.compiled.lacking(member, besides=("additivity",)):
+            named = read if self.caller.builder else member
+            raise SemanticError(
+                "MISSING_EXTENSION_DECLARATION",
+                {"element": named.kind, "name": self.label(named), "declaration": missing},
+            )
 
     def declaration_shapes(self, metric: MemberId) -> set[str]:
         """The shapes the metric's declarations need, and those of every metric it reads."""

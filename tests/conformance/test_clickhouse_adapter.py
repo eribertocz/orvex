@@ -1149,8 +1149,24 @@ EXACT_ROWS = {
         exact_case.aggregate("thirds"),
         exact_case.aggregate("s"),
         exact_case.aggregate("decimals"),
+        exact_case.aggregate("filtered"),
+        exact_case.aggregate("twice"),
+        exact_case.aggregate("float_products", "float_halves"),
+        exact_case.detail("t.id", order=[{"by": "t.q", "direction": "asc"}]),
+        exact_case.detail("t.id", "t.dd"),
     ],
-    ids=["half_even ties", "half_away ties", "a compared quotient", "a summed quotient", "sums"],
+    ids=[
+        "half_even ties",
+        "half_away ties",
+        "a compared quotient",
+        "a summed quotient",
+        "sums",
+        "a filtered quotient",
+        "a derived metric",
+        "floats and a float halved",
+        "a quotient as a sort",
+        "exact detail rows",
+    ],
 )
 def test_exact_arithmetic_answers_or_refuses_on_clickhouse_as_on_the_managed_lake(
     server: Server, document: Document
@@ -1167,6 +1183,36 @@ def test_a_generated_exact_question_gives_the_same_outcome_on_both_engines(
     server: Server,
     node: generated_exact.Node,
     generated: list[dict[str, str | None]],
+) -> None:
+    same_outcome(server, node, generated)
+
+
+# Shapes the review of #450 found or that the generator reaches rarely, always checked.
+KNOWN_SHAPES = {
+    "NULLIF compares at the common scale and keeps its first value": (
+        ("nullif", ("col", "x"), ("lit", "0.333333333333333333")),
+        [{"x": "0.333333", "y": None, "i": None, "j": None}],
+    ),
+    "a product past 18 digits": (
+        ("bin", "*", ("col", "x"), ("col", "x")),
+        [{"x": "999999999999.999999", "y": None, "i": None, "j": None}],
+    ),
+    "COALESCE of two scales": (
+        ("coalesce", ("col", "x"), "0.5"),
+        [{"x": None, "y": None, "i": None, "j": None}],
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", KNOWN_SHAPES.values(), ids=list(KNOWN_SHAPES))
+def test_a_known_exact_shape_gives_the_same_outcome_on_both_engines(
+    server: Server, shape: tuple[generated_exact.Node, list[dict[str, str | None]]]
+) -> None:
+    same_outcome(server, *shape)
+
+
+def same_outcome(
+    server: Server, node: generated_exact.Node, generated: list[dict[str, str | None]]
 ) -> None:
     try:
         compiled = generated_exact.model(node)

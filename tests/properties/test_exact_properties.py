@@ -12,6 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import duckdb
 import pytest
 import yaml
 from hypothesis import example, given
@@ -121,26 +122,51 @@ def test_an_exact_question_equals_the_oracle_or_is_refused_before_any_read(
     assert (None if value is None else Decimal(value)) == expected
 
 
+def twice(node: exact.Node, generated: list[dict[str, str | None]]) -> tuple[Any, Any]:
+    """The same question asked twice on one lake: (first, second) answers or errors."""
+    try:
+        compiled = exact.model(node)
+    except SemanticError as error:
+        return error, error
+    policy = read_policies(
+        yaml.safe_dump({"version": 1}), compiled, groups=frozenset(), managed_tables={}
+    )
+    found: list[Any] = []
+    with tempfile.TemporaryDirectory() as folder, exact.lake(Path(folder), generated) as lake:
+        for _ in range(2):
+            try:
+                found.append(
+                    answer(
+                        exact.QUESTION, compiled, policy, ce.viewer_context(), ce.engine_for(lake)
+                    )
+                )
+            except (SemanticError, StoreError) as error:
+                found.append(error)
+    return found[0], found[1]
+
+
 @exact.EXACT
 @given(node=exact.trees(), generated=exact.rows(), seed=st.integers(0, 2**32 - 1))
 def test_the_same_exact_question_gives_the_same_result_and_reproducible_receipt(
     node: exact.Node, generated: list[dict[str, str | None]], seed: int
 ) -> None:
-    first, _ = ask(node, generated)
-    shuffled = list(generated)
-    random.Random(seed).shuffle(shuffled)
-    second, _ = ask(node, shuffled)
+    first, second = twice(node, generated)
     if not hasattr(first, "result") or not hasattr(second, "result"):
         assert type(first) is type(second)
         assert getattr(first, "code", None) == getattr(second, "code", None)
         return
+    assert stable(first) == stable(second)  # one lake: every reproducible field, snapshot too
+    shuffled = list(generated)
+    random.Random(seed).shuffle(shuffled)
+    third, _ = ask(node, shuffled)
+    assert hasattr(third, "result")
     first_result, first_receipt = stable(first)
-    second_result, second_receipt = stable(second)
-    assert first_result == second_result
-    # The data's fingerprint differs when the rows are stored in another order on purpose:
-    # everything else the receipt can reproduce is equal.
-    first_receipt.pop("data"), second_receipt.pop("data")
-    assert first_receipt == second_receipt
+    third_result, third_receipt = stable(third)
+    assert first_result == third_result
+    # Another lake holds the shuffled rows: its snapshot is its own (`data`); everything else
+    # the receipt can reproduce is equal.
+    first_receipt.pop("data"), third_receipt.pop("data")
+    assert first_receipt == third_receipt
 
 
 def test_the_oracle_keeps_every_digit_a_lower_precision_would_lose() -> None:
@@ -163,3 +189,96 @@ def test_the_comparison_keeps_reproducible_receipt_fields_and_ignores_timing() -
     assert {k: v for k, v in changed.items() if k not in VARYING} != receipt
     timed = dict(document, execution={**document["execution"], "duration_ms": 999999})
     assert {k: v for k, v in timed.items() if k not in VARYING} == receipt
+
+
+FAR = ("bin", "*", ("col", "x"), ("col", "x"))  # up to 24 whole digits per row
+
+
+@exact.EXACT
+@given(
+    numerator=exact.trees().filter(lambda n: not exact.divides(n)),
+    denominator=exact.trees().filter(lambda n: not exact.divides(n)),
+    mode=st.sampled_from(sorted(exact.MODES)),
+    places=st.integers(0, 4),
+    zero=st.sampled_from(["null", "reject"]),
+    generated=exact.rows(),
+)
+@example(
+    numerator=("col", "i"),
+    denominator=("col", "j"),
+    mode="half_away_from_zero",
+    places=0,
+    zero="reject",
+    generated=[{"x": None, "y": None, "i": "-5", "j": "0"}],
+)
+@example(
+    numerator=FAR,
+    denominator=("lit", "0.333333"),
+    mode="half_even",
+    places=4,
+    zero="null",
+    generated=[{"x": "999999999999.999999", "y": None, "i": None, "j": None}],
+)
+def test_the_declared_division_equals_the_oracle_at_its_scale_and_mode(
+    numerator: exact.Node,
+    denominator: exact.Node,
+    mode: str,
+    places: int,
+    zero: str,
+    generated: list[dict[str, str | None]],
+) -> None:
+    rows = exact.typed(generated)
+    try:
+        compiled = exact.ratio_model(numerator, denominator, mode, places, zero)
+    except SemanticError:
+        return  # refused when the model compiles, before any engine is chosen
+    policy = read_policies(
+        yaml.safe_dump({"version": 1}), compiled, groups=frozenset(), managed_tables={}
+    )
+    question = exact.QUESTION.replace('"total"', '"ratio"')
+    with tempfile.TemporaryDirectory() as folder, exact.lake(Path(folder), generated) as lake:
+        reads = Reads(lake.read)
+        try:
+            found: Any = answer(
+                question, compiled, policy, ce.viewer_context(), ce.engine_for(lake, read=reads)
+            )
+        except (SemanticError, StoreError) as error:
+            found = error
+    try:
+        components = (exact.total(numerator, rows), exact.total(denominator, rows))
+        expected: Any = exact.quotient(*components, mode, places, zero)
+    except exact.Rejected:
+        assert isinstance(found, SemanticError)
+        assert found.code == "DIVISION_POLICY_VIOLATION"
+        return
+    except exact.Undefined:
+        assert isinstance(found, StoreError)  # an engine error, never an answer
+        return
+    if isinstance(found, SemanticError) and found.code in BEFORE_READ:
+        assert reads.calls == 0
+        return
+    assert not isinstance(found, (SemanticError, StoreError)), found
+    value = ce.rows_of(found)[0][0]
+    assert (None if value is None else Decimal(value)) == expected
+    if exact.in_domain(*components, mode, places):
+        second = exact.decimal_division(*components, places)  # type: ignore[arg-type]
+        assert second is None or second == expected
+
+
+def test_the_engine_s_own_division_is_only_an_oracle_inside_its_domain() -> None:
+    connection = duckdb.connect()
+
+    def division(sql: str) -> object:
+        return connection.execute(f"SELECT decimal_division({sql})").fetchall()[0][0]
+
+    assert division("NULL::DECIMAL(9,0), 3::DECIMAL(9,0)") is None
+    with pytest.raises(duckdb.InvalidInputException, match="division by zero"):
+        division("1::DECIMAL(9,0), 0::DECIMAL(9,0)")
+    huge = "99999999999999999999999999999999999999::DECIMAL(38,0), 0.1::DECIMAL(38,1)"
+    with pytest.raises(duckdb.OutOfRangeException):
+        division(huge)
+    # The oracle alone decides past 38 digits: outside the domain, never compared.
+    big, small = Decimal("9" * 38), Decimal("0.1")
+    assert not exact.in_domain(big, small, "half_even", 0)
+    with pytest.raises(exact.Undefined):
+        exact.quotient(big, small, "half_even", 0, "null")

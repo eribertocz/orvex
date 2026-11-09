@@ -297,11 +297,13 @@ class _ClickHouse(_Writer):
         if isinstance(node, sql.Unary) and node.op in ("-", "+"):
             return self.declared(node, f"({node.op}{self.exact(node.operand, again)})")
         if isinstance(node, sql.Case) and node.operand is None:
+            values = [t for _, t in node.whens] + [o for o in (node.otherwise,) if o is not None]
+            scale = self.common_scale(node, values)
             text = "".join(
-                f" WHEN {again(w)} THEN {self.branch(node, t, again)}" for w, t in node.whens
+                f" WHEN {again(w)} THEN {self.at(scale, t, again)}" for w, t in node.whens
             )
             if node.otherwise is not None:
-                text += f" ELSE {self.branch(node, node.otherwise, again)}"
+                text += f" ELSE {self.at(scale, node.otherwise, again)}"
             return f"(CASE{text} END)"
         if isinstance(node, sql.Binary) and node.op in ("+", "-", "*"):
             left, right = self.types.get(id(node.left)), self.types.get(id(node.right))
@@ -320,8 +322,7 @@ class _ClickHouse(_Writer):
                 raise _unsupported()
             return self.declared(node, f"({written[0]} {node.op} {written[1]})")
         if isinstance(node, sql.Binary) and node.op == "/":
-            sides = (self.types.get(id(node.left)), self.types.get(id(node.right)))
-            if not all(s is not None and s.logical.datatype == "Float" for s in sides):
+            if not self.divisible(node):
                 raise _unsupported()  # an exact quotient is C2's division, never `/`
             return f"({again(node.left)} / {again(node.right)})"
         if (
@@ -407,15 +408,20 @@ class _ClickHouse(_Writer):
             again(node.operand), f"DECIMAL({int(node.arguments[0])},{int(node.arguments[1])})"
         )
 
-    def branch(self, node: sql.Node, child: sql.Node, again: Callable[[sql.Node], str]) -> str:
-        """A value of a conditional (`CASE`, `COALESCE`, `NULLIF`) at the conditional's own
-        decimal scale: ClickHouse refuses alternatives of different scales, which the reference
-        widens to their common type (#426)."""
-        scale = _scale(self.types.get(id(node)))
+    def common_scale(self, node: sql.Node, values: Iterable[sql.Node]) -> int | None:
+        """The scale the values of a conditional (`CASE`, `COALESCE`, `NULLIF`, `ABS`) are
+        written at, when it is a decimal: the largest of theirs and its own, so no value loses a
+        digit. ClickHouse refuses alternatives of different scales, which the reference widens
+        to their common type; `NULLIF` compares at that scale and returns its first value
+        unchanged (#426)."""
         typed = self.types.get(id(node))
-        if scale is None or typed is None or typed.logical.datatype != "Decimal":
-            return again(child)
-        return wide(again(child), scale)
+        if typed is None or typed.logical.datatype != "Decimal":
+            return None
+        scales = [_scale(self.types.get(id(v))) for v in values] + [_scale(typed)]
+        return max(s for s in scales if s is not None)
+
+    def at(self, scale: int | None, value: sql.Node, again: Callable[[sql.Node], str]) -> str:
+        return again(value) if scale is None else wide(again(value), scale)
 
     def exact(self, node: sql.Node, again: Callable[[sql.Node], str]) -> str:
         """An exact value in 76 digits, so no step narrows or wraps it."""
@@ -453,7 +459,8 @@ class _ClickHouse(_Writer):
             return f"{function}If({value}, {where})"
         if name in ("COALESCE", "NULLIF", "ABS") and node.filter is None:
             function = {"COALESCE": "coalesce", "NULLIF": "nullIf", "ABS": "abs"}[name]
-            written = (self.branch(node, a, again) for a in node.arguments)
+            scale = self.common_scale(node, node.arguments)
+            written = (self.at(scale, a, again) for a in node.arguments)
             return f"{function}({', '.join(written)})"
         raise _unsupported()  # LOWER and UPPER included: ClickHouse's case mapping differs
 

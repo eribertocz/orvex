@@ -18,6 +18,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import duckdb
 from hypothesis import settings
 from hypothesis import strategies as st
 from orvex.semantic.compiler.catalog import SourceColumn
@@ -296,3 +297,104 @@ QUESTION = json.dumps(
         "metrics": [{"metric": "total"}],
     }
 )
+
+
+# --- the declared division (C2) -----------------------------------------------------------------
+
+MODES = {"half_even": decimal.ROUND_HALF_EVEN, "half_away_from_zero": decimal.ROUND_HALF_UP}
+
+
+def ratio_model(
+    numerator: Node, denominator: Node, mode: str, places: int, zero: str
+) -> CompiledModel:
+    """The model of one declared ratio `SUM(n) / SUM(d)` over two generated fields."""
+    declared = {
+        "element": "metric",
+        "additivity": "recomputable",
+        "components": {"numerator": "SUM(t.n)", "denominator": "SUM(t.d)"},
+        "zero_denominator": zero,
+        "rounding": {"scale": places, "mode": mode},
+    }
+    document = {
+        "version": "0.2.0.dev0",
+        "name": "generated",
+        "datasets": [
+            {
+                "name": "t",
+                "source": "t",
+                "primary_key": ["id"],
+                "fields": [{"name": c, "expression": {"sql": c}} for c in ("id", *COLUMNS)]
+                + [
+                    {"name": "n", "expression": {"sql": sql_of(numerator)}},
+                    {"name": "d", "expression": {"sql": sql_of(denominator)}},
+                ],
+            }
+        ],
+        "metrics": [
+            {
+                "name": "ratio",
+                "expression": {"sql": "SUM(t.n) / SUM(t.d)"},
+                "custom_extensions": [extension(declared)],
+            }
+        ],
+        "custom_extensions": [extension({"element": "model", "default_time_zone": "UTC"})],
+    }
+    loaded = read(json.dumps(document).encode(), "semantic/generated.ossie.json", VENDORS)
+    return compile_model(loaded, CATALOG, VENDORS)
+
+
+class Rejected(ArithmeticError):
+    """A zero denominator under `zero_denominator: reject`: the engine refuses the answer."""
+
+
+def quotient(numerator: Value, denominator: Value, mode: str, places: int, zero: str) -> Value:
+    """C2's one division: the exact quotient rounded once, at `places`, by `mode`. NULL over a
+    NULL component; a zero denominator is NULL or refused, as declared; past `DECIMAL(38)` the
+    engine stops, never answers."""
+    if numerator is None or denominator is None:
+        return None
+    if denominator == 0:
+        if zero == "reject":
+            raise Rejected
+        return None
+    exact = ORACLE.divide(numerator, denominator)
+    rounded = exact.quantize(Decimal(1).scaleb(-places), rounding=MODES[mode], context=ORACLE)
+    if abs(rounded) >= Decimal(10) ** (38 - places):
+        raise Undefined(("ratio",))
+    return rounded
+
+
+def in_domain(numerator: Value, denominator: Value, mode: str, places: int) -> bool:
+    """Whether the engine's own `decimal_division()` can serve as a second oracle: non-NULL
+    operands that fit `DECIMAL(38)` at their scale, a non-zero denominator, `half_even` (its only
+    mode) and a quotient that fits `DECIMAL(38, places)`. Outside it, the oracle alone decides."""
+    if numerator is None or denominator is None or denominator == 0 or mode != "half_even":
+        return False
+    if any(len(v.as_tuple().digits) > 38 for v in (numerator, denominator)):
+        return False
+    return abs(ORACLE.divide(numerator, denominator)) < Decimal(10) ** (38 - places)
+
+
+def decimal_division(numerator: Decimal, denominator: Decimal, places: int) -> Decimal | None:
+    """DuckDB's own exact division of the two values at `places` (half to even), each typed at
+    the narrowest `DECIMAL` that holds it; None when the width it needs passes 38, which is
+    outside its domain, where the oracle alone decides."""
+    kinds = []
+    for value in (numerator, denominator):
+        _, digits, exponent = value.as_tuple()
+        assert isinstance(exponent, int)
+        scale = max(-exponent, 0)
+        kinds.append(f"DECIMAL({max(len(digits), scale + 1)},{scale})")
+    statement = f"SELECT decimal_division(CAST(? AS {kinds[0]}), CAST(? AS {kinds[1]}), {places})"
+    try:
+        found = (
+            duckdb.connect()
+            .execute(
+                statement,
+                [str(numerator), str(denominator)],
+            )
+            .fetchall()
+        )
+    except duckdb.OutOfRangeException:
+        return None
+    return Decimal(found[0][0])

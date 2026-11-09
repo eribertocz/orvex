@@ -118,6 +118,7 @@ def model_document() -> Document:
             derived("twice", "thirds * 2"),
             metric("float_quotients", "SUM(t.fq)"),
             metric("float_products", "SUM(t.fp)"),
+            metric("float_halves", "SUM(t.fp) / 2", zero_denominator="null"),
             metric("decimals", "SUM(t.dd)"),
             ratio("even", "half_even"),
             ratio("away", "half_away_from_zero"),
@@ -191,60 +192,81 @@ def rows_of(found: Any) -> list[list[str | None]]:  # noqa: ANN401
     return [list(r) for r in ce.rows_of(found)]
 
 
+def builder() -> dict[str, Any]:
+    return {**ce.viewer_context(), "role": "builder"}
+
+
+# (question, the member a Viewer is told about): a Builder is told the member lacking it.
 REFUSED = {
-    "a metric reading the quotient": aggregate("thirds"),
-    "the sum of the quotient": aggregate("s"),
-    "the quotient only in a metric's filter": aggregate("filtered"),
-    "a metric over that metric": aggregate("twice"),
-    "the quotient only as a sort": detail("t.id", order=[{"by": "t.q", "direction": "asc"}]),
-    "the quotient as a detail field": detail("t.id", "t.q"),
+    "a metric reading the quotient": (aggregate("thirds"), ("metric", "thirds")),
+    "the sum of the quotient": (aggregate("s"), ("metric", "s")),
+    "the quotient only in a metric's filter": (aggregate("filtered"), ("metric", "filtered")),
+    "a metric over that metric": (aggregate("twice"), ("metric", "twice")),
+    "the quotient only as a sort": (
+        detail("t.id", order=[{"by": "t.q", "direction": "asc"}]),
+        ("field", "t.q"),
+    ),
+    "the quotient as a detail field": (detail("t.id", "t.q"), ("field", "t.q")),
 }
 
 
-@pytest.mark.parametrize("document", REFUSED.values(), ids=list(REFUSED))
+@pytest.mark.parametrize("case", REFUSED.values(), ids=list(REFUSED))
+@pytest.mark.parametrize("audience", ["viewer", "builder"])
 def test_an_undeclared_exact_quotient_anywhere_it_is_read_is_refused_before_any_read(
-    tmp_path: Path, document: Document
+    tmp_path: Path, case: tuple[Document, tuple[str, str]], audience: str
 ) -> None:
+    document, (element, name) = case
+    context = builder() if audience == "builder" else ce.viewer_context()
     with lake(tmp_path) as opened:
         engine = ce.engine_for(opened, read=never_read)
         with pytest.raises(SemanticError) as caught:
-            answer(json.dumps(document), MODEL, policies(), ce.viewer_context(), engine)
+            answer(json.dumps(document), MODEL, policies(), context, engine)
     assert caught.value.code == "MISSING_EXTENSION_DECLARATION"
+    expected = ("field", "t.q") if audience == "builder" else (element, name)
     assert dict(caught.value.details) == {
-        "element": "field",
-        "name": "t.q",
+        "element": expected[0],
+        "name": expected[1],
         "declaration": "rounding",
     }
 
 
-def test_explain_refuses_it_with_the_same_error(tmp_path: Path) -> None:
+@pytest.mark.parametrize("audience", ["viewer", "builder"])
+def test_explain_refuses_it_with_the_same_error(tmp_path: Path, audience: str) -> None:
+    context = builder() if audience == "builder" else ce.viewer_context()
     with lake(tmp_path) as opened:
         engine = ce.engine_for(opened, read=never_read)
         with pytest.raises(SemanticError) as caught:
-            explain(
-                json.dumps(aggregate("thirds")),
+            explain(json.dumps(aggregate("twice")), MODEL, policies(), context, engine, None)
+    assert caught.value.code == "MISSING_EXTENSION_DECLARATION"
+    assert dict(caught.value.details)["name"] == ("t.q" if audience == "builder" else "twice")
+
+
+HIDDEN = {"version": 1, "column_policies": [{"member": "t.q", "default": "hidden"}]}
+
+
+@pytest.mark.parametrize("asked", ["thirds", "twice", "s", "filtered"])
+@pytest.mark.parametrize("path", ["answer", "explain"])
+def test_a_hidden_quotient_hides_what_reads_it_and_the_error_names_only_the_asked_member(
+    tmp_path: Path, asked: str, path: str
+) -> None:
+    with lake(tmp_path) as opened:
+        engine = ce.engine_for(opened, read=never_read)
+        run = answer if path == "answer" else explain
+        extra = () if path == "answer" else (None,)
+        with pytest.raises(SemanticError) as caught:
+            run(
+                json.dumps(aggregate(asked)),
                 MODEL,
-                policies(),
+                policies(HIDDEN),
                 ce.viewer_context(),
                 engine,
-                None,
+                *extra,
             )
-    assert caught.value.code == "MISSING_EXTENSION_DECLARATION"
-    assert dict(caught.value.details)["name"] == "t.q"
-
-
-def test_a_hidden_quotient_hides_what_reads_it_and_the_error_names_only_the_asked_member(
-    tmp_path: Path,
-) -> None:
-    hidden = policies({"version": 1, "column_policies": [{"member": "t.q", "default": "hidden"}]})
-    with lake(tmp_path) as opened:
-        engine = ce.engine_for(opened, read=never_read)
-        with pytest.raises(SemanticError) as caught:
-            answer(json.dumps(aggregate("thirds")), MODEL, hidden, ce.viewer_context(), engine)
     assert caught.value.code == "MEMBER_NOT_FOUND"
-    shown = caught.value.to_message("es", "other").model_dump_json()
-    for disclosed in ("rounding", "t.q", '"q"'):
-        assert disclosed not in shown
+    for audience in ("other", "builder"):
+        shown = caught.value.to_message("es", audience).model_dump_json()
+        for disclosed in ("rounding", "t.q", '"q"'):
+            assert disclosed not in shown
 
 
 def test_a_float_quotient_without_its_zero_denominator_policy_is_refused_like_any_member(
@@ -269,7 +291,7 @@ def test_a_float_quotient_without_its_zero_denominator_policy_is_refused_like_an
 def test_floats_and_exact_sums_still_answer(tmp_path: Path) -> None:
     with lake(tmp_path) as opened:
         found = answer(
-            json.dumps(aggregate("float_products", "decimals")),
+            json.dumps(aggregate("float_products", "decimals", "float_halves")),
             MODEL,
             policies(),
             ce.viewer_context(),
@@ -279,6 +301,8 @@ def test_floats_and_exact_sums_still_answer(tmp_path: Path) -> None:
     assert columns["decimals"]["exactness"] == "exact"
     assert columns["float_products"]["exactness"] != "exact"
     assert rows_of(found)[0][1] == "14.000000"
+    assert columns["float_halves"]["exactness"] != "exact"  # a float `/` a bare literal
+    assert float(rows_of(found)[0][2] or "nan") == 6.5
 
 
 # Scale 0 of each half tie: the declared mode, on every sign (#426), and `half_even` equal to the
@@ -355,11 +379,15 @@ def compiled_with(sql: str) -> CompiledModel:
 MIXED = {
     "exact plus float": "a + f",
     "exact times float": "d * g",
+    "exact minus float": "a - f",
+    "exact divided by float": "d / g",
+    "exact modulo float": "a % f",
     "exact compared with float": "CASE WHEN d > f THEN 1 ELSE 0 END",
     "a CASE mixing exact and float": "CASE WHEN a > 0 THEN d ELSE f END",
     "a COALESCE mixing exact and float": "COALESCE(d, f)",
     "a NULLIF mixing exact and float": "NULLIF(d, f)",
     "a literal past 38 digits": "d + 0.123456789012345678901234567890123456789",
+    "an integer literal past 38 digits": "a + 123456789012345678901234567890123456789",
 }
 
 
@@ -403,3 +431,90 @@ def test_an_explicit_float_cast_is_refused_before_any_read_as_no_dialect_writes_
     with pytest.raises(SemanticError) as caught:
         ask_extra(tmp_path, "CAST(d AS DOUBLE) * f", read=never_read)
     assert caught.value.code == "UNSUPPORTED_OPERATION"
+
+
+# One field per node kind the DuckDB writer writes (Ref, Number, String, Boolean, Null, Unary,
+# Binary, Not, Between, InList, IsNull, Case, Cast, Call), all over exact or text columns.
+NODE_KINDS = {
+    "Number": "d + 1.5",
+    "String": "CASE WHEN 'x' = 'x' THEN d ELSE e END",
+    "Boolean": "CASE WHEN TRUE THEN d ELSE e END",
+    "Null": "COALESCE(NULL, d)",
+    "Unary": "-d",
+    "Binary": "d * e - a % b",
+    "Not": "CASE WHEN NOT (a > b) THEN d ELSE e END",
+    "Between": "CASE WHEN a BETWEEN 1 AND 2 THEN d ELSE e END",
+    "InList": "CASE WHEN a IN (1, 2) THEN d ELSE e END",
+    "IsNull": "CASE WHEN d IS NULL THEN e ELSE d END",
+    "Case": "CASE WHEN a > b THEN d ELSE e END",
+    "Cast": "CAST(d AS DECIMAL(20,2))",
+    "Call": "ABS(NULLIF(d, e))",
+}
+
+
+def kinds_in(tree: Any) -> set[str]:  # noqa: ANN401
+    found = {type(tree).__name__}
+    for value in vars(tree).values() if hasattr(tree, "__dict__") else ():
+        found |= _kinds(value)
+    for slot in getattr(type(tree), "__slots__", ()):
+        found |= _kinds(getattr(tree, slot))
+    return found
+
+
+def _kinds(value: Any) -> set[str]:  # noqa: ANN401
+    if isinstance(value, tuple):
+        return set().union(*(_kinds(v) for v in value)) if value else set()
+    if hasattr(value, "__slots__") or hasattr(value, "__dict__"):
+        return kinds_in(value)
+    return set()
+
+
+def test_every_node_kind_the_duckdb_writer_writes_is_written_without_an_exact_slash() -> None:
+    source = Path(duckdb_adapter.__file__).read_text("utf-8")
+    source += Path(duckdb_adapter.__file__).with_name("dialect.py").read_text("utf-8")
+    handled = set(re.findall(r"isinstance\(node, sql\.(\w+)\)", source))
+    writer = duckdb_adapter._Writer(plan_of(aggregate("decimals")))
+    covered: set[str] = set()
+    refusals: list[str] = []
+    for sql in NODE_KINDS.values():
+        compiled = compiled_with(sql)
+        tree = compiled.require(MemberId("field", "T", "EXTRA")).parsed.tree
+        assert tree is not None
+        covered |= kinds_in(tree)
+        writer.adopt(compiled)
+        try:
+            written = writer.node(tree, "t0", "T", "field")
+        except SemanticError as refused:  # a kind the writer refuses here writes nothing
+            refusals.append(refused.code)
+            continue
+        assert re.search(r"[^/]/[^/*]", written) is None, written
+    assert set(refusals) <= {"UNSUPPORTED_OPERATION"}
+    assert handled <= covered | {"Ref"}, handled - covered
+
+
+def test_an_exact_mean_needs_its_declarations_and_no_dialect_writes_it(tmp_path: Path) -> None:
+    document = model_document()
+    document["metrics"].append(metric("mean", "AVG(t.dd)", additivity="non_additive"))
+    with pytest.raises(SemanticError) as caught:
+        compiled_of(document)  # refused when the model compiles: the mean's scale is undeclared
+    assert caught.value.code == "MISSING_EXTENSION_DECLARATION"
+    document["metrics"][-1] = metric(
+        "mean",
+        "AVG(t.dd)",
+        additivity="non_additive",
+        zero_denominator="null",
+        rounding={"scale": 2, "mode": "half_even"},
+    )
+    compiled = compiled_of(document)
+    policy = read_policies(
+        yaml.safe_dump({"version": 1}), compiled, groups=frozenset(), managed_tables={}
+    )
+    with lake(tmp_path) as opened, pytest.raises(SemanticError) as refused:
+        answer(
+            json.dumps(aggregate("mean")),
+            compiled,
+            policy,
+            ce.viewer_context(),
+            ce.engine_for(opened, read=never_read),
+        )
+    assert refused.value.code == "UNSUPPORTED_OPERATION"  # never the engine's float mean
