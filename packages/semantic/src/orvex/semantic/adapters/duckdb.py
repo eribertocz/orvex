@@ -130,7 +130,7 @@ class _Writer(DuckDBDialect):
     def model(self, compiled: CompiledModel, placement: Any, rollup: Any) -> None:  # noqa: ANN401
         """What every statement of one model needs: its tables, its relationships, the row
         policies placed (none for an evidence check) and the aggregate table read (C8)."""
-        self.compiled = compiled
+        self.adopt(compiled)
         self.parameters: list[dict[str, str | None]] = []
         self.reads: list[tuple[str, str | None]] = []  # every table read, in order (#352)
         self.dataset_alias: dict[str, str] = {}
@@ -232,8 +232,8 @@ class _Writer(DuckDBDialect):
             return f"({node.op}{again(node.operand)})"
         if isinstance(node, sql.Binary):
             op = node.op.upper()
-            if op not in _ARITHMETIC | _COMPARISON | _LOGICAL:
-                raise _unsupported()
+            if op not in _ARITHMETIC | _COMPARISON | _LOGICAL or not self.divisible(node):
+                raise _unsupported()  # an exact quotient is C2's division, never `/`
             return f"({again(node.left)} {op} {again(node.right)})"
         if isinstance(node, sql.Not):
             return f"(NOT {again(node.operand)})"

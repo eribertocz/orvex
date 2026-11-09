@@ -32,6 +32,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.ipc
 import pytest
+from hypothesis import HealthCheck, given, settings
 from orvex.contracts.store.v1 import Parameter, ParameterType, StatementRequest
 from orvex.semantic import execution, external
 from orvex.semantic.adapters import clickhouse as ch
@@ -57,8 +58,10 @@ from orvex.store.lake import Lake
 from conformance.runners import bi_platform_adapter
 from conformance.runners import corpus_execution as ce
 from tests.conformance import test_direct_query as dq
+from tests.conformance import test_exact_arithmetic as exact_case
 from tests.conformance import test_row_policies as rp
 from tests.conformance.test_execution import no_policies
+from tests.properties import exact as generated_exact
 from tests.support.policies import VENDORS, extension
 
 Document = dict[str, Any]
@@ -1099,3 +1102,86 @@ def test_a_power_of_ten_past_hugeint_is_checked_and_never_wrapped() -> None:
     assert writer.scaled("v", 2) == ch_exact.checked(
         f"(toInt256(v) * toInt256({writer.power(2)}))", "HUGEINT"
     )
+
+
+# --- exact arithmetic parity (#426) -------------------------------------------------------------
+
+
+def both(
+    server: Server,
+    compiled: CompiledModel,
+    catalog: Mapping[str, Mapping[str, SourceColumn]],
+    rows: Mapping[str, Sequence[Sequence[str | None]]],
+    document: Document,
+) -> list[Any]:
+    """[ClickHouse's outcome, the managed lake's]: the envelope and rows, or the error code."""
+    load(server, catalog, rows)
+    adapter = OnClickHouse(server, names_of(catalog))
+    outcomes: list[Any] = []
+    with managed(catalog, rows) as lake:
+        routed = {"routing": everywhere(compiled), "adapters": {adapter.connection: adapter}}
+        for change in (routed, {}):
+            try:
+                found = answer(
+                    json.dumps(document),
+                    compiled,
+                    no_policies(compiled),
+                    ce.viewer_context(),
+                    ce.engine_for(lake, **change),
+                )
+                outcomes.append(envelope_and_rows(found))
+            except (SemanticError, StoreError) as error:
+                outcomes.append(type(error).__name__ + ":" + error.code)
+    return outcomes
+
+
+EXACT_ROWS = {
+    "t": [[*r] for r in exact_case.T_ROWS],
+    "r": [[*r] for r in exact_case.R_ROWS],
+}
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        exact_case.aggregate("even", group_by=("r.id",)),
+        exact_case.aggregate("away", group_by=("r.id",)),
+        exact_case.aggregate("thirds"),
+        exact_case.aggregate("s"),
+        exact_case.aggregate("decimals"),
+    ],
+    ids=["half_even ties", "half_away ties", "a compared quotient", "a summed quotient", "sums"],
+)
+def test_exact_arithmetic_answers_or_refuses_on_clickhouse_as_on_the_managed_lake(
+    server: Server, document: Document
+) -> None:
+    on_clickhouse, reference = both(
+        server, exact_case.MODEL, exact_case.CATALOG, EXACT_ROWS, document
+    )
+    assert on_clickhouse == reference
+
+
+@settings(generated_exact.EXACT, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(node=generated_exact.trees(), generated=generated_exact.rows())
+def test_a_generated_exact_question_gives_the_same_outcome_on_both_engines(
+    server: Server,
+    node: generated_exact.Node,
+    generated: list[dict[str, str | None]],
+) -> None:
+    try:
+        compiled = generated_exact.model(node)
+    except SemanticError:
+        return  # refused for every engine, before either is chosen
+    rows = {
+        "t": [
+            [str(n), *(r[c] for c in generated_exact.COLUMNS)] for n, r in enumerate(generated, 1)
+        ]
+    }
+    on_clickhouse, reference = both(
+        server, compiled, generated_exact.CATALOG, rows, json.loads(generated_exact.QUESTION)
+    )
+    if isinstance(reference, str) and reference.startswith("StoreError"):
+        assert isinstance(on_clickhouse, str)
+        assert on_clickhouse.startswith("StoreError")
+        return  # a value the data makes undefined: an engine error on both, never an answer
+    assert on_clickhouse == reference

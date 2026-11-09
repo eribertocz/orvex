@@ -7,8 +7,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
+from orvex.semantic.compiler.typecheck import NodeType, TypedNode
 from orvex.semantic.errors import SemanticError
+from orvex.semantic.ossie import sql
 from orvex.semantic.result import ColumnSpec
 
 
@@ -66,6 +69,30 @@ def _rounded(a: str, b: str, mode: str, quotient: str | None = None) -> str:
 
 class DuckDBDialect:
     """Each hook writes what DuckDB writes."""
+
+    def adopt(self, compiled: CompiledModel) -> None:
+        """The model the statements are written for, and the type of each of its expression
+        nodes, by identity (its compiled trees)."""
+        self.compiled = compiled
+        self.types: dict[int, NodeType] = {}
+        pending = [
+            tree
+            for member in compiled.members.values()
+            for tree in (member.typed.tree, *(t for _, t in member.typed.payload))
+            if isinstance(tree, TypedNode)
+        ]
+        while pending:
+            tree = pending.pop()
+            self.types[id(tree.node)] = tree.type
+            pending.extend(tree.children)
+
+    def divisible(self, node: sql.Binary) -> bool:
+        """`/` is written only between floats on every engine: an exact quotient is C2's one
+        division, with its declared scale and rounding, never the engine's `/` (#426)."""
+        if node.op != "/":
+            return True
+        sides = (self.types.get(id(node.left)), self.types.get(id(node.right)))
+        return all(side is not None and side.logical.datatype == "Float" for side in sides)
 
     def column_ref(self, alias: str, dataset: str, name: str) -> str:
         """A source column of `dataset`, read from the row `alias`."""

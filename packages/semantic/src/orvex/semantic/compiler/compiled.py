@@ -116,6 +116,20 @@ class CompiledModel:
         self.typed.parsed.require(member)
         return self.members[member]
 
+    def reads(self, member: MemberId) -> tuple[MemberId, ...]:
+        """`member` and every field and metric it reads, transitively, in a fixed order: the
+        member first, then each dependency depth-first in its sorted `depends_on` (#426). A
+        declaration any of them lacks is the question's, wherever the expression is inlined."""
+        found: dict[MemberId, None] = {}
+        pending = [member]
+        while pending:
+            current = pending.pop()
+            if current in found:
+                continue
+            found[current] = None
+            pending.extend(reversed(self.require(current).parsed.depends_on))
+        return tuple(found)
+
 
 # --- JSON documents -------------------------------------------------------------------------
 

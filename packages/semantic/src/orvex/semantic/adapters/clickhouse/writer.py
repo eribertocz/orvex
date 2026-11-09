@@ -78,7 +78,7 @@ from orvex.semantic.adapters.duckdb import (
 from orvex.semantic.catalog.building import _logical
 from orvex.semantic.compiler.catalog import LogicalType, column_key
 from orvex.semantic.compiler.parsing import MemberId
-from orvex.semantic.compiler.typecheck import NodeType, TypedNode
+from orvex.semantic.compiler.typecheck import NodeType
 from orvex.semantic.engines import CAPABILITIES as ENGINE_CAPABILITIES
 from orvex.semantic.engines import required
 from orvex.semantic.errors import PlanError, SemanticError
@@ -128,7 +128,7 @@ class _ClickHouse(_Writer):
         self.catalog(plan.compiled, columns)
 
     def catalog(self, compiled: Any, columns: Mapping[str, Iterable[str]]) -> None:  # noqa: ANN401
-        """Each table's exact column names, and every model expression's type."""
+        """Each table's exact column names (every model expression's type is the dialect's)."""
         self.levels: list[tuple[str, str]] = []  # a pivot table's sort keys (`by_level`)
         self.float_sets: set[str] = set()  # every bound set of floats (`membership`)
         # Each table's columns, by DuckDB's identity of a name (the compiler's), exact.
@@ -140,18 +140,6 @@ class _ClickHouse(_Writer):
                     raise PlanError("two columns of one ClickHouse table differ only in case")
                 exact[column_key(name)] = name
             self.names[source] = exact
-        # The type of every expression node of the model, by identity (the compiled trees).
-        self.types: dict[int, NodeType] = {}
-        for member in compiled.members.values():
-            trees = [member.typed.tree, *(v for _, v in member.typed.payload)]
-            for tree in trees:
-                if isinstance(tree, TypedNode):
-                    self.index(tree)
-
-    def index(self, tree: TypedNode) -> None:
-        self.types[id(tree.node)] = tree.type
-        for child in tree.children:
-            self.index(child)
 
     # hooks
 
@@ -308,6 +296,13 @@ class _ClickHouse(_Writer):
             return f"CAST('{node.text}' AS {engine_type(number_parameter(node.text))})"
         if isinstance(node, sql.Unary) and node.op in ("-", "+"):
             return self.declared(node, f"({node.op}{self.exact(node.operand, again)})")
+        if isinstance(node, sql.Case) and node.operand is None:
+            text = "".join(
+                f" WHEN {again(w)} THEN {self.branch(node, t, again)}" for w, t in node.whens
+            )
+            if node.otherwise is not None:
+                text += f" ELSE {self.branch(node, node.otherwise, again)}"
+            return f"(CASE{text} END)"
         if isinstance(node, sql.Binary) and node.op in ("+", "-", "*"):
             left, right = self.types.get(id(node.left)), self.types.get(id(node.right))
             if (
@@ -412,6 +407,16 @@ class _ClickHouse(_Writer):
             again(node.operand), f"DECIMAL({int(node.arguments[0])},{int(node.arguments[1])})"
         )
 
+    def branch(self, node: sql.Node, child: sql.Node, again: Callable[[sql.Node], str]) -> str:
+        """A value of a conditional (`CASE`, `COALESCE`, `NULLIF`) at the conditional's own
+        decimal scale: ClickHouse refuses alternatives of different scales, which the reference
+        widens to their common type (#426)."""
+        scale = _scale(self.types.get(id(node)))
+        typed = self.types.get(id(node))
+        if scale is None or typed is None or typed.logical.datatype != "Decimal":
+            return again(child)
+        return wide(again(child), scale)
+
     def exact(self, node: sql.Node, again: Callable[[sql.Node], str]) -> str:
         """An exact value in 76 digits, so no step narrows or wraps it."""
         scale = _scale(self.types.get(id(node)))
@@ -448,7 +453,8 @@ class _ClickHouse(_Writer):
             return f"{function}If({value}, {where})"
         if name in ("COALESCE", "NULLIF", "ABS") and node.filter is None:
             function = {"COALESCE": "coalesce", "NULLIF": "nullIf", "ABS": "abs"}[name]
-            return f"{function}({', '.join(again(a) for a in node.arguments)})"
+            written = (self.branch(node, a, again) for a in node.arguments)
+            return f"{function}({', '.join(written)})"
         raise _unsupported()  # LOWER and UPPER included: ClickHouse's case mapping differs
 
     def cut(self, unit: str, value: str, zone: str | None) -> str:
