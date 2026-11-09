@@ -7,7 +7,8 @@ from pathlib import Path
 import duckdb
 import pytest
 from orvex.contracts.store.v1 import StatementRequest
-from orvex.server import commands
+from orvex.server import run as run_command
+from orvex.server import run_metadata
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.store.errors import StoreError
@@ -169,7 +170,7 @@ def test_lookback_re_reads_late_rows_and_merges_them(
 def test_the_watermark_comes_from_the_data_not_the_clock(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(commands, "_now", lambda: "2000-01-01T00:00:00.000000+00:00")
+    monkeypatch.setattr(run_metadata, "_now", lambda: "2000-01-01T00:00:00.000000+00:00")
     project(tmp_path, APPEND)
     feed(tmp_path, (1, "1.0000", "2099-06-30 23:59:59.5+00"))
     assert command(capsys, "run", str(tmp_path))[0] == 0
@@ -274,7 +275,7 @@ def test_a_failed_record_write_commits_neither_rows_nor_watermark(
             (2, "2.0000", "2024-01-02 10:00:00+00"),
         )
     with monkeypatch.context() as patch:
-        patch.setattr(commands, "record_statements", broken_records)
+        patch.setattr(run_command, "record_statements", broken_records)
         code, out = command(capsys, "run", str(tmp_path))
     assert code == 1  # rolled back; the failed records could not be written either
     assert "run records were not written" in out
@@ -292,7 +293,7 @@ def test_a_failed_record_write_commits_neither_rows_nor_watermark(
 def test_watermarks_progress_with_a_frozen_clock(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(commands, "_now", lambda: "2000-01-01T00:00:00.000000+00:00")
+    monkeypatch.setattr(run_metadata, "_now", lambda: "2000-01-01T00:00:00.000000+00:00")
     project(tmp_path, APPEND)
     rows: list[tuple[int, str, str]] = []
     for day in range(1, 5):
@@ -337,7 +338,7 @@ def test_an_incremental_total_that_cannot_be_read_rolls_the_run_back(
     def failing(*_arguments: object) -> str:
         raise StoreError("STORE_TIMEOUT", "The statement exceeded its time limit.", {})
 
-    monkeypatch.setattr(commands, "_count", failing)
+    monkeypatch.setattr(run_command, "_count", failing)
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 1, out
     assert "STORE_TIMEOUT" in out

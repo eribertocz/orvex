@@ -179,22 +179,22 @@ def test_the_peak_is_attributed_to_the_line_printed_before_it() -> None:
 def test_the_memory_limit_is_set_only_by_the_experiment() -> None:
     # #168: no seam set, the lake's limit is unchanged; the experiment's limit reaches only the
     # traced process.
-    from orvex.server import commands
+    from orvex.server import lake_open
 
-    assert commands._limits().memory_limit == commands.memory_limit()
+    assert lake_open._limits().memory_limit == lake_open.memory_limit()
     plain = command_for(["run", "x"])
     assert plain[1] == "-c"
     assert plain[3:] == ["", "run", "x"]
     limited = command_for(["run", "x"], "4GB")
     assert limited[3:] == ["4GB", "run", "x"]
-    for command, expected in ((plain, commands.memory_limit()), (limited, "4GB")):
+    for command, expected in ((plain, lake_open.memory_limit()), (limited, "4GB")):
         probe = subprocess.run(
             [
                 sys.executable,
                 "-c",
                 command[2].replace(
                     "from orvex.server.cli import main\nsys.exit(main(sys.argv[2:]))\n",
-                    "print(commands._limits().memory_limit)\n",
+                    "print(lake_open._limits().memory_limit)\n",
                 ),
                 command[3],
             ],

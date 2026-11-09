@@ -16,7 +16,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from orvex.contracts.store.v1 import ReadRequest
-from orvex.server import commands, lake_place, mounts
+from orvex.server import commands, lake_open, lake_place, mounts
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.project import ProjectLoadError, load_project
@@ -916,7 +916,7 @@ def test_orphaned_data_is_named_in_the_refusal(tmp_path: Path) -> None:
     folder = bare(tmp_path / "proj", "")
     orphaned(folder).unlink()
     with pytest.raises(StoreError) as raised:
-        commands._refuse_missing_catalog(home(folder))
+        lake_open._refuse_missing_catalog(home(folder))
     data = (home(folder) / "lake" / "data").as_posix()
     assert raised.value.code == "STORE_CATALOG_UNAVAILABLE"
     assert data in str(raised.value)
@@ -936,7 +936,7 @@ def test_a_failed_first_open_after_204_still_protects_the_default_lake(tmp_path:
     catalog.unlink()  # lost before any other open
     assert lake_place.exists(home(folder))
     with pytest.raises(StoreError) as raised:
-        commands._refuse_missing_catalog(home(folder))
+        lake_open._refuse_missing_catalog(home(folder))
     assert raised.value.code == "STORE_CATALOG_UNAVAILABLE"
     default_lake(folder)  # restored
     lake_place.adopt(home(folder), place)  # what `runs`, `maintain` and the scheduler do

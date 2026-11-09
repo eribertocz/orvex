@@ -99,17 +99,18 @@ SAMPLE_SECONDS = 0.25
 # line, the API or the project files.
 TRACED = (
     "import sys\n"
-    "import orvex.server.commands as commands\n"
+    "import orvex.server.lake_open as lake_open\n"
+    "import orvex.server.run as run_command\n"
     "limit = sys.argv[1]\n"
     "if limit:\n"
-    "    commands.memory_limit = lambda: limit\n"
-    "step_of = commands._run_step\n"
+    "    lake_open.memory_limit = lambda: limit\n"
+    "step_of = run_command._run_step\n"
     "def traced(transaction, step, item):\n"
     "    text = str(getattr(getattr(step, 'request', step), 'sql', ''))[:60]\n"
     "    kind = type(step).__name__\n"
     "    print(f'step {item.model.name} {kind} {text}'.replace(chr(10), ' '), flush=True)\n"
     "    return step_of(transaction, step, item)\n"
-    "commands._run_step = traced\n"
+    "run_command._run_step = traced\n"
     "from orvex.server.cli import main\n"
     "sys.exit(main(sys.argv[2:]))\n"
 )

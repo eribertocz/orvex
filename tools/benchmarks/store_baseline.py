@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -144,10 +145,12 @@ def run(python: str, operation: str, sources: Path, work: Path) -> dict[str, flo
     return measured
 
 
-def report(found: dict[str, dict[str, list[dict[str, float]]]]) -> dict[str, object]:
+def report(
+    found: dict[str, dict[str, list[dict[str, float]]]], operations: Sequence[str] = OPERATIONS
+) -> dict[str, object]:
     """Medians per operation and side, and the candidate's change in percent."""
     result: dict[str, object] = {}
-    for operation in OPERATIONS:
+    for operation in operations:
         row: dict[str, object] = {}
         for metric in ("seconds", "peak_mib"):
             medians = {
