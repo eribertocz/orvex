@@ -18,10 +18,15 @@ never reads data and never transpiles.
   meaning: as `=` comparisons for a list, and, for a bound set, `NULL` membership explicit
   (ClickHouse's `2 NOT IN (1, NULL)` is true). A filter's values are never `NULL`, and its
   `NULL` rows are written apart, so its `IN` keeps the reference's form.
-- **Order.** `NULLS FIRST` or `NULLS LAST` is always written. A float is ordered and compared
-  as the reference does: `NaN` above every number and equal to itself (ClickHouse puts `NaN`
-  on the `NULL`s' side and `nan > 1` is false), in the final order, a detail page's keyset and
-  a range filter, so a page never skips a `NaN` row.
+- **Order.** `NULLS FIRST` or `NULLS LAST` is always written.
+- **Floats** are ordered and compared as the reference does: `NaN` above every number and
+  equal to itself, -0.0 equal to 0.0 (ClickHouse puts `NaN` on the `NULL`s' side, `nan > 1`
+  and `nan = nan` are false, and a distinct count keeps -0.0 apart). So: an `isNaN` key first
+  in the final order and a pivot table's metric keys; `NaN`-aware comparisons in a detail
+  page's keyset, a filter's range, a model's `=`, `<>`, `<`, `>`, `BETWEEN` and `IN`, and a
+  row policy's comparison; a distinct count of `x + 0.`. A float group or join key is refused
+  (`float_group`, `float_join`): the reference's -0.0/0.0 group shows an arbitrary row's sign.
+  `MIN`, `MAX` and every other aggregate but `SUM` and `COUNT` stay refused.
 - **Dates.** A date bucket is computed in `Date32` (`toStartOf*` answers a 16-bit `Date`).
 - **The result.** Each column is converted last to its exact store form, exact types checked:
   `HUGEINT`, `UHUGEINT` and `UUID` as text, `TIMESTAMP WITH TIME ZONE` with microseconds in
@@ -78,6 +83,8 @@ from orvex.semantic.engines import required
 from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.planning import ISSUED_PLAN, SemanticPlan
+from orvex.semantic.policies import predicate as policy_grammar
+from orvex.semantic.policies.placement import datatype as field_datatype
 from orvex.semantic.result import ColumnSpec
 
 NAME = "clickhouse"
@@ -94,6 +101,7 @@ _DATE_BUCKETS = {
     "year": "makeDate32(toYear({d}), 1, 1)",
 }
 _HUGEINT_DIGITS = 38  # 10^38 is the largest power of ten a `HUGEINT` holds
+_COMPARISONS = frozenset({"=", "<>", "<", "<=", ">", ">="})
 
 
 def _scale(node: NodeType | None) -> int | None:
@@ -311,11 +319,43 @@ class _ClickHouse(_Writer):
             if not all(s is not None and s.logical.datatype == "Float" for s in sides):
                 raise _unsupported()  # an exact quotient is C2's division, never `/`
             return f"({again(node.left)} / {again(node.right)})"
+        if (
+            isinstance(node, sql.Binary)
+            and node.op in _COMPARISONS
+            and self.floating(node.left, node.right)
+        ):
+            flags = (self.floating(node.left), self.floating(node.right))
+            return f"({_float_compared(again(node.left), node.op, again(node.right), flags)})"
+        if isinstance(node, sql.Between) and self.floating(node.operand, node.low, node.high):
+            value, low, high = again(node.operand), again(node.low), again(node.high)
+            on = self.floating(node.operand)
+            above = _float_compared(value, ">=", low, (on, self.floating(node.low)))
+            below = _float_compared(value, "<=", high, (on, self.floating(node.high)))
+            inside = f"({above} AND {below})"
+            return f"(NOT {inside})" if node.negated else inside
         if isinstance(node, sql.InList):
             operand = again(node.operand)
-            equal = " OR ".join(f"{operand} = {again(i)}" for i in node.items) or "false"
+            floating = self.floating(node.operand, *node.items)
+            equal = (
+                " OR ".join(
+                    _float_compared(
+                        operand, "=", again(i), (self.floating(node.operand), self.floating(i))
+                    )
+                    if floating
+                    else f"{operand} = {again(i)}"
+                    for i in node.items
+                )
+                or "false"
+            )
             return f"(NOT ({equal}))" if node.negated else f"({equal})"
         return super().node(node, alias, dataset, context)
+
+    def floating(self, *nodes: sql.Node) -> bool:
+        """Whether any of `nodes` is a float, compared as the reference compares floats."""
+        return any(
+            (typed := self.types.get(id(n))) is not None and typed.logical.datatype == "Float"
+            for n in nodes
+        )
 
     def declared(self, node: sql.Node, written: str) -> str:
         """An exact value the type checker says may leave its type, checked back into it; an
@@ -391,6 +431,8 @@ class _ClickHouse(_Writer):
                 value = self.accumulated(value, kind.logical.datatype, kind.logical.scale)
                 return self.declared(node, self.total(value, where))
             function = "uniqExact" if distinct else "count"
+            if distinct and self.floating(arguments[0]):
+                value = f"({value} + 0.)"  # -0.0 and 0.0 one value, as in the reference
             if where is None:
                 return f"{function}({value})"
             return f"{function}If({value}, {where})"
@@ -463,6 +505,22 @@ class _ClickHouse(_Writer):
                 return written if scale is None else wide(written, scale)
         raise _unsupported()
 
+    def predicate_sql(self, node: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
+        """A row policy's comparison of a float field, as the reference compares floats."""
+        g = policy_grammar
+        if not isinstance(node, g.Compare):
+            return super().predicate_sql(node, dataset, alias)
+        sides = tuple(
+            isinstance(o, g.Field) and field_datatype(self.compiled, dataset, o.name) == "Float"
+            for o in (node.left, node.right)
+        )
+        if not any(sides):
+            return super().predicate_sql(node, dataset, alias)
+        op = "<>" if node.op == "!=" else node.op
+        left = self.scalar_sql(node.left, node.right, dataset, alias)
+        right = self.scalar_sql(node.right, node.left, dataset, alias)
+        return f"({_float_compared(left, op, right, (sides[0], sides[1]))})"
+
     def predicate(self, column: str, predicate: Mapping[str, Any], member: MemberId) -> str:
         """A float's range as the reference compares it: `NaN` above every number."""
         logical = self.compiled.require(member).typed.type.logical
@@ -526,10 +584,19 @@ class _ClickHouse(_Writer):
     def by_level(self, inner: str, columns: list[ColumnSpec], checks: list[tuple[str, str]]) -> str:
         """The rows with their pivot-table sort keys (`level_order`), ordered last, in the
         statement that converts them (`ordered`): an order inside a subquery is not kept."""
-        keys, directions = self.level_order(columns)
+        ordered, directions = self.level_order(columns)
+        floats = [c.name for c in columns if c.role == "metric" and _floating(c.encoding)]
+        keys: list[str] = []
+        ways: list[str] = []
+        for key, way in zip(ordered, directions, strict=True):
+            if any(f"THEN {quote(name)} END" in key for name in floats):  # NaN above numbers
+                keys.append(f"isNaN({key})")
+                ways.append(way)
+            keys.append(key)
+            ways.append(way)
         names = [c.name for c in columns] + [n for n, _ in checks]
         names += [n for n, _ in self.weights] + [n for n, _ in self.as_of] + [LEVEL]
-        self.levels = [(f"#o{n}", d) for n, d in enumerate(directions)]
+        self.levels = [(f"#o{n}", d) for n, d in enumerate(ways)]
         kept = [quote(n) for n in names] + [f"{k} AS {quote(f'#o{n}')}" for n, k in enumerate(keys)]
         return f"SELECT {', '.join(kept)} FROM ({inner}) AS {quote('o')}"
 
@@ -577,11 +644,18 @@ def _sort_keys(column: str, kind: str, sort: Any) -> list[str]:  # noqa: ANN401 
     return [*keys, f"{column} {way}"]
 
 
-def _float_compared(column: str, sign: str, value: str) -> str:
-    """`column sign value` for floats as the reference compares them: `NaN` above every number
-    and equal to itself; `NULL` stays unknown."""
-    either = f"isNaN({column}) OR isNaN({value})"
-    return f"if({either}, isNaN({column}) {sign} isNaN({value}), {column} {sign} {value})"
+def _float_compared(
+    column: str, sign: str, value: str, floats: tuple[bool, bool] = (True, True)
+) -> str:
+    """`column sign value` as the reference compares floats: `NaN` above every number and
+    equal to itself; `NULL` stays unknown. `floats`: which side is a float (the other side's
+    `NaN` flag is `0`)."""
+    flags = [
+        f"isNaN({side})" if floating else "0"
+        for side, floating in zip((column, value), floats, strict=True)
+    ]
+    either = " OR ".join(flag for flag in flags if flag != "0")
+    return f"if({either}, {flags[0]} {sign} {flags[1]}, {column} {sign} {value})"
 
 
 def _same(column: str, value: str, kind: str) -> str:
@@ -610,6 +684,21 @@ def _converted(column: str, kind: str) -> str:
     return f"CAST({column} AS {engine_type(kind)})"
 
 
+def refuse_float_keys(plan: SemanticPlan) -> None:
+    """`UNSUPPORTED_OPERATION` before anything is written for a float a statement would group
+    or join by: the reference makes -0.0 and 0.0 one key, shown as whichever row came first,
+    and matches `NaN` with `NaN`; ClickHouse keeps them apart, and no statement can match an
+    arbitrary representative. A running total's order and partitions are its groups."""
+
+    def floating(member: MemberId) -> bool:
+        return plan.compiled.require(member).typed.type.logical.datatype == "Float"
+
+    if any(floating(group.member) for group in plan.groups):
+        raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "float_group"})
+    if any(floating(a) or floating(b) for join in plan.joins for a, b in join.pairs):
+        raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "float_join"})
+
+
 def compile_plan(
     plan: SemanticPlan,
     columns: Mapping[str, Iterable[str]],
@@ -624,6 +713,7 @@ def compile_plan(
     missing = sorted(required(plan) - CAPABILITIES)
     if missing:
         raise SemanticError("UNSUPPORTED_OPERATION", {"operation": missing[0]})
+    refuse_float_keys(plan)
     query = _ClickHouse(plan, columns, values).statement()
     check_statement(query.sql, {table for table, _ in query.reads})
     return PhysicalQuery(

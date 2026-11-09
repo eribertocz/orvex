@@ -215,7 +215,9 @@ def test_a_connection_that_fails_verification_is_its_error_for_every_question(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("WAREHOUSE_PASSWORD", raising=False)
-    with clickhouse_engines.opened(connections(tmp_path, WAREHOUSE), timeout_ms=1000) as engines:
+    with clickhouse_engines.opened(
+        connections(tmp_path, WAREHOUSE), timeout_ms=1000, memory_limit="1GB"
+    ) as engines:
         found = engines.pinned()
     assert set(found) == {"warehouse"}
     error = found["warehouse"]
@@ -236,3 +238,8 @@ def test_with_the_switch_off_serve_connects_no_clickhouse(
     with cli.connected_clickhouse(folder, IDENTITY) as engines:
         assert isinstance(engines, ClickHouseEngines)
         assert len(engines) == 1
+
+
+def test_the_memory_budget_is_the_managed_lake_s_in_bytes() -> None:
+    assert clickhouse_engines.memory_bytes("2GB") == 2 * 1024**3
+    assert clickhouse_engines.memory_bytes("512MB") == 512 * 1024**2

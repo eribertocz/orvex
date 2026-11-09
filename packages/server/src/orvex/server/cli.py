@@ -200,7 +200,9 @@ def connected_clickhouse(folder: Path, identity: Identity) -> Iterator[ClickHous
     if not clickhouse_connections(connections):
         yield None
         return
-    with clickhouse_engines.opened(connections, timeout_ms=QUERY_TIMEOUT_MS) as engines:
+    with clickhouse_engines.opened(
+        connections, timeout_ms=QUERY_TIMEOUT_MS, memory_limit=memory_limit()
+    ) as engines:
         yield engines
 
 

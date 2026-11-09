@@ -8,7 +8,7 @@ values) rather than as a `WITH`, every count a `BIGINT` (`toInt64(count(*))`: a
 ClickHouse `count` is unsigned), and every statement checked against the allow-lists before it
 is returned. An aggregate table is never read on a live engine, so `consistent` is not checked
 here (`PlanError`: it stays `declared`); `append_only` compares snapshots, which a live engine
-does not have.
+does not have. Nor is a check whose key is a float (ClickHouse compares floats differently).
 """
 
 from __future__ import annotations
@@ -69,13 +69,18 @@ class ClickHouseChecks:
         # Each statement written, with its count columns: what a read of it returns.
         self.written: dict[str, tuple[str, ...]] = {}
 
-    def _writer(self, compiled: CompiledModel, **aliases: str) -> _Checks:
+    def _writer(self, compiled: CompiledModel, *keys: MemberId, **aliases: str) -> _Checks:
+        """A writer for one check whose `keys` are compared; a float key is never compared
+        here (ClickHouse keeps -0.0 and 0.0 apart and `NaN` from `NaN`): `PlanError`, so the
+        evidence stays `declared`."""
+        if any(compiled.require(k).typed.type.logical.datatype == "Float" for k in keys):
+            raise PlanError("a float key is compared differently on ClickHouse")
         return _Checks(compiled, self.columns, self.written, **aliases)
 
     def unique(
         self, compiled: CompiledModel, dataset: str, key: tuple[MemberId, ...]
     ) -> EvidenceCheck:
-        w = self._writer(compiled, a=dataset)
+        w = self._writer(compiled, *key, a=dataset)
         keys = ", ".join(w.keys(key, "#a"))
         return w.done(
             f"SELECT {COUNT} AS {quote('#duplicates')} FROM (SELECT 1 FROM "
@@ -93,7 +98,10 @@ class ClickHouseChecks:
         end: MemberId,
         referenced: tuple[str, tuple[Pair, ...]] | None = None,
     ) -> EvidenceCheck:
-        w = self._writer(compiled, a=dataset, b=referenced[0] if referenced else dataset)
+        joined = [m for pair in (referenced[1] if referenced else ()) for m in pair]
+        w = self._writer(
+            compiled, *entity, *joined, a=dataset, b=referenced[0] if referenced else dataset
+        )
 
         def rows() -> str:
             """The entity's rows with both bounds, numbered in the order of every value they
@@ -133,7 +141,7 @@ class ClickHouseChecks:
     def repeat(
         self, compiled: CompiledModel, side: str, other: str, pairs: tuple[Pair, ...]
     ) -> EvidenceCheck:
-        w = self._writer(compiled, a=side, b=other)
+        w = self._writer(compiled, *(m for pair in pairs for m in pair), a=side, b=other)
         read = ", ".join(
             f"{w.field(s, '#a')} AS {quote(f'#k{i}')}" for i, (_, s) in enumerate(pairs)
         )
@@ -150,7 +158,7 @@ class ClickHouseChecks:
     def orphan(
         self, compiled: CompiledModel, source: str, target: str, pairs: tuple[Pair, ...]
     ) -> EvidenceCheck:
-        w = self._writer(compiled, a=source, b=target)
+        w = self._writer(compiled, *(m for pair in pairs for m in pair), a=source, b=target)
         read = ", ".join(
             f"{w.field(f, '#a')} AS {quote(f'#k{i}')}" for i, (f, _) in enumerate(pairs)
         )

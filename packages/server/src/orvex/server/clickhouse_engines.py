@@ -30,6 +30,7 @@ from orvex.contracts.store.v1 import LakeTable, TablesResult
 from orvex.semantic.evidence import EvidenceRecord
 from orvex.server.clickhouse_adapter import ClickHouseAdapter
 from orvex.server.clickhouse_evidence import EvidenceSchedule, checked
+from orvex.server.existing_lakes import memory_share
 from orvex.server.project import ProjectLoadError
 from orvex.server.semantic_http import ProjectBusy, ProjectSource, Refused
 from orvex.server.semantic_model import ExternalTables
@@ -38,10 +39,16 @@ from orvex.store.errors import StoreError
 
 log = logging.getLogger(__name__)
 POLL_SECONDS = 60.0  # how often the thread looks for a due schedule (each is at least 1h)
-# The most one ClickHouse question may use; the server's own limits must not be above it.
-MEMORY_BYTES = 8 * 1024**3
+# The most rows one ClickHouse question may return; the server's `max_result_rows` must not be
+# above it. The managed lake caps detail pages only (`DETAIL_PAGE_CAP`), so this has no
+# equivalent there. Time and memory reuse the managed lake's budgets (`opened`).
 RESULT_ROWS = 10_000_000
 SCHEMA = "main"  # a connection's database, as a dataset's unqualified `source` names it
+
+
+def memory_bytes(limit: str) -> int:
+    """A memory budget (`<n>MB`, `<n>GB` or `<n>TB`) in bytes."""
+    return int(memory_share(limit, 1).removesuffix("MB")) * 1024 * 1024
 
 
 def clickhouse_connections(connections: Mapping[str, object]) -> dict[str, ClickhouseConnection]:
@@ -195,11 +202,16 @@ class ClickHouseEngines:
 
 
 @contextmanager
-def opened(connections: Mapping[str, object], *, timeout_ms: int) -> Iterator[ClickHouseEngines]:
+def opened(
+    connections: Mapping[str, object], *, timeout_ms: int, memory_limit: str
+) -> Iterator[ClickHouseEngines]:
     """Every `clickhouse` connection of the project connected and verified (each refusal kept
-    as its error), with its evidence schedule."""
+    as its error), with its evidence schedule. `timeout_ms` and `memory_limit` are the managed
+    lake's per-question budgets (`QUERY_TIMEOUT_MS`, `commands.memory_limit`)."""
     engines = ClickHouseEngines()
-    budget = Budget(timeout_ms=timeout_ms, memory_bytes=MEMORY_BYTES, result_rows=RESULT_ROWS)
+    budget = Budget(
+        timeout_ms=timeout_ms, memory_bytes=memory_bytes(memory_limit), result_rows=RESULT_ROWS
+    )
     for name, connection in sorted(clickhouse_connections(connections).items()):
         try:
             engine: ClickHouse | StoreError = ClickHouse.connect(target(connection), budget)

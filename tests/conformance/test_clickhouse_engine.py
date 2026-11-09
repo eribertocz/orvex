@@ -23,14 +23,18 @@ import json
 from typing import Any
 
 import pytest
+import yaml
 from orvex.semantic.adapters import clickhouse as ch
 from orvex.semantic.adapters.clickhouse import CAPABILITIES as CLICKHOUSE_CAPABILITIES
-from orvex.semantic.compiler.compiled import CompiledModel
+from orvex.semantic.compiler.catalog import SourceColumn
+from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.correctness import analyze
 from orvex.semantic.engines import Routing
-from orvex.semantic.errors import SemanticError
+from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.evidence import verify
+from orvex.semantic.ossie.reader import read
 from orvex.semantic.planning import plan
+from orvex.semantic.policies import read_policies
 from orvex.semantic.query.binding import Limits as QueryLimits
 from orvex.semantic.query.binding import bind_query
 from orvex.server.clickhouse_adapter import ClickHouseAdapter
@@ -48,6 +52,7 @@ from tests.conformance import test_row_policies as rp
 from tests.conformance.test_clickhouse_adapter import server  # noqa: F401 - the fixture
 from tests.conformance.test_clickhouse_capabilities import copied
 from tests.conformance.test_execution import ask, no_policies, tiny_lake, tiny_model
+from tests.support.policies import VENDORS, extension
 
 Document = dict[str, Any]
 PASSWORD = "SEMANTIC_TEST_CLICKHOUSE_READER"
@@ -349,11 +354,38 @@ FLOAT_ROWS: list[dict[str, str | None]] = [
     {"id": "6", "x": "nan"},
     {"id": "7", "x": "1"},
     {"id": "8", "x": "-0.5"},
+    {"id": "9", "x": "-0.0"},
+    {"id": "10", "x": "0"},
 ]
 
 
 def float_model() -> tuple[CompiledModel, dict[str, Any]]:
     return tiny_model([("id", "BIGINT"), ("x", "DOUBLE")], "COUNT(*)")
+
+
+def float_metric(expression: str, **payload: Any) -> tuple[CompiledModel, dict[str, Any]]:  # noqa: ANN401
+    """`t` (id, g, x) with the one metric `total`, its product extension `payload`."""
+    columns = {"id": "BIGINT", "g": "VARCHAR", "x": "DOUBLE"}
+    metric: Document = {"name": "total", "expression": {"sql": expression}}
+    if payload:
+        metric["custom_extensions"] = [extension({"element": "metric", **payload})]
+    document = {
+        "version": "0.2.0.dev0",
+        "name": "floats",
+        "datasets": [
+            {
+                "name": "t",
+                "source": "t",
+                "primary_key": ["id"],
+                "fields": [{"name": c, "expression": {"sql": c}} for c in columns],
+            }
+        ],
+        "metrics": [metric],
+        "custom_extensions": [extension({"element": "model", "default_time_zone": "UTC"})],
+    }
+    catalog = {"t": {c: SourceColumn(k) for c, k in columns.items()}}
+    loaded = read(json.dumps(document).encode(), "semantic/floats.ossie.json", VENDORS)
+    return compile_model(loaded, catalog, VENDORS), catalog
 
 
 def float_pages(direction: str, nulls: str) -> Document:
@@ -383,7 +415,7 @@ def test_a_detail_page_ordered_by_a_float_never_skips_a_nan_row(
         found, _ = pages_of(lake, float_pages(direction, nulls), compiled, **routed)
         reference, _ = pages_of(lake, float_pages(direction, nulls), compiled)
     assert found == reference
-    assert sorted(r[0] for page in found for r in page) == [str(i) for i in range(1, 9)]
+    assert sorted(int(r[0]) for page in found for r in page) == list(range(1, 11))
 
 
 FLOAT_QUESTIONS = {
@@ -422,25 +454,184 @@ def test_a_float_range_filter_compares_nan_as_the_managed_lake(
     assert found == reference
 
 
-def test_a_float_group_ordered_by_its_value_puts_nan_where_the_managed_lake_does(
-    server: base.Server,  # noqa: F811
-    engine: ClickHouse,
-) -> None:
-    compiled, catalog = float_model()
-    document = {
+def aggregate(**more: Any) -> Document:  # noqa: ANN401
+    return {
         "kind": "semantic_query",
         "version": 1,
         "mode": "aggregate",
         "metrics": [{"metric": "total"}],
-        "group_by": [{"member": "t.x"}],
-        "order": [{"by": "t.x", "direction": "desc", "nulls": "last"}],
-    }
-    with tiny_lake(catalog, FLOAT_ROWS) as lake:
+    } | more
+
+
+def on_both(
+    server: base.Server,  # noqa: F811
+    engine: ClickHouse,
+    compiled: CompiledModel,
+    catalog: dict[str, Any],
+    rows: list[dict[str, str | None]],
+    document: Document,
+    policy: Any = None,  # noqa: ANN401
+    context: Any = None,  # noqa: ANN401
+) -> tuple[Any, Any]:
+    """(ClickHouse's outcome, the managed lake's) for one question on the same rows."""
+    with tiny_lake(catalog, rows) as lake:
         base.load(server, catalog, copied(lake, catalog))
         _, _, routed = wired(engine, compiled)
-        found = outcome(lambda: ask(document, compiled, lake, **routed))
-        reference = outcome(lambda: ask(document, compiled, lake))
+        more = {"policy": policy, "context": context}
+        found = outcome(lambda: ask(document, compiled, lake, **more, **routed))
+        reference = outcome(lambda: ask(document, compiled, lake, **more))
+    return found, reference
+
+
+# Every shape where ClickHouse compares a float: NaN above every number and equal to itself,
+# -0.0 equal to 0.0, as the managed lake. Each metric is asked over FLOAT_ROWS.
+FLOAT_METRICS = {
+    "a comparison in a filter": "COUNT(*) FILTER (WHERE t.x > 1)",
+    "NaN equal to itself": "COUNT(*) FILTER (WHERE t.x = t.x)",
+    "NaN not unequal to itself": "COUNT(*) FILTER (WHERE t.x <> t.x)",
+    "a comparison with NaN on the right": "COUNT(*) FILTER (WHERE 1 < t.x)",
+    "between": "COUNT(*) FILTER (WHERE t.x BETWEEN -1 AND 3)",
+    "not between": "COUNT(*) FILTER (WHERE t.x NOT BETWEEN -1 AND 3)",
+    "in a list of fields": "COUNT(*) FILTER (WHERE t.x IN (t.x, 1))",
+    "a distinct count: NaN once, -0.0 and 0.0 one value": "COUNT(DISTINCT t.x)",
+    "a distinct count in a filter": "COUNT(DISTINCT t.x) FILTER (WHERE t.x >= 0)",
+    "a float sum": "SUM(t.x)",
+}
+
+
+@pytest.mark.parametrize("metric", FLOAT_METRICS.values(), ids=list(FLOAT_METRICS))
+def test_each_float_comparison_and_distinct_count_answers_as_the_managed_lake(
+    server: base.Server,  # noqa: F811
+    engine: ClickHouse,
+    metric: str,
+) -> None:
+    distinct = {"aggregate_class": "holistic", "additivity": "non_additive"}
+    compiled, catalog = float_metric(metric, **(distinct if "DISTINCT" in metric else {}))
+    rows = [r | {"g": "a"} for r in FLOAT_ROWS]
+    found, reference = on_both(server, engine, compiled, catalog, rows, aggregate())
     assert found == reference
+
+
+def test_a_row_policy_comparing_a_float_restricts_as_on_the_managed_lake(
+    server: base.Server,  # noqa: F811
+    engine: ClickHouse,
+) -> None:
+    compiled, catalog = tiny_model([("id", "BIGINT"), ("x", "DOUBLE")], "COUNT(t.id)")
+    rule = {"name": "above", "dataset": "t", "kind": "predicate", "predicate": "x > 1"}
+    policy = read_policies(
+        yaml.safe_dump({"version": 1, "row_policies": [rule]}),
+        compiled,
+        groups=frozenset(),
+        managed_tables={},
+    )
+    context = rp.caller()
+    found, reference = on_both(
+        server, engine, compiled, catalog, FLOAT_ROWS, aggregate(), policy, context
+    )
+    assert found == reference
+    assert reference[1] == [["4"]]  # 2.5, inf and both NaN rows: NaN is above 1
+
+
+PIVOT_ROWS: list[dict[str, str | None]] = [
+    {"id": "1", "g": "a", "x": "1"},
+    {"id": "2", "g": "a", "x": "nan"},
+    {"id": "3", "g": "b", "x": "5"},
+    {"id": "4", "g": "c", "x": "-inf"},
+    {"id": "5", "g": "d", "x": None},
+]
+
+
+@pytest.mark.parametrize("direction", ["desc", "asc"])
+def test_a_pivot_table_ordered_by_a_float_metric_puts_nan_where_the_managed_lake_does(
+    server: base.Server,  # noqa: F811
+    engine: ClickHouse,
+    direction: str,
+) -> None:
+    compiled, catalog = float_metric("SUM(t.x)")
+    document = aggregate(
+        group_by=[{"member": "t.g"}],
+        totals="rollup",
+        order=[{"by": "total", "direction": direction, "nulls": "last"}],
+    )
+    found, reference = on_both(server, engine, compiled, catalog, PIVOT_ROWS, document)
+    assert found == reference
+
+
+def test_a_float_group_is_refused_on_clickhouse_with_a_stable_code(
+    server: base.Server,  # noqa: F811
+    engine: ClickHouse,
+) -> None:
+    """-0.0 and 0.0 are one group on the managed lake, shown as whichever row came first:
+    ClickHouse cannot match an arbitrary representative, so it refuses before reading. A
+    running total's order and partitions are its groups, so it is refused alike."""
+    compiled, catalog = float_metric("COUNT(t.id)")
+    document = aggregate(
+        group_by=[{"member": "t.x"}], order=[{"by": "t.x", "direction": "desc", "nulls": "last"}]
+    )
+    rows = [r | {"g": "a"} for r in FLOAT_ROWS]
+    found, reference = on_both(server, engine, compiled, catalog, rows, document)
+    assert found == ("SemanticError", "UNSUPPORTED_OPERATION", {"operation": "float_group"})
+    assert reference[0] != "SemanticError"
+
+
+@pytest.mark.parametrize("function", ["MIN", "MAX"])
+def test_a_float_minimum_or_maximum_is_never_answered_on_clickhouse(
+    server: base.Server,  # noqa: F811
+    engine: ClickHouse,
+    function: str,
+) -> None:
+    """The reference's MAX over NaN is NaN and ClickHouse's skips it; neither engine answers a
+    MIN or MAX metric today, and ClickHouse refuses it exactly as the reference does, so no
+    float minimum or maximum is ever a number of ClickHouse's."""
+    compiled, catalog = float_metric(f"{function}(t.x)", additivity="additive")
+    rows = [r | {"g": "a"} for r in FLOAT_ROWS]
+    found, reference = on_both(server, engine, compiled, catalog, rows, aggregate())
+    assert found == reference
+    assert found[:2] == ("SemanticError", "UNSUPPORTED_OPERATION")
+
+
+def test_a_join_or_an_evidence_key_on_a_float_is_never_compared_on_clickhouse() -> None:
+    """A join on a float key is refused (`float_join`); evidence keyed by a float is not
+    checked on ClickHouse, so it stays declared."""
+    document = {
+        "version": "0.2.0.dev0",
+        "name": "floats",
+        "datasets": [
+            {
+                "name": "t",
+                "source": "t",
+                "primary_key": ["id"],
+                "fields": [{"name": c, "expression": {"sql": c}} for c in ("id", "x")],
+            },
+            {
+                "name": "u",
+                "source": "u",
+                "primary_key": ["x"],
+                "fields": [{"name": c, "expression": {"sql": c}} for c in ("x", "label")],
+            },
+        ],
+        "relationships": [
+            {"name": "by_x", "from": "t", "to": "u", "from_columns": ["x"], "to_columns": ["x"]}
+        ],
+        "metrics": [{"name": "total", "expression": {"sql": "COUNT(t.id)"}}],
+        "custom_extensions": [extension({"element": "model", "default_time_zone": "UTC"})],
+    }
+    catalog = {
+        "t": {"id": SourceColumn("BIGINT"), "x": SourceColumn("DOUBLE")},
+        "u": {"x": SourceColumn("DOUBLE"), "label": SourceColumn("VARCHAR")},
+    }
+    loaded = read(json.dumps(document).encode(), "semantic/floats.ossie.json", VENDORS)
+    compiled = compile_model(loaded, catalog, VENDORS)
+    planned = base.plan_of(aggregate(group_by=[{"member": "u.label"}]), compiled)
+    with pytest.raises(SemanticError) as caught:
+        ch.compile_plan(planned, base.names_of(catalog), {})
+    assert (caught.value.code, dict(caught.value.details)) == (
+        "UNSUPPORTED_OPERATION",
+        {"operation": "float_join"},
+    )
+    key = (next(m for m in compiled.members if m.dataset == "U" and m.name == "X"),)
+    with pytest.raises(PlanError):
+        ch.ClickHouseChecks(base.names_of(catalog)).unique(compiled, "U", key)
 
 
 def test_a_float_sort_key_and_keyset_compare_nan_explicitly() -> None:
