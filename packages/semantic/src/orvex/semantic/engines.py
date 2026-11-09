@@ -122,9 +122,8 @@ class ExternalAdapter(Protocol):
     - `compile(plan, values)`: the plan's statement in the engine's dialect, with every mapping
       subquery bound from `values` (resolved on the managed lake); it never reads.
     - `read(...)`: one read-only statement at that version, every value bound.
-    - `estimate(query, restricted)`: the engine's own estimate of the read (`{"rows_scanned"}`),
-      or None without statistics; `QUERY_BUDGET_EXCEEDED` above its budget, before the read,
-      naming the estimate only when no row policy `restricted` it (law 7).
+    - `estimate(query)`: the engine's own estimate of the read (`{"rows_scanned"}`), recorded
+      in the receipt, or None without statistics; it never refuses a read (law 7).
     - `evidence()`: the evidence records the engine's schedule verified (a live engine's,
       ADR-0027 §7), each holding until the next verification; none for an existing DuckLake."""
 
@@ -145,7 +144,7 @@ class ExternalAdapter(Protocol):
         timeout_ms: int | None,
     ) -> pa.RecordBatchReader: ...
 
-    def estimate(self, query: PhysicalQuery, restricted: bool) -> Mapping[str, int] | None: ...
+    def estimate(self, query: PhysicalQuery) -> Mapping[str, int] | None: ...
 
     def evidence(self) -> Iterable[EvidenceRecord]: ...
 

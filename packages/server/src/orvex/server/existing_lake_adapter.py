@@ -91,7 +91,7 @@ class ExistingLakeAdapter:
                 self._schedule.restored()
             raise
 
-    def estimate(self, query: PhysicalQuery, restricted: bool) -> Mapping[str, int] | None:
+    def estimate(self, query: PhysicalQuery) -> Mapping[str, int] | None:
         """None: the lake's file statistics are not read for another engine's question."""
         return None
 

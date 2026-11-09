@@ -110,7 +110,7 @@ class Simulated:
         )
         return self.lake.read(request)
 
-    def estimate(self, query: PhysicalQuery, restricted: bool) -> Mapping[str, int] | None:
+    def estimate(self, query: PhysicalQuery) -> Mapping[str, int] | None:
         return None
 
     def evidence(self) -> tuple[()]:

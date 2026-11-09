@@ -79,10 +79,9 @@ class External:
         records: Iterable[EvidenceRecord] = self.adapter.evidence()
         return Ledger(compiled, records, LIVE)
 
-    def estimate(self, physical: PhysicalQuery, restricted: bool) -> Mapping[str, int] | None:
-        """The engine's own estimate of the read, refused above its budget before the read
-        (`QUERY_BUDGET_EXCEEDED`); None when the engine has no statistics."""
-        return self.adapter.estimate(physical, restricted)
+    def estimate(self, physical: PhysicalQuery) -> Mapping[str, int] | None:
+        """The engine's own estimate of the read, recorded only; None without statistics."""
+        return self.adapter.estimate(physical)
 
     def read(self, name: str, entry: EngineEntry | None) -> DataRead:
         """The dataset's data version on this engine, through its own connection (two names

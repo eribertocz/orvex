@@ -56,7 +56,9 @@ REQUIRED_SETTINGS: Mapping[str, str] = {
     "aggregate_functions_null_for_empty": "0",  # empty-set results are written out by the adapter
     "cancel_http_readonly_queries_on_client_close": "1",  # closing the connection cancels
 }
-LIMIT_SETTINGS = ("max_execution_time", "max_memory_usage", "max_result_rows")
+# No result-rows or rows-read limit (Owner, 2026-11-08): every question reads all the rows it
+# needs, so a profile that sets one is refused as any other changed setting is.
+LIMIT_SETTINGS = ("max_execution_time", "max_memory_usage")
 # Settings a profile may also change: none of them changes a result. Any other changed setting
 # is refused, so no setting can silently cut, filter, cache or reshape a result
 # (`result_overflow_mode`, `additional_table_filters`, `use_query_cache`, `limit`, ...).
@@ -138,7 +140,6 @@ class Budget:
 
     timeout_ms: int
     memory_bytes: int
-    result_rows: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,7 +381,6 @@ class ClickHouse:
         limits = {
             "max_execution_time": self._budget.timeout_ms / 1000,
             "max_memory_usage": self._budget.memory_bytes,
-            "max_result_rows": self._budget.result_rows,
         }
         for name, most in limits.items():
             value = Decimal(current.get(name, "0") or "0")

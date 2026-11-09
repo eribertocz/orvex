@@ -321,7 +321,7 @@ Preconditions:
   | `aggregate_functions_null_for_empty` | `0` |
   | `cancel_http_readonly_queries_on_client_close` | `1` |
 
-- **Limits.** `max_execution_time`, `max_memory_usage` and `max_result_rows` must each be set, and must not exceed the caller's budget (`ENGINE_SETTING_REQUIRED`).
+- **Limits.** `max_execution_time` and `max_memory_usage` must each be set, and must not exceed the caller's budget (`ENGINE_SETTING_REQUIRED`). No result-rows or rows-read limit may be set (Owner, 2026-11-08): every question reads all the rows it needs, so `max_result_rows` is refused as any other changed setting.
 - **No other setting changed.** The profile may change only the settings above and `database`, `max_threads`, `log_queries`, `log_comment` and `priority`. Any other changed setting is `ENGINE_SETTING_REQUIRED`, naming every one of them. Settings such as `result_overflow_mode`, `read_overflow_mode`, `timeout_overflow_mode`, `max_rows_to_read`, `additional_table_filters`, `use_query_cache`, `limit`, `offset` and `session_timezone` cut, filter, cache or reshape a result without an error. The check reads them in one aggregated row, so neither `limit` nor `offset` can hide one. A changed output-format setting that reshapes that row is refused the same way (`output_format_*`).
 
 **Tables.** A table's columns are read from `system.columns` and mapped exactly; an unmapped column is `UNSUPPORTED_SOURCE_TYPE`, naming it. A table this user cannot see is `SOURCE_NOT_FOUND`. `Nullable(T)`, `LowCardinality(T)` and `LowCardinality(Nullable(T))` map as `T`.

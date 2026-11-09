@@ -20,6 +20,7 @@ FUNCTIONS = frozenset(
         "GROUPING",
         "MAX",
         "abs",
+        "arrayExists",
         "arrayJoin",
         "arrayMap",
         "arrayZip",

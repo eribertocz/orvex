@@ -8,7 +8,7 @@ One purpose per module:
 - `exact`: store types in ClickHouse and the checked conversion to a declared type;
 - `allowlist`: the statements the adapter may send;
 - `names`: quoting the engine's names;
-- `cost`: `EXPLAIN ESTIMATE` and the budget check (law 7);
+- `cost`: `EXPLAIN ESTIMATE`, the estimate a receipt records (law 7);
 - `evidence`: the statements checking the model's evidence on the engine (ADR-0027 §7);
 - `zones`: instants in a zone, and the check of the engine's zone data (C6).
 """
@@ -16,7 +16,6 @@ One purpose per module:
 from orvex.semantic.adapters.clickhouse.allowlist import FUNCTIONS, check_statement
 from orvex.semantic.adapters.clickhouse.cost import (
     estimate_statement,
-    refuse_over_budget,
     rows_scanned,
 )
 from orvex.semantic.adapters.clickhouse.evidence import ClickHouseChecks
@@ -39,6 +38,5 @@ __all__ = [
     "engine_type",
     "estimate_statement",
     "quote_name",
-    "refuse_over_budget",
     "rows_scanned",
 ]

@@ -436,8 +436,8 @@ def _execute(
     estimated = (  # an upper bound, recorded only: it never refuses (#352)
         estimate(plan_, physical, report.compiled, engine.statistics, snapshot)
         if isinstance(snapshot, int) and not isinstance(snapshot, bool) and external is None
-        # Another engine's own estimate, checked against its budget before the read (law 7).
-        else external.estimate(physical, any(h != "exempt" for h in applied.values()))
+        # Another engine's own estimate, recorded only (law 7).
+        else external.estimate(physical)
         if external is not None
         else None
     )

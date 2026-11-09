@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 import yaml
+from orvex.semantic import execution
 from orvex.semantic.adapters import clickhouse as ch
 from orvex.semantic.adapters.clickhouse import CAPABILITIES as CLICKHOUSE_CAPABILITIES
 from orvex.semantic.compiler.catalog import SourceColumn
@@ -56,7 +57,7 @@ from tests.support.policies import VENDORS, extension
 
 Document = dict[str, Any]
 PASSWORD = "SEMANTIC_TEST_CLICKHOUSE_READER"
-BUDGET = Budget(timeout_ms=30_000, memory_bytes=1_000_000_000, result_rows=1_000_000)
+BUDGET = Budget(timeout_ms=30_000, memory_bytes=1_000_000_000)
 ENTRY = base.ENTRY.__class__(
     "warehouse", "clickhouse", "live", "localhost/test", CLICKHOUSE_CAPABILITIES
 )
@@ -141,47 +142,33 @@ def test_a_receipt_names_the_engine_its_version_the_connection_the_read_instant_
 # --- cost (law 7) -----------------------------------------------------------------------------
 
 
-def test_explain_estimate_refuses_a_read_over_the_budget_before_it_runs(
+def test_explain_estimate_is_recorded_and_never_refuses_a_read(
     server: base.Server,  # noqa: F811
     engine: ClickHouse,
 ) -> None:
+    """No rows-scanned budget on ClickHouse (Owner, 2026-11-08): every question reads all the
+    rows it needs; the engine's own estimate is the receipt's, under a row policy too."""
     with rp.lake_of() as lake:
         base.load(server, rp.CATALOG, copied(lake, rp.CATALOG))
-        adapter, _, routed = wired(engine, rp.COMPILED, rows_scanned=3)
-        read: list[str] = []
-        real = adapter.read
-
-        def counted(statement: str, *more: Any) -> Any:  # noqa: ANN401
-            read.append(statement)
-            return real(statement, *more)
-
-        adapter.read = counted  # type: ignore[method-assign,assignment]
-        found = outcome(lambda: ask(rp.query(), rp.COMPILED, lake, **routed))
+        _, _, routed = wired(engine, rp.COMPILED)
+        found = ask(rp.query(), rp.COMPILED, lake, **routed)
+        reference = ask(rp.query(), rp.COMPILED, lake)
         policy, context = rp.policies(rp.TENANT), rp.caller(tenant="A")
-        restricted = outcome(
-            lambda: ask(rp.query(), rp.COMPILED, lake, policy=policy, context=context, **routed)
-        )
-    assert found == (
-        "SemanticError",
-        "QUERY_BUDGET_EXCEEDED",
-        {"budget": "rows_scanned", "limit": "3", "estimate": "4"},
-    )
-    # Under a row policy the estimate, which counts the rows it hides, is never named.
-    assert restricted == (
-        "SemanticError",
-        "QUERY_BUDGET_EXCEEDED",
-        {"budget": "rows_scanned", "limit": "3"},
-    )
-    assert read == []  # refused before any read of the question
+        restricted = ask(rp.query(), rp.COMPILED, lake, policy=policy, context=context, **routed)
+        expected = ask(rp.query(), rp.COMPILED, lake, policy=policy, context=context)
+    assert ce.rows_of(found) == ce.rows_of(reference)
+    assert found.receipt.document()["execution"]["estimate"] == {"rows_scanned": 4}
+    assert ce.rows_of(restricted) == ce.rows_of(expected)
+    assert restricted.receipt.document()["execution"]["estimate"] == {"rows_scanned": 4}
 
 
-def test_a_table_with_no_estimate_answers_under_the_limits_with_none_recorded(
+def test_a_table_with_no_estimate_answers_with_none_recorded(
     server: base.Server,  # noqa: F811
     engine: ClickHouse,
 ) -> None:
     with rp.lake_of() as lake:
         base.load(server, rp.CATALOG, copied(lake, rp.CATALOG), "Memory")
-        _, _, routed = wired(engine, rp.COMPILED, rows_scanned=3)
+        _, _, routed = wired(engine, rp.COMPILED)
         found = ask(rp.query(), rp.COMPILED, lake, **routed)
         reference = ask(rp.query(), rp.COMPILED, lake)
     assert ce.rows_of(found) == ce.rows_of(reference)
@@ -418,40 +405,99 @@ def test_a_detail_page_ordered_by_a_float_never_skips_a_nan_row(
     assert sorted(int(r[0]) for page in found for r in page) == list(range(1, 11))
 
 
-FLOAT_QUESTIONS = {
-    "a range above a number keeps NaN": {"op": "range", "gt": {"type": "number", "value": "1"}},
-    "a range up to a number leaves NaN out": {
-        "op": "range",
-        "lte": {"type": "number", "value": "1"},
-    },
-    "a closed range": {
-        "op": "range",
-        "gte": {"type": "number", "value": "-1"},
-        "lt": {"type": "number", "value": "3"},
+def decimal(text: str) -> Document:
+    return {"type": "decimal", "value": text}
+
+
+def integer(text: str) -> Document:
+    return {"type": "integer", "value": text}
+
+
+# A filter on a float field, over FLOAT_ROWS (NaN twice, ±inf, -0.0, 0.0, NULL): each value is
+# a decimal or an integer, never a float, and both engines must answer rows, never an error.
+FLOAT_FILTERS = {
+    "a range above a decimal keeps NaN": {"op": "range", "gt": decimal("1")},
+    "a range up to an integer leaves NaN out": {"op": "range", "lte": integer("1")},
+    "a closed range": {"op": "range", "gte": decimal("-1"), "lt": integer("3")},
+    "in: -0.0 is 0": {"op": "in", "values": [decimal("0"), decimal("2.5")]},
+    "in with NULL": {"op": "in", "values": [integer("1")], "include_null": True},
+    "not in keeps NaN and NULL": {"op": "not_in", "values": [decimal("0"), integer("1")]},
+    "not in excluding NULL": {
+        "op": "not_in",
+        "values": [decimal("2.5")],
+        "exclude_null": True,
     },
 }
 
 
-@pytest.mark.parametrize("predicate", FLOAT_QUESTIONS.values(), ids=list(FLOAT_QUESTIONS))
-def test_a_float_range_filter_compares_nan_as_the_managed_lake(
+@pytest.mark.parametrize("predicate", FLOAT_FILTERS.values(), ids=list(FLOAT_FILTERS))
+def test_a_float_filter_compares_as_the_managed_lake(
     server: base.Server,  # noqa: F811
     engine: ClickHouse,
     predicate: Document,
 ) -> None:
-    compiled, catalog = float_model()
-    document = {
-        "kind": "semantic_query",
-        "version": 1,
-        "mode": "aggregate",
-        "metrics": [{"metric": "total"}],
-        "filters": [{"scope": "board", "member": "t.x", "predicate": predicate}],
-    }
-    with tiny_lake(catalog, FLOAT_ROWS) as lake:
-        base.load(server, catalog, copied(lake, catalog))
-        _, _, routed = wired(engine, compiled)
-        found = outcome(lambda: ask(document, compiled, lake, **routed))
-        reference = outcome(lambda: ask(document, compiled, lake))
+    compiled, catalog = float_metric("COUNT(t.id)")
+    document = aggregate(filters=[{"scope": "board", "member": "t.x", "predicate": predicate}])
+    rows = [r | {"g": "a"} for r in FLOAT_ROWS]
+    found, reference = on_both(server, engine, compiled, catalog, rows, document)
+    assert reference[0] != "SemanticError", reference  # an answerable question, on both
     assert found == reference
+
+
+def test_a_mapping_set_of_floats_holds_nan_as_the_managed_lake_does(
+    server: base.Server,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A float field in a bound set: `NaN` is in a set holding `NaN`, and -0.0 in one holding
+    0.0 (ClickHouse's `has` misses the first). Written for each set it can be given."""
+    from orvex.semantic.adapters.duckdb import PolicyValues
+
+    compiled, catalog = float_metric("COUNT(t.id)")
+    rule = {
+        "name": "listed",
+        "dataset": "t",
+        "kind": "predicate",
+        "predicate": "x IN (SELECT value FROM security.allowed WHERE user_id = $user_id)",
+    }
+    policy = read_policies(
+        yaml.safe_dump({"version": 1, "row_policies": [rule]}),
+        compiled,
+        groups=frozenset(),
+        managed_tables={"security.allowed": ["user_id", "value"]},
+    )
+    rows = [r | {"g": "a"} for r in FLOAT_ROWS]
+    with tiny_lake(catalog, rows) as lake:
+        base.load(server, catalog, copied(lake, catalog))
+        adapter = base.OnClickHouse(server, base.names_of(catalog))
+        routed = {
+            "routing": routing_of(compiled),
+            "adapters": {"warehouse": adapter},
+        }
+        adapter.entry = ENTRY
+        found: dict[str, Any] = {}
+        for label, values in {
+            "NaN": ("nan",),
+            "0.0": ("0",),
+            "NULL and 2.5": (None, "2.5"),
+        }.items():
+
+            def resolved(*_: Any, values: Any = values) -> Any:  # noqa: ANN401
+                queries = list(_[0])
+                return {q.key: PolicyValues("DOUBLE", values) for q in queries}, queries
+
+            monkeypatch.setattr(execution, "resolve", resolved)
+            found[label] = outcome(
+                lambda: ask(
+                    aggregate(),
+                    compiled,
+                    lake,
+                    policy=policy,
+                    context=rp.caller(user_id="u-1"),
+                    **routed,
+                )
+            )
+    expected = {"NaN": [["2"]], "0.0": [["2"]], "NULL and 2.5": [["1"]]}
+    assert {k: v[1] for k, v in found.items()} == expected
 
 
 def aggregate(**more: Any) -> Document:  # noqa: ANN401

@@ -1,12 +1,11 @@
-"""Cost (law 7; ADR-0027 §7): ClickHouse's own estimate of the rows a statement reads, and the
-budget check before the read."""
+"""Cost (law 7; ADR-0027 §7): ClickHouse's own estimate of the rows a statement reads, recorded
+in the receipt; it never refuses a read (no rows-scanned budget, Owner, 2026-11-08)."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
 from orvex.semantic.adapters.duckdb import PhysicalQuery
-from orvex.semantic.errors import SemanticError
 
 
 def estimate_statement(query: PhysicalQuery) -> str:
@@ -34,15 +33,3 @@ def rows_scanned(
             return None
         total += found[key]
     return total
-
-
-def refuse_over_budget(estimate: int | None, limit: int, restricted: bool) -> None:
-    """`QUERY_BUDGET_EXCEEDED` (`rows_scanned`) before the read when the estimate is above the
-    budget. The estimate is named only when no row policy restricts a dataset read, since it
-    counts the rows a policy hides (`semantic-error/v1`). No estimate decides nothing."""
-    if estimate is None or estimate <= limit:
-        return
-    details = {"budget": "rows_scanned", "limit": str(limit)}
-    if not restricted:
-        details["estimate"] = str(estimate)
-    raise SemanticError("QUERY_BUDGET_EXCEEDED", details)

@@ -24,7 +24,8 @@ never reads data and never transpiles.
   and `nan = nan` are false, and a distinct count keeps -0.0 apart). So: an `isNaN` key first
   in the final order and a pivot table's metric keys; `NaN`-aware comparisons in a detail
   page's keyset, a filter's range, a model's `=`, `<>`, `<`, `>`, `BETWEEN` and `IN`, and a
-  row policy's comparison; a distinct count of `x + 0.`. A float group or join key is refused
+  row policy's comparison; a filter's `in` as `=` against each value; `NaN` a member of a
+  bound set holding `NaN`; a distinct count of `x + 0.`. A float group or join key is refused
   (`float_group`, `float_join`): the reference's -0.0/0.0 group shows an arbitrary row's sign.
   `MIN`, `MAX` and every other aggregate but `SUM` and `COUNT` stay refused.
 - **Dates.** A date bucket is computed in `Date32` (`toStartOf*` answers a 16-bit `Date`).
@@ -129,6 +130,7 @@ class _ClickHouse(_Writer):
     def catalog(self, compiled: Any, columns: Mapping[str, Iterable[str]]) -> None:  # noqa: ANN401
         """Each table's exact column names, and every model expression's type."""
         self.levels: list[tuple[str, str]] = []  # a pivot table's sort keys (`by_level`)
+        self.float_sets: set[str] = set()  # every bound set of floats (`membership`)
         # Each table's columns, by DuckDB's identity of a name (the compiler's), exact.
         self.names: dict[str, dict[str, str]] = {}
         for source, names in columns.items():
@@ -219,16 +221,24 @@ class _ClickHouse(_Writer):
         return json.dumps([None if v is None else str(v) for v in values])
 
     def bound_list(self, listed: str, kind: str) -> str:
-        return (
+        found = (
             f"CAST(JSONExtract({listed}, 'Array(Nullable(String))') AS "
             f"Array(Nullable({engine_type(kind)})))"
         )
+        if canonical(kind) in ("FLOAT", "DOUBLE"):
+            self.float_sets.add(found)
+        return found
 
     def membership(self, field: str, values: str, negated: bool) -> str:
         """`field IN values` with SQL's meaning: false for an empty set, `NULL` for a `NULL`
-        field, or for a set holding `NULL` without the field."""
+        field, or for a set holding `NULL` without the field. In a set of floats `NaN` is a
+        member when the set holds `NaN`, as in the reference (ClickHouse's `has` misses it;
+        it already finds -0.0 in a set holding 0.0)."""
+        held = f"has({values}, {field})"
+        if values in self.float_sets:
+            held = f"({held} OR (isNaN({field}) AND arrayExists(v -> isNaN(v), {values})))"
         test = (
-            f"multiIf(empty({values}), false, {field} IS NULL, NULL, has({values}, {field}), "
+            f"multiIf(empty({values}), false, {field} IS NULL, NULL, {held}, "
             f"true, has({values}, NULL), NULL, false)"
         )
         return f"(NOT {test})" if negated else f"({test})"
@@ -522,17 +532,29 @@ class _ClickHouse(_Writer):
         return f"({_float_compared(left, op, right, (sides[0], sides[1]))})"
 
     def predicate(self, column: str, predicate: Mapping[str, Any], member: MemberId) -> str:
-        """A float's range as the reference compares it: `NaN` above every number."""
+        """A filter on a float as the reference compares it: `NaN` above every number in a
+        range, and `in`/`not_in` as `=` against each value, so -0.0 is 0 (ClickHouse's `IN`
+        keeps them apart, and refuses a decimal value for a float). A filter's value is a
+        decimal or an integer, never a float, so only the column can be `NaN`."""
         logical = self.compiled.require(member).typed.type.logical
-        if predicate["op"] != "range" or logical.datatype != "Float":
+        op = predicate["op"]
+        if logical.datatype != "Float" or op not in ("range", "in", "not_in"):
             return super().predicate(column, predicate, member)
-        signs = {"gte": ">=", "gt": ">", "lte": "<=", "lt": "<"}
-        terms = [
-            _float_compared(column, sign, self.value(predicate[key], member))
-            for key, sign in signs.items()
-            if key in predicate
-        ]
-        return "(" + " AND ".join(terms) + ")"
+        if op == "range":
+            signs = {"gte": ">=", "gt": ">", "lte": "<=", "lt": "<"}
+            terms = [
+                _float_compared(column, sign, self.value(predicate[key], member), (True, False))
+                for key, sign in signs.items()
+                if key in predicate
+            ]
+            return "(" + " AND ".join(terms) + ")"
+        equal = " OR ".join(f"{column} = {self.value(v, member)}" for v in predicate["values"])
+        if op == "in":
+            null = f" OR {column} IS NULL" if predicate["include_null"] else ""
+            return f"(({equal}){null})"
+        if predicate["exclude_null"]:
+            return f"({column} IS NOT NULL AND NOT ({equal}))"
+        return f"({column} IS NULL OR NOT ({equal}))"
 
     def after_position(self, encodings: Mapping[str, str]) -> str:
         """The rows strictly after the cursor's position, as the reference's keyset reads them

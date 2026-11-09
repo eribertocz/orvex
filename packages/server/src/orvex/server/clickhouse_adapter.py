@@ -6,9 +6,9 @@
 - `compile`: the semantic engine's ClickHouse adapter, with the exact column names the engine's
   catalog holds; every statement it writes is remembered with its result columns, so a read is
   only ever of a statement this adapter wrote (or the zone check, C6).
-- `estimate`: `EXPLAIN ESTIMATE` of the statement through the store, checked against the
-  rows-scanned budget before the read (law 7); a table of an engine without an estimate gives
-  none ("no statistics", `semantic-engine.md` §8).
+- `estimate`: `EXPLAIN ESTIMATE` of the statement through the store, recorded in the receipt
+  and never a refusal: no rows-scanned budget on ClickHouse (Owner, 2026-11-08; law 7); a
+  table of an engine without an estimate gives none ("no statistics", `semantic-engine.md` §8).
 - `read`: the store's read of that statement in its exact store types, under the question's
   time limit.
 - `evidence`: the records the connection's evidence schedule verified (`clickhouse_evidence`).
@@ -28,8 +28,6 @@ from orvex.semantic.evidence import EvidenceRecord
 from orvex.store.clickhouse import ClickHouse
 
 ENGINE = "clickhouse"
-# The most rows one question may scan on ClickHouse, by the engine's own estimate (law 7).
-ROWS_SCANNED_BUDGET = 1_000_000_000
 _ZONE_CHECK = (("#different", "BIGINT"),)
 
 
@@ -55,14 +53,12 @@ class ClickHouseAdapter:
         columns: Mapping[str, Sequence[str]],
         *,
         evidence: Callable[[], Iterable[EvidenceRecord]] = tuple,
-        rows_scanned: int = ROWS_SCANNED_BUDGET,
     ) -> None:
         self.connection = connection
         self.engine_version = engine.version
         self._engine = engine
         self._columns = {table: tuple(names) for table, names in columns.items()}
         self._evidence = evidence
-        self._rows_scanned = rows_scanned
         self._written: dict[str, tuple[tuple[str, str], ...]] = {ch.ZONE_CHECK_SQL: _ZONE_CHECK}
 
     def pin(self) -> Mapping[str, object]:
@@ -73,10 +69,9 @@ class ClickHouseAdapter:
         self._written[query.sql] = result_columns(query)
         return query
 
-    def estimate(self, query: PhysicalQuery, restricted: bool) -> Mapping[str, int] | None:
+    def estimate(self, query: PhysicalQuery) -> Mapping[str, int] | None:
         rows = self._engine.estimate(query.sql, _parameters(query.parameters))
         found = ch.rows_scanned(query, rows, self._engine.database)
-        ch.refuse_over_budget(found, self._rows_scanned, restricted)
         return None if found is None else {"rows_scanned": found}
 
     def read(

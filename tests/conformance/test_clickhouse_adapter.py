@@ -421,17 +421,6 @@ def test_a_rows_scanned_estimate_counts_every_read_and_needs_every_table() -> No
     assert ch.estimate_statement(query) == f"EXPLAIN ESTIMATE {query.sql}"
 
 
-def test_an_estimate_above_the_budget_is_refused_and_named_only_without_policies() -> None:
-    ch.refuse_over_budget(None, 1, restricted=False)  # no estimate decides nothing
-    ch.refuse_over_budget(10, 10, restricted=False)
-    with pytest.raises(SemanticError) as caught:
-        ch.refuse_over_budget(11, 10, restricted=False)
-    assert caught.value.details == {"budget": "rows_scanned", "limit": "10", "estimate": "11"}
-    with pytest.raises(SemanticError) as hidden:
-        ch.refuse_over_budget(11, 10, restricted=True)
-    assert hidden.value.details == {"budget": "rows_scanned", "limit": "10"}
-
-
 # --- parity on a ClickHouse server -----------------------------------------------------------
 
 PROFILE = {
@@ -445,7 +434,6 @@ PROFILE = {
     "cancel_http_readonly_queries_on_client_close": "1",
     "max_execution_time": "30",
     "max_memory_usage": "1000000000",
-    "max_result_rows": "1000000",
 }
 
 
@@ -641,7 +629,7 @@ class OnClickHouse:
         table = exact(pyarrow.ipc.open_stream(body).read_all(), kinds)
         return pa.RecordBatchReader.from_batches(table.schema, table.to_batches())
 
-    def estimate(self, query: PhysicalQuery, restricted: bool) -> Mapping[str, int] | None:
+    def estimate(self, query: PhysicalQuery) -> Mapping[str, int] | None:
         return None
 
     def evidence(self) -> tuple[()]:
@@ -739,7 +727,7 @@ def test_each_dialect_difference_answers_as_the_managed_lake(
     assert adapter.statements  # read on ClickHouse, not on the lake
 
 
-def test_explain_estimate_drives_the_budget_on_mergetree_and_not_on_memory(
+def test_explain_estimate_counts_a_mergetree_read_and_nothing_on_memory(
     server: Server,
 ) -> None:
     query = written(question("total"))
@@ -752,9 +740,6 @@ def test_explain_estimate_drives_the_budget_on_mergetree_and_not_on_memory(
         )
         rows = [json.loads(line) for line in body.decode().splitlines() if line]
         assert ch.rows_scanned(query, rows, server.database) == expected
-    with pytest.raises(SemanticError) as caught:
-        ch.refuse_over_budget(4, 3, restricted=False)
-    assert caught.value.code == "QUERY_BUDGET_EXCEEDED"
 
 
 # Policies: the managed lake resolves each mapping set; ClickHouse runs the restriction.

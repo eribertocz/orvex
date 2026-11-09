@@ -39,10 +39,6 @@ from orvex.store.errors import StoreError
 
 log = logging.getLogger(__name__)
 POLL_SECONDS = 60.0  # how often the thread looks for a due schedule (each is at least 1h)
-# The most rows one ClickHouse question may return; the server's `max_result_rows` must not be
-# above it. The managed lake caps detail pages only (`DETAIL_PAGE_CAP`), so this has no
-# equivalent there. Time and memory reuse the managed lake's budgets (`opened`).
-RESULT_ROWS = 10_000_000
 SCHEMA = "main"  # a connection's database, as a dataset's unqualified `source` names it
 
 
@@ -209,9 +205,7 @@ def opened(
     as its error), with its evidence schedule. `timeout_ms` and `memory_limit` are the managed
     lake's per-question budgets (`QUERY_TIMEOUT_MS`, `commands.memory_limit`)."""
     engines = ClickHouseEngines()
-    budget = Budget(
-        timeout_ms=timeout_ms, memory_bytes=memory_bytes(memory_limit), result_rows=RESULT_ROWS
-    )
+    budget = Budget(timeout_ms=timeout_ms, memory_bytes=memory_bytes(memory_limit))
     for name, connection in sorted(clickhouse_connections(connections).items()):
         try:
             engine: ClickHouse | StoreError = ClickHouse.connect(target(connection), budget)

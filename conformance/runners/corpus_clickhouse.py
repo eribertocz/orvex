@@ -51,13 +51,12 @@ SERVER = "CORPUS_CLICKHOUSE"
 PASSWORD = "CORPUS_CLICKHOUSE_PASSWORD"
 READER_PASSWORD = "CORPUS_CLICKHOUSE_READER_PASSWORD"  # set for each case, never stored
 CONNECTION = "corpus_warehouse"
-BUDGET = Budget(timeout_ms=60_000, memory_bytes=2_000_000_000, result_rows=1_000_000)
+BUDGET = Budget(timeout_ms=60_000, memory_bytes=2_000_000_000)
 PROFILE = {
     "readonly": "1",
     **REQUIRED_SETTINGS,
     "max_execution_time": "60",
     "max_memory_usage": "2000000000",
-    "max_result_rows": "1000000",
 }
 
 
