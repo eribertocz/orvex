@@ -250,6 +250,9 @@ def test_record_statements_bind_every_value(tmp_path: Path) -> None:
     assert values["p_rows_written"] is None
     assert values["p_project_dirty"] == "false"
     assert "p_snapshot_id" not in values  # resolved from the row's own snapshot when read
+    # Each parameter is written exactly once in the statement.
+    for parameter in insert.parameters:
+        assert len(re.findall(rf"\${parameter.name}\b", insert.sql)) == 1, parameter.name
     # Every parameter is found and bound, with its declared type, the way the store binds it.
     with recorded_lake(tmp_path, record) as lake:
         sql = "SELECT error_code, rows_written, project_dirty FROM _meta.run_records_v2"
@@ -273,6 +276,8 @@ def test_history_parameters_bind(tmp_path: Path) -> None:
         request = history_request(lake.current_snapshot().id, "America/La_Paz", 5, tables)
         assert request is not None
         assert len(request.parameters) == 2
+        for parameter in request.parameters:
+            assert len(re.findall(rf"\${parameter.name}\b", request.sql)) == 1, parameter.name
         assert [row["run_id"] for row in lake_read(lake, request)] == [record.run_id]
 
 
