@@ -4,10 +4,119 @@ Product releases of Orvex. Module versions are listed in `versions.toml`; the fo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
 [Semantic Versioning](https://semver.org/) (`docs/process/versioning.md`).
 
-## Unreleased
+## v0.3.0-alpha.1 — 2026-11-09
+
+Phase P2 (Semantic engine: parity with SEF). Alpha: formats and contracts may still change between phases.
+
+**Requires Python 3.14 or later.**
+
+Modules: contracts, server and store `0.3.0`; access and semantic `0.2.0`; transform `0.2.1`; dashboards and mcp stay `0.1.0`.
+
+### Added
+- `contracts`: Ossie-extensions v1, the payload of every v1 semantic declaration (#281)
+- `semantic`: Semantic-error v1 and the stable error catalog (P2-02) (#282)
+- `semantic`: Ossie adapter, read and validate documents into a reference-resolved OssieModel (P2-03) (#286)
+- `semantic`: Canonical JSON (own RFC 8785) and fingerprint primitives (P2-04a) (#292)
+- `semantic`: Expression parser, P2-03 advisories, cycles and lineage (P2-04b) (#294)
+- `semantic`: Type system, exact decimal rules and source catalog (P2-04c) (#295)
+- `semantic`: Units and currencies by dimensional analysis (P2-04d) (#296)
+- `semantic`: Required declarations, CompiledModel and model fingerprints (P2-04e) (#298)
+- `semantic`: Semantic-query v1 and QUERY_INVALID (P2-05a) (#299)
+- `semantic`: Bind semantic-query v1 to a canonical form and fingerprint (P2-05b) (#300)
+- `semantic`: Semantic-result v1 and PAGE_CURSOR_INVALID (P2-06a) (#301)
+- `semantic`: Semantic results, reference reader and cursor contract (P2-06b) (#302)
+- `semantic`: Receipt v1, the record of every result and its views (P2-07) (#305)
+- `semantic`: Security-policies v1, security.yaml and the policy model (P2-08) (#307)
+- `access`: Security-context v1, the permission fingerprint and a fixture provider (P2-09) (#308)
+- `semantic`: Catalog v1, the members a caller may see, and Ossie export with a loss report (P2-10) (#312)
+- `semantic`: Correctness engine framework and C1, the grain algebra (P2-11) (#323)
+- `semantic`: Planner, DuckDB adapter and pinned execution; first real corpus results (P2-12) (#324)
+- `semantic`: Ratios recomputed from components with exact division and declared rounding (P2-13) (#328)
+- `semantic`: Distinct counts and period-end balances (P2-14) (#330)
+- `semantic`: Relationship paths and roles, completing C4 (P2-15) (#332)
+- `semantic`: Isolate each fact and align on the requested grain (P2-16) (#335)
+- `semantic`: Align facts on conformed dimensions and compute metrics over metrics last (P2-17) (#336)
+- `semantic`: Allocate a metric through a bridge with weights validated in the same read (P2-18) (#338)
+- `semantic`: Convert instants to their declared zone before calendar bucketing (P2-19) (#339)
+- `semantic`: Guard as-of joins to exactly one match, and run totals after aggregation (P2-20) (#342)
+- `semantic`: Place row policies before aggregation at every read (P2-21) (#343)
+- `semantic`: Verify obligation discharge on the plan and the statement (P2-22) (#347)
+- `semantic`: Totals and subtotals through grouping sets, with every rule at every level (P2-23) (#349)
+- `semantic`: Detail pages at the base grain, in keyset pages on one snapshot (P2-24) (#350)
+- `semantic`: Materialization equivalence proof and substitution, with exact policy preservation (P2-25) (#353)
+- `semantic`: Evidence checked per snapshot and relied on by plans (P2-26) (#356)
+- `store`: Snapshot file statistics for read-cost upper bounds (P2-24b) (#357)
+- `server`: Load and compile the project's semantic model at an exact snapshot (P2-26a) (#360)
+- `server`: Verify evidence after runs and on demand, kept in the lake (P2-26b) (#362)
+- `server`: HTTP semantic query and catalog behind the serve session's credentials (P2-27a) (#365)
+- `server`: Explain a semantic question with no data read; query performance baseline (P2-27b) (#366)
+- `semantic`: Add the Direct Query foundation (P2-29) (#371)
+- `store`: Read every database source in a worker without the lake (#372) (#374)
+- `semantic`: Apply propagated row policies to an aggregate table that keeps their link (#384)
+- `server`: Say new rows and the table total, and when the scheduler runs next (#396)
+- `store`, `server`: ClickHouse Direct Query connection — verified read-only, exact reads (#225, PR 1 of 4) (#400)
+- `store`: Attach an existing DuckLake read-only and isolated (#399, PR 1 of 3) (#405)
+- `store`, `server`: Keep an existing DuckLake apart from the instance's files (#399, PR 2 of 3) (#407)
+- `semantic`: Add the ClickHouse dialect adapter, core capabilities (#225, PR 2 of 4) (#408)
+- `semantic`, `store`, `server`: Wire an existing DuckLake as a Direct Query engine (#399, PR 3a) (#413)
+- `server`, `store`, `conformance`: Serve existing DuckLakes and prove corpus parity on them (#399, PR 3b) (#416)
+- `semantic`: Run every capability on the ClickHouse adapter (#225, PR 3) (#418)
+- `semantic`, `server`, `conformance`: ClickHouse as a Direct Query engine with receipts, evidence, cost and parity (#225, PR 4) (#421)
+
+### Changed
+- `repo`: Gate the case matrix, the PR size and data reads outside DuckDB (#265)
+- `ci`: Verify locally with the official DuckDB extensions and one check list (#266)
+- `server`: Use the address the started server announces, and wait until it answers (#274)
+- `repo`: No required check can be skipped silently; scoped checks report "Not applicable" (#269)
+- `web`: Bump eslint from 10.13.0 to 10.14.0 in /web (#315)
+- `web`: Bump @sveltejs/adapter-static from 4.0.0 to 4.0.1 in /web (#322)
+- `web`: Bump @sveltejs/kit from 3.1.0 to 3.1.1 in /web (#321)
+- `repo`: Bump hypothesis from 6.170.12 to 6.170.14 (#314)
+- `repo`: Bump datamodel-code-generator from 0.86.0 to 0.87.0 (#316)
+- `repo`: Bump mypy from 2.4.0 to 2.4.1 (#317)
+- `repo`: Bump tzdata from 2026.5 to 2026.6 (#318)
+- `repo`: Bump types-pyyaml from 6.0.12.20260906 to 6.0.12.20261030 (#319)
+- `semantic`: Generated questions against a pure-Decimal oracle and plain DuckDB (P2-28) (#369)
+- `ci`: Add test profiles, impact selection and timing records (#378)
+- `store`: Prove the work bounds instead of timing them on a shared runner (#381)
+- `server`: Read the run records again only when the lake's catalog changes (#383)
+- `repo`: Freeze shared fixtures, run in random order, prove it on Windows (#379)
+- `repo`: Cancel a pull request's superseded runs (#388)
+- `ci`: Track test-time trends and follow nightly failures (#380)
+- `repo`: Run the whole suite on 3.15 and the pr selection on 3.14 in pull requests (#392)
+- `repo`: Fail when a raised contract error code has no test (#397)
+- `repo`: Fast pull requests — the change's selection on every Python, spread over every part (#401)
+- `repo`: Warn on large files, fail on import cycles and façade imports (#398)
+- `ci`: Faster store tests, earlier test services and a fresh durations record (#403)
+- `semantic`: Add a weekly read-only watch of apache/ossie (#402)
+- `repo`: One purpose per file, enforced — first rule for agents, purpose check, size ceiling that only shrinks (#246) (#409)
+- `transform`, `repo`: Split incremental and the boundary checks by purpose; one transform SQL parser (#246) (#414)
+- `ci`: Fall back to round robin on a corrupt or stale duration record (#261) (#415)
+- `store`: Split lake.py and the source worker by purpose, no behavior change (#246, PR 2) (#419)
+- `server`: Split commands.py by command, no behavior change (#246, PR 3) (#420)
+
+### Fixed
+- `store`: Refuse DuckDB sources with generated columns before any read (#273)
+- `semantic`: Write schema-qualified sources as separate identifiers (P2-26c) (#361)
+- `semantic`: Refuse a page cursor that is not its canonical Base64 (#387)
+- `transform`: Refuse a lookback that is not whole days on a DATE time column (#390)
+- `store`, `server`: Record the snapshot a transaction committed, found by its own token (#393)
+- `store`: Refuse a Parquet decimal DuckDB does not read as one (#389)
+- `store`: Keep the engine's catalog and settings out of SQL, redact escaped secrets (#395)
+- `server`: Commit a successful run's records with its data (#406)
+- `store`, `server`: Refuse nested UHUGEINT, read policies strictly, isolate source copies (#412)
+- `conformance`: Run CASE-008 on every route and fail a runner-side not-run (#423)
 
 ### Security
 - A DuckDB-file source with generated columns is now refused (`STORE_SOURCE_INVALID`), before anything is read (#268). A `VIRTUAL` generated column's expression ran in the lake's session when the column was read, and could return the lake session's settings. `STORED` generated columns are refused too, as a precaution: no leak through them was shown, and DuckDB 2.0.0 cannot create them.
+- `web`: Override minimatch to 11.0.5 for GHSA-g3hv-75wg-m249 (#242, PR 1) (#411)
+
+### Documentation and process
+- `repo`: Write the P2 working rules approved by the Owner (#264)
+- `adr`: ADR-0029, the semantic engine scope for v1.0.0 is S1–S14 (#275)
+- `repo`: Study prior art in proportion to complexity, novelty and risk (#279)
+- `adr`: ADR-0030, evolving with Apache Ossie through a version registry (#284)
+- `repo`: Record the P2 query-performance baseline (#364) (#368)
 
 ## v0.2.0-alpha.1 — 2026-10-31
 
