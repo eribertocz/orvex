@@ -46,6 +46,7 @@ PASSING = {
     "CASE-002",
     "CASE-006",
     "CASE-007",
+    "CASE-008",
     "CASE-020",
     "CASE-021",
     "CASE-003",
@@ -139,6 +140,43 @@ def test_every_case_is_answered_or_not_run_with_its_capability() -> None:
     assert sum(report.expected == "result" for report in reports) == 18
     assert sum(report.expected == "error" for report in reports) == 3
     assert {report.model for report in reports} == {"valid"}
+
+
+def test_a_runner_side_not_run_fails_the_required_run(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#422: a case the runner skips (`NOT_YET`) is a finding, and the command exits 1; only
+    an engine's declared refusal may end a case `not-run`."""
+    from conformance.runners import corpus_execution, semantic_corpus
+
+    monkeypatch.setattr(corpus_execution, "NOT_YET", {"CASE-001": "skipped by the runner"})
+    _, findings = run()
+    assert [str(f) for f in findings] == [
+        "CORPUS_CASE_NOT_RUN: CASE-001: library: skipped by the runner"
+    ]
+    monkeypatch.setattr(sys, "argv", ["semantic_corpus", "--through", "both"])
+    assert semantic_corpus.main() == 1
+    printed = capsys.readouterr().out
+    assert "CORPUS_CASE_NOT_RUN: CASE-001: library: skipped by the runner" in printed
+    assert "CORPUS_CASE_NOT_RUN: CASE-001: http: skipped by the runner" in printed
+
+
+def test_a_declared_refusal_ends_not_run_without_a_finding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#422: the route's own refusal (the switch off) is the product refusing: `not-run`, and
+    no finding of the runner's."""
+    from conformance.runners.semantic_corpus import load_case, ossie_validator
+
+    existing_ducklake_server(monkeypatch)
+    switch(monkeypatch, on=False)
+    manifest = json.loads((ROOT / CORPUS / "corpus/manifest.json").read_text("utf-8"))
+    entry = next(e for e in manifest["cases"] if e["id"] == "CASE-001")
+    report, findings = load_case(
+        ROOT / CORPUS, entry, ossie_validator(ROOT / OSSIE), through="existing-ducklake"
+    )
+    assert report is not None
+    assert (report.status, findings) == ("not-run", [])
 
 
 def test_expected_errors_map_to_product_codes() -> None:

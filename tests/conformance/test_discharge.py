@@ -68,7 +68,22 @@ def plans() -> dict[str, SemanticPlan]:
 
 
 def target(obligation: Obligation) -> str:
-    return obligation.id.split(":", 1)[1]
+    """The obligation's element, without the total level it holds at (`@<level>`, P2-23)."""
+    return obligation.id.split(":", 1)[1].split("@", 1)[0]
+
+
+def level_mutations(found: SemanticPlan, obligation: Obligation) -> list[Mutation]:
+    """For an obligation held at a total level (#422, CASE-008): the way to take that level away,
+    besides every way to bend the step itself."""
+    if "@" not in obligation.id:
+        return []
+    level = int(obligation.id.rsplit("@", 1)[1])
+    return [
+        (
+            "drop the total level",
+            replace(found, levels=tuple(n for n in found.levels if n != level)),
+        ),
+    ]
 
 
 def label(found: SemanticPlan, member: Any) -> str:  # noqa: ANN401
@@ -78,6 +93,11 @@ def label(found: SemanticPlan, member: Any) -> str:  # noqa: ANN401
 
 def mutations(found: SemanticPlan, obligation: Obligation) -> list[Mutation]:
     """Each way to take away or bend the step that discharges `obligation`."""
+    return [*step_mutations(found, obligation), *level_mutations(found, obligation)]
+
+
+def step_mutations(found: SemanticPlan, obligation: Obligation) -> list[Mutation]:
+    """Each way to take away or bend the step itself."""
     name = target(obligation)
     aggregate = next((a for a in found.aggregates if label(found, a.metric) == name), None)
     derived = next((d for d in found.derived if label(found, d.metric) == name), None)

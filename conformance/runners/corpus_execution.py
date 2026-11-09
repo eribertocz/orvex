@@ -63,6 +63,9 @@ _TYPES = {"TIMESTAMP WITH TIME ZONE": "TIMESTAMPTZ"}
 class CaseRun:
     status: str  # pass, fail or not-run
     reason: str  # the capability not yet implemented, the mismatch, or the error code
+    # Whether a `not-run` is the engine's declared refusal; any other `not-run` is the runner's,
+    # and fails a required run (#422).
+    refused: bool = False
 
 
 def _quote(name: str) -> str:
@@ -225,12 +228,14 @@ PENDING = {
 }
 
 
-# Cases this runner cannot exercise yet, for a reason outside the engine's own refusals.
-NOT_YET: Mapping[str, str] = {
-    # Its expected file holds the overall count beside the per-region ones: a total (P2-23).
-    # Both are answered exactly, and proven in tests/conformance/test_period_end.py.
-    "CASE-008": "the overall count is a total (P2-23)",
-}
+# Cases this runner cannot exercise yet, for a reason outside the engine's own refusals. Each
+# one fails a required run (#422): none is listed.
+NOT_YET: Mapping[str, str] = {}
+
+# The corpus writes a result with totals (CASE-008) with its group column named `scope`, and a
+# total row's rolled-up group as `ALL`.
+TOTAL_COLUMN = "scope"
+TOTAL_VALUE = "ALL"
 
 
 def capability(operation: str) -> str:
@@ -371,8 +376,10 @@ def run_case(
         for e in compiled.ossie.product_extensions
         if "conformed_dimension" in e.payload
     }
+    totals = "row_roles" in found.envelope
     accepted = [
         {c["name"], c.get("bucket", {}).get("unit", c["name"])}
+        | ({TOTAL_COLUMN} if totals and c.get("role") == "dimension" else set())
         | {
             conformed[m.parsed.pointer]
             for m in (compiled.members[k] for k in compiled.members if _is(k, c["member"]))
@@ -383,7 +390,7 @@ def run_case(
     header = list(expected[0]) if expected else []
     if len(header) != len(names) or any(h not in a for h, a in zip(header, accepted, strict=True)):
         return CaseRun("fail", f"columns {names}")
-    got = found.rows
+    got = totals_written(found)
     dates = [c["encoding"] == "DATE" for c in columns]
     return CaseRun("pass", "") if same(got, wanted, dates) else CaseRun("fail", f"rows {got}")
 
@@ -395,6 +402,20 @@ def _is(member: Any, written: Mapping[str, Any]) -> bool:  # noqa: ANN401
     dataset = written.get("dataset")
     expected = sql.normalize(str(dataset)) if dataset else None
     return bool(member.name == sql.normalize(str(written["name"])) and member.dataset == expected)
+
+
+def totals_written(found: Answered) -> list[list[str | None]]:
+    """The rows as the corpus writes them: in a row the result marks as a total or subtotal,
+    each dimension it does not keep is `ALL`; every other cell, a `NULL` included, unchanged."""
+    roles = found.envelope.get("row_roles")
+    if roles is None:
+        return found.rows
+    columns = found.envelope["columns"]
+    dimensions = [i for i, c in enumerate(columns) if c.get("role") == "dimension"]
+    return [
+        [TOTAL_VALUE if i in dimensions[role["level"] :] else v for i, v in enumerate(row)]
+        for row, role in zip(found.rows, roles, strict=True)
+    ]
 
 
 def same(got: list[list[str | None]], wanted: list[list[str | None]], dates: list[bool]) -> bool:
@@ -419,7 +440,8 @@ def _refused(error: SemanticError, expected_code: str | None) -> CaseRun:
         if error.code != "UNSUPPORTED_OPERATION":
             return CaseRun("fail", f"{error.code} instead of {expected_code}")
     if error.code == "UNSUPPORTED_OPERATION":
-        return CaseRun("not-run", capability(str(error.details["operation"])))
+        return CaseRun("not-run", capability(str(error.details["operation"])), refused=True)
     if error.code == "MISSING_EXTENSION_DECLARATION":
-        return CaseRun("not-run", f"declaration {error.details['declaration']} (#283)")
+        declaration = error.details["declaration"]
+        return CaseRun("not-run", f"declaration {declaration} (#283)", refused=True)
     return CaseRun("fail", error.code)

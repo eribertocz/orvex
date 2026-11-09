@@ -12,7 +12,8 @@ only when every case loads, none fails, and both ways give the same outcome. Sin
 `--through existing-ducklake` also asks every case on an existing DuckLake with a PostgreSQL
 catalog (`corpus_existing_ducklake`) and compares it with the library: the corpus parity.
 Since P2-31 (#225), `--through clickhouse` asks every case on ClickHouse (`corpus_clickhouse`)
-and compares it with the library in the same way.
+and compares it with the library in the same way. Since #422, a case run but left `not-run` for
+any reason other than an engine's declared refusal is a finding: the runner never skips silently.
 """
 
 from __future__ import annotations
@@ -190,6 +191,8 @@ def load_case(
 
         outcome = run_case(case, folder, model_path, code)
         status, reason = outcome.status, outcome.reason
+        if status == "not-run" and not outcome.refused:  # the runner's skip, never a pass (#422)
+            findings.append(Finding("CORPUS_CASE_NOT_RUN", case, f"{through}: {reason}"))
     report = CaseReport(
         case=case,
         title=entry["title"],
@@ -282,7 +285,8 @@ def main() -> int:
     runs = {way: run(arguments.root, through=way) for way in ways}
     reports, findings = runs[ways[0]]
     if len(ways) == 2:
-        findings = [*findings, *compare(reports, runs[ways[1]][0], ways[1])]
+        not_run = [f for f in runs[ways[1]][1] if f.code == "CORPUS_CASE_NOT_RUN"]
+        findings = [*findings, *not_run, *compare(reports, runs[ways[1]][0], ways[1])]
     else:
         findings = [
             *findings,

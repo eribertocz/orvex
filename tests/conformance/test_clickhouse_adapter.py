@@ -68,9 +68,7 @@ MANIFEST = json.loads((CORPUS / "corpus/manifest.json").read_text("utf-8"))
 # The corpus cases ClickHouse answers: every case the managed lake answers (the others are
 # refused when the model is compiled, before any engine).
 ANSWERED = tuple(
-    c["id"]
-    for c in MANIFEST["cases"]
-    if c["id"] not in ("CASE-008", "CASE-016", "CASE-017", "CASE-020")
+    c["id"] for c in MANIFEST["cases"] if c["id"] not in ("CASE-016", "CASE-017", "CASE-020")
 )
 ENTRY = EngineEntry(
     "warehouse", "clickhouse", "live", "clickhouse://localhost/test", ch.CAPABILITIES
@@ -393,7 +391,7 @@ def test_every_corpus_statement_passes_the_allow_lists(
     if case in ANSWERED:
         assert outcomes
         assert set(outcomes) == {"compiled"}
-    else:  # refused when the model is compiled, or not run: nothing is planned
+    else:  # refused when the model is compiled: nothing is planned
         assert outcomes == []
 
 

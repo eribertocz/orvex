@@ -1,5 +1,5 @@
 {
-  "_comment": "The requested semantic query of each corpus case (its README's 'Requested semantic query'), written once as a semantic-query v1 query (#283). Not normative: the cases' prose is. CASE-015's tenant comes from the caller's security context (P2-08), not from the query; CASE-016 names no role on purpose; CASE-017 asks for its derived `combined` metric, which the adapter declares (P2-16). CASE-007 buckets the daily snapshots by month, as its expected results are per month. CASE-008's overall count is a total, which v1 queries do not express (totals are P7); the query asks for the count by region. CASE-020 sums the year's balances with no filter, as its README asks.",
+  "_comment": "The requested semantic query of each corpus case (its README's 'Requested semantic query'), written once as a semantic-query v1 query (#283). Not normative: the cases' prose is. CASE-015's tenant comes from the caller's security context (P2-08), not from the query; CASE-016 names no role on purpose; CASE-017 asks for its derived `combined` metric, which the adapter declares (P2-16). CASE-007 buckets the daily snapshots by month, as its expected results are per month. CASE-008 asks for the count by region with its grand total (P2-23), the overall count its expected file writes as the `ALL` row. CASE-020 sums the year's balances with no filter, as its README asks.",
   "queries": {
     "CASE-001": {
       "kind": "semantic_query",
@@ -128,6 +128,7 @@
           "metric": "active_customers"
         }
       ],
+      "totals": "grand",
       "group_by": [
         {
           "member": "activity.region"
