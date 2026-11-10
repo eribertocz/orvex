@@ -16,11 +16,13 @@ def test_x() -> None:
     assert True
 
 
-def test_examples_are_derandomized_while_measuring() -> None:
+def test_hypothesis_is_reproducible_and_never_explains_while_measuring() -> None:
     import os
-    measuring = os.environ.get("PYTEST_COVERAGE") == "1"
-    assert hypothesis.settings().derandomize is measuring
-    assert (hypothesis.settings().database is None) is measuring
+    if os.environ.get("PYTEST_COVERAGE") == "1":
+        current = hypothesis.settings()
+        assert current.derandomize
+        assert current.database is None
+        assert hypothesis.Phase.explain not in current.phases
 """
 
 
