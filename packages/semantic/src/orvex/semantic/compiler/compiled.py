@@ -116,6 +116,32 @@ class CompiledModel:
         self.typed.parsed.require(member)
         return self.members[member]
 
+    def reads(self, member: MemberId) -> tuple[MemberId, ...]:
+        """`member` and every field and metric it reads, transitively, in a fixed order: the
+        member first, then each dependency depth-first in its sorted `depends_on` (#426). A
+        declaration any of them lacks is the question's, wherever the expression is inlined."""
+        found: dict[MemberId, None] = {}
+        pending = [member]
+        while pending:
+            current = pending.pop()
+            if current in found:
+                continue
+            found[current] = None
+            pending.extend(reversed(self.require(current).parsed.depends_on))
+        return tuple(found)
+
+    def lacking(
+        self, member: MemberId, besides: tuple[str, ...] = ()
+    ) -> tuple[tuple[MemberId, str], ...]:
+        """Each declaration `member` or anything it reads lacks, but those in `besides`, with
+        the member lacking it, in the order of `reads`."""
+        return tuple(
+            (read, missing)
+            for read in self.reads(member)
+            for missing in self.require(read).missing
+            if missing not in besides
+        )
+
 
 # --- JSON documents -------------------------------------------------------------------------
 
@@ -317,6 +343,20 @@ def _walk(tree: TypedNode | None) -> Iterator[TypedNode]:
         yield from _walk(child)
 
 
+def nonzero_literal(node: sql.Node) -> bool:
+    """A numeric literal other than zero, signed or not: a divisor that needs no zero policy."""
+    if isinstance(node, sql.Unary) and node.op in ("-", "+"):
+        return nonzero_literal(node.operand)
+    return isinstance(node, sql.Number) and Decimal(node.text) != 0
+
+
+def zero_literal(node: sql.Node) -> bool:
+    """A numeric literal equal to zero, signed or not: a divisor that never gives a value."""
+    if isinstance(node, sql.Unary) and node.op in ("-", "+"):
+        return zero_literal(node.operand)
+    return isinstance(node, sql.Number) and Decimal(node.text) == 0
+
+
 def _is_ratio(node: TypedNode) -> bool:
     if not (isinstance(node.node, sql.Binary) and node.node.op == "/"):
         return False
@@ -512,7 +552,9 @@ class _Model:
         exact_divisions = [n for n in divisions if n.type.logical.datatype == "Decimal"]
         if (exact_divisions or means) and "rounding" not in payload:
             found.add("rounding")
-        if divisions and "zero_denominator" not in payload:
+        if "zero_denominator" not in payload and any(
+            isinstance(n.node, sql.Binary) and not nonzero_literal(n.node.right) for n in divisions
+        ):
             found.add("zero_denominator")
         logical = typed.type.logical
         if typed.tree is None and (

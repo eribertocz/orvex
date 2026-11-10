@@ -77,8 +77,9 @@ from orvex.semantic.adapters.duckdb import (
 )
 from orvex.semantic.catalog.building import _logical
 from orvex.semantic.compiler.catalog import LogicalType, column_key
+from orvex.semantic.compiler.compiled import zero_literal
 from orvex.semantic.compiler.parsing import MemberId
-from orvex.semantic.compiler.typecheck import NodeType, TypedNode
+from orvex.semantic.compiler.typecheck import NodeType
 from orvex.semantic.engines import CAPABILITIES as ENGINE_CAPABILITIES
 from orvex.semantic.engines import required
 from orvex.semantic.errors import PlanError, SemanticError
@@ -128,7 +129,7 @@ class _ClickHouse(_Writer):
         self.catalog(plan.compiled, columns)
 
     def catalog(self, compiled: Any, columns: Mapping[str, Iterable[str]]) -> None:  # noqa: ANN401
-        """Each table's exact column names, and every model expression's type."""
+        """Each table's exact column names (every model expression's type is the dialect's)."""
         self.levels: list[tuple[str, str]] = []  # a pivot table's sort keys (`by_level`)
         self.float_sets: set[str] = set()  # every bound set of floats (`membership`)
         # Each table's columns, by DuckDB's identity of a name (the compiler's), exact.
@@ -140,18 +141,6 @@ class _ClickHouse(_Writer):
                     raise PlanError("two columns of one ClickHouse table differ only in case")
                 exact[column_key(name)] = name
             self.names[source] = exact
-        # The type of every expression node of the model, by identity (the compiled trees).
-        self.types: dict[int, NodeType] = {}
-        for member in compiled.members.values():
-            trees = [member.typed.tree, *(v for _, v in member.typed.payload)]
-            for tree in trees:
-                if isinstance(tree, TypedNode):
-                    self.index(tree)
-
-    def index(self, tree: TypedNode) -> None:
-        self.types[id(tree.node)] = tree.type
-        for child in tree.children:
-            self.index(child)
 
     # hooks
 
@@ -308,7 +297,18 @@ class _ClickHouse(_Writer):
             return f"CAST('{node.text}' AS {engine_type(number_parameter(node.text))})"
         if isinstance(node, sql.Unary) and node.op in ("-", "+"):
             return self.declared(node, f"({node.op}{self.exact(node.operand, again)})")
-        if isinstance(node, sql.Binary) and node.op in ("+", "-", "*"):
+        if isinstance(node, sql.Case) and node.operand is None:
+            values = [t for _, t in node.whens] + [o for o in (node.otherwise,) if o is not None]
+            scale = self.common_scale(node, values)
+            text = "".join(
+                f" WHEN {again(w)} THEN {self.at(scale, t, again)}" for w, t in node.whens
+            )
+            if node.otherwise is not None:
+                text += f" ELSE {self.at(scale, node.otherwise, again)}"
+            return f"(CASE{text} END)"
+        if isinstance(node, sql.Binary) and node.op in ("+", "-", "*", "%"):
+            if node.op == "%" and zero_literal(node.right):
+                raise _unsupported()  # never a value: an error on every row
             left, right = self.types.get(id(node.left)), self.types.get(id(node.right))
             if (
                 left is not None
@@ -318,17 +318,20 @@ class _ClickHouse(_Writer):
             ):
                 if node.op == "*" and _bits(left) + _bits(right) > WIDE_BITS:
                     raise _unsupported()  # a product past 76 digits would wrap
-                written = (self.exact(node.left, again), self.exact(node.right, again))
+                if node.op == "%":  # ClickHouse's modulo needs one scale on both sides
+                    common = max(int(_scale(left) or 0), int(_scale(right) or 0))
+                    written = (wide(again(node.left), common), wide(again(node.right), common))
+                else:
+                    written = (self.exact(node.left, again), self.exact(node.right, again))
             elif left is not None and right is not None:
                 written = (again(node.left), again(node.right))  # a float's own arithmetic
             else:
                 raise _unsupported()
             return self.declared(node, f"({written[0]} {node.op} {written[1]})")
         if isinstance(node, sql.Binary) and node.op == "/":
-            sides = (self.types.get(id(node.left)), self.types.get(id(node.right)))
-            if not all(s is not None and s.logical.datatype == "Float" for s in sides):
+            if not self.divisible(node):
                 raise _unsupported()  # an exact quotient is C2's division, never `/`
-            return f"({again(node.left)} / {again(node.right)})"
+            return self.binary(node, "/", again)  # a float's, by its zero policy
         if (
             isinstance(node, sql.Binary)
             and node.op in _COMPARISONS
@@ -412,6 +415,24 @@ class _ClickHouse(_Writer):
             again(node.operand), f"DECIMAL({int(node.arguments[0])},{int(node.arguments[1])})"
         )
 
+    def zero_as_null(self, value: str) -> str:
+        return f"nullIf({value}, 0)"
+
+    def common_scale(self, node: sql.Node, values: Iterable[sql.Node]) -> int | None:
+        """The scale the values of a conditional (`CASE`, `COALESCE`, `NULLIF`, `ABS`) are
+        written at, when it is a decimal: the largest of theirs and its own, so no value loses a
+        digit. ClickHouse refuses alternatives of different scales, which the reference widens
+        to their common type; `NULLIF` compares at that scale and returns its first value
+        unchanged (#426)."""
+        typed = self.types.get(id(node))
+        if typed is None or typed.logical.datatype != "Decimal":
+            return None
+        scales = [_scale(self.types.get(id(v))) for v in values] + [_scale(typed)]
+        return max(s for s in scales if s is not None)
+
+    def at(self, scale: int | None, value: sql.Node, again: Callable[[sql.Node], str]) -> str:
+        return again(value) if scale is None else wide(again(value), scale)
+
     def exact(self, node: sql.Node, again: Callable[[sql.Node], str]) -> str:
         """An exact value in 76 digits, so no step narrows or wraps it."""
         scale = _scale(self.types.get(id(node)))
@@ -448,7 +469,9 @@ class _ClickHouse(_Writer):
             return f"{function}If({value}, {where})"
         if name in ("COALESCE", "NULLIF", "ABS") and node.filter is None:
             function = {"COALESCE": "coalesce", "NULLIF": "nullIf", "ABS": "abs"}[name]
-            return f"{function}({', '.join(again(a) for a in node.arguments)})"
+            scale = self.common_scale(node, node.arguments)
+            written = (self.at(scale, a, again) for a in node.arguments)
+            return f"{function}({', '.join(written)})"
         raise _unsupported()  # LOWER and UPPER included: ClickHouse's case mapping differs
 
     def cut(self, unit: str, value: str, zone: str | None) -> str:

@@ -25,6 +25,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.ipc
 import pytest
+from hypothesis import HealthCheck, given, settings
 from orvex.contracts.store.v1 import Parameter, ParameterType, StatementRequest
 from orvex.semantic import execution, external
 from orvex.semantic.adapters import clickhouse as ch
@@ -57,8 +59,10 @@ from orvex.store.lake import Lake
 from conformance.runners import bi_platform_adapter
 from conformance.runners import corpus_execution as ce
 from tests.conformance import test_direct_query as dq
+from tests.conformance import test_exact_arithmetic as exact_case
 from tests.conformance import test_row_policies as rp
 from tests.conformance.test_execution import no_policies
+from tests.properties import exact as generated_exact
 from tests.support.policies import VENDORS, extension
 
 Document = dict[str, Any]
@@ -1099,3 +1103,147 @@ def test_a_power_of_ten_past_hugeint_is_checked_and_never_wrapped() -> None:
     assert writer.scaled("v", 2) == ch_exact.checked(
         f"(toInt256(v) * toInt256({writer.power(2)}))", "HUGEINT"
     )
+
+
+# --- exact arithmetic parity (#426) -------------------------------------------------------------
+
+
+def both(
+    server: Server,
+    compiled: CompiledModel,
+    catalog: Mapping[str, Mapping[str, SourceColumn]],
+    rows: Mapping[str, Sequence[Sequence[str | None]]],
+    document: Document,
+) -> list[Any]:
+    """[ClickHouse's outcome, the managed lake's]: the envelope and rows, or the error code."""
+    load(server, catalog, rows)
+    adapter = OnClickHouse(server, names_of(catalog))
+    outcomes: list[Any] = []
+    with managed(catalog, rows) as lake:
+        routed = {"routing": everywhere(compiled), "adapters": {adapter.connection: adapter}}
+        for change in (routed, {}):
+            try:
+                found = answer(
+                    json.dumps(document),
+                    compiled,
+                    no_policies(compiled),
+                    ce.viewer_context(),
+                    ce.engine_for(lake, **change),
+                )
+                outcomes.append(envelope_and_rows(found))
+            except (SemanticError, StoreError) as error:
+                outcomes.append(type(error).__name__ + ":" + error.code)
+    return outcomes
+
+
+EXACT_ROWS = {
+    "t": [[*r] for r in exact_case.T_ROWS],
+    "r": [[*r] for r in exact_case.R_ROWS],
+}
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        exact_case.aggregate("even", group_by=("r.id",)),
+        exact_case.aggregate("away", group_by=("r.id",)),
+        exact_case.aggregate("thirds"),
+        exact_case.aggregate("s"),
+        exact_case.aggregate("decimals"),
+        exact_case.aggregate("filtered"),
+        exact_case.aggregate("twice"),
+        exact_case.aggregate("float_products", "float_halves"),
+        exact_case.detail("t.id", order=[{"by": "t.q", "direction": "asc"}]),
+        exact_case.detail("t.id", "t.dd"),
+        exact_case.detail("t.id", "t.alt", "t.alt2", "t.pr", "t.pi"),
+        exact_case.aggregate("float_halves", "float_by_zero", "float_nulls"),
+    ],
+    ids=[
+        "half_even ties",
+        "half_away ties",
+        "a compared quotient",
+        "a summed quotient",
+        "sums",
+        "a filtered quotient",
+        "a derived metric",
+        "floats and a float halved",
+        "a quotient as a sort",
+        "exact detail rows",
+        "alternatives and products as values",
+        "float quotients by their zero policy",
+    ],
+)
+def test_exact_arithmetic_answers_or_refuses_on_clickhouse_as_on_the_managed_lake(
+    server: Server, document: Document
+) -> None:
+    on_clickhouse, reference = both(
+        server, exact_case.MODEL, exact_case.CATALOG, EXACT_ROWS, document
+    )
+    assert on_clickhouse == reference
+
+
+@settings(generated_exact.EXACT, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(node=generated_exact.trees(), generated=generated_exact.rows())
+def test_a_generated_exact_question_gives_the_same_outcome_on_both_engines(
+    server: Server,
+    node: generated_exact.Node,
+    generated: list[dict[str, str | None]],
+) -> None:
+    same_outcome(server, node, generated)
+
+
+# Shapes the review of #450 found or that the generator reaches rarely, always checked.
+KNOWN_SHAPES = {
+    "NULLIF compares at the common scale and keeps its first value": (
+        ("nullif", ("col", "x"), ("lit", "0.333333333333333333")),
+        [{"x": "0.333333", "y": None, "i": None, "j": None}],
+    ),
+    "a product past 18 digits": (
+        ("bin", "*", ("col", "x"), ("col", "x")),
+        [{"x": "999999999999.999999", "y": None, "i": None, "j": None}],
+    ),
+    "COALESCE of two scales": (
+        ("coalesce", ("col", "x"), "0.5"),
+        [{"x": None, "y": None, "i": None, "j": None}],
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", KNOWN_SHAPES.values(), ids=list(KNOWN_SHAPES))
+def test_a_known_exact_shape_gives_the_same_outcome_on_both_engines(
+    server: Server, shape: tuple[generated_exact.Node, list[dict[str, str | None]]]
+) -> None:
+    same_outcome(server, *shape)
+
+
+def same_outcome(
+    server: Server, node: generated_exact.Node, generated: list[dict[str, str | None]]
+) -> None:
+    try:
+        compiled = generated_exact.model(node)
+    except SemanticError:
+        return  # refused for every engine, before either is chosen
+    rows = {
+        "t": [
+            [str(n), *(r[c] for c in generated_exact.COLUMNS)] for n, r in enumerate(generated, 1)
+        ]
+    }
+    on_clickhouse, reference = both(
+        server, compiled, generated_exact.CATALOG, rows, json.loads(generated_exact.QUESTION)
+    )
+    errors = [isinstance(o, str) and o.startswith("StoreError") for o in (on_clickhouse, reference)]
+    if all(errors):
+        return  # a value the data makes undefined: an engine error on both, never an answer
+    if any(errors):
+        # One engine stops with a clear engine error where the other answers (a step computed
+        # wider, or a NULL row evaluated or spared): allowed, as long as the answer given is
+        # the exact value, never another one (Owner principle: the reference's value or a clear
+        # error; #450).
+        typed = generated_exact.typed(generated)
+        readings = generated_exact.readings(lambda: generated_exact.total(node, typed))
+        answered = reference if errors[0] else on_clickhouse
+        value = answered[1][0][0]
+        found = None if value is None else Decimal(value)
+        assert found in [r for r in readings if not isinstance(r, ArithmeticError)], readings
+        return
+    assert on_clickhouse == reference

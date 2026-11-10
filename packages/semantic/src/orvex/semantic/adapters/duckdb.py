@@ -130,7 +130,7 @@ class _Writer(DuckDBDialect):
     def model(self, compiled: CompiledModel, placement: Any, rollup: Any) -> None:  # noqa: ANN401
         """What every statement of one model needs: its tables, its relationships, the row
         policies placed (none for an evidence check) and the aggregate table read (C8)."""
-        self.compiled = compiled
+        self.adopt(compiled)
         self.parameters: list[dict[str, str | None]] = []
         self.reads: list[tuple[str, str | None]] = []  # every table read, in order (#352)
         self.dataset_alias: dict[str, str] = {}
@@ -232,9 +232,9 @@ class _Writer(DuckDBDialect):
             return f"({node.op}{again(node.operand)})"
         if isinstance(node, sql.Binary):
             op = node.op.upper()
-            if op not in _ARITHMETIC | _COMPARISON | _LOGICAL:
-                raise _unsupported()
-            return f"({again(node.left)} {op} {again(node.right)})"
+            if op not in _ARITHMETIC | _COMPARISON | _LOGICAL or not self.divisible(node):
+                raise _unsupported()  # an exact quotient is C2's division, never `/`
+            return self.binary(node, op, again)
         if isinstance(node, sql.Not):
             return f"(NOT {again(node.operand)})"
         if isinstance(node, sql.IsNull):
@@ -251,9 +251,9 @@ class _Writer(DuckDBDialect):
             if node.operand is not None:
                 text += f" {again(node.operand)}"
             for when, then in node.whens:
-                text += f" WHEN {again(when)} THEN {again(then)}"
+                text += f" WHEN {again(when)} THEN {self.typed_as(node, then, again)}"
             if node.otherwise is not None:
-                text += f" ELSE {again(node.otherwise)}"
+                text += f" ELSE {self.typed_as(node, node.otherwise, again)}"
             return text + " END)"
         if isinstance(node, sql.Cast):
             return self.cast(node, again, dataset, context)
@@ -315,7 +315,7 @@ class _Writer(DuckDBDialect):
             where = f" FILTER (WHERE {again(node.filter)})" if node.filter is not None else ""
             return f"{name}({inner}){where}"
         if name in _CALLS and node.filter is None:
-            return f"{name}({', '.join(again(a) for a in node.arguments)})"
+            return f"{name}({', '.join(self.typed_as(node, a, again) for a in node.arguments)})"
         raise _unsupported()
 
     def ref(self, node: sql.Ref, alias: str, dataset: str, context: str) -> str:

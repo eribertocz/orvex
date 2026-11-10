@@ -51,6 +51,7 @@ critical_tests = [
   # Exactness and the semantic engine's contract with its corpus.
   "tests/conformance/test_semantic_corpus.py",
   "tests/conformance/test_execution.py",
+  "tests/conformance/test_exact_arithmetic.py",
   "tests/properties",
   # Contracts and their examples.
   "tests/contracts",
@@ -59,6 +60,7 @@ critical_tests = [
 regressions = [
   "tests/properties/test_binder_properties.py",
   "tests/properties/test_engine_oracle.py",
+  "tests/properties/test_exact_properties.py",
   "tests/properties/test_multifact_materialization.py",
   "tests/properties/test_policy_properties.py",
 ]
