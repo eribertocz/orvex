@@ -14,6 +14,11 @@ catalog (`corpus_existing_ducklake`) and compares it with the library: the corpu
 Since P2-31 (#225), `--through clickhouse` asks every case on ClickHouse (`corpus_clickhouse`)
 and compares it with the library in the same way. Since #422, a case run but left `not-run` for
 any reason other than an engine's declared refusal is a finding: the runner never skips silently.
+Since #427, each way's reports must be exactly the manifest's cases, each once and each passed:
+a case missing, repeated, unknown, refused or not run fails the check by itself, unless
+`conformance/semantic-corpus/expected-fail.toml` (governed: the Owner merges it) lists it with
+an open issue and a due phase not yet passed; such a case that passes fails too, so its entry
+is removed. A known gap excuses only its own case's run, never a changed source or model.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ import sys
 import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import jsonschema
 import yaml
@@ -36,6 +42,13 @@ from conformance.runners import bi_platform_adapter as adapter
 ROOT = Path(__file__).resolve().parents[2]
 CORPUS = Path("conformance/semantic-corpus/bi-platform")
 OSSIE = Path("vendor/apache-ossie")
+# Outside the imported corpus, whose files are each pinned to upstream (governed: Owner merges).
+GAPS = Path("conformance/semantic-corpus/expected-fail.toml")
+# What a known gap may excuse: its own case failing, not running or differing between ways.
+# A changed source, a manifest mismatch or an invalid model is never a known gap.
+EXCUSABLE = frozenset(
+    {"CORPUS_CASE_FAILED", "CORPUS_CASE_NOT_RUN", "CORPUS_CASE_NOT_PASSED", "CORPUS_WAYS_DIFFER"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +244,59 @@ def run(
     return reports, findings
 
 
+def expected_failures(path: Path, minor: int) -> tuple[dict[str, str], list[Finding]]:
+    """The known gaps of `expected-fail.toml` (`CASE-NNN = {issue = n, due = "P3"}`), and a
+    finding for each entry without an issue or a due phase, or whose due phase has passed (the
+    current phase is P<minor> of the product version: `0.3.x` ships P2 and works on P3)."""
+    if not path.is_file():
+        return {}, []
+    listed = tomllib.loads(path.read_text("utf-8"))
+    gaps: dict[str, str] = {}
+    findings = []
+    for case, entry in listed.items():
+        if not isinstance(entry, dict):
+            findings.append(Finding("CORPUS_EXPECTED_FAIL_INVALID", case, "needs issue and due"))
+            continue
+        issue, due = entry.get("issue"), str(entry.get("due", ""))
+        if not isinstance(issue, int) or not due.startswith("P") or not due[1:].isdigit():
+            findings.append(Finding("CORPUS_EXPECTED_FAIL_INVALID", case, "needs issue and due"))
+        elif int(due[1:]) < minor:
+            findings.append(Finding("CORPUS_EXPECTED_FAIL_OVERDUE", case, f"due {due}, #{issue}"))
+        else:
+            gaps[case] = f"#{issue}"
+    return gaps, findings
+
+
+def excuse(findings: list[Finding], gaps: dict[str, str]) -> list[Finding]:
+    """`findings` without those a known gap of `gaps` excuses (`EXCUSABLE`, its own case)."""
+    return [f for f in findings if not (f.code in EXCUSABLE and f.case in gaps)]
+
+
+def exact_cases(
+    manifest: dict[str, Any], reports: list[CaseReport], way: str, gaps: dict[str, str]
+) -> list[Finding]:
+    """A finding unless `reports` are exactly the manifest's cases, each once, each passed
+    (a known gap of `gaps` fails instead, and a gap that passes is a finding too)."""
+    expected = [str(entry["id"]) for entry in manifest["cases"]]
+    seen = [report.case for report in reports]
+    findings = [
+        *(Finding("CORPUS_CASE_MISSING", c, way) for c in expected if c not in seen),
+        *(Finding("CORPUS_CASE_UNKNOWN", c, way) for c in sorted(set(seen) - set(expected))),
+        *(
+            Finding("CORPUS_CASE_DUPLICATE", c, way)
+            for c in sorted({c for c in seen if seen.count(c) > 1})
+        ),
+    ]
+    for report in reports:
+        if report.case in gaps:
+            if report.status == "pass":
+                findings.append(Finding("CORPUS_EXPECTED_FAIL_PASSED", report.case, way))
+        elif report.status != "pass":
+            message = f"{way}: {report.status} ({report.reason})"
+            findings.append(Finding("CORPUS_CASE_NOT_PASSED", report.case, message))
+    return findings
+
+
 def compare(
     library: list[CaseReport], other_way: list[CaseReport], name: str = "http"
 ) -> list[Finding]:
@@ -284,6 +350,24 @@ def main() -> int:
     }.get(arguments.through, (arguments.through,))
     runs = {way: run(arguments.root, through=way) for way in ways}
     reports, findings = runs[ways[0]]
+    corpus = arguments.root / CORPUS
+    manifest = json.loads((corpus / "corpus" / "manifest.json").read_text("utf-8"))
+    versions = arguments.root / "versions.toml"
+    if not versions.is_file():  # a test's copy of the corpus alone: the repository's phase
+        versions = ROOT / "versions.toml"
+    product = tomllib.loads(versions.read_text("utf-8"))["product"]
+    gaps, gap_findings = expected_failures(arguments.root / GAPS, int(str(product).split(".")[1]))
+    known = {str(entry["id"]) for entry in manifest["cases"]}
+    findings = [
+        *findings,
+        *gap_findings,
+        *(
+            Finding("CORPUS_EXPECTED_FAIL_UNKNOWN", c, "not in the manifest")
+            for c in gaps
+            if c not in known
+        ),
+        *(f for way in ways for f in exact_cases(manifest, runs[way][0], way, gaps)),
+    ]
     if len(ways) == 2:
         not_run = [f for f in runs[ways[1]][1] if f.code == "CORPUS_CASE_NOT_RUN"]
         findings = [*findings, *not_run, *compare(reports, runs[ways[1]][0], ways[1])]
@@ -296,6 +380,7 @@ def main() -> int:
                 if r.status == "fail"
             ),
         ]
+    findings = excuse(findings, gaps)
     for way in ways:
         for report in runs[way][0]:
             print(

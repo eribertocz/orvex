@@ -20,7 +20,10 @@ from typing import Any
 import pytest
 
 from conformance.runners import bi_platform_adapter as adapter
+from conformance.runners import corpus_execution as ce
+from conformance.runners import semantic_corpus
 from conformance.runners.semantic_corpus import CORPUS, OSSIE, ROOT, check_vendored, run
+from tests.support.environment import unavailable
 
 
 def copy_repository(tmp_path: Path) -> Path:
@@ -81,9 +84,10 @@ def existing_ducklake_server(monkeypatch: pytest.MonkeyPatch) -> None:
         if not os.environ.get(name) and os.environ.get(fallback):
             monkeypatch.setenv(name, os.environ[fallback])
     if not (os.environ.get(existing.SERVER) and os.environ.get(existing.PASSWORD)):
-        if os.environ.get("CI"):
-            pytest.fail("CI needs a PostgreSQL server for the existing lake's catalog")
-        pytest.skip("no PostgreSQL configured for this run")
+        unavailable(
+            "no PostgreSQL configured for this run",
+            "CI needs a PostgreSQL server for the existing lake's catalog",
+        )
 
 
 def switch(monkeypatch: pytest.MonkeyPatch, on: bool) -> None:
@@ -764,3 +768,112 @@ def test_a_repeated_name_fails_instead_of_replacing_an_element(kind: str) -> Non
 
     with pytest.raises(adapter.UntranslatableKey, match=f"two {kind}s? named"):
         translated_or_error(edit)
+
+
+# --- the exact set of cases per way (#427) ------------------------------------------------------
+
+
+def _report(case: str, status: str = "pass") -> semantic_corpus.CaseReport:
+    return semantic_corpus.CaseReport(case, "t", "result", None, "valid", status, "")
+
+
+MANIFEST = {"cases": [{"id": "CASE-001"}, {"id": "CASE-002"}]}
+
+
+@pytest.mark.parametrize(
+    ("reports", "code"),
+    [
+        ([_report("CASE-001")], "CORPUS_CASE_MISSING"),
+        ([_report("CASE-001"), _report("CASE-002"), _report("CASE-002")], "CORPUS_CASE_DUPLICATE"),
+        ([_report("CASE-001"), _report("CASE-002"), _report("CASE-999")], "CORPUS_CASE_UNKNOWN"),
+        ([_report("CASE-001"), _report("CASE-002", "not-run")], "CORPUS_CASE_NOT_PASSED"),
+        ([_report("CASE-001"), _report("CASE-002", "fail")], "CORPUS_CASE_NOT_PASSED"),
+    ],
+    ids=["missing", "duplicate", "unknown", "refused or not run", "failed"],
+)
+def test_any_case_not_passed_exactly_once_fails_the_way(
+    reports: list[semantic_corpus.CaseReport], code: str
+) -> None:
+    found = semantic_corpus.exact_cases(MANIFEST, reports, "clickhouse", {})
+    assert [f.code for f in found] == [code]
+    complete = [_report("CASE-001"), _report("CASE-002")]
+    assert semantic_corpus.exact_cases(MANIFEST, complete, "clickhouse", {}) == []
+
+
+def test_a_known_gap_must_fail_and_must_be_due_later(tmp_path: Path) -> None:
+    gap = {"CASE-002": "#9"}
+    failing = [_report("CASE-001"), _report("CASE-002", "not-run")]
+    assert semantic_corpus.exact_cases(MANIFEST, failing, "library", gap) == []
+    passing = [_report("CASE-001"), _report("CASE-002")]
+    found = semantic_corpus.exact_cases(MANIFEST, passing, "library", gap)
+    assert [f.code for f in found] == ["CORPUS_EXPECTED_FAIL_PASSED"]
+    listed = tmp_path / "expected-fail.toml"
+    listed.write_text(
+        '"CASE-001" = {issue = 9, due = "P3"}\n"CASE-002" = {issue = 9, due = "P2"}\n'
+        '"CASE-003" = {due = "P5"}\n"CASE-005" = 7\n',
+        "utf-8",
+    )
+    gaps, findings = semantic_corpus.expected_failures(listed, minor=3)
+    assert gaps == {"CASE-001": "#9"}
+    assert [(f.code, f.case) for f in findings] == [
+        ("CORPUS_EXPECTED_FAIL_OVERDUE", "CASE-002"),
+        ("CORPUS_EXPECTED_FAIL_INVALID", "CASE-003"),
+        ("CORPUS_EXPECTED_FAIL_INVALID", "CASE-005"),
+    ]
+
+
+def test_a_rolled_up_cell_holding_a_value_fails_its_case() -> None:
+    found = ce.Answered(
+        envelope={
+            "columns": [{"role": "dimension"}, {"role": "metric"}],
+            "row_roles": [{"role": "detail", "level": 1}, {"role": "total", "level": 0}],
+        },
+        rows=[["a", "1"], ["b", "1"]],
+    )
+    assert ce.totals_written(found) == [["a", "1"], ["ROLLED-UP CELL WITH A VALUE: b", "1"]]
+
+
+def corpus_command(root: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "conformance.runners.semantic_corpus", "--root", str(root)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_a_known_gap_excuses_its_own_failure_end_to_end(tmp_path: Path) -> None:
+    root = copy_repository(tmp_path)
+    expected = case_folder(root, "CASE-004") / "expected" / "result.csv"
+    expected.write_text(expected.read_text("utf-8").replace("150.00", "151.00"), "utf-8")
+    refresh_sources(root)
+    failing = corpus_command(root)
+    assert failing.returncode == 1
+    assert "CORPUS_CASE_FAILED: CASE-004: " in failing.stdout
+    listed = root / semantic_corpus.GAPS
+    assert not listed.is_relative_to(root / CORPUS)  # outside the pinned upstream files
+    listed.write_text('"CASE-004" = {issue = 9, due = "P9"}\n', "utf-8")
+    excused = corpus_command(root)
+    assert excused.returncode == 0, excused.stdout[-2000:]
+    listed.write_text('"CASE-004" = {issue = 9, due = "P1"}\n', "utf-8")
+    overdue = corpus_command(root)
+    assert overdue.returncode == 1
+    assert "CORPUS_EXPECTED_FAIL_OVERDUE: CASE-004: " in overdue.stdout
+
+
+def test_a_known_gap_for_a_case_not_in_the_manifest_fails(tmp_path: Path) -> None:
+    root = copy_repository(tmp_path)
+    (root / semantic_corpus.GAPS).write_text('"CASE-999" = {issue = 9, due = "P9"}\n', "utf-8")
+    result = corpus_command(root)
+    assert result.returncode == 1
+    assert "CORPUS_EXPECTED_FAIL_UNKNOWN: CASE-999: " in result.stdout
+
+
+def test_a_known_gap_never_excuses_a_changed_source(tmp_path: Path) -> None:
+    root = copy_repository(tmp_path)
+    break_source(root)
+    (root / semantic_corpus.GAPS).write_text('"CASE-001" = {issue = 9, due = "P9"}\n', "utf-8")
+    result = corpus_command(root)
+    assert result.returncode == 1
+    assert "CORPUS_SOURCE_CHANGED: corpus/cases/CASE-001/README.md: " in result.stdout

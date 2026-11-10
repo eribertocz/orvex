@@ -1,14 +1,19 @@
-"""Every contract error code the product raises has a test (#241).
+"""Every contract error code the product raises has a test, and every other one is reserved
+for a phase (#241, #427).
 
     python -m tools.checks.error_codes
 
-The codes are the `*ErrorCode` enumerations of `contracts/*/v1/schema.json`. A code is used when
+The codes are every registry the contracts keep: the `*ErrorCode` enumerations of
+`contracts/*/v1/schema.json` and the `components.x-error-codes` of `contracts/*/v1/openapi.yaml`.
+A code is used when
 a string constant of module code (`packages/*/src`, the generated `contracts` package aside) is
 exactly that code. It is tested when a string constant of a test module (`packages/*/tests`,
 `tests/`) holds it as a whole word, or a conformance case (`conformance/`: YAML, JSON or SQL)
 names it; comments and prose do not count. Every used code without a test is reported
-(`ERROR_CODE_UNTESTED`), and the check fails. Codes the contracts define but no code raises are
-listed as a note, not a failure: a contract may reserve a code before the module that raises it.
+(`ERROR_CODE_UNTESTED`). A code no module raises must be listed, with the phase that raises it,
+in `tools/checks/reserved-error-codes.toml` (`ERROR_CODE_UNRESERVED`), and a reserved code that
+is raised must leave that list (`ERROR_CODE_RESERVED_BUT_RAISED`), as must one whose phase has
+passed or is not a phase (`ERROR_CODE_RESERVED_OVERDUE`). Any of them fails the check.
 """
 
 from __future__ import annotations
@@ -17,17 +22,21 @@ import ast
 import json
 import re
 import sys
+import tomllib
 from collections.abc import Iterable
 from pathlib import Path
 
 from tools.repository import REPOSITORY_ROOT
+
+RESERVED = "tools/checks/reserved-error-codes.toml"
 
 TEST_GLOBS = ("packages/*/tests/**/*.py", "tests/**/*.py", "conformance/**/*")
 TEXT_SUFFIXES = {".py", ".yaml", ".yml", ".json", ".sql"}
 
 
 def contract_codes(root: Path) -> dict[str, str]:
-    """Every contract error code, with the contract that defines it."""
+    """Every contract error code, with the contract that defines it: each schema's
+    `*ErrorCode` enumerations and each OpenAPI contract's `components.x-error-codes`."""
     found: dict[str, str] = {}
     for schema in sorted(root.glob("contracts/*/v1/schema.json")):
         definitions = json.loads(schema.read_text("utf-8")).get("$defs", {})
@@ -35,7 +44,52 @@ def contract_codes(root: Path) -> dict[str, str]:
             if name.endswith("ErrorCode") and isinstance(definition.get("enum"), list):
                 for code in definition["enum"]:
                     found.setdefault(str(code), schema.parent.parent.name)
+    for api in sorted(root.glob("contracts/*/v1/openapi.yaml")):
+        for code in registry_keys(api.read_text("utf-8")):
+            found.setdefault(str(code), api.parent.parent.name)
     return found
+
+
+REGISTRY_KEY = re.compile(r"^    ([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*):")
+
+
+def registry_keys(text: str) -> list[str]:
+    """The keys of `components.x-error-codes`, read from the YAML text: the check runs where
+    no YAML parser is installed, and the registry is a flat mapping two levels deep."""
+    keys: list[str] = []
+    section = inside = False
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            section, inside = line.rstrip() == "components:", False
+        elif section and indent == 2:
+            inside = line.rstrip() == "  x-error-codes:"
+        elif inside and (match := REGISTRY_KEY.match(line)):
+            keys.append(match.group(1))
+    return keys
+
+
+def reserved_codes(root: Path) -> dict[str, str]:
+    """Each reserved code with the phase that raises it."""
+    path = root / RESERVED
+    if not path.is_file():
+        return {}
+    listed = tomllib.loads(path.read_text("utf-8")).get("reserved", {})
+    return {str(code): str(entry["phase"]) for code, entry in listed.items()}
+
+
+def current_phase(root: Path) -> int:
+    """The phase being built: P<minor> of the product version (`0.3.x` ships P2, builds P3)."""
+    versions = root / "versions.toml"
+    if not versions.is_file():  # a test's partial copy: the repository's own phase
+        versions = REPOSITORY_ROOT / "versions.toml"
+    return int(str(tomllib.loads(versions.read_text("utf-8"))["product"]).split(".")[1])
+
+
+def _phase(text: str) -> int | None:
+    return int(text[1:]) if text[:1] == "P" and text[1:].isdigit() else None
 
 
 def _constants(path: Path) -> Iterable[str]:
@@ -78,14 +132,38 @@ def problems(root: Path) -> tuple[list[str], list[str]]:
     codes = contract_codes(root)
     used = used_codes(root, codes)
     tested = tested_codes(root, codes)
+    reserved = reserved_codes(root)
     failures = [
         f"ERROR_CODE_UNTESTED {code} ({codes[code]}): raised in {', '.join(used[code])}, "
         "but no test names it"
         for code in sorted(set(used) - tested)
     ]
+    failures += [
+        f"ERROR_CODE_UNRESERVED {code} ({codes[code]}): no module raises it and it is not "
+        f"reserved in {RESERVED} with the phase that raises it"
+        for code in sorted(set(codes) - set(used) - set(reserved))
+    ]
+    failures += [
+        f"ERROR_CODE_RESERVED_BUT_RAISED {code}: raised in {', '.join(used[code])}; "
+        f"remove it from {RESERVED}"
+        for code in sorted(set(reserved) & set(used))
+    ]
+    failures += [
+        f"ERROR_CODE_RESERVED_UNKNOWN {code}: no contract defines it; remove it from {RESERVED}"
+        for code in sorted(set(reserved) - set(codes))
+    ]
+    phase = current_phase(root)
+    failures += [
+        f"ERROR_CODE_RESERVED_OVERDUE {code}: reserved for {due}, but P{phase} is being built; "
+        "raise and test it, or move it with the Owner's approval"
+        if _phase(due) is not None
+        else f"ERROR_CODE_RESERVED_OVERDUE {code}: '{due}' is not a phase (P<n>)"
+        for code, due in sorted(reserved.items())
+        if (_phase(due) or 0) < phase
+    ]
     notes = [
-        f"note: {code} ({codes[code]}) is defined but no module code raises it"
-        for code in sorted(set(codes) - set(used))
+        f"note: {code} ({codes[code]}) is reserved for {reserved[code]}"
+        for code in sorted(set(codes) & set(reserved))
     ]
     return failures, notes
 

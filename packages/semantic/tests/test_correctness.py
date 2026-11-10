@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 import yaml
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from orvex.semantic import SemanticError
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
@@ -677,8 +677,29 @@ def test_no_legal_transition_crosses_a_one_to_many_step(members: list[str]) -> N
 def test_adding_a_coarser_dimension_never_makes_an_illegal_query_legal(
     members: list[str], coarser: str
 ) -> None:
-    if isinstance(outcome(members), SemanticError):
+    assume(coarser not in members)  # otherwise the query does not change (#427)
+    found = outcome(members)
+    if isinstance(found, SemanticError):
         assert isinstance(outcome(sorted({*members, coarser})), SemanticError)
+
+
+@pytest.mark.parametrize(
+    ("members", "coarser", "code"),
+    [
+        (["employees.employee_id"], "zones.label", "ILLEGAL_GRAIN_TRANSITION"),
+        (["allocations.allocation_id"], "customers.segment", "UNSUPPORTED_OPERATION"),
+    ],
+)
+def test_an_illegal_query_stays_refused_for_its_reason_with_a_coarser_dimension(
+    members: list[str], coarser: str, code: str
+) -> None:
+    # The property above, pinned on one illegal start of each kind, so it never runs vacuously;
+    # with more members the first reason found may differ, so the property checks only that it
+    # stays refused.
+    started, widened = outcome(members), outcome(sorted({*members, coarser}))
+    assert isinstance(started, SemanticError)
+    assert isinstance(widened, SemanticError)
+    assert (started.code, widened.code) == (code, code)
 
 
 @pytest.mark.parametrize(

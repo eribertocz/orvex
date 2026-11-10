@@ -5,8 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tools.ci import select, verify
+from tools.repository import REPOSITORY_ROOT
 
 DOCS = ["docs/process/engineering.md"]
 STORE = ["packages/store/src/orvex/store/lake.py"]
@@ -73,3 +75,18 @@ def test_a_part_without_history_runs_its_share_of_the_whole_suite(tmp_path: Path
     environment = {"PYTHON": "3.14", "PART": "4", "GITHUB_ENV": str(output)}
     assert select._whole(environment) == 0
     assert output.read_text("utf-8").splitlines()[0] == "PYTEST_SHARD=4/10"
+
+
+def test_the_python_workflow_runs_the_whole_suite_on_every_push_to_main() -> None:
+    # #427: the periodic full run that catches anything a selection misses cannot be removed or
+    # narrowed without this failing: a push to `main` triggers it on both Pythons, every part.
+    workflow = yaml.safe_load((REPOSITORY_ROOT / ".github/workflows/python.yml").read_text("utf-8"))
+    triggers = workflow.get(True, workflow.get("on"))
+    assert "main" in triggers["push"]["branches"]
+    assert "paths" not in triggers["push"]
+    assert "paths-ignore" not in triggers["push"]
+    job = workflow["jobs"]["python-tests-part"]
+    assert {str(p) for p in job["strategy"]["matrix"]["python"]} >= {"3.14", "3.15"}
+    assert len(job["strategy"]["matrix"]["part"]) == select.PARTS
+    steps = " ".join(str(s.get("run", "")) for s in job["steps"])
+    assert "python -m tools.ci.select" in steps

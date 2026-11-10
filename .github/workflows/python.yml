@@ -169,6 +169,9 @@ jobs:
           for package in packages/*/; do
             python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
           done
+      - name: Install the store's DuckDB extensions, verified (#427)
+        # Tests of the extension checks need the official files; without them they would skip.
+        run: python -m tools.ci.duckdb_extensions
       - name: Choose this part's tests (#391)
         run: python -m tools.ci.select
         env:
@@ -197,6 +200,8 @@ jobs:
           python -m pytest -p tools.ci.shard -p tools.ci.timing -p tools.ci.order --junitxml=junit.xml $PYTEST_PATHS
           # Each test's time to this log (#375): what tools/ci/durations.py reads back.
           python -m tools.ci.durations emit junit.xml
+          # No critical test passes by not running (#427), checked apart from the plugin.
+          python -m tools.ci.critical junit.xml
         env:
           # 3.15 runs in a random order, seeded by the run and printed in the header (#376).
           PYTEST_RANDOM_ORDER: ${{ matrix.python == '3.15' && github.run_id || '' }}

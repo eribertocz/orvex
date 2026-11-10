@@ -15,7 +15,7 @@ import os
 import urllib.request
 import xml.etree.ElementTree as ElementTree
 
-import pytest
+from tests.support.environment import unavailable
 
 VARIABLE = "STORE_TEST_AZURE_CONNECTION_STRING"
 VERSION = "2021-08-06"
@@ -26,9 +26,7 @@ def connection_string() -> str:
     """Azurite's connection string, from CI (required there), or skip."""
     value = os.environ.get(VARIABLE, "")
     if not value:
-        if os.environ.get("CI"):
-            pytest.fail(f"{VARIABLE} is required in CI")
-        pytest.skip("no Azurite configured for this run")
+        unavailable("no Azurite configured for this run", f"{VARIABLE} is required in CI")
     return value
 
 

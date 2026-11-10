@@ -1,0 +1,15 @@
+# Error codes a contract defines before any module raises them (tools/checks/error_codes.py), each
+# with the phase whose issue raises it. Until then, the engine refuses the shape that would need
+# the code with `UNSUPPORTED_OPERATION` (fail closed). A reserved code that is raised, or a code
+# neither raised nor reserved, fails the check.
+
+[reserved]
+CONTEXT_CONFLICT = { phase = "P4", raised_by = "P4-02 context modifiers (ADR-0029 S8)" }
+COVERAGE_POLICY_REQUIRED = { phase = "P4", raised_by = "P4-06 period coverage rules" }
+DEPRECATED_METRIC = { phase = "P4", raised_by = "P4-12 controlled deprecation (law 8)" }
+FANOUT_NOT_ISOLATABLE = { phase = "P4", raised_by = "fan-out isolation of multi-fact shapes" }
+FILTER_INTERSECTION_EMPTY = { phase = "P4", raised_by = "P4-02 filter contexts (#238)" }
+METRIC_IN_USE = { phase = "P4", raised_by = "P4-12 controlled deprecation (law 8)" }
+MISSING_CARDINALITY_DECLARATION = { phase = "P4", raised_by = "relationships without a declared cardinality" }
+REAGGREGATION_NOT_ALLOWED = { phase = "P4", raised_by = "re-aggregation of stored states (S11/S13)" }
+WINDOW_UNDEFINED_AT_TOTAL = { phase = "P4", raised_by = "windows at total levels (ADR-0029 S9)" }

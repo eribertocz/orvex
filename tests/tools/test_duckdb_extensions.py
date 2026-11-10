@@ -11,6 +11,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
+from tests.support.environment import unavailable
 from tools.ci import duckdb_extensions as tool
 from tools.repository import REPOSITORY_ROOT
 
@@ -133,7 +134,10 @@ def test_a_signature_broken_by_one_byte_is_refused(tmp_path: Path) -> None:
     official = Path.home() / ".duckdb" / "extensions" / f"v{duckdb.__version__}"
     found = sorted(official.rglob("httpfs.duckdb_extension"))
     if not found:
-        pytest.skip("no official httpfs file installed on this machine to tamper with")
+        unavailable(
+            "no official httpfs file installed on this machine to tamper with",
+            "the official httpfs extension, for the signature test",
+        )
     data = bytearray(found[0].read_bytes())
     data[len(data) // 2] ^= 0xFF
     directory = tmp_path / "extensions"

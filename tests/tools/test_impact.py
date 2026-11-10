@@ -206,3 +206,53 @@ def test_every_change_gets_a_reason() -> None:
     selection = impact.select(ROOT, changed)
     for path in changed:
         assert any(reason.startswith(path) for reason in selection.reasons)
+
+
+def tool_references(path: Path) -> set[str]:
+    """The `tools.*` modules a test file reaches: imported, or named in a string (a subprocess's
+    `-m tools.x`), each that exists as a file of the repository."""
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text("utf-8"))):
+        names: list[str] = []
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            names = [node.value]
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names = [node.module]
+        elif isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        for name in names:
+            parts = name.split(".")
+            if parts[0] != "tools" or len(parts) < 2 or not all(p.isidentifier() for p in parts):
+                continue
+            for n in range(len(parts), 1, -1):
+                candidate = Path(*parts[:n]).with_suffix(".py")
+                if (REPOSITORY_ROOT / candidate).is_file():
+                    found.add(candidate.as_posix())
+                    break
+    return found
+
+
+def covers(selection: impact.Selection, test: str) -> bool:
+    return selection.full or any(
+        test == t or test.startswith(t.rstrip("/") + "/") for t in selection.tests
+    )
+
+
+def test_every_test_that_reaches_a_tool_is_selected_when_that_tool_changes() -> None:
+    # #427: a dependency through a subprocess or a string is invisible to the package graph;
+    # the selection must still run every test that reaches the changed tool.
+    missed = []
+    tests = [*ROOT.glob("packages/*/tests/**/test_*.py"), *ROOT.glob("tests/**/test_*.py")]
+    for test in sorted(tests):
+        relative = test.relative_to(REPOSITORY_ROOT).as_posix()
+        for tool in sorted(tool_references(test)):
+            if not covers(impact.select(REPOSITORY_ROOT, [tool]), relative):
+                missed.append(f"{relative} reaches {tool}")
+    assert missed == []
+
+
+def test_a_test_reaching_a_tool_through_a_subprocess_is_found() -> None:
+    synthetic = REPOSITORY_ROOT / "packages/store/tests/test_sources.py"
+    assert "tools/synthetic/generate.py" in tool_references(synthetic)
+    narrowed = impact.Selection(tests={"tests/tools"})
+    assert not covers(narrowed, "packages/store/tests/test_sources.py")  # the old map missed it

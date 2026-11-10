@@ -63,6 +63,7 @@ from tests.conformance import test_exact_arithmetic as exact_case
 from tests.conformance import test_row_policies as rp
 from tests.conformance.test_execution import no_policies
 from tests.properties import exact as generated_exact
+from tests.support.environment import unavailable
 from tests.support.policies import VENDORS, extension
 
 Document = dict[str, Any]
@@ -484,9 +485,10 @@ class Server:
 def server() -> Iterator[Server]:
     named = os.environ.get("SEMANTIC_TEST_CLICKHOUSE")
     if not named:
-        if os.environ.get("CI"):
-            pytest.fail("SEMANTIC_TEST_CLICKHOUSE is required in CI")
-        pytest.skip("no ClickHouse server configured for this run")
+        unavailable(
+            "no ClickHouse server configured for this run",
+            "SEMANTIC_TEST_CLICKHOUSE is required in CI",
+        )
     host, port, user = named.split(":")
     found = Server(host, int(port), user, os.environ.get("SEMANTIC_TEST_CLICKHOUSE_PASSWORD", ""))
     name = f"s_{secrets.token_hex(6)}"

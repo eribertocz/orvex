@@ -23,7 +23,16 @@ def _repository(root: Path, raised: str, tested: str) -> Path:
     test = root / "packages" / "store" / "tests" / "test_x.py"
     test.parent.mkdir(parents=True)
     test.write_text(tested, "utf-8")
+    reserved = root / error_codes.RESERVED
+    reserved.parent.mkdir(parents=True)
+    reserved.write_text('[reserved]\nSTORE_RESERVED = { phase = "P9" }\n', "utf-8")
     return root
+
+
+def untested(root: Path) -> list[str]:
+    return [
+        f.split()[1] for f in error_codes.problems(root)[0] if f.startswith("ERROR_CODE_UNTESTED")
+    ]
 
 
 def test_a_raised_code_without_a_test_fails_and_a_tested_one_passes(tmp_path: Path) -> None:
@@ -32,7 +41,7 @@ def test_a_raised_code_without_a_test_fails_and_a_tested_one_passes(tmp_path: Pa
     )
     failures, notes = error_codes.problems(root)
     assert [f.split()[1] for f in failures] == ["STORE_B"]
-    assert notes == ["note: STORE_RESERVED (store) is defined but no module code raises it"]
+    assert notes == ["note: STORE_RESERVED (store) is reserved for P9"]
 
 
 def test_a_code_in_a_conformance_case_counts_as_tested(tmp_path: Path) -> None:
@@ -40,18 +49,92 @@ def test_a_code_in_a_conformance_case_counts_as_tested(tmp_path: Path) -> None:
     case = root / "conformance" / "cases" / "c.yaml"
     case.parent.mkdir(parents=True)
     case.write_text("expect: {error: STORE_B}\n", "utf-8")
-    assert error_codes.problems(root)[0] == []
+    assert untested(root) == []
 
 
 def test_a_code_only_inside_a_longer_name_is_not_tested(tmp_path: Path) -> None:
     root = _repository(tmp_path, 'raise E("STORE_A")\n', 'NAME = "STORE_A_LIKE"\n')
-    assert [f.split()[1] for f in error_codes.problems(root)[0]] == ["STORE_A"]
+    assert untested(root) == ["STORE_A"]
 
 
 def test_a_code_only_in_a_comment_is_not_tested(tmp_path: Path) -> None:
     root = _repository(tmp_path, 'raise E("STORE_A")\n', "# STORE_A is covered elsewhere\n")
-    assert [f.split()[1] for f in error_codes.problems(root)[0]] == ["STORE_A"]
+    assert untested(root) == ["STORE_A"]
 
 
 def test_the_repository_has_no_untested_code() -> None:
     assert error_codes.problems(REPOSITORY_ROOT)[0] == []
+
+
+def test_a_code_neither_raised_nor_reserved_fails(tmp_path: Path) -> None:
+    root = _repository(tmp_path, 'raise E("STORE_A")\n', 'assert c == "STORE_A"\n')
+    failures = error_codes.problems(root)[0]
+    assert [f.split()[:2] for f in failures] == [["ERROR_CODE_UNRESERVED", "STORE_B"]]
+
+
+def test_a_reserved_code_that_is_raised_or_unknown_fails(tmp_path: Path) -> None:
+    root = _repository(
+        tmp_path,
+        'raise E("STORE_A")\nraise E("STORE_B")\nraise E("STORE_RESERVED")\n',
+        'assert c in ("STORE_A", "STORE_B", "STORE_RESERVED")\n',
+    )
+    (root / error_codes.RESERVED).write_text(
+        '[reserved]\nSTORE_RESERVED = { phase = "P9" }\nGONE = { phase = "P9" }\n', "utf-8"
+    )
+    codes = [f.split()[:2] for f in error_codes.problems(root)[0]]
+    assert codes == [
+        ["ERROR_CODE_RESERVED_BUT_RAISED", "STORE_RESERVED:"],
+        ["ERROR_CODE_RESERVED_UNKNOWN", "GONE:"],
+    ]
+
+
+def test_the_http_registry_of_an_openapi_contract_is_read(tmp_path: Path) -> None:
+    root = _repository(tmp_path, 'raise E("STORE_A")\nraise E("HTTP_X")\n', 'x = "STORE_A"\n')
+    api = root / "contracts" / "http-api" / "v1" / "openapi.yaml"
+    api.parent.mkdir(parents=True)
+    api.write_text("components:\n  x-error-codes:\n    HTTP_X: An HTTP code.\n", "utf-8")
+    assert error_codes.contract_codes(root)["HTTP_X"] == "http-api"
+    untested = [
+        f.split()[1] for f in error_codes.problems(root)[0] if f.startswith("ERROR_CODE_UNTESTED")
+    ]
+    assert untested == ["HTTP_X"]
+
+
+def test_registry_keys_match_a_yaml_parser_on_every_contract() -> None:
+    import yaml
+
+    apis = sorted(REPOSITORY_ROOT.glob("contracts/*/v1/openapi.yaml"))
+    assert apis
+    for api in apis:
+        text = api.read_text("utf-8")
+        parsed = (yaml.safe_load(text).get("components") or {}).get("x-error-codes") or {}
+        assert error_codes.registry_keys(text) == list(parsed), api
+
+
+def test_registry_keys_ignore_codes_outside_the_registry() -> None:
+    text = (
+        "paths:\n  x-error-codes:\n    STRAY_CODE: no\n"
+        "components:\n  schemas:\n    OTHER_CODE: no\n"
+        "  x-error-codes:\n    # comment\n    FIRST_CODE: one\n"
+        "    SECOND: >-\n      folded\n  responses: {}\n    LATE_CODE: no\n"
+    )
+    assert error_codes.registry_keys(text) == ["FIRST_CODE", "SECOND"]
+
+
+def test_a_reserved_code_whose_phase_has_passed_fails(tmp_path: Path) -> None:
+    root = _repository(tmp_path, 'raise E("STORE_A")\n', 'assert c == "STORE_A"\n')
+    phase = error_codes.current_phase(root)
+    (root / error_codes.RESERVED).write_text(
+        f'[reserved]\nSTORE_B = {{ phase = "P{phase}" }}\n'
+        f'STORE_RESERVED = {{ phase = "P{phase - 1}" }}\n',
+        "utf-8",
+    )
+    assert [f.split()[:2] for f in error_codes.problems(root)[0]] == [
+        ["ERROR_CODE_RESERVED_OVERDUE", "STORE_RESERVED:"]
+    ]
+    (root / error_codes.RESERVED).write_text(
+        '[reserved]\nSTORE_B = { phase = "P9" }\nSTORE_RESERVED = { phase = "later" }\n', "utf-8"
+    )
+    assert [f.split()[:2] for f in error_codes.problems(root)[0]] == [
+        ["ERROR_CODE_RESERVED_OVERDUE", "STORE_RESERVED:"]
+    ]
