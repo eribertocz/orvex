@@ -162,10 +162,12 @@ def test_the_listener_starts_only_for_main_s_and_the_tags_runs() -> None:
     assert trigger["branches"] == ["main", "v*"]
 
 
-def test_the_health_check_runs_on_pull_requests_only() -> None:
-    # On main it would fail the merge itself and report the listener back to the listener.
+def test_the_health_check_is_never_skipped_and_its_script_checks_pull_requests_only() -> None:
+    # A skipped required check passes, so the job has no `if`; the script passes on a push
+    # (scripts/test_ci_health.py), which would fail the merge and report the listener back.
     job = workflow(WORKFLOWS / "checks.yml")["jobs"]["ci-alerts-healthy"]
-    assert job["if"] == "github.event_name == 'pull_request'"
+    assert "if" not in job
+    assert "ci_health.py" in job["steps"][-1]["run"]
 
 
 def test_the_ossie_report_is_kept_when_a_finding_fails_the_run() -> None:

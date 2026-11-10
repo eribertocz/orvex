@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import unittest
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
+import ci_health
 from ci_health import verdict
 from github_api import GitHubApiError
 
@@ -88,6 +91,17 @@ class HealthTests(unittest.TestCase):
 
     def test_before_the_listener_reaches_main_it_passes(self) -> None:
         self.assertTrue(self.healthy(Fake([], present=False)))
+
+
+class EntryTests(unittest.TestCase):
+    def test_a_push_passes_without_reading_and_anything_else_is_checked(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(ci_health.main({"GITHUB_EVENT_NAME": "push"}), 0)
+            # A pull request, or no event at all, is checked: here it lacks its token.
+            self.assertEqual(ci_health.main({"GITHUB_EVENT_NAME": "pull_request"}), 1)
+            self.assertEqual(ci_health.main({}), 1)
+        self.assertIn("pull requests only, not on push", output.getvalue())
 
 
 if __name__ == "__main__":
