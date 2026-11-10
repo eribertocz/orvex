@@ -110,10 +110,10 @@ local = true
 workflow = "checks.yml"
 job = "ci-alerts-healthy"
 kind = "check"
-# Required by main's protection once the listener has run on main (#428): the Owner adds it.
-required = false
+required = true
+contexts = ["ci-alerts-healthy"]
 permissions = { contents = "read", actions = "read" }
-digest = "dbcfbc3905cbb2fa"
+digest = "753f00f76e5ae1ae"
 setup = []
 [[job.check]]
 # The CI alert listener succeeded on main within 7 hours (#428).

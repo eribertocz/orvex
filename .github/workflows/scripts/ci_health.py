@@ -1,7 +1,9 @@
 """The `ci-alerts-healthy` check (#428): a pull request fails while the CI alert listener is
 broken on `main`, so a silent listener is seen at the next pull request. It fails when the
 newest completed, non-cancelled run of `ci-alerts.yml` on `main` did not succeed or started more
-than `WINDOW` ago. Before the listener reaches `main` it passes with a notice. Fail closed."""
+than `WINDOW` ago. Before the listener reaches `main` it passes with a notice, and so it does on
+any event but a pull request (a push to main would report the listener back to the listener).
+Fail closed: an unknown event is checked."""
 
 from __future__ import annotations
 
@@ -49,6 +51,10 @@ def verdict(client: GitHubReader, repository: str, now: datetime) -> tuple[bool,
 
 
 def main(environment: Mapping[str, str] = os.environ) -> int:
+    event = environment.get("GITHUB_EVENT_NAME", "")
+    if event and event != "pull_request":
+        print(f"ci-alerts-healthy: checked on pull requests only, not on {event}")
+        return 0
     try:
         repository = environment["GITHUB_REPOSITORY"]
         client = GitHubClient(environment["GITHUB_TOKEN"], repository)
