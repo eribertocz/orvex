@@ -194,6 +194,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if summary:
         with open(summary, "a", encoding="utf-8") as file:
             file.write("\n".join(lines) + "\n")
+    for source in sources:
+        if source in measured:
+            print(f"coverage {measured[source]:.2f}% {source}")
     for failure in failures:
         print(f"::error::{failure}")
     for candidate in candidates:

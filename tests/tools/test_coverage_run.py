@@ -9,9 +9,23 @@ from pathlib import Path
 
 from tools.repository import REPOSITORY_ROOT
 
+BODY = """import hypothesis
+
+
+def test_x() -> None:
+    assert True
+
+
+def test_examples_are_derandomized_while_measuring() -> None:
+    import os
+    measuring = os.environ.get("PYTEST_COVERAGE") == "1"
+    assert hypothesis.settings().derandomize is measuring
+    assert (hypothesis.settings().database is None) is measuring
+"""
+
 
 def run_in(folder: Path, measure: bool) -> int:
-    (folder / "test_x.py").write_text("def test_x() -> None:\n    assert True\n", "utf-8")
+    (folder / "test_x.py").write_text(BODY, "utf-8")
     environment = {k: v for k, v in os.environ.items() if k not in ("PYTEST_COVERAGE", "CI")}
     environment["PYTHONPATH"] = str(REPOSITORY_ROOT)
     if measure:
