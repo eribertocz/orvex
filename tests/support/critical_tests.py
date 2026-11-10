@@ -49,10 +49,12 @@ def pytest_runtest_makereport(
 def pytest_make_collect_report(
     collector: pytest.Collector,
 ) -> Generator[None, Result[pytest.CollectReport]]:
-    """A module skipped while collecting (`allow_module_level`, `importorskip`) reports no test,
-    so the check is on the collection report itself."""
+    """A module or a folder skipped while collecting (`allow_module_level`, `importorskip`, in a
+    test file, a `conftest.py` or an `__init__.py`) reports no test, so the check is on the
+    collection report itself."""
     outcome: Result[pytest.CollectReport] = yield
     report = outcome.get_result()
-    if report.skipped and isinstance(collector, pytest.File) and critical_path(collector.path):
+    collected = isinstance(collector, (pytest.File, pytest.Directory))
+    if report.skipped and collected and critical_path(collector.path):
         report.outcome = "failed"
-        report.longrepr = f"a critical module may not be skipped in CI: {report.longrepr}"
+        report.longrepr = f"a critical module or folder may not be skipped in CI: {report.longrepr}"

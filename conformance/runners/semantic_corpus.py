@@ -254,6 +254,9 @@ def expected_failures(path: Path, minor: int) -> tuple[dict[str, str], list[Find
     gaps: dict[str, str] = {}
     findings = []
     for case, entry in listed.items():
+        if not isinstance(entry, dict):
+            findings.append(Finding("CORPUS_EXPECTED_FAIL_INVALID", case, "needs issue and due"))
+            continue
         issue, due = entry.get("issue"), str(entry.get("due", ""))
         if not isinstance(issue, int) or not due.startswith("P") or not due[1:].isdigit():
             findings.append(Finding("CORPUS_EXPECTED_FAIL_INVALID", case, "needs issue and due"))
@@ -354,9 +357,15 @@ def main() -> int:
         versions = ROOT / "versions.toml"
     product = tomllib.loads(versions.read_text("utf-8"))["product"]
     gaps, gap_findings = expected_failures(arguments.root / GAPS, int(str(product).split(".")[1]))
+    known = {str(entry["id"]) for entry in manifest["cases"]}
     findings = [
         *findings,
         *gap_findings,
+        *(
+            Finding("CORPUS_EXPECTED_FAIL_UNKNOWN", c, "not in the manifest")
+            for c in gaps
+            if c not in known
+        ),
         *(f for way in ways for f in exact_cases(manifest, runs[way][0], way, gaps)),
     ]
     if len(ways) == 2:

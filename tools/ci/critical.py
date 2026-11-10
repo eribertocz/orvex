@@ -42,7 +42,9 @@ def skipped(report: Path, paths: tuple[str, ...]) -> list[str]:
             continue
         # A module skipped at collection has no class name: pytest puts the module in `name`.
         module = str(case.get("classname") or case.get("name") or "").split("[")[0]
-        candidates = {module.replace(".", "/") + ".py", str(case.get("file", ""))}
+        # A folder skipped by its `conftest.py` is named by the folder alone.
+        folder = module.replace(".", "/")
+        candidates = {folder, folder + ".py", str(case.get("file", ""))}
         parts = module.split(".")
         candidates |= {"/".join(parts[:n]) + ".py" for n in range(1, len(parts) + 1)}
         if any(is_critical(c, paths) for c in candidates if c):

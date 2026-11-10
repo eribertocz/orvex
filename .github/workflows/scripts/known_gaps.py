@@ -64,9 +64,14 @@ def closed_gaps(client: GitHubReader, pull_number: int) -> list[str]:
             continue
         for case, issue in linked_issues(text, f"{folder}/{name}").items():
             try:
-                state = client.request("GET", f"/issues/{issue}")["state"]
+                linked = client.request("GET", f"/issues/{issue}")
+                state, pull = linked["state"], "pull_request" in linked
             except (GitHubApiError, KeyError, TypeError) as error:
                 raise KnownGapsUnavailable(f"cannot read issue #{issue}: {error}") from error
-            if state != "open":
+            if pull:
+                found.append(
+                    f"{folder}/{name}: {case} links #{issue}, a pull request, not an issue"
+                )
+            elif state != "open":
                 found.append(f"{folder}/{name}: {case} links #{issue}, which is {state}")
     return found

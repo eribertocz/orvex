@@ -300,7 +300,10 @@ class PullClient:
             number = int(path.removeprefix("/issues/"))
             if number not in self.issues:
                 raise GitHubApiError("GET failed with HTTP 404")
-            return {"state": self.issues[number]}
+            state = self.issues[number]
+            if state == "pull":
+                return {"state": "open", "pull_request": {}}
+            return {"state": state}
         return {
             "head": {"sha": "head"},
             "changed_files": len(self.files),
@@ -349,6 +352,11 @@ class RunTests(unittest.TestCase):
             self.assertEqual(self.run_with(closed), 1)
         self.assertIn("KNOWN_GAP_ISSUE_CLOSED", output.getvalue())
         self.assertIn("CASE-004 links #9, which is closed", output.getvalue())
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            pull = PullClient(MATRIX, self.store, [], gaps=gap, issues={9: "pull"})
+            self.assertEqual(self.run_with(pull), 1)
+        self.assertIn("a pull request, not an issue", output.getvalue())
 
     def test_known_gaps_that_cannot_be_read_fail_closed(self) -> None:
         for gaps in ('"CASE-004" = {issue = 9, due = "P3"}\n', '"CASE-004" = {due = "P3"}\n', "["):

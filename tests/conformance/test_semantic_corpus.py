@@ -810,7 +810,7 @@ def test_a_known_gap_must_fail_and_must_be_due_later(tmp_path: Path) -> None:
     listed = tmp_path / "expected-fail.toml"
     listed.write_text(
         '"CASE-001" = {issue = 9, due = "P3"}\n"CASE-002" = {issue = 9, due = "P2"}\n'
-        '"CASE-003" = {due = "P5"}\n',
+        '"CASE-003" = {due = "P5"}\n"CASE-005" = 7\n',
         "utf-8",
     )
     gaps, findings = semantic_corpus.expected_failures(listed, minor=3)
@@ -818,6 +818,7 @@ def test_a_known_gap_must_fail_and_must_be_due_later(tmp_path: Path) -> None:
     assert [(f.code, f.case) for f in findings] == [
         ("CORPUS_EXPECTED_FAIL_OVERDUE", "CASE-002"),
         ("CORPUS_EXPECTED_FAIL_INVALID", "CASE-003"),
+        ("CORPUS_EXPECTED_FAIL_INVALID", "CASE-005"),
     ]
 
 
@@ -859,6 +860,14 @@ def test_a_known_gap_excuses_its_own_failure_end_to_end(tmp_path: Path) -> None:
     overdue = corpus_command(root)
     assert overdue.returncode == 1
     assert "CORPUS_EXPECTED_FAIL_OVERDUE: CASE-004: " in overdue.stdout
+
+
+def test_a_known_gap_for_a_case_not_in_the_manifest_fails(tmp_path: Path) -> None:
+    root = copy_repository(tmp_path)
+    (root / semantic_corpus.GAPS).write_text('"CASE-999" = {issue = 9, due = "P9"}\n', "utf-8")
+    result = corpus_command(root)
+    assert result.returncode == 1
+    assert "CORPUS_EXPECTED_FAIL_UNKNOWN: CASE-999: " in result.stdout
 
 
 def test_a_known_gap_never_excuses_a_changed_source(tmp_path: Path) -> None:

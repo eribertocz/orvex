@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import uuid
@@ -106,3 +107,57 @@ def test_the_critical_set_includes_conformance_and_properties() -> None:
     for folder in critical.ALWAYS:
         assert critical.is_critical(f"{folder}/test_x.py", paths)
     assert not critical.is_critical("tests/tools/test_x.py", paths)
+
+
+def run_folder_in(folder: str, ci: bool, report: Path) -> tuple[int, str]:
+    """Run a planted folder of `folder` holding a subfolder whose `conftest.py` skips while
+    collecting (a `conftest.py` of the folder given on the command line would load at startup)."""
+    planted = REPOSITORY_ROOT / folder / f"tmp_{uuid.uuid4().hex}"
+    (planted / "skipped").mkdir(parents=True)
+    try:
+        (planted / "skipped" / "conftest.py").write_text(MODULE_SKIP.split("def ")[0], "utf-8")
+        (planted / "skipped" / "test_planted.py").write_text(
+            "def test_x() -> None:\n    pass\n", "utf-8"
+        )
+        env = {k: v for k, v in os.environ.items() if k != "CI"} | ({"CI": "true"} if ci else {})
+        done = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:randomly",
+                str(planted),
+                f"--junitxml={report}",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=REPOSITORY_ROOT,
+            check=False,
+        )
+    finally:
+        shutil.rmtree(planted)
+    return done.returncode, done.stdout.strip().splitlines()[-1]
+
+
+def test_a_critical_folder_skipped_by_its_conftest_fails_in_ci_and_in_junit(
+    tmp_path: Path,
+) -> None:
+    status, summary = run_folder_in("tests/properties", ci=True, report=tmp_path / "j.xml")
+    assert status != 0
+    assert "error" in summary
+    assert run_folder_in("tests/properties", ci=False, report=tmp_path / "k.xml")[0] == 5
+    assert len(critical.skipped(tmp_path / "k.xml", critical.critical_paths())) == 1
+    assert run_folder_in("tests/tools", ci=True, report=tmp_path / "m.xml")[0] == 5
+
+
+def test_the_junit_check_names_a_folder_skipped_by_its_conftest(tmp_path: Path) -> None:
+    report = tmp_path / "j.xml"
+    report.write_text(
+        '<testsuites><testsuite><testcase classname="" name="tests.contracts">'
+        "<skipped/></testcase></testsuite></testsuites>",
+        "utf-8",
+    )
+    assert critical.skipped(report, critical.critical_paths()) == ["::tests.contracts"]
