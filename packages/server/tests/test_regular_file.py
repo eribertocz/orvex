@@ -4,10 +4,14 @@ and read through one descriptor; anything else at its path is an error, never "a
 from __future__ import annotations
 
 import os
+import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
+from types import FrameType
 
 import pytest
+from orvex.server import regular_file
 from orvex.server.regular_file import NotRegularFile, read_regular_file
 
 
@@ -77,18 +81,37 @@ def test_a_swap_after_the_check_does_not_change_what_is_read(
     path.write_bytes(b"checked\n")
     other = tmp_path / "other.yaml"
     other.write_bytes(b"swapped\n")
-    real_fstat = os.fstat
+    real_fstat, real_stat, real_lstat = os.fstat, os.stat, os.lstat
+    swapped: list[bool] = []
+
+    def from_reader() -> bool:
+        # Only calls made while the module under test is on the stack are trapped, however
+        # they reach `os` (`pathlib` included): the runner itself (coverage, pytest's
+        # reporting) may stat paths while the test runs (#429).
+        frame: FrameType | None = sys._getframe(1)
+        while frame is not None:
+            if frame.f_code.co_filename == regular_file.__file__:
+                return True
+            frame = frame.f_back
+        return False
 
     def fstat_then_swap(descriptor: int) -> os.stat_result:
         found = real_fstat(descriptor)
-        path.unlink()
-        path.symlink_to(other)
+        if from_reader() and not swapped:
+            swapped.append(True)
+            path.unlink()
+            path.symlink_to(other)
         return found
 
-    def no_path_stat(*_: object, **__: object) -> os.stat_result:
-        raise AssertionError("a path was examined instead of the descriptor")
+    def trap(real: Callable[..., os.stat_result]) -> Callable[..., os.stat_result]:
+        def no_path_stat(*arguments: object, **keywords: object) -> os.stat_result:
+            if from_reader():
+                raise AssertionError("a path was examined instead of the descriptor")
+            return real(*arguments, **keywords)
+
+        return no_path_stat
 
     monkeypatch.setattr(os, "fstat", fstat_then_swap)
-    monkeypatch.setattr(os, "stat", no_path_stat)
-    monkeypatch.setattr(os, "lstat", no_path_stat)
+    monkeypatch.setattr(os, "stat", trap(real_stat))
+    monkeypatch.setattr(os, "lstat", trap(real_lstat))
     assert read_regular_file(path) == b"checked\n"
