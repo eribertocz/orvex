@@ -141,7 +141,8 @@ def test_purls_encode_npm_scopes_and_name_the_wheel_file(dist: Path) -> None:
 
 
 def test_a_requirement_with_extras_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    extra = [Requirement("uvicorn[standard]==0.54.0")]
+    # The extra comes last (the walk pops from the end): uvicorn itself is walked first.
+    extra = [Requirement("uvicorn[standard]==0.54.0"), Requirement("uvicorn==0.54.0")]
     monkeypatch.setattr(sbom_runtime, "roots", lambda root: extra)
     with pytest.raises(sbom_runtime.LockError, match="does not follow extras"):
         sbom_runtime.python_runtime(REPOSITORY_ROOT)

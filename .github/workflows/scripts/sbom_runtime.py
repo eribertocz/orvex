@@ -89,13 +89,14 @@ def python_runtime(root: Path) -> list[Package]:
     while pending:
         requirement = pending.pop()
         name = normalize(requirement.name)
-        if name in products or name in seen:
-            continue
         marker = requirement.marker
         if marker is not None and not marker.evaluate({"extra": ""}):
             continue
+        # Before the skip below, so it fails in every order, even for a package already walked.
         if requirement.extras:
             raise LockError(f"{requirement}: the SBOM does not follow extras yet")
+        if name in products or name in seen:
+            continue
         if name not in lock:
             raise LockError(f"{name} is a runtime dependency that pylock.toml lacks")
         seen.add(name)
