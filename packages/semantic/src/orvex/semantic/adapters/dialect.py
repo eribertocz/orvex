@@ -8,7 +8,7 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from orvex.semantic.compiler.compiled import CompiledModel
+from orvex.semantic.compiler.compiled import CompiledModel, nonzero_literal, zero_literal
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.compiler.typecheck import NodeType, TypedNode
 from orvex.semantic.errors import SemanticError
@@ -36,14 +36,14 @@ def _power(exponent: int) -> str:
 
 
 def _unscaled(value: str, scale: int) -> str:
-    """The exact integer behind a `DECIMAL(p, scale)`, as a `HUGEINT`: its integer part and its
-    fraction are scaled apart, so a 38-digit value never overflows a `DECIMAL(38)` on the way."""
+    """The exact integer behind a value of declared scale `scale`, as a `HUGEINT`: the value at
+    exactly that scale (`DECIMAL(38, scale)`, whatever scale the engine computed it in; past the
+    type, the cast fails), written as text with exactly `scale` fraction digits, the point
+    removed. No arithmetic step, so no scale overflows a `DECIMAL(38)` on the way (#426)."""
     if scale == 0:
         return f"CAST({value} AS HUGEINT)"
-    return (
-        f"(CAST(trunc({value}) AS HUGEINT) * {_power(scale)}"
-        f" + CAST(({value} - trunc({value})) * {_power(scale)} AS HUGEINT))"
-    )
+    fixed = f"CAST({value} AS DECIMAL(38,{scale}))"
+    return f"CAST(replace(CAST({fixed} AS VARCHAR), '.', '') AS HUGEINT)"
 
 
 def _rounded(a: str, b: str, mode: str, quotient: str | None = None) -> str:
@@ -68,6 +68,16 @@ def _rounded(a: str, b: str, mode: str, quotient: str | None = None) -> str:
     return f"({quotient} + {step})"
 
 
+def _nodes(tree: object) -> list[TypedNode]:
+    pending = [tree] if isinstance(tree, TypedNode) else []
+    found: list[TypedNode] = []
+    while pending:
+        node = pending.pop()
+        found.append(node)
+        pending.extend(node.children)
+    return found
+
+
 class DuckDBDialect:
     """Each hook writes what DuckDB writes."""
 
@@ -76,30 +86,68 @@ class DuckDBDialect:
         nodes, by identity (its compiled trees)."""
         self.compiled = compiled
         self.types: dict[int, NodeType] = {}
-        pending = [
-            tree
-            for member in compiled.members.values()
-            for tree in (member.typed.tree, *(t for _, t in member.typed.payload))
-            if isinstance(tree, TypedNode)
-        ]
-        while pending:
-            tree = pending.pop()
-            self.types[id(tree.node)] = tree.type
-            pending.extend(tree.children)
+        self.zeros: dict[int, str] = {}  # each `/` node: its member's `zero_denominator`
+        payloads = {
+            e.pointer.rsplit("/custom_extensions/", 1)[0]: e.payload
+            for e in compiled.ossie.product_extensions
+        }
+        for member in compiled.members.values():
+            policy = payloads.get(member.parsed.pointer, {}).get("zero_denominator")
+            for tree in (member.typed.tree, *(t for _, t in member.typed.payload)):
+                for found in _nodes(tree):
+                    self.types[id(found.node)] = found.type
+                    if isinstance(found.node, sql.Binary) and found.node.op == "/" and policy:
+                        self.zeros[id(found.node)] = str(policy)
 
     def binary(self, node: sql.Binary, op: str, again: Callable[[sql.Node], str]) -> str:
-        """`left op right`. An exact product is computed at 38 digits: DuckDB multiplies two
-        `DECIMAL(18)` values in 18-digit arithmetic and stops on a product its declared type
-        holds; widened first, it is exact up to that type, and stops only past it (#426)."""
+        """`left op right`. An exact product is computed at 38 digits and cast back to its
+        declared type: DuckDB multiplies two `DECIMAL(18)` values in 18-digit arithmetic and
+        stops on a product the type holds. A float quotient follows its zero policy: a
+        non-zero literal needs none, `null` divides by `NULLIF(d, 0)` (never an infinity), and
+        anything else is refused (#426)."""
         left, right = again(node.left), again(node.right)
+        if op == "%" and zero_literal(node.right):
+            raise _unsupported()  # never a value: an error on every row, NULL ones on one engine
+        if op == "/":
+            if nonzero_literal(node.right):
+                return f"({left} / {right})"
+            if self.zeros.get(id(node)) != "null":
+                raise _unsupported()
+            return f"({left} / {self.zero_as_null(right)})"
         kinds = [self.types.get(id(n)) for n in (node.left, node.right)]
         families = {k.logical.datatype if k is not None else None for k in kinds}
+        typed = self.types.get(id(node))
         if op == "*" and "Decimal" in families and families <= {"Decimal", "Integer"}:
             scales = [int(k.logical.scale or 0) if k is not None else 0 for k in kinds]
-            left, right = (
+            wide = (
                 f"CAST({v} AS DECIMAL(38,{s}))" for v, s in zip((left, right), scales, strict=True)
             )
+            product = "({} * {})".format(*wide)
+            if typed is None or typed.logical.precision is None or typed.logical.scale is None:
+                raise _unsupported()
+            return f"CAST({product} AS DECIMAL({typed.logical.precision},{typed.logical.scale}))"
         return f"({left} {op} {right})"
+
+    def zero_as_null(self, value: str) -> str:
+        """`value`, or NULL when it is zero."""
+        return f"NULLIF({value}, 0)"
+
+    def typed_as(self, node: sql.Node, value: sql.Node, again: Callable[[sql.Node], str]) -> str:
+        """A value of a `CASE` or `COALESCE` at the alternative's declared exact type: DuckDB
+        unifies decimals past 38 digits by cutting their scale, which rounds a value silently
+        (0.333333333333333333 became 0.33333333333333). Past the type, the cast fails (#426)."""
+        typed = self.types.get(id(node))
+        coalesce = isinstance(node, sql.Call) and node.name.upper() == "COALESCE"
+        if (
+            not (isinstance(node, sql.Case) or coalesce)
+            or typed is None
+            or typed.logical.datatype != "Decimal"
+            or typed.logical.precision is None
+            or typed.logical.scale is None
+        ):
+            return again(value)
+        kind = f"DECIMAL({typed.logical.precision},{typed.logical.scale})"
+        return f"CAST({again(value)} AS {kind})"
 
     def divisible(self, node: sql.Binary) -> bool:
         """`/` is written only for a float quotient on every engine (a bare literal takes its

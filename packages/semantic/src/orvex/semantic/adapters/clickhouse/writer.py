@@ -77,6 +77,7 @@ from orvex.semantic.adapters.duckdb import (
 )
 from orvex.semantic.catalog.building import _logical
 from orvex.semantic.compiler.catalog import LogicalType, column_key
+from orvex.semantic.compiler.compiled import zero_literal
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.compiler.typecheck import NodeType
 from orvex.semantic.engines import CAPABILITIES as ENGINE_CAPABILITIES
@@ -305,7 +306,9 @@ class _ClickHouse(_Writer):
             if node.otherwise is not None:
                 text += f" ELSE {self.at(scale, node.otherwise, again)}"
             return f"(CASE{text} END)"
-        if isinstance(node, sql.Binary) and node.op in ("+", "-", "*"):
+        if isinstance(node, sql.Binary) and node.op in ("+", "-", "*", "%"):
+            if node.op == "%" and zero_literal(node.right):
+                raise _unsupported()  # never a value: an error on every row
             left, right = self.types.get(id(node.left)), self.types.get(id(node.right))
             if (
                 left is not None
@@ -315,7 +318,11 @@ class _ClickHouse(_Writer):
             ):
                 if node.op == "*" and _bits(left) + _bits(right) > WIDE_BITS:
                     raise _unsupported()  # a product past 76 digits would wrap
-                written = (self.exact(node.left, again), self.exact(node.right, again))
+                if node.op == "%":  # ClickHouse's modulo needs one scale on both sides
+                    common = max(int(_scale(left) or 0), int(_scale(right) or 0))
+                    written = (wide(again(node.left), common), wide(again(node.right), common))
+                else:
+                    written = (self.exact(node.left, again), self.exact(node.right, again))
             elif left is not None and right is not None:
                 written = (again(node.left), again(node.right))  # a float's own arithmetic
             else:
@@ -324,7 +331,7 @@ class _ClickHouse(_Writer):
         if isinstance(node, sql.Binary) and node.op == "/":
             if not self.divisible(node):
                 raise _unsupported()  # an exact quotient is C2's division, never `/`
-            return f"({again(node.left)} / {again(node.right)})"
+            return self.binary(node, "/", again)  # a float's, by its zero policy
         if (
             isinstance(node, sql.Binary)
             and node.op in _COMPARISONS
@@ -407,6 +414,9 @@ class _ClickHouse(_Writer):
         return self.cast_to(
             again(node.operand), f"DECIMAL({int(node.arguments[0])},{int(node.arguments[1])})"
         )
+
+    def zero_as_null(self, value: str) -> str:
+        return f"nullIf({value}, 0)"
 
     def common_scale(self, node: sql.Node, values: Iterable[sql.Node]) -> int | None:
         """The scale the values of a conditional (`CASE`, `COALESCE`, `NULLIF`, `ABS`) are

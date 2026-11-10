@@ -93,6 +93,13 @@ def model_document() -> Document:
         "fq": "f / g",  # a float quotient, with no zero-denominator policy to declare
         "fp": "f * g",
         "dd": "d + e",
+        "pr": "d * e",  # an exact product read as a value, never inside a sum
+        "pi": "a * d",
+        # Alternatives of 36 and 18 digits: DuckDB alone would cut their common scale to 14.
+        "alt": "CASE WHEN a > 100 THEN d * e ELSE 0.333333333333333333 END",
+        "alt2": "COALESCE(CASE WHEN a > 100 THEN d * e END, 0.333333333333333333)",
+        "fv": "f",
+        "fz": "f - f",  # a float zero on every row
     }
     document = {
         "version": "0.2.0.dev0",
@@ -118,7 +125,10 @@ def model_document() -> Document:
             derived("twice", "thirds * 2"),
             metric("float_quotients", "SUM(t.fq)"),
             metric("float_products", "SUM(t.fp)"),
-            metric("float_halves", "SUM(t.fp) / 2", zero_denominator="null"),
+            metric("float_halves", "SUM(t.fp) / 2"),  # a non-zero literal needs no zero policy
+            metric("float_by_zero", "SUM(t.fp) / 0", zero_denominator="null"),
+            metric("float_nulls", "SUM(t.fv / t.fz)", zero_denominator="null"),
+            metric("float_rejects", "SUM(t.fv / t.fz)", zero_denominator="reject"),
             metric("decimals", "SUM(t.dd)"),
             ratio("even", "half_even"),
             ratio("away", "half_away_from_zero"),
@@ -357,7 +367,11 @@ def test_the_duckdb_writer_never_writes_an_exact_slash_even_if_asked_directly() 
     with pytest.raises(SemanticError) as caught:
         writer.node(tree_of("q"), "t0", "T", "field")  # an exact quotient: C2's division only
     assert caught.value.code == "UNSUPPORTED_OPERATION"
-    assert " / " in writer.node(tree_of("fq"), "t0", "T", "field")  # a float's own `/`
+    halves = compiled_with("f / 2")
+    writer.adopt(halves)
+    tree = halves.require(MemberId("field", "T", "EXTRA")).parsed.tree
+    assert tree is not None
+    assert " / " in writer.node(tree, "t0", "T", "field")  # a float's own `/`, by a literal
 
 
 def test_no_exact_question_s_statement_divides_with_a_slash() -> None:
@@ -518,3 +532,85 @@ def test_an_exact_mean_needs_its_declarations_and_no_dialect_writes_it(tmp_path:
             ce.engine_for(opened, read=never_read),
         )
     assert refused.value.code == "UNSUPPORTED_OPERATION"  # never the engine's float mean
+
+
+def test_a_float_quotient_follows_its_zero_policy_and_is_never_infinite(tmp_path: Path) -> None:
+    with lake(tmp_path) as opened:
+        found = answer(
+            json.dumps(aggregate("float_halves", "float_by_zero", "float_nulls")),
+            MODEL,
+            policies(),
+            ce.viewer_context(),
+            ce.engine_for(opened),
+        )
+        with pytest.raises(SemanticError) as caught:  # a row-level `reject` has no writer yet
+            answer(
+                json.dumps(aggregate("float_rejects")),
+                MODEL,
+                policies(),
+                ce.viewer_context(),
+                ce.engine_for(opened, read=never_read),
+            )
+    assert rows_of(found) == [["6.5", None, None]]
+    assert caught.value.code == "UNSUPPORTED_OPERATION"
+
+
+PRODUCTS = {
+    "alternatives keep their declared scale": (
+        detail("t.id", "t.alt", "t.alt2"),
+        [[str(n), "0.333333333333333333", "0.333333333333333333"] for n in (1, 2, 3)],
+    ),
+    "grouped by a product": (
+        aggregate("decimals", group_by=("t.pr",)),
+        [
+            ["3.000000000000", "4.000000"],
+            ["4.000000000000", "5.000000"],
+            ["6.000000000000", "5.000000"],
+        ],
+    ),
+    "grouped by an integer product": (
+        aggregate("decimals", group_by=("t.pi",)),
+        [["1.000000", "9.000000"], ["4.000000", "5.000000"]],
+    ),
+    "products as detail fields": (
+        detail("t.id", "t.pr", "t.pi"),
+        [
+            ["1", "3.000000000000", "1.000000"],
+            ["2", "6.000000000000", "4.000000"],
+            ["3", "4.000000000000", "1.000000"],
+        ],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", PRODUCTS.values(), ids=list(PRODUCTS))
+def test_an_exact_product_read_as_a_value_keeps_its_declared_type(
+    tmp_path: Path, case: tuple[Document, list[list[str]]]
+) -> None:
+    document, expected = case
+    with lake(tmp_path) as opened:
+        found = answer(
+            json.dumps(document), MODEL, policies(), ce.viewer_context(), ce.engine_for(opened)
+        )
+    assert rows_of(found) == expected
+    assert all(c["exactness"] == "exact" for c in found.result.envelope()["columns"])
+
+
+@pytest.mark.parametrize("scale", [1, 6, 18, 24, 37, 38])
+@pytest.mark.parametrize("sign", ["", "-"])
+def test_duckdb_writes_a_decimal_with_exactly_its_scale_so_its_digits_are_its_integer(
+    scale: int, sign: str
+) -> None:
+    # The C2 division reads each component's integer from this text (dialect `_unscaled`).
+    digits = "1" + "0" * (37 - scale) + "7" * scale if scale < 38 else "7" * 38
+    value = f"{sign}{digits[: 38 - scale] or '0'}.{digits[38 - scale :]}"
+    found = (
+        duckdb.connect()
+        .execute(
+            f"SELECT CAST(replace(CAST(CAST(? AS DECIMAL(38,{scale})) AS VARCHAR), '.', '')"
+            " AS HUGEINT)",
+            [value],
+        )
+        .fetchall()
+    )
+    assert found[0][0] == int(f"{sign}{digits}")

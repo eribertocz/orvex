@@ -25,6 +25,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -1154,6 +1155,8 @@ EXACT_ROWS = {
         exact_case.aggregate("float_products", "float_halves"),
         exact_case.detail("t.id", order=[{"by": "t.q", "direction": "asc"}]),
         exact_case.detail("t.id", "t.dd"),
+        exact_case.detail("t.id", "t.alt", "t.alt2", "t.pr", "t.pi"),
+        exact_case.aggregate("float_halves", "float_by_zero", "float_nulls"),
     ],
     ids=[
         "half_even ties",
@@ -1166,6 +1169,8 @@ EXACT_ROWS = {
         "floats and a float halved",
         "a quotient as a sort",
         "exact detail rows",
+        "alternatives and products as values",
+        "float quotients by their zero policy",
     ],
 )
 def test_exact_arithmetic_answers_or_refuses_on_clickhouse_as_on_the_managed_lake(
@@ -1226,8 +1231,19 @@ def same_outcome(
     on_clickhouse, reference = both(
         server, compiled, generated_exact.CATALOG, rows, json.loads(generated_exact.QUESTION)
     )
-    if isinstance(reference, str) and reference.startswith("StoreError"):
-        assert isinstance(on_clickhouse, str)
-        assert on_clickhouse.startswith("StoreError")
+    errors = [isinstance(o, str) and o.startswith("StoreError") for o in (on_clickhouse, reference)]
+    if all(errors):
         return  # a value the data makes undefined: an engine error on both, never an answer
+    if any(errors):
+        # One engine stops with a clear engine error where the other answers (a step computed
+        # wider, or a NULL row evaluated or spared): allowed, as long as the answer given is
+        # the exact value, never another one (Owner principle: the reference's value or a clear
+        # error; #450).
+        typed = generated_exact.typed(generated)
+        readings = generated_exact.readings(lambda: generated_exact.total(node, typed))
+        answered = reference if errors[0] else on_clickhouse
+        value = answered[1][0][0]
+        found = None if value is None else Decimal(value)
+        assert found in [r for r in readings if not isinstance(r, ArithmeticError)], readings
+        return
     assert on_clickhouse == reference

@@ -251,9 +251,9 @@ class _Writer(DuckDBDialect):
             if node.operand is not None:
                 text += f" {again(node.operand)}"
             for when, then in node.whens:
-                text += f" WHEN {again(when)} THEN {again(then)}"
+                text += f" WHEN {again(when)} THEN {self.typed_as(node, then, again)}"
             if node.otherwise is not None:
-                text += f" ELSE {again(node.otherwise)}"
+                text += f" ELSE {self.typed_as(node, node.otherwise, again)}"
             return text + " END)"
         if isinstance(node, sql.Cast):
             return self.cast(node, again, dataset, context)
@@ -315,7 +315,7 @@ class _Writer(DuckDBDialect):
             where = f" FILTER (WHERE {again(node.filter)})" if node.filter is not None else ""
             return f"{name}({inner}){where}"
         if name in _CALLS and node.filter is None:
-            return f"{name}({', '.join(again(a) for a in node.arguments)})"
+            return f"{name}({', '.join(self.typed_as(node, a, again) for a in node.arguments)})"
         raise _unsupported()
 
     def ref(self, node: sql.Ref, alias: str, dataset: str, context: str) -> str:

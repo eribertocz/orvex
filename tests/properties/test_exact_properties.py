@@ -105,12 +105,13 @@ def test_an_exact_question_equals_the_oracle_or_is_refused_before_any_read(
     if isinstance(found, SemanticError) and found.code in BEFORE_READ:
         assert calls == 0, f"{found.code} after a read"
         return
+    rows = exact.typed(generated)
+    readings = exact.readings(lambda: exact.total(node, rows))
     if isinstance(found, (SemanticError, StoreError)):
         # Only a value the data makes undefined may stop a question after its read: an engine
         # error, stable, never an internal one and never an answer.
         assert isinstance(found, StoreError), found.code
-        with pytest.raises(exact.Undefined):
-            exact.total(node, exact.typed(generated))
+        assert any(isinstance(r, exact.Undefined) for r in readings), readings
         return
     assert not exact.divides(node), "an exact `/` was answered"
     column = found.result.envelope()["columns"][0]
@@ -118,8 +119,8 @@ def test_an_exact_question_equals_the_oracle_or_is_refused_before_any_read(
     assert column["encoding"] not in ("FLOAT", "DOUBLE")
     assert " / " not in found.physical.sql  # no float operation on exact inputs
     value = ce.rows_of(found)[0][0]
-    expected = exact.total(node, exact.typed(generated))
-    assert (None if value is None else Decimal(value)) == expected
+    answered = None if value is None else Decimal(value)
+    assert answered in [r for r in readings if not isinstance(r, ArithmeticError)], readings
 
 
 def twice(node: exact.Node, generated: list[dict[str, str | None]]) -> tuple[Any, Any]:
@@ -192,6 +193,7 @@ def test_the_comparison_keeps_reproducible_receipt_fields_and_ignores_timing() -
 
 
 FAR = ("bin", "*", ("col", "x"), ("col", "x"))  # up to 24 whole digits per row
+SCALES = ("case", "<", ("col", "x"), ("col", "x"), ("lit", "0.333333333333333333"), FAR)
 
 
 @exact.EXACT
@@ -210,6 +212,33 @@ FAR = ("bin", "*", ("col", "x"), ("col", "x"))  # up to 24 whole digits per row
     places=0,
     zero="reject",
     generated=[{"x": None, "y": None, "i": "-5", "j": "0"}],
+)
+@example(  # a denominator of scale 24: the components unscaled without arithmetic (#450 review)
+    numerator=("col", "x"),
+    denominator=("bin", "*", ("lit", "1.000001"), ("lit", "0.333333333333333333")),
+    mode="half_away_from_zero",
+    places=0,
+    zero="null",
+    generated=[{"x": "1.000000", "y": None, "i": None, "j": None}],
+)
+@example(  # a component computed at another scale than declared: read at the declared one
+    numerator=("col", "x"),
+    denominator=SCALES,
+    mode="half_away_from_zero",
+    places=0,
+    zero="null",
+    generated=[{"x": "-1.000000", "y": None, "i": None, "j": None}],
+)
+@example(  # the same component past its declared type: an engine error, never an answer
+    numerator=("col", "x"),
+    denominator=SCALES,
+    mode="half_away_from_zero",
+    places=0,
+    zero="null",
+    generated=[
+        {"x": None, "y": None, "i": None, "j": None},
+        {"x": "999999999999.999999", "y": None, "i": None, "j": None},
+    ],
 )
 @example(
     numerator=FAR,
@@ -244,25 +273,34 @@ def test_the_declared_division_equals_the_oracle_at_its_scale_and_mode(
             )
         except (SemanticError, StoreError) as error:
             found = error
-    try:
-        components = (exact.total(numerator, rows), exact.total(denominator, rows))
-        expected: Any = exact.quotient(*components, mode, places, zero)
-    except exact.Rejected:
-        assert isinstance(found, SemanticError)
-        assert found.code == "DIVISION_POLICY_VIOLATION"
-        return
-    except exact.Undefined:
-        assert isinstance(found, StoreError)  # an engine error, never an answer
-        return
     if isinstance(found, SemanticError) and found.code in BEFORE_READ:
         assert reads.calls == 0
         return
-    assert not isinstance(found, (SemanticError, StoreError)), found
+
+    def computed() -> tuple[Any, Any, Any]:
+        pair = (exact.total(numerator, rows), exact.total(denominator, rows))
+        return pair, exact.quotient(*pair, mode, places, zero), None
+
+    readings = exact.readings(computed)
+    if isinstance(found, SemanticError) and found.code == "DIVISION_POLICY_VIOLATION":
+        assert any(isinstance(r, exact.Rejected) for r in readings), readings
+        return
+    if isinstance(found, StoreError):  # an engine error, never an answer
+        assert any(isinstance(r, exact.Undefined) for r in readings), readings
+        return
+    assert not isinstance(found, SemanticError), found
     value = ce.rows_of(found)[0][0]
-    assert (None if value is None else Decimal(value)) == expected
-    if exact.in_domain(*components, mode, places):
-        second = exact.decimal_division(*components, places)  # type: ignore[arg-type]
-        assert second is None or second == expected
+    answered = None if value is None else Decimal(value)
+    defined = [r for r in readings if not isinstance(r, ArithmeticError)]
+    assert answered in [q for _, q, _ in defined], readings
+    for components, expected, _ in defined:
+        top: exact.Value = components[0]
+        bottom: exact.Value = components[1]
+        if expected == answered and exact.in_domain(top, bottom, mode, places):
+            assert top is not None
+            assert bottom is not None
+            second = exact.decimal_division(top, bottom, places)
+            assert second is None or second == expected
 
 
 def test_the_engine_s_own_division_is_only_an_oracle_inside_its_domain() -> None:

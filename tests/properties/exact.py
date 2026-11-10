@@ -15,6 +15,7 @@ import json
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -127,6 +128,8 @@ def shape(node: Node) -> tuple[int, int]:
         assert isinstance(exponent, int)
         places = max(-exponent, 0)
         return (max(len(digits), places, 10 if places == 0 else 1), places)
+    if kind == "nullif":
+        return shape(node[1])  # NULLIF has its first argument's type
     shapes = [shape(c) for c in node[1:] if isinstance(c, tuple)]
     if kind == "coalesce":
         shapes.append(shape(("lit", node[2])))
@@ -151,6 +154,8 @@ def bits(node: Node) -> int | None:
     if kind == "lit":
         value = Decimal(str(node[1]))
         return None if value != value.to_integral_value() or "." in str(node[1]) else 32
+    if kind == "nullif":
+        return bits(node[1])  # NULLIF has its first argument's type
     children = [c for c in node[1:] if isinstance(c, tuple)]
     if kind == "coalesce":
         children.append(("lit", node[2]))
@@ -175,11 +180,20 @@ class Undefined(ArithmeticError):
     scale. The engine must stop with an error, never answer."""
 
 
+# Whether a NULL operand spares the other operand's evaluation. SQL leaves it to the engine: one
+# folds `NULL + (0 % 0)` to NULL, another raises. The oracle gives both readings (`lenient`),
+# and a property accepts the engine's answer under either, or its error where one raises.
+LENIENT = {"on": False}
+# Whether a value past its declared type is undefined (the engine stops) or kept (an engine may
+# compute a step in a wider type and still answer the exact value: never a different one).
+UNBOUNDED = {"on": False}
+
+
 def evaluate(node: Node, row: Mapping[str, Value]) -> Value:
     """The oracle: SQL semantics in `Decimal` at 80 digits (NULL propagates; `%` truncates
     toward zero, as both engines do). An undefined value raises `Undefined`."""
     value = _value(node, row)
-    if not fits(node, value):
+    if not UNBOUNDED["on"] and not fits(node, value):
         raise Undefined(node)
     return value
 
@@ -208,7 +222,10 @@ def _value(node: Node, row: Mapping[str, Value]) -> Value:
         holds = a is not None and b is not None and {"<": a < b, "=": a == b, ">": a > b}[op]
         return evaluate(then if holds else otherwise, row)
     if kind == "bin":
-        a, b = evaluate(node[2], row), evaluate(node[3], row)
+        a = evaluate(node[2], row)
+        if a is None and LENIENT["on"]:
+            return None
+        b = evaluate(node[3], row)
         if a is None or b is None:
             return None
         if node[1] == "+":
@@ -301,7 +318,7 @@ QUESTION = json.dumps(
 
 # --- the declared division (C2) -----------------------------------------------------------------
 
-MODES = {"half_even": decimal.ROUND_HALF_EVEN, "half_away_from_zero": decimal.ROUND_HALF_UP}
+MODES = ("half_away_from_zero", "half_even")
 
 
 def ratio_model(
@@ -348,17 +365,24 @@ class Rejected(ArithmeticError):
 
 
 def quotient(numerator: Value, denominator: Value, mode: str, places: int, zero: str) -> Value:
-    """C2's one division: the exact quotient rounded once, at `places`, by `mode`. NULL over a
-    NULL component; a zero denominator is NULL or refused, as declared; past `DECIMAL(38)` the
-    engine stops, never answers."""
-    if numerator is None or denominator is None:
-        return None
-    if denominator == 0:
+    """C2's one division: the exact quotient rounded once, at `places`, by `mode`. A zero
+    denominator is NULL or refused, as declared, whatever the numerator; otherwise NULL over a
+    NULL component; past `DECIMAL(38)` the engine stops, never answers."""
+    if denominator is not None and denominator == 0:  # the policy decides first, as declared
         if zero == "reject":
             raise Rejected
         return None
-    exact = ORACLE.divide(numerator, denominator)
-    rounded = exact.quantize(Decimal(1).scaleb(-places), rounding=MODES[mode], context=ORACLE)
+    if numerator is None or denominator is None:
+        return None
+    scaled = Fraction(numerator) / Fraction(denominator) * 10**places  # exact, never rounded
+    whole, rest = divmod(abs(scaled.numerator), scaled.denominator)
+    twice_rest = 2 * rest
+    if twice_rest > scaled.denominator or (
+        twice_rest == scaled.denominator and (mode == "half_away_from_zero" or whole % 2 == 1)
+    ):
+        whole += 1  # rounded once, from the exact remainder
+    sign = -1 if scaled < 0 else 1
+    rounded = Decimal(sign * whole).scaleb(-places)
     if abs(rounded) >= Decimal(10) ** (38 - places):
         raise Undefined(("ratio",))
     return rounded
@@ -398,3 +422,21 @@ def decimal_division(numerator: Decimal, denominator: Decimal, places: int) -> D
     except duckdb.OutOfRangeException:
         return None
     return Decimal(found[0][0])
+
+
+def readings(compute: Any) -> list[Any]:  # noqa: ANN401
+    """The value `compute()` gives under each reading the engines may take: a NULL operand that
+    spares the other or not, and a step kept exact past its declared type or stopped there.
+    Each is the value or the exception it raises; an answer must equal one of the values, and
+    an engine error needs one of the exceptions."""
+    found: list[Any] = []
+    for lenient in (False, True):
+        for unbounded in (False, True):
+            LENIENT["on"], UNBOUNDED["on"] = lenient, unbounded
+            try:
+                found.append(compute())
+            except ArithmeticError as error:
+                found.append(error)
+            finally:
+                LENIENT["on"], UNBOUNDED["on"] = False, False
+    return found

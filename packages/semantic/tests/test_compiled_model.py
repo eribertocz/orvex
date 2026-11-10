@@ -346,7 +346,8 @@ def test_answerability_lists_every_other_missing_declaration() -> None:
     document = base(metric("revenue", "SUM(sales.amount)", additivity="additive"))
     sales = document["datasets"][0]
     sales["fields"] += [
-        field("unit_price", "amount / 3"),
+        field("unit_price", "amount / cost"),
+        field("third", "amount / 3"),  # a non-zero literal divisor needs no zero policy (#426)
         field("day", "DATE_TRUNC('DAY', sold_at)"),
     ]
     sales["metrics"] = [
@@ -374,6 +375,7 @@ def test_answerability_lists_every_other_missing_declaration() -> None:
             "rounding",
             "zero_denominator",
         )
+        assert members[MemberId("field", "SALES", "THIRD")].missing == ("rounding",)
         assert members[MemberId("field", "SALES", "DAY")].missing == ("time_zone",)
         assert members[MemberId("metric", "SALES", "OPAQUE")].missing == ("numeric",)
         assert members[MemberId("metric", "SALES", "UNTYPED")].missing == ("datatype",)
