@@ -33,7 +33,7 @@ jobs:
       # secret. Each case creates its own database, read-only profile and reader, and drops them.
       clickhouse:
         # clickhouse/clickhouse-server:26.10.2.103, the image of python.yml's service
-        image: clickhouse/clickhouse-server:26.10.2.103
+        image: clickhouse/clickhouse-server@sha256:b2bfa4d8399ee9973868cc5c1754cb506a6f4b86fbddc41010cc090beb55c85e
         env:
           CLICKHOUSE_USER: ci
           CLICKHOUSE_PASSWORD: ci-disposable-database

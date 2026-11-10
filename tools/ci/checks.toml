@@ -235,7 +235,7 @@ contexts = [
   "python-tests-3.14-part-8",
   "python-tests-3.14-part-9",
 ]
-digest = "b727fca771559ec1"
+digest = "9b4e2cf138395b7c"
 pythons = ["3.15", "3.14"]
 setup = [
   "python -m pip install --quiet pip==26.3",
@@ -624,7 +624,7 @@ job = "semantic-corpus"
 kind = "check"
 required = true
 contexts = ["semantic-corpus"]
-digest = "60b467dbe012e034"
+digest = "9ac09eeaf88b538c"
 setup = ["python -m pip install --quiet pip==26.3", "version=26.8.30.8"]
 [[job.check]]
 name = "semantic-corpus"
