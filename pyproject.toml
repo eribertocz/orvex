@@ -35,7 +35,11 @@ dev = [
 
 # Branch coverage of the critical sources (#429): measured on the whole suite only, the same on
 # every Python; `tools/ci/coverage_floor.py` checks it against `tools/ci/coverage-floor.toml`.
+# `ctrace` (sys.settrace), not `sysmon`: another sys.monitoring tool in the run (Hypothesis'
+# explain phase on 3.14; on 3.15 more than that) drops sysmon's events, and the same commit then
+# measured differently from run to run. Twice as slow, on the whole-suite runs only.
 [tool.coverage.run]
+core = "ctrace"
 branch = true
 parallel = true
 relative_files = true
