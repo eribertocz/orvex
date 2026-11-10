@@ -307,7 +307,7 @@ Preconditions:
 
 - **TLS.** A host other than `localhost`, `127.0.0.1` or `::1` is reached only over TLS that checks the server's certificate and name (`STORE_TLS_REQUIRED`). The operating system's authorities are used unless a CA file is named.
 - **Password.** It comes from the environment variable `password_env` (`STORE_SECRET_MISSING`), is sent as a header, and is redacted from every error.
-- **Version.** It must be a tested version, by major and minor: `26.8` (LTS) and `26.9` (`ENGINE_VERSION_UNTESTED`).
+- **Version.** It must be a tested version, by major and minor: `26.8` (LTS) and `26.10` (the latest stable; #429) (`ENGINE_VERSION_UNTESTED`).
 - **Read-only profile.** `readonly = 1`, so the session can neither write nor change its own settings (`SOURCE_NOT_READ_ONLY`).
 - **Settings that decide a result's meaning,** each with exactly this value (`ENGINE_SETTING_REQUIRED`):
 

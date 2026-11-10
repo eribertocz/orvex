@@ -44,7 +44,7 @@ def test_a_check_runs_the_workflow_step_itself() -> None:
     lock = next(c for c in checks.load(REPOSITORY_ROOT) if c.name == "python-lock")
     text = checks.script(REPOSITORY_ROOT, lock)
     assert text.startswith(lock.run)
-    assert "diff /tmp/first.txt /tmp/second.txt" in text
+    assert 'diff "/tmp/$python-first.txt" "/tmp/$python-second.txt"' in text
 
 
 JUNIT = """<?xml version="1.0"?>

@@ -1,0 +1,44 @@
+# The branch-coverage floor of each critical source (#429), a whole percent, read by
+# tools/ci/coverage_floor.py. Each Python version must reach it. Raised only by review, in its
+# own pull request, from the measured values the coverage job reports; never lowered to make CI
+# pass. Governed: the Owner merges every change here.
+[floors]
+"packages/access/src/orvex/access/__init__.py" = 100
+"packages/access/src/orvex/access/context.py" = 97
+"packages/access/src/orvex/access/fixtures.py" = 96
+"packages/access/src/orvex/access/local.py" = 100
+"packages/semantic/src/orvex/semantic/adapters/__init__.py" = 100
+"packages/semantic/src/orvex/semantic/adapters/clickhouse/__init__.py" = 100
+"packages/semantic/src/orvex/semantic/adapters/clickhouse/allowlist.py" = 95
+"packages/semantic/src/orvex/semantic/adapters/clickhouse/cost.py" = 100
+"packages/semantic/src/orvex/semantic/adapters/clickhouse/evidence.py" = 98
+"packages/semantic/src/orvex/semantic/adapters/clickhouse/exact.py" = 96
+"packages/semantic/src/orvex/semantic/adapters/clickhouse/names.py" = 100
+"packages/semantic/src/orvex/semantic/adapters/clickhouse/writer.py" = 92
+"packages/semantic/src/orvex/semantic/adapters/clickhouse/zones.py" = 100
+"packages/semantic/src/orvex/semantic/adapters/dialect.py" = 96
+"packages/semantic/src/orvex/semantic/adapters/duckdb.py" = 91
+"packages/semantic/src/orvex/semantic/compiler/__init__.py" = 100
+"packages/semantic/src/orvex/semantic/compiler/catalog.py" = 100
+"packages/semantic/src/orvex/semantic/compiler/compiled.py" = 98
+"packages/semantic/src/orvex/semantic/compiler/parsing.py" = 94
+"packages/semantic/src/orvex/semantic/compiler/typecheck.py" = 86
+"packages/semantic/src/orvex/semantic/compiler/units.py" = 97
+"packages/semantic/src/orvex/semantic/compiler/zones.py" = 100
+"packages/semantic/src/orvex/semantic/correctness/__init__.py" = 100
+"packages/semantic/src/orvex/semantic/correctness/analysis.py" = 93
+"packages/semantic/src/orvex/semantic/correctness/discharge.py" = 89
+"packages/semantic/src/orvex/semantic/correctness/graph.py" = 95
+"packages/semantic/src/orvex/semantic/correctness/materialization.py" = 82
+"packages/semantic/src/orvex/semantic/correctness/report.py" = 98
+"packages/semantic/src/orvex/semantic/policies/__init__.py" = 100
+"packages/semantic/src/orvex/semantic/policies/caller.py" = 90
+"packages/semantic/src/orvex/semantic/policies/model.py" = 90
+"packages/semantic/src/orvex/semantic/policies/placement.py" = 88
+"packages/semantic/src/orvex/semantic/policies/predicate.py" = 92
+"packages/semantic/src/orvex/semantic/policies/strict_yaml.py" = 83
+"packages/store/src/orvex/store/arrow_exact.py" = 100
+"packages/store/src/orvex/store/isolation.py" = 93
+"packages/store/src/orvex/store/separation.py" = 89
+"packages/store/src/orvex/store/source_exactness.py" = 24
+"packages/store/src/orvex/store/sql_guard.py" = 97

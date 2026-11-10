@@ -9,6 +9,9 @@
   2026-11-08: fast pull requests; `main` runs the whole suite on every push, so anything a
   selection misses is caught there at once).
 
+Coverage of the critical sources is measured only when a part runs its share of the whole suite
+(`PYTEST_COVERAGE=1`, #429): a selection would measure less and fail the floors.
+
 The printed reasons say what was chosen and why. A selected path that is not a plain repository
 path selects the whole suite: nothing from a pull request reaches a shell unchecked.
 """
@@ -23,9 +26,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from tools.ci import impact, verify
+from tools.ci.parts import PARTS
 from tools.repository import REPOSITORY_ROOT
 
-PARTS = 10
 PLAIN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*")
 
 
@@ -51,6 +54,7 @@ def lines(choice: Choice) -> list[str]:
     return [
         f"PYTEST_SHARD={choice.shard}",
         f"PYTEST_PATHS={' '.join(choice.paths)}",
+        f"PYTEST_COVERAGE={0 if choice.paths else 1}",
     ]
 
 

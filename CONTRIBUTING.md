@@ -4,7 +4,7 @@ Rules for every change: [`AGENTS.md`](AGENTS.md) and [`docs/process/`](docs/proc
 
 ## Python workspace
 
-Requirements: Python 3.15 (also tested on 3.14) and pip 26.2.2 or newer, because pip installs from `pylock.toml` only from 26.1 on.
+Requirements: Python 3.15 (also tested on 3.14) and pip 26.3 or newer, because pip installs from `pylock.toml` only from 26.1 on.
 
 Every module under `packages/` is its own distribution in the `orvex` namespace (PEP 420). The root `pyproject.toml` holds only tool settings and the `dev` dependency group.
 
@@ -13,7 +13,7 @@ Every module under `packages/` is its own distribution in the `orvex` namespace 
 ```bash
 python3.15 -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
-python -m pip install pip==26.2.2
+python -m pip install pip==26.3
 python -m pip install -r pylock.toml # Python 3.14: pylock.py314.toml
 for package in packages/*/; do python -m pip install --no-deps --no-build-isolation -e "$package"; done
 ```

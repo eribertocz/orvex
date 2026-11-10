@@ -3,7 +3,7 @@
 # finding (engineering.md §8: required from P2-27). Since P2-30 (#399) the same job also asks
 # every case on an existing DuckLake with a PostgreSQL catalog, with the development switch on,
 # and fails unless each case ends exactly as through the library (corpus parity). Since P2-31
-# (#225) it does the same on ClickHouse, on each tested version: the latest stable (26.9, the
+# (#225) it does the same on ClickHouse, on each tested version: the latest stable (26.10, the
 # service) and the current LTS (26.8, run from its release archive, checked by its SHA-512).
 name: semantic-corpus
 
@@ -29,11 +29,11 @@ jobs:
     # The existing lake's PostgreSQL catalog (#399); a disposable database, not a secret. Each
     # case creates its own database, owner role and reader role, and drops them.
     services:
-      # ClickHouse 26.9 for the corpus parity on ClickHouse (#225); a disposable server, not a
+      # ClickHouse 26.10 for the corpus parity on ClickHouse (#225); a disposable server, not a
       # secret. Each case creates its own database, read-only profile and reader, and drops them.
       clickhouse:
-        # clickhouse/clickhouse-server:26.9.25.15, the image of python.yml's service
-        image: clickhouse/clickhouse-server@sha256:19bfacb135479a892551a8155cfbbc8211aedf2aa888cd91950b9ee7e76cc7e3
+        # clickhouse/clickhouse-server:26.10.2.103, the image of python.yml's service
+        image: clickhouse/clickhouse-server@sha256:b2bfa4d8399ee9973868cc5c1754cb506a6f4b86fbddc41010cc090beb55c85e
         env:
           CLICKHOUSE_USER: ci
           CLICKHOUSE_PASSWORD: ci-disposable-database
@@ -60,14 +60,14 @@ jobs:
           python-version: "3.15"
       - name: Install from the lock file and the workspace packages
         run: |
-          python -m pip install --quiet pip==26.2.2
+          python -m pip install --quiet pip==26.3
           python -m pip install --quiet -r pylock.toml
           for package in packages/*/; do
             python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
           done
       - name: Start ClickHouse 26.8 LTS from its release archive (#225)
         # The official static build, checked against its pinned SHA-512 before it runs; on port
-        # 8124 beside the 26.9 service, its own data in the runner's temporary folder.
+        # 8124 beside the 26.10 service, its own data in the runner's temporary folder.
         run: |
           version=26.8.30.8
           archive="clickhouse-common-static-$version-amd64.tgz"
@@ -95,7 +95,7 @@ jobs:
         env:
           CORPUS_POSTGRES: host=localhost port=5432 dbname=postgres user=postgres
           CORPUS_POSTGRES_PASSWORD: ci-disposable-database
-      - name: Corpus parity on ClickHouse 26.9, the development switch on (#225)
+      - name: Corpus parity on ClickHouse 26.10, the development switch on (#225)
         run: python -m conformance.runners.semantic_corpus --through clickhouse --switch-on
         env:
           CORPUS_CLICKHOUSE: localhost:8123:ci

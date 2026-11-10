@@ -43,7 +43,7 @@ from orvex.store.errors import StoreError, register_secret
 from orvex.store.nested_types import refuse_nested_uhugeint
 
 # Server versions tested (major.minor): the current LTS and the latest stable (ADR-0022).
-TESTED_VERSIONS = ("26.8", "26.9")
+TESTED_VERSIONS = ("26.8", "26.10")
 
 # Settings that decide what a statement means; each must have exactly this value. `readonly` is
 # checked first, with its own code. The adapter relies on every one of them.

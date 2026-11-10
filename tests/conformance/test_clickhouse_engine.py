@@ -122,7 +122,7 @@ def test_a_receipt_names_the_engine_its_version_the_connection_the_read_instant_
     document = found.receipt.document()
     assert document["execution"]["engine"] == "clickhouse"
     assert document["execution"]["engine_version"] == engine.version
-    assert ".".join(engine.version.split(".")[:2]) in ("26.8", "26.9")
+    assert ".".join(engine.version.split(".")[:2]) in ("26.8", "26.10")
     assert document["execution"]["estimate"] == {"rows_scanned": len(rp.DATA["sales"])}
     reads = document["data"]
     live = [r for r in reads if r["route"] == "live"]

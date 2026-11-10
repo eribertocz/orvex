@@ -28,7 +28,7 @@ jobs:
           python-version: "3.15"
       - name: Install from the lock file
         run: |
-          python -m pip install --quiet pip==26.2.2
+          python -m pip install --quiet pip==26.3
           python -m pip install --quiet -r pylock.toml
       - run: ruff format --check .
       - run: ruff check .
@@ -44,7 +44,7 @@ jobs:
           python-version: "3.15"
       - name: Install from the lock file and the workspace packages
         run: |
-          python -m pip install --quiet pip==26.2.2
+          python -m pip install --quiet pip==26.3
           python -m pip install --quiet -r pylock.toml
           for package in packages/*/; do
             python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
@@ -85,8 +85,8 @@ jobs:
       # ClickHouse for the Direct Query tests (P2-31, #225); a disposable server, not a secret.
       # The tests create their own read-only profiles, users and synthetic tables.
       clickhouse:
-        # clickhouse/clickhouse-server:26.9.25.15
-        image: clickhouse/clickhouse-server@sha256:19bfacb135479a892551a8155cfbbc8211aedf2aa888cd91950b9ee7e76cc7e3
+        # clickhouse/clickhouse-server:26.10.2.103 (#429: the latest stable)
+        image: clickhouse/clickhouse-server@sha256:b2bfa4d8399ee9973868cc5c1754cb506a6f4b86fbddc41010cc090beb55c85e
         env:
           CLICKHOUSE_USER: ci
           CLICKHOUSE_PASSWORD: ci-disposable-database
@@ -161,7 +161,7 @@ jobs:
           cache-dependency-path: ${{ matrix.lock }}
       - name: Install from the lock file and the workspace packages
         run: |
-          python -m pip install --quiet pip==26.2.2
+          python -m pip install --quiet pip==26.3
           python -m pip install --quiet -r ${{ matrix.lock }}
           for package in packages/*/; do
             python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
@@ -194,7 +194,7 @@ jobs:
           key="Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
           echo "STORE_TEST_AZURE_CONNECTION_STRING=DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=$key;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;" >> "$GITHUB_ENV"
       - run: |
-          python -m pytest -p tools.ci.shard -p tools.ci.timing -p tools.ci.order --junitxml=junit.xml $PYTEST_PATHS
+          python -m pytest -p tools.ci.shard -p tools.ci.timing -p tools.ci.order -p tools.ci.coverage_run --junitxml=junit.xml $PYTEST_PATHS
           # Each test's time to this log (#375): what tools/ci/durations.py reads back.
           python -m tools.ci.durations emit junit.xml
           # No critical test passes by not running (#427), checked apart from the plugin.
@@ -202,25 +202,73 @@ jobs:
         env:
           # 3.15 runs in a random order, seeded by the run and printed in the header (#376).
           PYTEST_RANDOM_ORDER: ${{ matrix.python == '3.15' && github.run_id || '' }}
+      - name: Keep this part's coverage data, or that it was not measured (#429)
+        run: |
+          mkdir coverage-part
+          if [ "$PYTEST_COVERAGE" = 1 ]; then mv .coverage.* coverage-part/; else touch coverage-part/not-measured; fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-${{ matrix.python }}-${{ matrix.part }}
+          path: coverage-part
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Report failures as annotations
         if: failure()
         run: python -m tools.ci.junit_annotations junit.xml
+  python-coverage:
+    # The critical sources' branch coverage against their floors, per Python (#429): every
+    # version must reach every floor, so the lower of the two decides.
+    name: python-coverage-${{ matrix.python }}
+    needs: python-tests-part
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.15", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install the lock file's coverage
+        env:
+          LOCK: ${{ matrix.python == '3.14' && 'pylock.py314.toml' || 'pylock.toml' }}
+        run: |
+          python -m pip install --quiet pip==26.3
+          python -m pip install --quiet --no-deps $(python -m tools.ci.pins "$LOCK" coverage)
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-${{ matrix.python }}-*
+          path: coverage-data
+      - run: python -m tools.ci.coverage_floor coverage-data --python ${{ matrix.python }} --measured coverage-measured.toml
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-measured-${{ matrix.python }}
+          path: coverage-measured.toml
+          if-no-files-found: ignore
 
   python-tests:
     # The required checks keep their names: one per Python version, green only when all of its
     # parts passed.
     name: python-tests-${{ matrix.python }}
-    needs: python-tests-part
+    needs: [python-tests-part, python-coverage]
     if: always()
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python: ["3.15", "3.14"]
     steps:
-      - name: Every part passed
+      - name: Every part passed, and the coverage floors held
         env:
           RESULT: ${{ needs.python-tests-part.result }}
-        run: test "$RESULT" = success
+          COVERAGE: ${{ needs.python-coverage.result }}
+        run: |
+          test "$RESULT" = success
+          test "$COVERAGE" = success
 
   python-tests-windows:
     # Shared fixtures are read-only and private copies are writable on Windows too, where
@@ -238,7 +286,7 @@ jobs:
         # wheels, with colorama, pytest's Windows-only dependency.
         shell: bash
         run: |
-          python -m pip install --quiet pip==26.2.2
+          python -m pip install --quiet pip==26.3
           pins=$(python -m tools.ci.pins pylock.toml pytest pluggy iniconfig packaging pygments duckdb)
           python -m pip install --quiet --only-binary=:all: --no-deps $pins colorama==0.4.6
       - run: python -m pytest -p tools.ci.order tests/tools/test_fixtures.py tests/tools/test_order.py tests/tools/test_shard.py tests/tools/test_pins.py tests/tools/test_synthetic.py
@@ -253,14 +301,40 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.15"
-      - name: Two clean installs from pylock.toml produce identical versions
+          python-version: |
+            3.14
+            3.15
+      - name: Two clean installs from each lock file produce identical packages (#429)
         run: |
-          for attempt in first second; do
-            python -m venv "/tmp/$attempt"
-            "/tmp/$attempt/bin/python" -m pip install --quiet pip==26.2.2
-            "/tmp/$attempt/bin/python" -m pip install --quiet -r pylock.toml
-            "/tmp/$attempt/bin/python" -m pip freeze > "/tmp/$attempt.txt"
+          for python in 3.15 3.14; do
+            lock=pylock.toml
+            if [ "$python" = 3.14 ]; then lock=pylock.py314.toml; fi
+            for attempt in first second; do
+              "python$python" -m venv "/tmp/$python-$attempt"
+              "/tmp/$python-$attempt/bin/python" -m pip install --quiet pip==26.3
+              "/tmp/$python-$attempt/bin/python" -m pip install --quiet -r "$lock"
+              "/tmp/$python-$attempt/bin/python" -m pip freeze --all > "/tmp/$python-$attempt.txt"
+            done
+            diff "/tmp/$python-first.txt" "/tmp/$python-second.txt"
+            echo "Python $python, $lock:"
+            cat "/tmp/$python-first.txt"
           done
-          diff /tmp/first.txt /tmp/second.txt
-          cat /tmp/first.txt
+      - name: A tampered hash fails the install (#429)
+        # pip checks each file against the lock's hash; one changed digit must refuse it.
+        run: |
+          python3.15 -m venv /tmp/tampered
+          /tmp/tampered/bin/python -m pip install --quiet pip==26.3
+          python3.15 -m tools.ci.tamper pylock.toml /tmp/pylock.tampered.toml
+          if /tmp/tampered/bin/python -m pip install --quiet -r /tmp/pylock.tampered.toml 2> /tmp/tampered.err; then
+            echo "::error::an install with a tampered hash succeeded"
+            exit 1
+          fi
+          # Refused for its hash, not for anything else (a network error proves nothing).
+          grep --quiet "DO NOT MATCH THE HASHES" /tmp/tampered.err
+      - name: No known vulnerability in the locked packages (#429)
+        # pip-audit exits non-zero on a finding; its report decides, against the exceptions.
+        run: |
+          /tmp/3.15-first/bin/python -m pip_audit -f json --progress-spinner off --output /tmp/pip-audit-3.15.json || true
+          /tmp/3.14-first/bin/python -m pip_audit -f json --progress-spinner off --output /tmp/pip-audit-3.14.json || true
+          python3.15 -m tools.ci.audit pip /tmp/pip-audit-3.15.json
+          python3.15 -m tools.ci.audit pip /tmp/pip-audit-3.14.json

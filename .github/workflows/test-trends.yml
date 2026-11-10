@@ -43,7 +43,7 @@ jobs:
           cache-dependency-path: pylock.toml
       - name: Install from the lock file
         run: |
-          python -m pip install --quiet pip==26.2.2
+          python -m pip install --quiet pip==26.3
           python -m pip install --quiet -r pylock.toml
       - name: Fetch the run's job logs and the previous history
         env:
