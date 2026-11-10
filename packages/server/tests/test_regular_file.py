@@ -85,13 +85,16 @@ def test_a_swap_after_the_check_does_not_change_what_is_read(
     swapped: list[bool] = []
 
     def from_reader() -> bool:
-        # Only calls made while the module under test is on the stack are trapped, however
-        # they reach `os` (`pathlib` included): the runner itself (coverage, pytest's
-        # reporting) may stat paths while the test runs (#429).
+        # Only a call the reader makes is trapped, however it reaches `os` (`pathlib`
+        # included). Coverage's monitoring callbacks run inside the reader's frame and stat
+        # its source (#429): a call that passes through coverage is the runner's, not the
+        # reader's.
         frame: FrameType | None = sys._getframe(1)
         while frame is not None:
             if frame.f_code.co_filename == regular_file.__file__:
                 return True
+            if f"{os.sep}coverage{os.sep}" in frame.f_code.co_filename:
+                return False
             frame = frame.f_back
         return False
 
