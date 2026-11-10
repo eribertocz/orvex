@@ -9,7 +9,10 @@ name: ci-alerts
 on:
   workflow_run:
     # The watched workflows not themselves triggered by workflow_run (those, and missing runs,
-    # are reconciled on the schedule). Never this workflow.
+    # are reconciled on the schedule). Never this workflow. Only main's and the tags' runs: a
+    # pull request's run never starts the listener (a fork's branch named main still may, and
+    # the reporter ignores it).
+    branches: [main, "v*"]
     workflows:
       - checks
       - contracts
@@ -29,7 +32,9 @@ on:
 
 permissions: {}
 
-# One listener run at a time; a dropped pending run is harmless, the next reconciles everything.
+# One listener run at a time. A dropped pending run is harmless for the contexts every run
+# reconciles; the schedule's own work (workflow_run contexts, missed cadences) waits at most one
+# period, within the health check's 7 hours.
 concurrency:
   group: ci-alerts
   cancel-in-progress: false

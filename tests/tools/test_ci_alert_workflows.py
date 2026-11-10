@@ -155,3 +155,28 @@ def test_every_action_is_pinned_by_sha(name: str) -> None:
         found = re.search(r"uses:\s*([^\s#]+)", line)
         if found and not found.group(1).startswith("./"):
             assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", found.group(1)), line
+
+
+def test_the_listener_starts_only_for_main_s_and_the_tags_runs() -> None:
+    trigger = workflow(WORKFLOWS / LISTENER)["on"]["workflow_run"]
+    assert trigger["branches"] == ["main", "v*"]
+
+
+def test_the_health_check_runs_on_pull_requests_only() -> None:
+    # On main it would fail the merge itself and report the listener back to the listener.
+    job = workflow(WORKFLOWS / "checks.yml")["jobs"]["ci-alerts-healthy"]
+    assert job["if"] == "github.event_name == 'pull_request'"
+
+
+def test_the_ossie_report_is_kept_when_a_finding_fails_the_run() -> None:
+    steps = workflow(WORKFLOWS / "ossie-upstream.yml")["jobs"]["ossie-upstream"]["steps"]
+    upload = next(s for s in steps if str(s.get("uses", "")).startswith("actions/upload-artifact"))
+    assert "!cancelled()" in upload["if"]
+
+
+def test_test_trends_starts_a_new_history_only_when_none_was_kept() -> None:
+    steps = workflow(WORKFLOWS / "test-trends.yml")["jobs"]["trends"]["steps"]
+    fetch = next(s["run"] for s in steps if "Fetch" in s.get("name", ""))
+    assert "/artifacts" in fetch
+    assert 'if [ "$kept" != 0 ]; then' in fetch
+    assert "&& gh run download" not in fetch  # a failed download is never a new history

@@ -46,7 +46,9 @@ jobs:
 
   ci-alerts-healthy:
     # The CI alert listener works on main (#428): a broken or silent listener fails here, at the
-    # next pull request. Reads the Actions API with the default token.
+    # next pull request. Reads the Actions API with the default token. Pull requests only: on
+    # main it would report the listener's state back to the listener, and fail the merge itself.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read

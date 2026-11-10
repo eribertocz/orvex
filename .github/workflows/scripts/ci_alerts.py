@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -211,7 +211,10 @@ class Reconciler:
         return self.actions
 
 
-def main(environment: Mapping[str, str] = os.environ) -> int:
+def main(
+    environment: Mapping[str, str] = os.environ,
+    connect: Callable[[str, str], GitHubReader] = GitHubClient,
+) -> int:
     names = ("GITHUB_TOKEN", "GITHUB_REPOSITORY", "EVENT_NAME", "GITHUB_REF", "ASSIGNEE")
     missing = [name for name in names if not environment.get(name)]
     if missing:
@@ -222,7 +225,7 @@ def main(environment: Mapping[str, str] = os.environ) -> int:
         print(f"ci-alerts: unexpected event {environment['EVENT_NAME']!r}", file=sys.stderr)
         return 1
     repository = environment["GITHUB_REPOSITORY"]
-    client: GitHubReader = GitHubClient(environment["GITHUB_TOKEN"], repository)
+    client: GitHubReader = connect(environment["GITHUB_TOKEN"], repository)
     dry = environment["EVENT_NAME"] == "workflow_dispatch" and (
         environment["GITHUB_REF"] != "refs/heads/main"
     )

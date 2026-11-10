@@ -113,7 +113,7 @@ kind = "check"
 # Required by main's protection once the listener has run on main (#428): the Owner adds it.
 required = false
 permissions = { contents = "read", actions = "read" }
-digest = "753f00f76e5ae1ae"
+digest = "dbcfbc3905cbb2fa"
 setup = []
 [[job.check]]
 # The CI alert listener succeeded on main within 7 hours (#428).

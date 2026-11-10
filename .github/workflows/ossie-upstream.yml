@@ -30,7 +30,9 @@ jobs:
           # The default token, read-only, for the public API's rate limit.
           GITHUB_TOKEN: ${{ github.token }}
         run: python -m tools.ossie.watch --json ossie-upstream.json
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      # Also when a finding fails the run: that is when the report matters most (#428).
+      - if: ${{ !cancelled() && hashFiles('ossie-upstream.json') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ossie-upstream
           path: ossie-upstream.json

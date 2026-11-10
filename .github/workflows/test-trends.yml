@@ -69,8 +69,15 @@ jobs:
           last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/test-trends.yml/runs?branch=main&status=success&per_page=20" \
             --jq "[.workflow_runs[] | select(.head_repository.full_name == \"$GITHUB_REPOSITORY\")
               | select(.event == \"workflow_run\")][0].id // empty")
-          if [ -n "$last" ] && gh run download "$last" --repo "$GITHUB_REPOSITORY" \
-              --name "$HISTORY" --dir previous; then
+          # A new history only when that run kept none under this name; any other failure to
+          # read it fails the step, so a history is never dropped silently.
+          kept=0
+          if [ -n "$last" ]; then
+            kept=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$last/artifacts" \
+              --jq "[.artifacts[] | select(.name == \"$HISTORY\" and (.expired | not))] | length")
+          fi
+          if [ "$kept" != 0 ]; then
+            gh run download "$last" --repo "$GITHUB_REPOSITORY" --name "$HISTORY" --dir previous
             echo "history from run $last"
           else
             echo "::notice::no earlier $HISTORY history: this run starts a new one"

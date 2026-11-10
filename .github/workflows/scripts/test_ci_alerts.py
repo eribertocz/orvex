@@ -42,6 +42,26 @@ def comments_of(fake: FakeGitHub, number: int) -> list[str]:
 
 
 class CycleTests(unittest.TestCase):
+    def test_a_retried_reconciliation_posts_no_comment_twice(self) -> None:
+        fake = FakeGitHub(FILES, [run(1, 1, "checks.yml")])
+        reconcile(fake)
+        fake.runs.append(run(2, 2, "checks.yml"))
+        reconcile(fake)
+        (issue,) = open_issues(fake)
+        fake.issues[issue["number"]]["body"] = issue["body"].replace("number=2", "number=1")
+        posted = fake.calls
+        writes: list[str] = []
+        original = fake.request
+
+        def spy(method: str, path: str, body: Any = None) -> Any:
+            writes.append(f"{method} {path}")
+            return original(method, path, body)
+
+        fake.request = spy  # type: ignore[method-assign]
+        reconcile(fake)  # the state marker lost: the comment is found by its key, not posted
+        self.assertNotIn(f"POST /issues/{issue['number']}/comments", writes)
+        self.assertGreater(fake.calls, posted)
+
     def test_a_failure_opens_one_issue_and_a_retry_or_second_failure_updates_it(self) -> None:
         fake = FakeGitHub(FILES, [run(1, 1, "checks.yml")])
         reconcile(fake)
@@ -171,7 +191,7 @@ class EntryPointTests(unittest.TestCase):
         reconcile(fake, "all")
         self.assertEqual(len(open_issues(fake)), 4)
 
-    def test_a_dispatch_off_main_writes_nothing(self) -> None:
+    def test_a_dry_run_reconciler_writes_nothing(self) -> None:
         fake = self.failing_everywhere()
         dry = DryRun(fake)
         actions = Reconciler(dry, REPOSITORY, Tracker(dry, "agent"), NOW, dry=True).reconcile(
@@ -181,7 +201,54 @@ class EntryPointTests(unittest.TestCase):
         self.assertEqual(len(actions), 4)
         self.assertTrue(all(w.startswith("would POST /issues") for w in dry.writes))
 
-    def test_main_runs_a_dry_run_off_main_and_rejects_other_events(self) -> None:
+    def real_configuration_fake(self) -> FakeGitHub:
+        """Every configured workflow, healthy but `checks.yml`, which fails, all run just now."""
+        now = datetime.now(UTC).isoformat()
+        runs = [run(1, 1, "checks.yml", created=now)]
+        for index, watch in enumerate(load(), start=2):
+            event = {"tag": "push"}.get(watch.events[0], watch.events[0])
+            branch = "v1.0.0" if watch.events[0] == "tag" else "main"
+            if watch.workflow != "checks.yml":
+                jobs = {pattern.replace("*", "0"): "success" for pattern in watch.required_jobs}
+                runs.append(
+                    run(
+                        index,
+                        1,
+                        watch.workflow,
+                        "success",
+                        event=event,
+                        branch=branch,
+                        created=now,
+                        jobs=jobs,
+                    )
+                )
+        fake = FakeGitHub([w.workflow for w in load()], runs)
+        fake.head = (SHA, now)
+        return fake
+
+    def entry(self, ref: str) -> tuple[int, FakeGitHub]:
+        fake = self.real_configuration_fake()
+        environment = {
+            "GITHUB_TOKEN": "t",
+            "GITHUB_REPOSITORY": REPOSITORY,
+            "ASSIGNEE": "agent",
+            "EVENT_NAME": "workflow_dispatch",
+            "GITHUB_REF": ref,
+        }
+        with contextlib.redirect_stdout(io.StringIO()):
+            status = ci_alerts.main(environment, connect=lambda token, repository: fake)
+        return status, fake
+
+    def test_main_dispatched_off_main_is_a_dry_run_and_on_main_writes(self) -> None:
+        status, fake = self.entry("refs/heads/feature")
+        self.assertEqual((status, fake.issues), (0, {}))
+        status, fake = self.entry("refs/heads/main")
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            [i["title"] for i in open_issues(fake)], ["ci: checks.yml failing (push on main)"]
+        )
+
+    def test_main_rejects_other_events_and_missing_settings(self) -> None:
         base = {
             "GITHUB_TOKEN": "t",
             "GITHUB_REPOSITORY": REPOSITORY,
@@ -255,6 +322,31 @@ class FailureTests(unittest.TestCase):
         self.assertNotIn("ci-alerts.yml", workflows)
 
 
+class AuthorTests(unittest.TestCase):
+    def test_an_issue_or_comment_by_anyone_else_is_never_the_listener_s(self) -> None:
+        fake = FakeGitHub(FILES, [run(1, 1, "checks.yml")])
+        context = Context("checks.yml", "push", "main")
+        stranger = {"login": "someone"}
+        fake.issues[90] = {
+            "number": 90,
+            "state": "open",
+            "user": stranger,
+            "title": "forged",
+            "body": marker(context, "failing")
+            + "\n<!-- ci-alert-state id=1 number=9 attempt=9 -->",
+        }
+        reconcile(fake)
+        (issue,) = [i for i in open_issues(fake) if i["user"] != stranger]
+        self.assertEqual(fake.issues[90]["state"], "open")  # left alone, never closed as ours
+        key = "<!-- ci-alert-run id=2 attempt=1 -->"
+        fake.comments[91] = {"id": 91, "issue": issue["number"], "user": stranger, "body": key}
+        fake.runs.append(run(2, 2, "checks.yml"))
+        reconcile(fake)
+        ours = [c for c in fake.comments.values() if c["user"] != stranger]
+        self.assertEqual([c["body"].splitlines()[0] for c in ours], [key])
+        self.assertIn(91, fake.comments)
+
+
 class UntrustedTextTests(unittest.TestCase):
     def test_markup_and_shell_syntax_are_escaped(self) -> None:
         title = "<script>x</script> [a](http://e) @team `$(rm -rf /)` --> ::error::x"
@@ -291,6 +383,29 @@ class StalenessTests(unittest.TestCase):
         fake.runs.append(run(2, 2, "checks.yml", "success"))
         reconcile(fake, watches=(watch,))
         self.assertEqual(open_issues(fake), [])
+
+    def test_only_a_completed_run_of_the_newest_commit_counts(self) -> None:
+        watch = Watch("checks.yml", ("push",), ("job",), "push")
+        fake = FakeGitHub(FILES, [run(1, 1, "checks.yml", status="in_progress")])
+        fake.head = (SHA, "2026-11-09T20:00:00+00:00")
+        reconcile(fake, watches=(watch,))
+        self.assertEqual(len(open_issues(fake)), 1)
+
+    def test_a_run_before_its_trigger_does_not_count(self) -> None:
+        watch = Watch(
+            "trends.yml", ("workflow_run",), ("job",), "workflow_run", triggers=("checks.yml",)
+        )
+        trigger = run(1, 1, "checks.yml", "success", created="2026-11-09T20:00:00+00:00")
+        earlier = run(
+            2, 1, "trends.yml", "success", event="workflow_run", created="2026-11-09T19:00:00+00:00"
+        )
+        fake = FakeGitHub(FILES, [trigger, earlier])
+        reconcile(fake, watches=(watch,))
+        self.assertEqual(len(open_issues(fake)), 1)
+        pending = run(1, 1, "checks.yml", status="in_progress", created="2026-11-09T20:00:00+00:00")
+        fake = FakeGitHub(FILES, [pending])
+        reconcile(fake, watches=(watch,))
+        self.assertEqual(fake.issues, {})
 
     def test_a_recent_commit_is_not_yet_missed(self) -> None:
         watch = Watch("checks.yml", ("push",), ("job",), "push")

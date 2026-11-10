@@ -15,6 +15,7 @@ from github_api import GitHubApiError
 REPOSITORY = "owner/repo"
 SHA = "a" * 40
 OTHER_SHA = "b" * 40
+BOT = {"login": "github-actions[bot]"}
 
 
 def run(
@@ -112,11 +113,16 @@ class FakeGitHub:
             return {"sha": self.head[0], "commit": {"committer": {"date": self.head[1]}}}
         if method == "POST" and url.path == "/issues":
             number = self._number()
-            self.issues[number] = {"number": number, "state": "open", **body}
+            self.issues[number] = {"number": number, "state": "open", "user": BOT, **body}
             return {"number": number}
         if match := re.fullmatch(r"/issues/(\d+)/comments", url.path):
             comment = self._number()
-            self.comments[comment] = {"id": comment, "issue": int(match.group(1)), **body}
+            self.comments[comment] = {
+                "id": comment,
+                "issue": int(match.group(1)),
+                "user": BOT,
+                **body,
+            }
             return {"id": comment}
         if method == "DELETE" and (match := re.fullmatch(r"/issues/comments/(\d+)", url.path)):
             del self.comments[int(match.group(1))]

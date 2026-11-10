@@ -66,6 +66,13 @@ class HealthTests(unittest.TestCase):
         self.assertFalse(self.healthy(Fake(runs)))
         self.assertFalse(self.healthy(Fake([runs[0]])))
 
+    def test_a_cancelled_newest_run_after_a_recent_success_passes(self) -> None:
+        runs = [
+            listener_run("cancelled", "2026-11-10T11:00:00+00:00"),
+            listener_run("success", "2026-11-10T08:00:00+00:00"),
+        ]
+        self.assertTrue(self.healthy(Fake(runs)))
+
     def test_runs_of_other_branches_or_forks_and_unfinished_runs_do_not_count(self) -> None:
         runs = [
             listener_run("success", "2026-11-10T11:00:00+00:00", head_branch="feature"),

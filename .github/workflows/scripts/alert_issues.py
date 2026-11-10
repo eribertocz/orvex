@@ -16,6 +16,9 @@ from alert_runs import Context
 from github_api import GitHubApiError, GitHubReader
 
 LABELS = ("type:ci", "priority:p0", "module:repo")
+# The listener writes as the default token's bot: an issue or comment by anyone else, even one
+# carrying a marker or a key, is never taken for the listener's own.
+AUTHOR = "github-actions[bot]"
 _STATE = re.compile(r"<!-- ci-alert-state id=(\d+) number=(\d+) attempt=(\d+) -->")
 _MARKDOWN = re.compile(r"([\\`*_{}\[\]()#+\-.!|~<>&@:])")
 
@@ -53,6 +56,10 @@ def state_marker(run_id: int, number: int, attempt: int) -> str:
     return f"<!-- ci-alert-state id={run_id} number={number} attempt={attempt} -->"
 
 
+def _by_listener(item: dict[str, Any]) -> bool:
+    return str((item.get("user") or {}).get("login") or "") == AUTHOR
+
+
 @dataclass(frozen=True, slots=True)
 class Issue:
     number: int
@@ -83,7 +90,7 @@ class Tracker:
     def _open_issues(self) -> Iterator[dict[str, Any]]:
         label = urllib.parse.quote(LABELS[0], safe="")
         for issue in self.client.paginate(f"/issues?state=open&labels={label}&per_page=100"):
-            if "pull_request" not in issue:
+            if "pull_request" not in issue and _by_listener(issue):
                 yield issue
 
     def find(self, context: Context, kind: str) -> Issue | None:
@@ -138,7 +145,11 @@ class Tracker:
 
     def _keyed(self, number: int, key: str) -> list[int]:
         comments = self.client.paginate(f"/issues/{number}/comments?per_page=100")
-        return sorted(int(c["id"]) for c in comments if str(c.get("body") or "").startswith(key))
+        return sorted(
+            int(c["id"])
+            for c in comments
+            if _by_listener(c) and str(c.get("body") or "").startswith(key)
+        )
 
     def record(self, issue: Issue, state: str) -> None:
         """Replace the issue's state marker with `state`."""
