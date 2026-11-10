@@ -574,9 +574,17 @@ reason = "reads the pull request's base and head commits in CI; its rules are te
 workflow = "release.yml"
 job = "build"
 kind = "scoped"
-digest = "a4407b7bee3c8633"
-reason = "runs only when the release workflow changes; it builds the web application with Node 24"
-paths = [".github/workflows/release.yml"]
+digest = "a21abb6a9dc895ff"
+reason = "runs only when what a release builds changes; it builds the web application with Node 24"
+paths = [
+  ".github/workflows/release.yml",
+  ".github/workflows/scripts/sbom_build.py",
+  ".github/workflows/scripts/sbom_check.py",
+  ".github/workflows/scripts/sbom_runtime.py",
+  "vendor/cyclonedx/**",
+  "pylock.toml",
+  "web/package-lock.json",
+]
 # The tag check applies to tag pushes only; on a pull request there is no tag to check.
 conditions = ["startsWith(github.ref, 'refs/tags/v')"]
 setup = []
@@ -614,8 +622,9 @@ setup = []
 workflow = "release.yml"
 job = "publish"
 kind = "automation"
-# Publishes a release for a product tag only (its `if` is unchanged by #267).
-permissions = { contents = "write" }
+# Publishes a release for a product tag only (its `if` is unchanged by #267), and alone signs
+# its files' provenance and SBOM attestations (#242).
+permissions = { contents = "write", id-token = "write", attestations = "write" }
 setup = []
 
 [[job]]

@@ -70,5 +70,10 @@ paths = ["vendor/json-canonicalization/"]
 modules = ["semantic", "contracts"]
 
 [[narrow]]
+# What a release ships, read by the SBOM's tests (#242).
+paths = ["web/package-lock.json", "vendor/cyclonedx/"]
+tests = ["tests/tools"]
+
+[[narrow]]
 paths = ["web/"]
 tests = []  # the web checks run in CI only (Node 24)
