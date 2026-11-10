@@ -20,6 +20,10 @@ concurrency:
   group: test-trends
   cancel-in-progress: false
 
+env:
+  # The history artifact; renamed when its format starts again (#428: logs read raw).
+  HISTORY: test-trends-history
+
 jobs:
   trends:
     # Only main's own builds: a fork's pull request from a branch named `main` matches the
@@ -46,18 +50,39 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN: ${{ github.event.workflow_run.id }}
         run: |
+          # A failure anywhere in a pipeline fails the step (#428).
+          set -o pipefail
+          # The output formats below matter: the versions that produced them (#428).
+          gh --version | head -1
+          jq --version
           mkdir -p logs previous
+          # Each job's log through the REST endpoint, written raw to a file: no `gh` version
+          # refuses it for its escape sequences, which trends.py strips. The file is named
+          # after the job with only safe characters, chosen by jq, never by the shell.
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN/jobs" --paginate \
-            --jq '.jobs[] | select(.conclusion != "skipped") | "\(.id) \(.name)"' |
+            --jq '.jobs[] | select(.conclusion != "skipped")
+              | "\(.id) \(.name | gsub("[^A-Za-z0-9._-]"; "_"))"' |
             while read -r id name; do
-              gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs" > "logs/$name.txt"
+              curl --fail --silent --show-error --location --output "logs/$name.txt" \
+                --header "Authorization: Bearer $GH_TOKEN" \
+                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/jobs/$id/logs"
             done
-          last=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow test-trends.yml --branch main \
-            --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          # The history: the newest successful test-trends run on main of this repository.
+          last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/test-trends.yml/runs?branch=main&status=success&per_page=20" \
+            --jq "[.workflow_runs[] | select(.head_repository.full_name == \"$GITHUB_REPOSITORY\")
+              | select(.event == \"workflow_run\")][0].id // empty")
+          # A new history only when that run kept none under this name; any other failure to
+          # read it fails the step, so a history is never dropped silently.
+          kept=0
           if [ -n "$last" ]; then
-            gh run download "$last" --repo "$GITHUB_REPOSITORY" --name test-trends --dir previous
+            kept=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$last/artifacts" \
+              --jq "[.artifacts[] | select(.name == \"$HISTORY\" and (.expired | not))] | length")
+          fi
+          if [ "$kept" != 0 ]; then
+            gh run download "$last" --repo "$GITHUB_REPOSITORY" --name "$HISTORY" --dir previous
+            echo "history from run $last"
           else
-            echo "::notice::no earlier history: this run starts it"
+            echo "::notice::no earlier $HISTORY history: this run starts a new one"
           fi
       - name: Record the run and report
         env:
@@ -73,7 +98,7 @@ jobs:
             --conclusion "$CONCLUSION" --url "$URL" --summary "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: test-trends
+          name: ${{ env.HISTORY }}
           path: previous/test-trends.json
           retention-days: 90
           if-no-files-found: error

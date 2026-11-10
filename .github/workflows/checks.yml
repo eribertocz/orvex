@@ -43,3 +43,20 @@ jobs:
       # File sizes (a warning), import cycles and façade imports (#246).
       - run: python -m tools.checks.structure
       - run: python -m tools.checks.purpose
+
+  ci-alerts-healthy:
+    # The CI alert listener works on main (#428): a broken or silent listener fails here, at the
+    # next pull request. Reads the Actions API with the default token. Pull requests only: on
+    # main it would report the listener's state back to the listener, and fail the merge itself.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 .github/workflows/scripts/ci_health.py
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

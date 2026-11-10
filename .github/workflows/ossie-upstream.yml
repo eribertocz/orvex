@@ -1,7 +1,8 @@
 # Weekly read-only watch of apache/ossie (#285, ADR-0030 §7): reports and classifies what changed
 # upstream since the active registry entry, as warnings in the job summary and a JSON artifact.
 # It never runs on a pull request or a push, so it blocks nothing and is not a required check.
-# It succeeds whatever it finds and fails only when it cannot run. It writes nothing: no issue,
+# It fails when a finding needs action or when it cannot run, and the CI alert listener
+# (ci-alerts.yml, #428) then reports the failed run. It writes nothing itself: no issue,
 # comment, commit or version; adopting a revision is an owner-reviewed issue.
 name: ossie-upstream
 
@@ -29,7 +30,9 @@ jobs:
           # The default token, read-only, for the public API's rate limit.
           GITHUB_TOKEN: ${{ github.token }}
         run: python -m tools.ossie.watch --json ossie-upstream.json
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      # Also when a finding fails the run: that is when the report matters most (#428).
+      - if: ${{ !cancelled() && hashFiles('ossie-upstream.json') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ossie-upstream
           path: ossie-upstream.json

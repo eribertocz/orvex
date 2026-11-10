@@ -12,9 +12,11 @@ byte-identical copy of the packaged entry) on the paths and proposals of
 
 Each changed path is classified as informational, compatible, potentially incompatible or a
 critical review. A class is a warning for a person, never a verdict: the watch changes no file,
-version or contract, and writes nothing upstream or here. It exits 0 whatever it finds, and 1
-(with an `::error::` annotation) only when it cannot run: the network, Git, or a malformed watch
-list or entry. Standard library and the `git` command only.
+version or contract, and writes nothing upstream or here. It exits 1 (with an `::error::`
+annotation) when a finding needs action (a vendored file or a proposal changed, or a path
+changed in any class but informational; #428), so the run is reported as failing; and when it
+cannot run: the network, Git, or a malformed watch list or entry. Otherwise it exits 0.
+Standard library and the `git` command only.
 """
 
 from __future__ import annotations
@@ -142,6 +144,14 @@ class Report:
     changes: list[Change]
     commits: list[Commit]
     proposals: list[ProposalChange]
+
+    def needs_action(self) -> bool:
+        """Whether a person must look: anything but informational changes."""
+        return bool(
+            self.vendored
+            or self.proposals
+            or any(change.kind != INFORMATIONAL for change in self.changes)
+        )
 
     def to_json(self) -> dict[str, Any]:
         classes: dict[str, list[str]] = {}
@@ -598,6 +608,9 @@ def main(argv: Sequence[str] | None = None, fetch: Fetch | None = None) -> int:
             print(_printable(annotation))
     except Exception as error:  # noqa: BLE001 - a WatchError, or any unexpected error, fails visibly
         return _cannot_run(error)
+    if report.needs_action():
+        print("::error::Apache Ossie changed upstream in a way that needs action: see the summary")
+        return 1
     return 0
 
 

@@ -359,11 +359,13 @@ def test_a_name_that_is_not_utf8_is_reported(
     summary, artifact = tmp_path / "summary.md", tmp_path / "report.json"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     arguments = ["--watch", str(watch_list), "--pin", str(pin), "--json", str(artifact)]
-    assert watch.main(arguments, fetch=no_proposal) == 0
+    assert (
+        watch.main(arguments, fetch=no_proposal) == 1
+    )  # a spec path changed: it needs action (#428)
     (change,) = json.loads(artifact.read_text(encoding="utf-8"))["changes"]
     assert os.fsencode(change["path"]) == b"core-spec/caf\xe9.md"
     assert "caf\\xe9.md" in summary.read_text(encoding="utf-8")
-    assert "::error::" not in capsys.readouterr().out
+    assert "cannot run" not in capsys.readouterr().out
 
 
 def test_a_commit_without_parents_is_compared_with_the_empty_tree(
@@ -446,7 +448,7 @@ def test_an_unknown_proposal_state_fails(tmp_path: Path, upstream: Upstream) -> 
 # --- Outputs and exit status -------------------------------------------------------------------
 
 
-def test_findings_succeed_with_a_summary_a_json_artifact_and_warnings(
+def test_findings_that_need_action_fail_with_a_summary_a_json_artifact_and_warnings(
     tmp_path: Path,
     upstream: Upstream,
     monkeypatch: pytest.MonkeyPatch,
@@ -457,7 +459,7 @@ def test_findings_succeed_with_a_summary_a_json_artifact_and_warnings(
     summary, artifact = tmp_path / "summary.md", tmp_path / "out" / "report.json"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     arguments = ["--watch", str(watch_list), "--pin", str(pin), "--json", str(artifact)]
-    assert watch.main(arguments, fetch=answer) == 0
+    assert watch.main(arguments, fetch=answer) == 1  # #428: the run is reported as failing
     data = json.loads(artifact.read_text(encoding="utf-8"))
     assert set(data) == {
         "upstream",
@@ -474,7 +476,15 @@ def test_findings_succeed_with_a_summary_a_json_artifact_and_warnings(
     text = summary.read_text(encoding="utf-8")
     assert "critical review" in text
     assert "#587: open -> merged" in text
-    assert "::warning " in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "::warning " in out
+    assert "::error::Apache Ossie changed upstream in a way that needs action" in out
+
+
+def test_only_informational_changes_succeed(tmp_path: Path, upstream: Upstream) -> None:
+    upstream.commit("docs", {"README.md": "# Read me again\n"})
+    watch_list, pin = write_inputs(tmp_path, upstream)
+    assert watch.main(["--watch", str(watch_list), "--pin", str(pin)], fetch=no_proposal) == 0
 
 
 @pytest.mark.parametrize(
@@ -631,7 +641,9 @@ def test_it_never_changes_the_registry_a_vendored_file_a_contract_or_a_version(
     )
     before = tree_digest(*guarded)
     arguments = ["--watch", str(watch_list), "--pin", str(pin), "--json", str(tmp_path / "r.json")]
-    assert watch.main(arguments, fetch=answer) == 0
+    assert (
+        watch.main(arguments, fetch=answer) == 1
+    )  # findings need action (#428); the files are still unchanged
     assert tree_digest(*guarded) == before
 
 
@@ -660,7 +672,9 @@ def test_it_only_reads_the_api(
     monkeypatch.setattr(watch.OPENER, "open", record)
     monkeypatch.setenv("GITHUB_TOKEN", "fixture-token")
     watch_list, pin = write_inputs(tmp_path, upstream, {587: "open"})
-    assert watch.main(["--watch", str(watch_list), "--pin", str(pin)]) == 0
+    assert (
+        watch.main(["--watch", str(watch_list), "--pin", str(pin)]) == 1
+    )  # findings need action (#428); still only reads
     (request,) = requests
     assert request.get_method() == "GET"
     assert request.data is None

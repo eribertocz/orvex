@@ -4,10 +4,11 @@
         --sha SHA --date DATE --conclusion CONCLUSION --url URL [--summary PATH]
 
 `test-trends.yml` runs it after each `python` (profile `full`) and `property-nightly` (profile
-`nightly`) run on `main`. It reads that run's job logs (one file per job, named after the job)
-with `tools/ci/durations.py`, appends one entry to the history (the total test time, the slowest
-part, the tests and the skipped tests by reason), and writes the report: the latest `full` and
-`nightly` results, the skipped tests by reason, the tests in no profile and any sustained rise.
+`nightly`) run on `main`. It reads that run's job logs (one file per job, named after the job;
+terminal escape sequences stripped first, #428) with `tools/ci/durations.py`, appends one entry
+to the history (the total test time, the slowest part, the tests and the skipped tests by
+reason), and writes the report: the latest `full` and `nightly` results, the skipped tests by
+reason, the tests in no profile and any sustained rise.
 
 A rise is flagged only when it is sustained: each of the last `WINDOW` comparable runs (same
 profile, successful) exceeds the median of the `BASELINE` comparable runs before them by more
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import statistics
 import subprocess
 import sys
@@ -63,6 +65,14 @@ class Rise:
     message: str
 
 
+# Terminal escape sequences a job log may hold (CSI, OSC and two-byte ones), read as data (#428).
+_ESCAPES = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
+
+
+def strip_escapes(text: str) -> str:
+    return _ESCAPES.sub("", text)
+
+
 def measure(
     logs: Path, run: int, workflow: str, sha: str, date: str, conclusion: str, url: str
 ) -> Entry:
@@ -73,7 +83,7 @@ def measure(
     skipped: Counter[str] = Counter()
     timed = 0
     for log in sorted(logs.glob("*.txt")):
-        lines = log.read_text("utf-8", "replace").splitlines()
+        lines = strip_escapes(log.read_text("utf-8", "replace")).splitlines()
         timings = list(durations.from_log(lines))
         if timings:
             parts[log.stem] = sum(t.total for t in timings)
