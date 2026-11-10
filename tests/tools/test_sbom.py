@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from packaging.requirements import Requirement
 
 from tools.repository import REPOSITORY_ROOT
 
@@ -127,6 +128,22 @@ def test_a_runtime_dependency_the_lock_lacks_fails(
     lock = {k: v for k, v in sbom_runtime.python_lock(REPOSITORY_ROOT).items() if k != "starlette"}
     monkeypatch.setattr(sbom_runtime, "python_lock", lambda root: lock)
     with pytest.raises(sbom_runtime.LockError, match="starlette is a runtime dependency"):
+        sbom_runtime.python_runtime(REPOSITORY_ROOT)
+
+
+def test_purls_encode_npm_scopes_and_name_the_wheel_file(dist: Path) -> None:
+    built = bom(dist)
+    purls = {c["purl"] for c in built["components"]}
+    assert f"pkg:pypi/{STORE}@0.3.0?file_name={NAMESPACE}_store-0.3.0-py3-none-any.whl" in purls
+    scoped = [p for p in purls if p.startswith("pkg:npm/%40")]
+    assert scoped
+    assert not any(p.startswith("pkg:npm/@") for p in purls)
+
+
+def test_a_requirement_with_extras_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    extra = [Requirement("uvicorn[standard]==0.54.0")]
+    monkeypatch.setattr(sbom_runtime, "roots", lambda root: extra)
+    with pytest.raises(sbom_runtime.LockError, match="does not follow extras"):
         sbom_runtime.python_runtime(REPOSITORY_ROOT)
 
 

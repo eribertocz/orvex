@@ -6,7 +6,8 @@ this, and `sbom_check.py` compares the SBOM with it.
 `runtime` group of `pyproject.toml` and of each product package, walked through the installed
 distributions' `Requires-Dist` (the job installs the lock first). A requirement whose marker is
 false here (behind an extra, or for another platform or Python) is not followed, as pip would
-not install it; any other requirement the lock lacks fails (fail closed). Versions and hashes
+not install it; any other requirement the lock lacks fails (fail closed), and so does a
+requirement with extras, whose added dependencies this walk does not follow. Versions and hashes
 come from the lock, never from the installed copy.
 """
 
@@ -93,6 +94,8 @@ def python_runtime(root: Path) -> list[Package]:
         marker = requirement.marker
         if marker is not None and not marker.evaluate({"extra": ""}):
             continue
+        if requirement.extras:
+            raise LockError(f"{requirement}: the SBOM does not follow extras yet")
         if name not in lock:
             raise LockError(f"{name} is a runtime dependency that pylock.toml lacks")
         seen.add(name)
