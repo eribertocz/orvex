@@ -98,3 +98,43 @@ def test_the_http_registry_of_an_openapi_contract_is_read(tmp_path: Path) -> Non
         f.split()[1] for f in error_codes.problems(root)[0] if f.startswith("ERROR_CODE_UNTESTED")
     ]
     assert untested == ["HTTP_X"]
+
+
+def test_registry_keys_match_a_yaml_parser_on_every_contract() -> None:
+    import yaml
+
+    apis = sorted(REPOSITORY_ROOT.glob("contracts/*/v1/openapi.yaml"))
+    assert apis
+    for api in apis:
+        text = api.read_text("utf-8")
+        parsed = (yaml.safe_load(text).get("components") or {}).get("x-error-codes") or {}
+        assert error_codes.registry_keys(text) == list(parsed), api
+
+
+def test_registry_keys_ignore_codes_outside_the_registry() -> None:
+    text = (
+        "paths:\n  x-error-codes:\n    STRAY_CODE: no\n"
+        "components:\n  schemas:\n    OTHER_CODE: no\n"
+        "  x-error-codes:\n    # comment\n    FIRST_CODE: one\n"
+        "    SECOND: >-\n      folded\n  responses: {}\n    LATE_CODE: no\n"
+    )
+    assert error_codes.registry_keys(text) == ["FIRST_CODE", "SECOND"]
+
+
+def test_a_reserved_code_whose_phase_has_passed_fails(tmp_path: Path) -> None:
+    root = _repository(tmp_path, 'raise E("STORE_A")\n', 'assert c == "STORE_A"\n')
+    phase = error_codes.current_phase(root)
+    (root / error_codes.RESERVED).write_text(
+        f'[reserved]\nSTORE_B = {{ phase = "P{phase}" }}\n'
+        f'STORE_RESERVED = {{ phase = "P{phase - 1}" }}\n',
+        "utf-8",
+    )
+    assert [f.split()[:2] for f in error_codes.problems(root)[0]] == [
+        ["ERROR_CODE_RESERVED_OVERDUE", "STORE_RESERVED:"]
+    ]
+    (root / error_codes.RESERVED).write_text(
+        '[reserved]\nSTORE_B = { phase = "P9" }\nSTORE_RESERVED = { phase = "later" }\n', "utf-8"
+    )
+    assert [f.split()[:2] for f in error_codes.problems(root)[0]] == [
+        ["ERROR_CODE_RESERVED_OVERDUE", "STORE_RESERVED:"]
+    ]

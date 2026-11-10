@@ -242,7 +242,8 @@ def test_every_test_that_reaches_a_tool_is_selected_when_that_tool_changes() -> 
     # #427: a dependency through a subprocess or a string is invisible to the package graph;
     # the selection must still run every test that reaches the changed tool.
     missed = []
-    for test in sorted(REPOSITORY_ROOT.glob("packages/*/tests/**/test_*.py")):
+    tests = [*ROOT.glob("packages/*/tests/**/test_*.py"), *ROOT.glob("tests/**/test_*.py")]
+    for test in sorted(tests):
         relative = test.relative_to(REPOSITORY_ROOT).as_posix()
         for tool in sorted(tool_references(test)):
             if not covers(impact.select(REPOSITORY_ROOT, [tool]), relative):

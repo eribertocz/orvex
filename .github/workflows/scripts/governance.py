@@ -7,6 +7,8 @@
    "Not counted in a pull request's size", needs a `## Size` section that justifies it.
 4. A pull request that changes the test-duration baseline (`BASELINE_FILES`, #377) needs a
    `## Baseline` section that gives its reason: the trends are read against that baseline.
+5. Every known gap (`expected-fail` entry of a normative manifest) links an open issue (#427,
+   `known_gaps.py`).
 
 Every path list but `BASELINE_FILES` is read from the rules document. The check fails closed:
 if a list, the changed files, their line counts or the description cannot be read, it fails.
@@ -21,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from github_api import GitHubApiError, GitHubClient, GitHubReader
+from known_gaps import KnownGapsUnavailable, closed_gaps
 
 OWNER_MERGE_LABEL = "owner-merge"
 SECTION_HEADING = "### Governed paths"
@@ -272,8 +275,12 @@ def run(client: GitHubReader, pull_number: int, document: str) -> int:
         blocking = evaluate(paths, current_labels(client, pull_number), governed)
         body, author = pull_body(client, pull_number)
         broken = body_findings(body, files, critical, uncounted, author)
+        broken += [("KNOWN_GAP_ISSUE_CLOSED", line) for line in closed_gaps(client, pull_number)]
     except GovernanceError as error:
         print(f"::error::{error}")
+        return 1
+    except KnownGapsUnavailable as error:
+        print(f"::error::KNOWN_GAPS_UNAVAILABLE: {error}")
         return 1
     for code, message in broken:
         print(f"::error::{code}: {message}")

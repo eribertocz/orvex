@@ -16,8 +16,9 @@ and compares it with the library in the same way. Since #422, a case run but lef
 any reason other than an engine's declared refusal is a finding: the runner never skips silently.
 Since #427, each way's reports must be exactly the manifest's cases, each once and each passed:
 a case missing, repeated, unknown, refused or not run fails the check by itself, unless
-`expected-fail.toml` (governed: the Owner merges it) lists it with an open issue and a due
-phase not yet passed; such a case that passes fails too, so its entry is removed.
+`conformance/semantic-corpus/expected-fail.toml` (governed: the Owner merges it) lists it with
+an open issue and a due phase not yet passed; such a case that passes fails too, so its entry
+is removed. A known gap excuses only its own case's run, never a changed source or model.
 """
 
 from __future__ import annotations
@@ -41,6 +42,13 @@ from conformance.runners import bi_platform_adapter as adapter
 ROOT = Path(__file__).resolve().parents[2]
 CORPUS = Path("conformance/semantic-corpus/bi-platform")
 OSSIE = Path("vendor/apache-ossie")
+# Outside the imported corpus, whose files are each pinned to upstream (governed: Owner merges).
+GAPS = Path("conformance/semantic-corpus/expected-fail.toml")
+# What a known gap may excuse: its own case failing, not running or differing between ways.
+# A changed source, a manifest mismatch or an invalid model is never a known gap.
+EXCUSABLE = frozenset(
+    {"CORPUS_CASE_FAILED", "CORPUS_CASE_NOT_RUN", "CORPUS_CASE_NOT_PASSED", "CORPUS_WAYS_DIFFER"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,11 +244,10 @@ def run(
     return reports, findings
 
 
-def expected_failures(corpus: Path, minor: int) -> tuple[dict[str, str], list[Finding]]:
+def expected_failures(path: Path, minor: int) -> tuple[dict[str, str], list[Finding]]:
     """The known gaps of `expected-fail.toml` (`CASE-NNN = {issue = n, due = "P3"}`), and a
     finding for each entry without an issue or a due phase, or whose due phase has passed (the
     current phase is P<minor> of the product version: `0.3.x` ships P2 and works on P3)."""
-    path = corpus / "expected-fail.toml"
     if not path.is_file():
         return {}, []
     listed = tomllib.loads(path.read_text("utf-8"))
@@ -255,6 +262,11 @@ def expected_failures(corpus: Path, minor: int) -> tuple[dict[str, str], list[Fi
         else:
             gaps[case] = f"#{issue}"
     return gaps, findings
+
+
+def excuse(findings: list[Finding], gaps: dict[str, str]) -> list[Finding]:
+    """`findings` without those a known gap of `gaps` excuses (`EXCUSABLE`, its own case)."""
+    return [f for f in findings if not (f.code in EXCUSABLE and f.case in gaps)]
 
 
 def exact_cases(
@@ -341,7 +353,7 @@ def main() -> int:
     if not versions.is_file():  # a test's copy of the corpus alone: the repository's phase
         versions = ROOT / "versions.toml"
     product = tomllib.loads(versions.read_text("utf-8"))["product"]
-    gaps, gap_findings = expected_failures(corpus, int(str(product).split(".")[1]))
+    gaps, gap_findings = expected_failures(arguments.root / GAPS, int(str(product).split(".")[1]))
     findings = [
         *findings,
         *gap_findings,
@@ -359,6 +371,7 @@ def main() -> int:
                 if r.status == "fail"
             ),
         ]
+    findings = excuse(findings, gaps)
     for way in ways:
         for report in runs[way][0]:
             print(

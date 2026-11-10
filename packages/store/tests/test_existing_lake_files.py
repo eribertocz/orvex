@@ -641,7 +641,6 @@ def test_a_credential_check_compares_azure_account_keys_and_passes_a_credential_
 
 S3_SERVER = """
 import duckdb, http.server, json, socketserver, sys, threading
-from tests.support.environment import unavailable
 hits = []
 class Handler(http.server.BaseHTTPRequestHandler):
     def answer(self):

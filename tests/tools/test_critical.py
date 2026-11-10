@@ -8,6 +8,8 @@ import sys
 import uuid
 from pathlib import Path
 
+import pytest
+
 from tools.ci import critical
 from tools.repository import REPOSITORY_ROOT
 
@@ -17,13 +19,26 @@ def test_skips() -> None:
 @pytest.mark.xfail(reason="#1")
 def test_expects_to_fail() -> None:
     raise AssertionError
+@pytest.mark.xfail(reason="#2", strict=False)
+def test_passes_while_marked_to_fail() -> None:
+    pass
+"""
+MODULE_SKIP = """import pytest
+pytest.skip("no service here", allow_module_level=True)
+def test_never_collected() -> None:
+    pass
+"""
+IMPORT_SKIP = """import pytest
+pytest.importorskip("a_module_that_is_not_installed")
+def test_never_collected() -> None:
+    pass
 """
 
 
-def run_in(folder: str, ci: bool, report: Path) -> tuple[int, str]:
-    """Run a skipping test placed in `folder` of the repository; (exit status, summary)."""
+def run_in(folder: str, ci: bool, report: Path, body: str = BODY) -> tuple[int, str]:
+    """Run planted tests placed in `folder` of the repository; (exit status, summary)."""
     path = REPOSITORY_ROOT / folder / f"test_tmp_{uuid.uuid4().hex}.py"
-    path.write_text(BODY, "utf-8")
+    path.write_text(body, "utf-8")
     try:
         env = {k: v for k, v in os.environ.items() if k != "CI"} | ({"CI": "true"} if ci else {})
         done = subprocess.run(
@@ -48,10 +63,28 @@ def run_in(folder: str, ci: bool, report: Path) -> tuple[int, str]:
     return done.returncode, done.stdout.strip().splitlines()[-1]
 
 
-def test_a_critical_test_that_skips_or_xfails_fails_in_ci(tmp_path: Path) -> None:
+def test_a_critical_test_that_skips_xfails_or_xpasses_fails_in_ci(tmp_path: Path) -> None:
     status, summary = run_in("tests/properties", ci=True, report=tmp_path / "j.xml")
     assert status == 1
-    assert "2 failed" in summary
+    assert "3 failed" in summary
+
+
+@pytest.mark.parametrize("body", [MODULE_SKIP, IMPORT_SKIP], ids=["module-level", "importorskip"])
+def test_a_critical_module_skipped_while_collecting_fails_in_ci(tmp_path: Path, body: str) -> None:
+    status, summary = run_in("tests/properties", ci=True, report=tmp_path / "j.xml", body=body)
+    assert status != 0
+    assert "error" in summary
+    # Exit 5: pytest collected no test, which is what a skipped module is everywhere else.
+    assert run_in("tests/properties", ci=False, report=tmp_path / "k.xml", body=body)[0] == 5
+    assert run_in("tests/tools", ci=True, report=tmp_path / "m.xml", body=body)[0] == 5
+
+
+@pytest.mark.parametrize("body", [MODULE_SKIP, IMPORT_SKIP], ids=["module-level", "importorskip"])
+def test_the_junit_check_finds_a_critical_module_skipped_while_collecting(
+    tmp_path: Path, body: str
+) -> None:
+    run_in("tests/properties", ci=False, report=tmp_path / "j.xml", body=body)
+    assert len(critical.skipped(tmp_path / "j.xml", critical.critical_paths())) == 1
 
 
 def test_outside_ci_or_outside_the_critical_set_a_skip_stays_a_skip(tmp_path: Path) -> None:

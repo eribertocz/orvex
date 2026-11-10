@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import io
 import tempfile
@@ -270,11 +271,20 @@ pylock.toml
 class PullClient:
     """A fake GitHub API for one pull request."""
 
-    def __init__(self, body: Any, files: list[dict[str, Any]], labels: list[str]) -> None:
+    def __init__(
+        self,
+        body: Any,
+        files: list[dict[str, Any]],
+        labels: list[str],
+        gaps: str | None = None,
+        issues: dict[int, str] | None = None,
+    ) -> None:
         self.body = body
         self.files = files
         self.labels = labels
         self.requests = 0
+        self.gaps = gaps  # the head's expected-fail.toml, None when there is none
+        self.issues = issues or {}  # issue number -> state; any other number fails to read
 
     def request(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
         # The first request lists the files; with `GitHubApiError` as the body, the next one,
@@ -282,7 +292,21 @@ class PullClient:
         self.requests += 1
         if self.body is GitHubApiError and self.requests > 1:
             raise GitHubApiError("GET failed with HTTP 502")
-        return {"changed_files": len(self.files), "body": self.body, "user": {"login": "a"}}
+        if path == "/contents/conformance/semantic-corpus?ref=head":
+            return [{"name": "bi-platform"}] + ([{"name": "expected-fail.toml"}] * bool(self.gaps))
+        if path == "/contents/conformance/semantic-corpus/expected-fail.toml?ref=head":
+            return {"content": base64.b64encode(str(self.gaps).encode()).decode()}
+        if path.startswith("/issues/"):
+            number = int(path.removeprefix("/issues/"))
+            if number not in self.issues:
+                raise GitHubApiError("GET failed with HTTP 404")
+            return {"state": self.issues[number]}
+        return {
+            "head": {"sha": "head"},
+            "changed_files": len(self.files),
+            "body": self.body,
+            "user": {"login": "a"},
+        }
 
     def paginate(self, path: str) -> Iterator[Any]:
         if path.endswith("/labels"):
@@ -314,6 +338,24 @@ class RunTests(unittest.TestCase):
         with contextlib.redirect_stdout(output):
             self.assertEqual(self.run_with(PullClient(GitHubApiError, small, [])), 1)
         self.assertIn("DESCRIPTION_UNAVAILABLE", output.getvalue())
+
+    def test_a_known_gap_must_link_an_open_issue(self) -> None:
+        gap = '"CASE-004" = {issue = 9, due = "P3"}\n'
+        open_issue = PullClient(MATRIX, self.store, [], gaps=gap, issues={9: "open"})
+        self.assertEqual(self.run_with(open_issue), 0)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            closed = PullClient(MATRIX, self.store, [], gaps=gap, issues={9: "closed"})
+            self.assertEqual(self.run_with(closed), 1)
+        self.assertIn("KNOWN_GAP_ISSUE_CLOSED", output.getvalue())
+        self.assertIn("CASE-004 links #9, which is closed", output.getvalue())
+
+    def test_known_gaps_that_cannot_be_read_fail_closed(self) -> None:
+        for gaps in ('"CASE-004" = {issue = 9, due = "P3"}\n', '"CASE-004" = {due = "P3"}\n', "["):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(self.run_with(PullClient(MATRIX, self.store, [], gaps=gaps)), 1)
+            self.assertIn("KNOWN_GAPS_UNAVAILABLE", output.getvalue())
 
     def test_a_null_description_is_an_empty_one(self) -> None:
         self.assertEqual(self.run_with(PullClient(None, self.store, [])), 1)

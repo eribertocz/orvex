@@ -807,12 +807,13 @@ def test_a_known_gap_must_fail_and_must_be_due_later(tmp_path: Path) -> None:
     passing = [_report("CASE-001"), _report("CASE-002")]
     found = semantic_corpus.exact_cases(MANIFEST, passing, "library", gap)
     assert [f.code for f in found] == ["CORPUS_EXPECTED_FAIL_PASSED"]
-    (tmp_path / "expected-fail.toml").write_text(
+    listed = tmp_path / "expected-fail.toml"
+    listed.write_text(
         '"CASE-001" = {issue = 9, due = "P3"}\n"CASE-002" = {issue = 9, due = "P2"}\n'
         '"CASE-003" = {due = "P5"}\n',
         "utf-8",
     )
-    gaps, findings = semantic_corpus.expected_failures(tmp_path, minor=3)
+    gaps, findings = semantic_corpus.expected_failures(listed, minor=3)
     assert gaps == {"CASE-001": "#9"}
     assert [(f.code, f.case) for f in findings] == [
         ("CORPUS_EXPECTED_FAIL_OVERDUE", "CASE-002"),
@@ -829,3 +830,41 @@ def test_a_rolled_up_cell_holding_a_value_fails_its_case() -> None:
         rows=[["a", "1"], ["b", "1"]],
     )
     assert ce.totals_written(found) == [["a", "1"], ["ROLLED-UP CELL WITH A VALUE: b", "1"]]
+
+
+def corpus_command(root: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "conformance.runners.semantic_corpus", "--root", str(root)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_a_known_gap_excuses_its_own_failure_end_to_end(tmp_path: Path) -> None:
+    root = copy_repository(tmp_path)
+    expected = case_folder(root, "CASE-004") / "expected" / "result.csv"
+    expected.write_text(expected.read_text("utf-8").replace("150.00", "151.00"), "utf-8")
+    refresh_sources(root)
+    failing = corpus_command(root)
+    assert failing.returncode == 1
+    assert "CORPUS_CASE_FAILED: CASE-004: " in failing.stdout
+    listed = root / semantic_corpus.GAPS
+    assert not listed.is_relative_to(root / CORPUS)  # outside the pinned upstream files
+    listed.write_text('"CASE-004" = {issue = 9, due = "P9"}\n', "utf-8")
+    excused = corpus_command(root)
+    assert excused.returncode == 0, excused.stdout[-2000:]
+    listed.write_text('"CASE-004" = {issue = 9, due = "P1"}\n', "utf-8")
+    overdue = corpus_command(root)
+    assert overdue.returncode == 1
+    assert "CORPUS_EXPECTED_FAIL_OVERDUE: CASE-004: " in overdue.stdout
+
+
+def test_a_known_gap_never_excuses_a_changed_source(tmp_path: Path) -> None:
+    root = copy_repository(tmp_path)
+    break_source(root)
+    (root / semantic_corpus.GAPS).write_text('"CASE-001" = {issue = 9, due = "P9"}\n', "utf-8")
+    result = corpus_command(root)
+    assert result.returncode == 1
+    assert "CORPUS_SOURCE_CHANGED: corpus/cases/CASE-001/README.md: " in result.stdout

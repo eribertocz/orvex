@@ -12,7 +12,8 @@ exactly that code. It is tested when a string constant of a test module (`packag
 names it; comments and prose do not count. Every used code without a test is reported
 (`ERROR_CODE_UNTESTED`). A code no module raises must be listed, with the phase that raises it,
 in `tools/checks/reserved-error-codes.toml` (`ERROR_CODE_UNRESERVED`), and a reserved code that
-is raised must leave that list (`ERROR_CODE_RESERVED_BUT_RAISED`). Any of them fails the check.
+is raised must leave that list (`ERROR_CODE_RESERVED_BUT_RAISED`), as must one whose phase has
+passed or is not a phase (`ERROR_CODE_RESERVED_OVERDUE`). Any of them fails the check.
 """
 
 from __future__ import annotations
@@ -24,8 +25,6 @@ import sys
 import tomllib
 from collections.abc import Iterable
 from pathlib import Path
-
-import yaml
 
 from tools.repository import REPOSITORY_ROOT
 
@@ -46,11 +45,30 @@ def contract_codes(root: Path) -> dict[str, str]:
                 for code in definition["enum"]:
                     found.setdefault(str(code), schema.parent.parent.name)
     for api in sorted(root.glob("contracts/*/v1/openapi.yaml")):
-        document = yaml.safe_load(api.read_text("utf-8")) or {}
-        registry = (document.get("components") or {}).get("x-error-codes") or {}
-        for code in registry:
+        for code in registry_keys(api.read_text("utf-8")):
             found.setdefault(str(code), api.parent.parent.name)
     return found
+
+
+REGISTRY_KEY = re.compile(r"^    ([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*):")
+
+
+def registry_keys(text: str) -> list[str]:
+    """The keys of `components.x-error-codes`, read from the YAML text: the check runs where
+    no YAML parser is installed, and the registry is a flat mapping two levels deep."""
+    keys: list[str] = []
+    section = inside = False
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            section, inside = line.rstrip() == "components:", False
+        elif section and indent == 2:
+            inside = line.rstrip() == "  x-error-codes:"
+        elif inside and (match := REGISTRY_KEY.match(line)):
+            keys.append(match.group(1))
+    return keys
 
 
 def reserved_codes(root: Path) -> dict[str, str]:
@@ -60,6 +78,18 @@ def reserved_codes(root: Path) -> dict[str, str]:
         return {}
     listed = tomllib.loads(path.read_text("utf-8")).get("reserved", {})
     return {str(code): str(entry["phase"]) for code, entry in listed.items()}
+
+
+def current_phase(root: Path) -> int:
+    """The phase being built: P<minor> of the product version (`0.3.x` ships P2, builds P3)."""
+    versions = root / "versions.toml"
+    if not versions.is_file():  # a test's partial copy: the repository's own phase
+        versions = REPOSITORY_ROOT / "versions.toml"
+    return int(str(tomllib.loads(versions.read_text("utf-8"))["product"]).split(".")[1])
+
+
+def _phase(text: str) -> int | None:
+    return int(text[1:]) if text[:1] == "P" and text[1:].isdigit() else None
 
 
 def _constants(path: Path) -> Iterable[str]:
@@ -121,6 +151,15 @@ def problems(root: Path) -> tuple[list[str], list[str]]:
     failures += [
         f"ERROR_CODE_RESERVED_UNKNOWN {code}: no contract defines it; remove it from {RESERVED}"
         for code in sorted(set(reserved) - set(codes))
+    ]
+    phase = current_phase(root)
+    failures += [
+        f"ERROR_CODE_RESERVED_OVERDUE {code}: reserved for {due}, but P{phase} is being built; "
+        "raise and test it, or move it with the Owner's approval"
+        if _phase(due) is not None
+        else f"ERROR_CODE_RESERVED_OVERDUE {code}: '{due}' is not a phase (P<n>)"
+        for code, due in sorted(reserved.items())
+        if (_phase(due) or 0) < phase
     ]
     notes = [
         f"note: {code} ({codes[code]}) is reserved for {reserved[code]}"

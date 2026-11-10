@@ -40,7 +40,8 @@ def skipped(report: Path, paths: tuple[str, ...]) -> list[str]:
     for case in ElementTree.parse(report).iter("testcase"):
         if case.find("skipped") is None:
             continue
-        module = str(case.get("classname", "")).split("[")[0]
+        # A module skipped at collection has no class name: pytest puts the module in `name`.
+        module = str(case.get("classname") or case.get("name") or "").split("[")[0]
         candidates = {module.replace(".", "/") + ".py", str(case.get("file", ""))}
         parts = module.split(".")
         candidates |= {"/".join(parts[:n]) + ".py" for n in range(1, len(parts) + 1)}
