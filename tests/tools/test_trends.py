@@ -186,3 +186,34 @@ def test_only_main_s_own_builds_enter_the_history() -> None:
     assert "github.event.workflow_run.head_repository.full_name == github.repository" in condition
     assert " && " in condition
     assert " || " not in condition
+
+
+def test_escape_sequences_in_a_log_are_stripped_before_parsing(tmp_path: Path) -> None:
+    # #428: real job logs hold colour (CSI) and hyperlink (OSC) sequences around the lines.
+    plain = trends.measure(write_logs(tmp_path / "plain"), 7, "python", "", "", "", "")
+    coloured = tmp_path / "coloured"
+    coloured.mkdir()
+    for log in sorted((tmp_path / "plain").glob("*.txt")):
+        lines = log.read_text("utf-8").splitlines()
+        wrapped = [f"\x1b[36;1m\x1b]8;;http://x\x07{line}\x1b]8;;\x1b\\\x1b[0m" for line in lines]
+        (coloured / log.name).write_text("\n".join(wrapped) + "\n", "utf-8")
+    assert trends.measure(coloured, 7, "python", "", "", "", "") == plain
+    assert trends.strip_escapes("a\x1b[0mb\x1bMc") == "abc"
+
+
+def test_the_workflow_reads_logs_raw_and_history_only_from_main_s_own_runs() -> None:
+    workflow = yaml.safe_load(
+        (REPOSITORY_ROOT / ".github/workflows/test-trends.yml").read_text("utf-8")
+    )
+    fetch = next(
+        s["run"] for s in workflow["jobs"]["trends"]["steps"] if "Fetch" in s.get("name", "")
+    )
+    assert "gh --version" in fetch
+    assert "jq --version" in fetch
+    assert "curl --fail" in fetch
+    assert "--output" in fetch
+    assert '/logs" >' not in fetch  # never through gh's output
+    assert '/logs" |' not in fetch
+    assert 'select(.head_repository.full_name == \\"$GITHUB_REPOSITORY\\")' in fetch
+    assert "branch=main" in fetch
+    assert "this run starts a new one" in fetch

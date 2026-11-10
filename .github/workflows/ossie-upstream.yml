@@ -1,7 +1,8 @@
 # Weekly read-only watch of apache/ossie (#285, ADR-0030 §7): reports and classifies what changed
 # upstream since the active registry entry, as warnings in the job summary and a JSON artifact.
 # It never runs on a pull request or a push, so it blocks nothing and is not a required check.
-# It succeeds whatever it finds and fails only when it cannot run. It writes nothing: no issue,
+# It fails when a finding needs action or when it cannot run, and the CI alert listener
+# (ci-alerts.yml, #428) then reports the failed run. It writes nothing itself: no issue,
 # comment, commit or version; adopting a revision is an owner-reviewed issue.
 name: ossie-upstream
 

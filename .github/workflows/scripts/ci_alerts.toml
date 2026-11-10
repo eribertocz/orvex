@@ -1,0 +1,91 @@
+# The workflows the CI alert listener watches (#428), read by `alert_config.py`.
+#
+# Each [[watch]] is one workflow file. `events` are its watched event classes: "push" (a push to
+# main), "schedule", "workflow_dispatch", "workflow_run" or "tag" (a push of a tag matching
+# `tags`). One context is a workflow, an event class and a ref (main or the tag); each context
+# has at most one open tracking issue per kind (failing, stale).
+#
+# `required_jobs`: patterns (fnmatch) of the jobs a run needs, each matching at least one job,
+#   every match concluded `success`; a run missing one never closes an issue.
+# `cadence`: "push" (a completed run for main's newest commit within 3 hours), "schedule" (a
+#   run no older than `every_hours` plus 6 hours), "workflow_run" (a run after each completed
+#   run of its triggers, within 3 hours) or "none".
+# `triggers`: for "workflow_run", the names of the workflows that trigger it.
+#
+# tests/tools/test_ci_alert_workflows.py fails when a workflow with a push to main, a schedule,
+# a workflow_run or a tag trigger is missing here.
+
+[[watch]]
+workflow = "checks.yml"
+events = ["push"]
+required_jobs = ["product-name", "boundaries"]
+cadence = "push"
+
+[[watch]]
+workflow = "contracts.yml"
+events = ["push"]
+required_jobs = ["contracts"]
+cadence = "push"
+
+[[watch]]
+workflow = "python.yml"
+events = ["push"]
+required_jobs = [
+  "python-lint", "python-types", "python-lock", "python-tests-windows",
+  "python-tests-3.14-part-*", "python-tests-3.15-part-*",
+]
+cadence = "push"
+
+[[watch]]
+workflow = "semantic-corpus.yml"
+events = ["push"]
+required_jobs = ["semantic-corpus"]
+cadence = "push"
+
+[[watch]]
+workflow = "web.yml"
+events = ["push"]
+required_jobs = ["web-check", "web-lint", "web-test", "web-build", "licenses"]
+cadence = "push"
+
+[[watch]]
+# Runs only when `.github/labels.yml` changes: no cadence.
+workflow = "labels.yml"
+events = ["push"]
+required_jobs = ["sync"]
+cadence = "none"
+
+[[watch]]
+workflow = "release.yml"
+events = ["tag"]
+tags = ["v*"]
+required_jobs = ["build", "publish"]
+cadence = "none"
+
+[[watch]]
+workflow = "property-nightly.yml"
+events = ["schedule"]
+required_jobs = ["property-nightly"]
+cadence = "schedule"
+every_hours = 24
+
+[[watch]]
+workflow = "ossie-upstream.yml"
+events = ["schedule"]
+required_jobs = ["ossie-upstream"]
+cadence = "schedule"
+every_hours = 168
+
+[[watch]]
+workflow = "test-trends.yml"
+events = ["workflow_run"]
+required_jobs = ["trends"]
+cadence = "workflow_run"
+triggers = ["python.yml", "property-nightly.yml"]
+
+[[watch]]
+# The listener's own end-to-end test, run by hand (#428).
+workflow = "ci-alerts-selftest.yml"
+events = ["workflow_dispatch"]
+required_jobs = ["selftest"]
+cadence = "none"

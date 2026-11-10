@@ -103,9 +103,6 @@ jobs:
       # The PostgreSQL with TLS started below (#120), reached through 127.0.0.2: a host that is
       # not the local machine for the catalog rule, so verify-full is required and tested.
       STORE_TEST_POSTGRES_TLS: host=127.0.0.2 port=5433 dbname=postgres user=postgres
-      TRANSFORM_TEST_CLICKHOUSE: http://localhost:8123
-      TRANSFORM_TEST_CLICKHOUSE_USER: ci
-      TRANSFORM_TEST_CLICKHOUSE_PASSWORD: ci-disposable-database
       # The ClickHouse dialect adapter's parity tests (P2-31, #225): the same disposable server.
       SEMANTIC_TEST_CLICKHOUSE: localhost:8123:ci
       SEMANTIC_TEST_CLICKHOUSE_PASSWORD: ci-disposable-database

@@ -1,0 +1,24 @@
+# The CI alert listener's end-to-end test (#428): run by hand on main with `fail: true`, it fails
+# and the listener opens its tracking issue; run again with `fail: false`, it passes and the
+# listener closes that issue. Watched with no cadence (scripts/ci_alerts.toml).
+name: ci-alerts-selftest
+
+on:
+  workflow_dispatch:
+    inputs:
+      fail:
+        description: Fail this run
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Pass or fail as asked
+        env:
+          FAIL: ${{ inputs.fail }}
+        run: test "$FAIL" != "true"
