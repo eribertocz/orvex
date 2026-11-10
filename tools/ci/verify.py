@@ -37,7 +37,7 @@ from tools.ci import checks, impact
 from tools.repository import REPOSITORY_ROOT
 
 TESTS = "python-tests"
-PIP = "pip==26.2.2"  # the version CI installs first (python.yml)
+PIP = "pip==26.3"  # the version CI installs first (python.yml)
 CACHE = Path.home() / ".cache" / "verify-environments"
 # The checks `fast` runs: quick ones, each well under a minute.
 FAST = (

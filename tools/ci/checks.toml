@@ -56,6 +56,21 @@ critical_tests = [
   # Contracts and their examples.
   "tests/contracts",
 ]
+# The source the critical tests protect: security (access, policies, source isolation and the
+# SQL guard) and exactness (the compiler, correctness, the engine adapters and exact values).
+# Each Python file under these paths has a branch-coverage floor in coverage-floor.toml (#429).
+critical_sources = [
+  "packages/access/src/orvex/access",
+  "packages/semantic/src/orvex/semantic/policies",
+  "packages/semantic/src/orvex/semantic/compiler",
+  "packages/semantic/src/orvex/semantic/correctness",
+  "packages/semantic/src/orvex/semantic/adapters",
+  "packages/store/src/orvex/store/arrow_exact.py",
+  "packages/store/src/orvex/store/isolation.py",
+  "packages/store/src/orvex/store/separation.py",
+  "packages/store/src/orvex/store/source_exactness.py",
+  "packages/store/src/orvex/store/sql_guard.py",
+]
 # The files that hold committed nightly counterexamples (`@example`).
 regressions = [
   "tests/properties/test_binder_properties.py",
@@ -128,8 +143,8 @@ job = "contracts"
 kind = "check"
 required = true
 contexts = ["contracts"]
-digest = "d290acd3722cec10"
-setup = ["python -m pip install --quiet pip==26.2.2"]
+digest = "b3e1fe4f60e416f4"
+setup = ["python -m pip install --quiet pip==26.3"]
 [[job.check]]
 name = "contracts-validate"
 run = "python -m tools.contracts.validate"
@@ -165,8 +180,8 @@ job = "python-lint"
 kind = "check"
 required = true
 contexts = ["python-lint"]
-digest = "d738506075b8608f"
-setup = ["python -m pip install --quiet pip==26.2.2"]
+digest = "69ac062ddce50ea7"
+setup = ["python -m pip install --quiet pip==26.3"]
 [[job.check]]
 name = "ruff-format"
 run = "ruff format --check ."
@@ -182,8 +197,8 @@ job = "python-types"
 kind = "check"
 required = true
 contexts = ["python-types"]
-digest = "75687ff402893421"
-setup = ["python -m pip install --quiet pip==26.2.2"]
+digest = "087922b95833f378"
+setup = ["python -m pip install --quiet pip==26.3"]
 [[job.check]]
 name = "mypy-modules"
 run = "mypy -p orvex.store -p orvex.transform -p orvex.semantic -p orvex.access -p orvex.dashboards -p orvex.mcp -p orvex.server -p orvex.contracts"
@@ -220,13 +235,14 @@ contexts = [
   "python-tests-3.14-part-8",
   "python-tests-3.14-part-9",
 ]
-digest = "280213831be75923"
+digest = "b727fca771559ec1"
 pythons = ["3.15", "3.14"]
 setup = [
-  "python -m pip install --quiet pip==26.2.2",
+  "python -m pip install --quiet pip==26.3",
   "python -m tools.ci.duckdb_extensions",
   "python -m tools.ci.select",
   'dir="$RUNNER_TEMP/postgres-tls"',
+  "mkdir coverage-part",
   "for attempt in $(seq 60); do",
 ]
 # Trailing steps that run only on a failure and check nothing (#267).
@@ -235,8 +251,25 @@ reports = ["python -m tools.ci.junit_annotations junit.xml"]
 # Locally: the whole suite on each Python of the matrix, in one part. Tests that need the
 # PostgreSQL, ClickHouse or Azurite services CI starts are reported as not run, by reason.
 name = "python-tests"
-run = "python -m pytest -p tools.ci.shard -p tools.ci.timing -p tools.ci.order --junitxml=junit.xml $PYTEST_PATHS"
+run = "python -m pytest -p tools.ci.shard -p tools.ci.timing -p tools.ci.order -p tools.ci.coverage_run --junitxml=junit.xml $PYTEST_PATHS"
 local = true
+
+[[job]]
+workflow = "python.yml"
+job = "python-coverage"
+kind = "check"
+# Gated through python-tests, which needs it (#429).
+required = false
+contexts = ["python-coverage-3.15", "python-coverage-3.14"]
+digest = "cf75155f857f7bfb"
+pythons = ["3.15", "3.14"]
+setup = ["python -m pip install --quiet pip==26.3"]
+[[job.check]]
+# The critical sources' branch coverage against their floors (#429).
+name = "python-coverage"
+run = "python -m tools.ci.coverage_floor coverage-data --python ${{ matrix.python }} --measured coverage-measured.toml"
+local = false
+reason = "combines the coverage data of the whole suite's CI parts"
 
 [[job]]
 workflow = "python.yml"
@@ -244,10 +277,11 @@ job = "python-tests"
 kind = "check"
 required = true
 contexts = ["python-tests-3.15", "python-tests-3.14"]
-digest = "6d1a12821c8f372d"
+digest = "fc5c4ab145de44e7"
 pythons = ["3.15", "3.14"]
 setup = ['test "$RESULT" = success']
-# Reports the parts of python-tests-part as the required checks; nothing to run locally.
+# Reports the parts of python-tests-part and the coverage floors as the required checks;
+# nothing to run locally.
 
 [[job]]
 workflow = "python.yml"
@@ -255,8 +289,8 @@ job = "python-tests-windows"
 kind = "check"
 required = false
 contexts = ["python-tests-windows"]
-digest = "78d68bdb18595baa"
-setup = ["python -m pip install --quiet pip==26.2.2"]
+digest = "cbdaa0231351793f"
+setup = ["python -m pip install --quiet pip==26.3"]
 [[job.check]]
 name = "python-tests-windows"
 run = "python -m pytest -p tools.ci.order tests/tools/test_fixtures.py tests/tools/test_order.py tests/tools/test_shard.py tests/tools/test_pins.py tests/tools/test_synthetic.py"
@@ -269,12 +303,45 @@ job = "python-lock"
 kind = "check"
 required = true
 contexts = ["python-lock"]
-digest = "73afff09045a5b65"
+digest = "174d952c5c195140"
 setup = []
 [[job.check]]
 name = "python-lock"
-run = "for attempt in first second; do"
+run = "for python in 3.15 3.14; do"
 local = true
+[[job.check]]
+# A tampered hash fails the install (#429).
+name = "python-lock-hashes"
+run = "python3.15 -m venv /tmp/tampered"
+local = false
+reason = "installs from the package index into a fresh environment"
+[[job.check]]
+# No known vulnerability without its recorded exception (#429).
+name = "python-audit"
+run = "/tmp/3.15-first/bin/python -m pip_audit -f json --progress-spinner off --output /tmp/pip-audit-3.15.json || true"
+local = false
+reason = "reads the advisory databases over the network"
+
+[[job]]
+workflow = "web.yml"
+job = "web-supply-chain"
+kind = "check"
+required = false
+digest = "1d60c78674cdbf9b"
+setup = ["npm ci"]
+[[job.check]]
+# The registry's signatures of every installed package (#429).
+name = "web-signatures"
+run = "npm audit signatures"
+directory = "web"
+local = false
+reason = "verifies against the registry's keys over the network"
+[[job.check]]
+# No known high or critical vulnerability without its recorded exception (#429).
+name = "web-audit"
+run = "(cd web && npm audit --json > ../npm-audit.json) || true"
+local = false
+reason = "reads the advisory database over the network"
 
 [[job]]
 workflow = "web.yml"
@@ -282,8 +349,8 @@ job = "licenses"
 kind = "check"
 required = true
 contexts = ["licenses"]
-digest = "356a33b2e6ef5a12"
-setup = ["python -m pip install --quiet pip==26.2.2"]
+digest = "a73f46a6be63a296"
+setup = ["python -m pip install --quiet pip==26.3"]
 [[job.check]]
 name = "licenses"
 run = "python tools/licenses/check_licenses.py"
@@ -431,7 +498,7 @@ reason = "reads the pull request's base and head commits in CI; its rules are te
 workflow = "load-baseline.yml"
 job = "baseline"
 kind = "scoped"
-digest = "b749dcc6fa2bfbbe"
+digest = "0b91271a7805a8b4"
 reason = "runs only when its workflow or tools/benchmarks change, on the synthetic small dataset"
 paths = [".github/workflows/load-baseline.yml", "tools/benchmarks/**"]
 setup = []
@@ -469,7 +536,7 @@ reason = "reads the pull request's base and head commits in CI; its rules are te
 workflow = "query-baseline.yml"
 job = "baseline"
 kind = "scoped"
-digest = "1468a63cdf9d4a7e"
+digest = "57668310f0c2b204"
 reason = "runs only when its workflow, script or fixed questions change, on the synthetic small dataset"
 paths = [".github/workflows/query-baseline.yml", "tools/benchmarks/query_baseline.py", "benchmarks/query-baseline/**"]
 setup = []
@@ -507,7 +574,7 @@ reason = "reads the pull request's base and head commits in CI; its rules are te
 workflow = "release.yml"
 job = "build"
 kind = "scoped"
-digest = "042ed9e228ff1be1"
+digest = "a4407b7bee3c8633"
 reason = "runs only when the release workflow changes; it builds the web application with Node 24"
 paths = [".github/workflows/release.yml"]
 # The tag check applies to tag pushes only; on a pull request there is no tag to check.
@@ -557,8 +624,8 @@ job = "semantic-corpus"
 kind = "check"
 required = true
 contexts = ["semantic-corpus"]
-digest = "656ef848ddf41778"
-setup = ["python -m pip install --quiet pip==26.2.2", "version=26.8.30.8"]
+digest = "703eded632bf41bc"
+setup = ["python -m pip install --quiet pip==26.3", "version=26.8.30.8"]
 [[job.check]]
 name = "semantic-corpus"
 run = "python -m conformance.runners.semantic_corpus --through both"

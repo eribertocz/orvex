@@ -1,0 +1,9 @@
+# Known vulnerabilities accepted for a while, each with its reason (#429), read by
+# tools/ci/audit.py. Governed: the Owner merges every change here.
+#
+# [[exception]]
+# ecosystem = "pip"            # or "npm"
+# package = "example"
+# id = "GHSA-xxxx-xxxx-xxxx"   # the advisory the audit reports
+# reason = "why it does not apply here, or why there is no fix yet"
+# review = 2026-12-31          # past this date the exception fails the run

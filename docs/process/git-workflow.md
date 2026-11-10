@@ -39,6 +39,8 @@ conformance/semantic-corpus/
 conformance/security/scenarios/
 .github/workflows/
 tools/checks/file-size-exceptions.toml   the ceilings of oversized files: only the Owner may raise one (2026-11-08)
+tools/ci/coverage-floor.toml   the coverage floors of the critical sources: raised only by review (#429)
+tools/ci/audit-exceptions.toml   the accepted known vulnerabilities, each with its reason and review date (#429)
 ```
 
 ## 3. Branches, commits and pull requests

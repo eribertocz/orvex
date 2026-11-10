@@ -60,7 +60,16 @@ def test_the_choice_is_written_for_the_next_steps(tmp_path: Path) -> None:
     assert output.read_text("utf-8").splitlines() == [
         "PYTEST_SHARD=3/10",
         "PYTEST_PATHS=",
+        "PYTEST_COVERAGE=1",
     ]
+
+
+def test_coverage_is_measured_only_on_the_whole_suite(monkeypatch: pytest.MonkeyPatch) -> None:
+    # #429: a selection measures less, so it would fail the floors; it is never measured.
+    monkeypatch.setattr(verify, "pr_tests", lambda *_: (["packages/store/tests"], ["store"]))
+    selected = select.lines(select.choose("pull_request", 0, STORE))
+    assert "PYTEST_COVERAGE=0" in selected
+    assert "PYTEST_COVERAGE=1" in select.lines(select.choose("push", 0, None))
 
 
 def test_every_python_of_a_pull_request_fetches_the_history_it_compares() -> None:
