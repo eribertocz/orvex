@@ -26,9 +26,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from tools.ci import impact, verify
+from tools.ci.parts import PARTS
 from tools.repository import REPOSITORY_ROOT
 
-PARTS = 10
 PLAIN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*")
 
 

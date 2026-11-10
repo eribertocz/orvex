@@ -5,7 +5,8 @@
 `<data-folder>` holds one folder per test part (`coverage-<python>-<part>`), each with the
 part's `.coverage.*` data or, when that part did not run the whole suite, a `not-measured` file.
 Every part must be there. When no part measured, coverage was not measured (a pull request's
-selection) and the check passes with a notice; a mix fails.
+selection) and the check passes with a notice; a mix fails, and so does an unmeasured push to
+`main`, which always runs the whole suite (a broken selection never turns the gate off).
 
 The parts' data are combined, and every Python file under `critical_sources`
 (`tools/ci/checks.toml`) must be in it (instrumented) with a branch coverage at or above its
@@ -27,7 +28,7 @@ import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 
-from tools.ci.select import PARTS
+from tools.ci.parts import PARTS
 from tools.repository import REPOSITORY_ROOT
 
 FLOORS = Path("tools/ci/coverage-floor.toml")
@@ -172,6 +173,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         files = part_files(arguments.folder, arguments.python)
         if files is None:
+            if os.environ.get("GITHUB_EVENT_NAME") != "pull_request":  # unknown: fail closed
+                raise CoverageError("a push runs the whole suite, but no part measured coverage")
             print(
                 f"::notice::coverage not measured on Python {arguments.python}: not the whole suite"
             )

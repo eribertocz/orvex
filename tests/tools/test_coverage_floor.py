@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import runpy
+import subprocess
+import sys
 from pathlib import Path
 
 import coverage
@@ -10,6 +13,7 @@ import pytest
 
 from tools.ci import coverage_floor
 from tools.ci.coverage_floor import CoverageError
+from tools.ci.parts import PARTS
 from tools.repository import REPOSITORY_ROOT
 
 SOURCE = "pkg/branchy.py"
@@ -135,6 +139,7 @@ def test_the_command_fails_closed_and_passes_an_unmeasured_selection(
     root: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(coverage_floor, "PARTS", 1)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     assert coverage_floor.main([str(root / "data"), "--python", "3.15"]) == 1
     assert "COVERAGE_DATA_INVALID" in capsys.readouterr().out
     part(root, 0, measured=False)
@@ -156,3 +161,58 @@ def test_the_workflow_measures_the_whole_suite_and_its_result_gates_the_tests() 
     gate = jobs["python-tests"]["steps"][0]
     assert gate["env"]["COVERAGE"] == "${{ needs.python-coverage.result }}"
     assert 'test "$COVERAGE" = success' in gate["run"]
+
+
+def test_an_unmeasured_push_fails(
+    root: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(coverage_floor, "PARTS", 1)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    part(root, 0, measured=False)
+    assert coverage_floor.main([str(root / "data"), "--python", "3.15"]) == 1
+    assert "no part measured coverage" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("floor", "code"),
+    [({SOURCE: 100}, "COVERAGE_BELOW_FLOOR"), ({}, "COVERAGE_FLOOR_MISSING")],
+    ids=["below", "missing"],
+)
+def test_the_command_exits_one_on_a_floor_failure(
+    root: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    floor: dict[str, int],
+    code: str,
+) -> None:
+    monkeypatch.setattr(coverage_floor, "PARTS", 1)
+    monkeypatch.setattr(coverage_floor, "REPOSITORY_ROOT", root)
+    monkeypatch.setattr(coverage_floor, "critical_sources", lambda: [SOURCE])
+    monkeypatch.setattr(coverage_floor, "floors", lambda: floor)
+    part(root, 0)
+    assert coverage_floor.main([str(root / "data"), "--python", "3.15"]) == 1
+    assert code in capsys.readouterr().out
+    monkeypatch.setattr(coverage_floor, "floors", lambda: {SOURCE: 50})
+    assert coverage_floor.main([str(root / "data"), "--python", "3.15"]) == 0
+
+
+def test_the_command_runs_with_coverage_alone_installed(tmp_path: Path) -> None:
+    # The coverage job installs only `coverage` (#429): no YAML parser may be needed.
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    (blocked / "yaml.py").write_text("raise ImportError('not installed in the coverage job')\n")
+    environment = {**os.environ, "PYTHONPATH": f"{blocked}{os.pathsep}{REPOSITORY_ROOT}"}
+    environment["GITHUB_EVENT_NAME"] = "pull_request"
+    data = tmp_path / "data"
+    for number in range(PARTS):
+        (data / f"coverage-3.15-{number}").mkdir(parents=True)
+        (data / f"coverage-3.15-{number}" / coverage_floor.NOT_MEASURED).touch()
+    done = subprocess.run(
+        [sys.executable, "-m", "tools.ci.coverage_floor", str(data), "--python", "3.15"],
+        cwd=REPOSITORY_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr

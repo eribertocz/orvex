@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from tools.ci import select, verify
+from tools.ci.parts import PARTS
 from tools.repository import REPOSITORY_ROOT
 
 DOCS = ["docs/process/engineering.md"]
@@ -18,22 +19,22 @@ GLOBAL = ["pyproject.toml"]
 @pytest.mark.parametrize("event", ["push", "schedule", "workflow_dispatch"])
 @pytest.mark.parametrize("python", ["3.15", "3.14"])
 def test_main_and_schedules_run_the_whole_suite_on_every_python(event: str, python: str) -> None:
-    for part in range(select.PARTS):
+    for part in range(PARTS):
         choice = select.choose(event, part, STORE)
         assert (choice.shard, choice.paths) == (f"{part}/10", ())
 
 
 @pytest.mark.parametrize("python", ["3.15", "3.14"])
 def test_a_pull_request_runs_the_selection_on_every_python(python: str) -> None:
-    chosen = [select.choose("pull_request", part, STORE) for part in range(select.PARTS)]
-    assert [c.shard for c in chosen] == [f"{part}/10" for part in range(select.PARTS)]
+    chosen = [select.choose("pull_request", part, STORE) for part in range(PARTS)]
+    assert [c.shard for c in chosen] == [f"{part}/10" for part in range(PARTS)]
     assert all(c.paths for c in chosen)
 
 
 def test_a_pull_request_runs_the_critical_and_affected_tests_on_the_other_python() -> None:
-    chosen = [select.choose("pull_request", part, STORE) for part in range(select.PARTS)]
+    chosen = [select.choose("pull_request", part, STORE) for part in range(PARTS)]
     # The selection is spread over every part, as the whole suite is: never a slower job.
-    assert [c.shard for c in chosen] == [f"{part}/10" for part in range(select.PARTS)]
+    assert [c.shard for c in chosen] == [f"{part}/10" for part in range(PARTS)]
     assert len({c.paths for c in chosen}) == 1
     paths = set(chosen[0].paths)
     assert "packages/store/tests" in paths  # the change
@@ -42,7 +43,7 @@ def test_a_pull_request_runs_the_critical_and_affected_tests_on_the_other_python
 
 
 def test_an_uncertain_impact_runs_the_whole_suite_on_every_python() -> None:
-    for part in range(select.PARTS):
+    for part in range(PARTS):
         choice = select.choose("pull_request", part, GLOBAL)
         assert (choice.shard, choice.paths) == (f"{part}/10", ())
 
@@ -96,6 +97,6 @@ def test_the_python_workflow_runs_the_whole_suite_on_every_push_to_main() -> Non
     assert "paths-ignore" not in triggers["push"]
     job = workflow["jobs"]["python-tests-part"]
     assert {str(p) for p in job["strategy"]["matrix"]["python"]} >= {"3.14", "3.15"}
-    assert len(job["strategy"]["matrix"]["part"]) == select.PARTS
+    assert len(job["strategy"]["matrix"]["part"]) == PARTS
     steps = " ".join(str(s.get("run", "")) for s in job["steps"])
     assert "python -m tools.ci.select" in steps

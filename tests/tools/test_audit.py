@@ -83,6 +83,25 @@ def test_an_exception_for_another_package_unused_or_incomplete_fails(
     assert "AUDIT_EXCEPTION_INVALID X" in capsys.readouterr().out
 
 
+def test_an_npm_finding_matches_its_ghsa_exception_and_a_transitive_entry_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = EXCEPTION.format(kind="npm", package="left-pad", id="GHSA-aaaa", review="2026-12-31")
+    write_exceptions(tmp_path, monkeypatch, entry)
+    assert run(tmp_path, "npm", npm_report("high")) == 0
+    transitive = {"vulnerabilities": {"wrapper": {"via": ["left-pad"]}}}
+    assert audit.npm_findings(transitive) == []
+
+
+def test_an_exception_without_a_reason_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    entry = EXCEPTION.format(kind="pip", package="jinja2", id="PYSEC-1", review="2026-12-31")
+    write_exceptions(tmp_path, monkeypatch, entry.replace("not reachable here", " "))
+    assert run(tmp_path, "pip", pip_report(("jinja2", "PYSEC-1"))) == 1
+    assert "AUDIT_EXCEPTION_INVALID PYSEC-1" in capsys.readouterr().out
+
+
 def test_an_unreadable_report_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     write_exceptions(tmp_path, monkeypatch, "")
     assert run(tmp_path, "pip", {"no": "dependencies"}) == 1

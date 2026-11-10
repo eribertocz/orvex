@@ -325,10 +325,12 @@ jobs:
           python3.15 -m venv /tmp/tampered
           /tmp/tampered/bin/python -m pip install --quiet pip==26.3
           python3.15 -m tools.ci.tamper pylock.toml /tmp/pylock.tampered.toml
-          if /tmp/tampered/bin/python -m pip install --quiet -r /tmp/pylock.tampered.toml; then
+          if /tmp/tampered/bin/python -m pip install --quiet -r /tmp/pylock.tampered.toml 2> /tmp/tampered.err; then
             echo "::error::an install with a tampered hash succeeded"
             exit 1
           fi
+          # Refused for its hash, not for anything else (a network error proves nothing).
+          grep --quiet "DO NOT MATCH THE HASHES" /tmp/tampered.err
       - name: No known vulnerability in the locked packages (#429)
         # pip-audit exits non-zero on a finding; its report decides, against the exceptions.
         run: |
