@@ -333,6 +333,35 @@ def test_a_model_with_problems_publishes_nothing(
     )
 
 
+def test_a_lake_without_a_semantic_model_says_so(
+    served: tuple[LocalSemantic, TestClient], tmp_path: Path
+) -> None:
+    semantic, http = served
+    for path in (tmp_path / "semantic").iterdir():
+        path.unlink()  # the lake stays; the project now declares no model
+    response = ask(http, semantic, aggregate())
+    error = response.json()["error"]
+    assert (response.status_code, error["code"]) == (404, "SEMANTIC_MODEL_NOT_FOUND")
+    assert error["message"] == "The project has no semantic model"
+    assert error["request_id"] == response.headers["x-request-id"]
+
+
+def test_project_settings_with_problems_are_refused_before_any_read(
+    served: tuple[LocalSemantic, TestClient], tmp_path: Path
+) -> None:
+    semantic, http = served
+    (tmp_path / "project.yaml").write_text("version: 1\nname: [\n", "utf-8")
+    for route in ("query", "catalog"):
+        response = (
+            ask(http, semantic, aggregate())
+            if route == "query"
+            else http.get("/api/v1/semantic/catalog", headers=bearer(semantic))
+        )
+        error = response.json()["error"]
+        assert (response.status_code, error["code"]) == (422, "PROJECT_INVALID"), route
+        assert error["message"] == "The project's settings have problems"
+
+
 def test_a_run_holding_the_lake_makes_a_question_busy(
     served: tuple[LocalSemantic, TestClient], tmp_path: Path
 ) -> None:

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import os
 import shutil
 import sqlite3
 import tempfile
@@ -47,6 +46,7 @@ from conformance.runners import corpus_execution as ce
 from tests.conformance import test_row_policies as rp
 from tests.conformance.test_direct_query import CASES, ZONE, routed
 from tests.conformance.test_execution import ask
+from tests.support.environment import unavailable
 from tests.support.policies import VENDORS, extension
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -112,9 +112,7 @@ class Engine:
 def owner() -> Iterator[Owner]:
     shared = Path("/dev/shm")
     if not shared.is_dir() or shared.stat().st_dev == Path(tempfile.gettempdir()).stat().st_dev:
-        if os.environ.get("CI"):
-            pytest.fail("CI needs /dev/shm on a file system of its own")
-        pytest.skip("no second file system here")
+        unavailable("no second file system here", "CI needs /dev/shm on a file system of its own")
     root = Path(tempfile.mkdtemp(dir=shared, prefix="existing-ducklake-"))
     made = Owner(root / "catalog.sqlite", root / "data")
     made.data.mkdir()

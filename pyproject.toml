@@ -78,7 +78,7 @@ explicit_package_bases = true
 warn_unreachable = true
 
 [tool.pytest.ini_options]
-addopts = ["--import-mode=importlib", "--strict-markers", "--strict-config", "-ra"]
+addopts = ["--import-mode=importlib", "--strict-markers", "--strict-config", "-ra", "-p", "tests.support.critical_tests"]
 pythonpath = ["."]
 testpaths = ["packages", "tests"]
 xfail_strict = true

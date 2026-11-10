@@ -406,14 +406,21 @@ def _is(member: Any, written: Mapping[str, Any]) -> bool:  # noqa: ANN401
 
 def totals_written(found: Answered) -> list[list[str | None]]:
     """The rows as the corpus writes them: in a row the result marks as a total or subtotal,
-    each dimension it does not keep is `ALL`; every other cell, a `NULL` included, unchanged."""
+    each dimension it does not keep is `ALL`; every other cell, a `NULL` included, unchanged.
+    A rolled-up cell must be `NULL`: one holding a value is written as itself, marked, so the
+    case fails instead of the value being hidden behind `ALL` (#427)."""
     roles = found.envelope.get("row_roles")
     if roles is None:
         return found.rows
     columns = found.envelope["columns"]
     dimensions = [i for i, c in enumerate(columns) if c.get("role") == "dimension"]
     return [
-        [TOTAL_VALUE if i in dimensions[role["level"] :] else v for i, v in enumerate(row)]
+        [
+            (TOTAL_VALUE if v is None else f"ROLLED-UP CELL WITH A VALUE: {v}")
+            if i in dimensions[role["level"] :]
+            else v
+            for i, v in enumerate(row)
+        ]
         for row, role in zip(found.rows, roles, strict=True)
     ]
 

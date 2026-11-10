@@ -384,7 +384,13 @@ def physical(found: SemanticPlan) -> Any:  # noqa: ANN401
     return adapter.compile_plan(found)
 
 
+# The corpus cases answered with a plan; 016, 017 and 020 are refused before one (their expected
+# error). A case regressing to a refusal shrinks this set and fails here, never silently (#427).
+ANSWERED = {f"CASE-{n:03d}" for n in (*range(1, 16), 18, 19, 21)}
+
+
 def test_every_answered_case_s_statement_holds_its_evidence() -> None:
+    assert set(plans()) == ANSWERED
     for found in plans().values():
         verify_physical(found, physical(found))
 

@@ -43,8 +43,19 @@ paths = ["benchmarks/", "tools/benchmarks/"]
 tests = ["tests/tools"]
 
 [[narrow]]
-paths = ["tools/checks/", "tools/licenses/", "tools/rename/", "tools/synthetic/"]
+paths = ["tools/checks/", "tools/licenses/", "tools/rename/"]
 tests = ["tests/tools", "tests/workspace"]
+
+[[narrow]]
+# Also run as a subprocess by package tests (#427: `tests/tools/test_impact.py` finds them).
+paths = ["tools/synthetic/"]
+tests = [
+  "tests/tools",
+  "tests/workspace",
+  "packages/store/tests/test_database_sources.py",
+  "packages/store/tests/test_sources.py",
+  "packages/server/tests/test_commands.py",
+]
 
 [[narrow]]
 paths = ["tools/contracts/"]

@@ -34,6 +34,8 @@ from orvex.store import separation
 from orvex.store.errors import StoreError
 from orvex.store.existing_lake import ExistingLake
 
+from tests.support.environment import unavailable
+
 MEMORY = "512MB"
 
 
@@ -547,7 +549,7 @@ def test_an_overlay_file_system_is_refused_for_local_data_in_both_directions(
     # Measured by the Reviewer: through an overlay, a hard link made in the upper layer to a
     # protected file passes any device comparison. Mounted in a mount namespace of its own.
     if shutil.which("unshare") is None:
-        pytest.skip("no unshare here")
+        unavailable("no unshare here", "unshare, for the overlay hard-link test")
     python = [
         "env",
         f"PYTHONPATH={os.pathsep.join(sys.path)}",
@@ -639,6 +641,7 @@ def test_a_credential_check_compares_azure_account_keys_and_passes_a_credential_
 
 S3_SERVER = """
 import duckdb, http.server, json, socketserver, sys, threading
+from tests.support.environment import unavailable
 hits = []
 class Handler(http.server.BaseHTTPRequestHandler):
     def answer(self):
@@ -688,7 +691,7 @@ def test_duckdb_resolves_dot_dot_in_object_storage_after_the_allow_list() -> Non
         env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
     )
     if "httpfs" in result.stderr and "not found" in result.stderr.lower():
-        pytest.skip("the httpfs extension is not installed here")
+        unavailable("the httpfs extension is not installed here", "httpfs, for the S3 prefix test")
     found = json.loads(result.stdout.strip().splitlines()[-1])
     assert ["/otherbucket/x.parquet", True] in found  # signed, outside the prefix
     assert ["s3://otherbucket/x.parquet", "PermissionException"] in found  # as written: refused
