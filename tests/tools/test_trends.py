@@ -208,6 +208,9 @@ def test_the_workflow_reads_logs_raw_and_history_only_from_main_s_own_runs() -> 
     fetch = next(
         s["run"] for s in workflow["jobs"]["trends"]["steps"] if "Fetch" in s.get("name", "")
     )
+    assert fetch.startswith(
+        "# A failure anywhere in a pipeline fails the step (#428).\nset -o pipefail\n"
+    )
     assert "gh --version" in fetch
     assert "jq --version" in fetch
     assert "curl --fail" in fetch

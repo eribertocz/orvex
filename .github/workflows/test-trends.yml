@@ -50,6 +50,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN: ${{ github.event.workflow_run.id }}
         run: |
+          # A failure anywhere in a pipeline fails the step (#428).
+          set -o pipefail
           # The output formats below matter: the versions that produced them (#428).
           gh --version | head -1
           jq --version
