@@ -70,5 +70,16 @@ paths = ["vendor/json-canonicalization/"]
 modules = ["semantic", "contracts"]
 
 [[narrow]]
+# What a release ships, read by the SBOM's tests (#242).
+paths = ["web/package-lock.json"]
+tests = ["tests/tools"]
+
+[[narrow]]
+# The SBOM schema (#242); the semantic tests read the whole vendor folder.
+paths = ["vendor/cyclonedx/"]
+tests = ["tests/tools"]
+modules = ["semantic"]
+
+[[narrow]]
 paths = ["web/"]
 tests = []  # the web checks run in CI only (Node 24)

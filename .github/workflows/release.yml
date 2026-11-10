@@ -1,5 +1,7 @@
 # Release (P0-08): a product tag `v*` builds the web application and every wheel (the server wheel
-# includes the web build) and publishes them as a GitHub release with SHA256SUMS. Module tags
+# includes the web build) and publishes them as a GitHub release with SHA256SUMS, a CycloneDX
+# SBOM, and signed build provenance and SBOM attestations for every file (#242;
+# docs/user/verify-a-release.md). Module tags
 # (`<module>-v*`) only mark versions and do not match this trigger.
 # `workflow_dispatch` with dry-run (the default) builds and uploads the files as a workflow
 # artifact only; nothing is published.
@@ -32,6 +34,12 @@ env:
   # The paths that make this check apply (#267), read by changes.py and aggregate.py.
   RELEVANT_PATHS: |
     .github/workflows/release.yml
+    .github/workflows/scripts/sbom_build.py
+    .github/workflows/scripts/sbom_check.py
+    .github/workflows/scripts/sbom_runtime.py
+    vendor/cyclonedx/**
+    pylock.toml
+    web/package-lock.json
 
 jobs:
   # Whether this run changes a relevant path (#267): `changes.py` fails closed.
@@ -88,6 +96,12 @@ jobs:
           for package in packages/*/; do
             python -m pip wheel --no-deps --wheel-dir dist "$package"
           done
+      - name: Install the lock, whose runtime closure the SBOM lists
+        run: python -m pip install --quiet -r pylock.toml
+      - name: The SBOM of what the release ships (#242)
+        run: python .github/workflows/scripts/sbom_build.py dist "$GITHUB_SHA" "$(git log -1 --format=%cI)"
+      - name: The SBOM is valid and complete
+        run: python .github/workflows/scripts/sbom_check.py dist
       - name: Check the server wheel contains the web build and its license notices
         # A block scalar: the script's ": " would end a plain YAML value (#197).
         shell: python
@@ -99,7 +113,7 @@ jobs:
           sys.exit("missing from the server wheel: " + ", ".join(missing) if missing else 0)
       - name: Checksums
         working-directory: dist
-        run: sha256sum -- *.whl > SHA256SUMS && cat SHA256SUMS
+        run: sha256sum -- *.whl *.cdx.json > SHA256SUMS && cat SHA256SUMS
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-files
@@ -113,13 +127,29 @@ jobs:
       startsWith(github.ref, 'refs/tags/v') &&
       (github.event_name == 'push' || inputs.dry-run == false)
     runs-on: ubuntu-latest
+    # The only job that may sign (#242): a Sigstore certificate for this workflow and commit.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-files
           path: dist
+      - id: sbom
+        run: echo "path=$(ls dist/*.cdx.json)" >> "$GITHUB_OUTPUT"
+      - name: Signed build provenance for every wheel and the SBOM
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.cdx.json
+      - name: The SBOM attested for every wheel
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/*.whl
+          sbom-path: ${{ steps.sbom.outputs.path }}
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -127,14 +157,19 @@ jobs:
         run: |
           prerelease=false
           case "$TAG" in *-*) prerelease=true ;; esac
+          verify="Verify these files before installing them: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$TAG/docs/user/verify-a-release.md"
           # The release may already exist when the tag was created by publishing it on GitHub;
-          # then the files are attached to it.
+          # then the files are attached to it, and its notes gain the verification link.
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease="$prerelease"
+            notes=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+            case "$notes" in *verify-a-release.md*) ;; *) notes="$verify
+
+          $notes" ;; esac
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease="$prerelease" --notes "$notes"
           else
             gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --title "$TAG" \
-              --generate-notes --prerelease="$prerelease"
+              --notes "$verify" --generate-notes --prerelease="$prerelease"
           fi
 
   # The required result (#267): passes when build ran and passed, reports "Not applicable"
