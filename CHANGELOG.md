@@ -4,6 +4,21 @@ Product releases of Orvex. Module versions are listed in `versions.toml`; the fo
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow
 [Semantic Versioning](https://semver.org/) (`docs/process/versioning.md`).
 
+## v0.3.1-alpha.1 — 2026-11-10
+
+Patch of v0.3.0-alpha.1: exact numbers that could come out wrong without a warning. Alpha: formats and contracts may still change between phases.
+
+**Requires Python 3.14 or later.**
+
+Modules: semantic `0.2.1`, server `0.3.1`; the rest unchanged.
+
+### Fixed
+- `semantic`: an exact quotient inside a field read by a metric was computed as a float on DuckDB (a value could change silently); every member a question reads, transitively, is now checked for its declarations before any read, and `/` is written only for a float quotient (#426) (#450)
+- `semantic`: DuckDB cut the common scale of `CASE` and `COALESCE` alternatives past 38 digits and rounded silently; alternatives are now written at their declared exact type (#450)
+- `semantic`: on ClickHouse, `NULLIF` compared at its first argument's scale and `CASE`/`COALESCE`/`NULLIF` alternatives of different scales failed; they are now written at their common scale and checked into their type (#450)
+- `semantic`: a float quotient declared `zero_denominator: null` returned `Infinity` for a zero divisor; it now gives NULL on both engines, and a non-zero literal divisor needs no zero policy (#450)
+- `semantic`: C2's exact division and exact products stopped with an engine error on values their declared type holds; `%` by a literal zero is refused before any read (#450)
+
 ## v0.3.0-alpha.1 — 2026-11-09
 
 Phase P2 (Semantic engine: parity with SEF). Alpha: formats and contracts may still change between phases.
