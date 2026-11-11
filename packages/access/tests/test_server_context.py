@@ -11,7 +11,8 @@ from typing import Any
 import pytest
 from orvex.access.context import permission_fingerprint, read_context
 from orvex.access.directory import statements as sql
-from orvex.access.directory.attributes import Attributes, ProjectAttributes
+from orvex.access.directory.attribute_sources import ProjectAttributes
+from orvex.access.directory.attributes import Attributes
 from orvex.access.errors import ACCESS_FORBIDDEN, AccessError
 from orvex.access.server_context import ServerContextProvider, ServerRequest, audience_of
 from orvex.access.storage.store import Transaction
@@ -79,19 +80,24 @@ def test_no_role_no_context(world: World, members: tuple[str, str]) -> None:
         provider(world).context_for(object())
 
 
-def test_a_planted_attribute_builds_no_context(world: World, members: tuple[str, str]) -> None:
+@pytest.mark.parametrize("value", ['"01"', '"-0"'])
+def test_a_planted_attribute_builds_no_context(
+    world: World, members: tuple[str, str], value: str
+) -> None:
     _, ana = members
     with world.store.transaction() as transaction:
         transaction.run(
             "INSERT INTO attributes (project, user_id, name, type, value, set_at) VALUES "
-            "(:p, :u, 'region', 'integer', '\"01\"', '2026-11-11T00:00:00.000000Z')",
+            "(:p, :u, 'region', 'integer', :v, '2026-11-11T00:00:00.000000Z')",
             p=P,
             u=ana,
+            v=value,
         )
     with pytest.raises(AccessError) as caught:
         context(world, ana)
     assert caught.value.code == ACCESS_FORBIDDEN
-    assert '"01"' not in str(world.events()[-1])
+    assert world.refusals() == [ACCESS_FORBIDDEN]
+    assert value not in str(world.events()[-1])
 
 
 def test_a_concurrent_change_never_mixes_two_states(world: World, members: tuple[str, str]) -> None:
@@ -211,6 +217,51 @@ class Claims:
             "region": {"type": "text", "value": "from-claims"},
             "badge": {"type": "boolean", "value": True},
         }
+
+
+class Planted:
+    """A later source that hands over something no Builder could set."""
+
+    def __init__(self, attributes: dict[str, Any]) -> None:
+        self.attributes = attributes
+
+    def attributes_for(self, transaction: Transaction, user: str, project: str) -> dict[str, Any]:
+        return self.attributes
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    [
+        {"user_id": {"type": "text", "value": "someone-else"}},  # reserved
+        {"Region": {"type": "text", "value": "north"}},  # outside the pattern
+        {"level": {"type": "integer", "value": "-0"}},
+        {"level": {"type": "integer", "value": "9223372036854775808"}},  # past int64
+        {"zones": {"type": "list", "values": ["b", "a"]}},  # not in its contract form
+        {"badge": {"type": "boolean", "value": "true"}},
+        {"badge": {"type": "boolean", "value": True, "extra": 1}},
+        {"badge": "true"},
+        {f"a{n}": {"type": "boolean", "value": True} for n in range(65)},
+    ],
+    ids=["reserved", "name", "minus-zero", "int64", "unsorted", "string", "extra", "bare", "65"],
+)
+def test_every_source_is_checked_like_a_hand_set_value(
+    world: World, members: tuple[str, str], attributes: dict[str, Any]
+) -> None:
+    _, ana = members
+    with pytest.raises(AccessError) as caught:
+        context(world, ana, sources=(ProjectAttributes(), Planted(attributes)))
+    assert caught.value.code == ACCESS_FORBIDDEN
+    assert world.refusals() == [ACCESS_FORBIDDEN]
+
+
+def test_a_document_the_contract_refuses_builds_no_context(
+    world: World, members: tuple[str, str]
+) -> None:
+    _, ana = members
+    with pytest.raises(AccessError) as caught:
+        context(world, ana, policies="sha256:short")  # `InvalidContext` from the fingerprint
+    assert caught.value.code == ACCESS_FORBIDDEN
+    assert world.refusals() == [ACCESS_FORBIDDEN]
 
 
 def test_another_source_plugs_in_and_a_hand_set_value_wins(

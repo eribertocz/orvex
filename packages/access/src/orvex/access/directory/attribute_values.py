@@ -4,7 +4,8 @@ where they are written and never coerced.
 - **Names** match `^[a-z][a-z0-9_]{0,62}$`, and are not one of the built-in context variables
   (`user_id`, `user`, `project`, `role`, `groups`).
 - **`text`:** 1 to 1,024 characters, already in NFC.
-- **`integer`:** the decimal text `^-?(0|[1-9][0-9]*)$`, within the signed 64-bit range.
+- **`integer`:** the contract's decimal text `^(0|-?[1-9][0-9]{0,37})$` (so never `-0`), within
+  the signed 64-bit range.
 - **`boolean`:** JSON `true` or `false` only.
 - **`list`:** 1 to 1,000 texts, each a valid `text`, no two equal. Stored sorted by code point.
 - **Nothing is converted.** `"1"` is not a boolean, `1.0` and `"01"` are not integers, and text
@@ -29,7 +30,7 @@ KINDS: tuple[Kind, ...] = ("text", "integer", "boolean", "list")
 RESERVED = frozenset({"user_id", "user", "project", "role", "groups"})
 MAXIMUM_PER_USER = 64
 _NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
-_INTEGER = re.compile(r"-?(0|[1-9][0-9]*)")
+_INTEGER = re.compile(r"0|-?[1-9][0-9]{0,37}")  # the contract's own pattern: no "-0"
 _LONGEST_TEXT = 1024
 _LONGEST_LIST = 1000
 _INT64 = (-(2**63), 2**63 - 1)

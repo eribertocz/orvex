@@ -66,10 +66,13 @@ def manage_groups(caller: Caller, member: str | None = None) -> str | None:
     return None
 
 
-def manage_attributes(caller: Caller, member: str) -> str | None:
-    """Set or remove an attribute of `member` (#440): the project's active Builder only, and
-    never for themselves, so nobody widens their own access."""
+def manage_attributes(caller: Caller, member: str, member_active: bool) -> str | None:
+    """Set or remove an attribute of `member` (#440): the project's active Builder only, never
+    for themselves, so nobody widens their own access, and only for an active member of the
+    project (`member_active`). Every refusal is the same code, so none tells who is a member."""
     if not caller.active or caller.role != "builder" or member == caller.user_id:
+        return ACCESS_FORBIDDEN
+    if not member_active:
         return ACCESS_FORBIDDEN
     return None
 

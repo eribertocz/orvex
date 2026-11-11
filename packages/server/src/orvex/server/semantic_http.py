@@ -6,7 +6,8 @@ server opened, composed from `store`, `semantic` and `access`.
   detail page instead uses the snapshot its cursor pins (Owner precision 2): the sealed cursor
   names it to the server alone (`SealedForm.data_version`), the model is compiled there and the
   page is read there. A snapshot no longer kept is `PAGE_CURSOR_INVALID`, reason `expired`;
-  nothing falls back to the current one.
+  nothing falls back to the current one. Its permissions, though, are those in force now
+  (`permission_state`, #440): a policy or mapping changed since refuses the cursor.
 - **The caller** comes from a `ContextSource`: in local mode, `access`'s one local Builder,
   only for a request the HTTP layer authenticated; in server mode, the session's user as the
   directory knows them at that request (`server_context`, #440). No CLI grant is used here.
@@ -48,6 +49,7 @@ from orvex.semantic.result import SemanticResult
 from orvex.semantic.result.cursors import SealedForm
 from orvex.server import evidence_records, lake_place, semantic_model
 from orvex.server.identity import Identity
+from orvex.server.permission_state import permission_state
 from orvex.server.project import Project, ProjectLoadError, load_project
 from orvex.server.semantic_model import ExternalTables
 from orvex.store.errors import StoreError
@@ -76,10 +78,11 @@ class Refused(Exception):
 
 
 class ContextSource(Protocol):
-    """The caller's `security-context` v1 document for one request, policies and snapshot."""
+    """The caller's `security-context` v1 document for one request, on the policy model's
+    fingerprint and the snapshot of the mapping state in force (`permission_state`)."""
 
     def __call__(
-        self, request: object, policies: PolicyModel, snapshot: int
+        self, request: object, policy_fingerprint: str, mapping_snapshot: int
     ) -> Mapping[str, Any]: ...
 
 
@@ -92,12 +95,16 @@ class LakeSource(Protocol):
     def model(self, lake: Lake, snapshot: int) -> semantic_model.Loaded: ...
 
 
-def local_context(request: object, policies: PolicyModel, snapshot: int) -> dict[str, Any]:
-    """Local mode: the one local Builder, for an authenticated request only. Every managed table
-    the policies may read is read on `snapshot`, which the permission fingerprint records."""
+def local_context(
+    request: object, policy_fingerprint: str, mapping_snapshot: int
+) -> dict[str, Any]:
+    """Local mode: the one local Builder, for an authenticated request only. The permission
+    fingerprint records the mapping state the policies read (`permission_state`)."""
     if not isinstance(request, LocalRequest):
         raise InvalidContext("the request is not an authenticated local request")
-    provider = LocalContextProvider(request.project, policies.fingerprint, {"lake": str(snapshot)})
+    provider = LocalContextProvider(
+        request.project, policy_fingerprint, {"lake": str(mapping_snapshot)}
+    )
     return provider.context_for(request).document()
 
 
@@ -166,11 +173,12 @@ def status_of(error: SemanticError) -> int:
 
 def server_context(store: Store, audit: AuditLog) -> ContextSource:
     """Server mode (#440): the session's user as the directory knows them now, on the policy
-    model and the snapshot this request pinned, which the permission fingerprint records."""
+    model and the mapping state in force now (`permission_state`), which the permission
+    fingerprint records."""
 
-    def build(request: object, policies: PolicyModel, snapshot: int) -> dict[str, Any]:
+    def build(request: object, policy_fingerprint: str, mapping_snapshot: int) -> dict[str, Any]:
         provider = ServerContextProvider(
-            store, audit, policies.fingerprint, {"lake": str(snapshot)}
+            store, audit, policy_fingerprint, {"lake": str(mapping_snapshot)}
         )
         return provider.context_for(request).document()
 
@@ -240,6 +248,12 @@ def _loaded(semantic: Semantic, lake: Lake, snapshot: int) -> semantic_model.Sem
     )
 
 
+def _policies_at(semantic: Semantic, lake: Lake, snapshot: int) -> PolicyModel | None:
+    """The policies in force at `snapshot`, or None when its model is invalid or missing."""
+    loaded = semantic.source.model(lake, snapshot)
+    return None if loaded.model is None else _policies(loaded.model)
+
+
 @dataclass(frozen=True)
 class Asked:
     """One answer: the result, its receipt view, and the result in the JSON form."""
@@ -303,7 +317,8 @@ def _question(
     snapshot = _read_snapshot(lake, settings, _after(body))
     model = _loaded(semantic, lake, snapshot)
     policies = _policies(model)
-    context = dict(semantic.context(request, policies, snapshot))
+    state = permission_state(lake, snapshot, policies, lambda n: _policies_at(semantic, lake, n))
+    context = dict(semantic.context(request, state.policy_fingerprint, state.mapping_snapshot))
     pinned = _snapshot_document(lake, snapshot)
     if pinned is None:  # expired between the two calls: never another snapshot
         raise SemanticError("PAGE_CURSOR_INVALID", {"reason": "expired"})
@@ -363,7 +378,7 @@ def catalog(semantic: Semantic, request: object) -> dict[str, Any]:
         snapshot = lake.current_snapshot().id
         model = _loaded(semantic, lake, snapshot)
         policies = _policies(model)
-        context = semantic.context(request, policies, snapshot)
+        context = semantic.context(request, policies.fingerprint, snapshot)
         return catalog_for_context(model.compiled, policies, context)
 
 

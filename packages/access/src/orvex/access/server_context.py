@@ -8,12 +8,14 @@ directory as it is at that moment.
   is `ACCESS_FORBIDDEN`, audited (`build_context`). The administrator flag never enters a
   context and grants nothing here.
 - **Fail closed on read.** An attribute that fails the contract's checks when read
-  (`UnreadableAttribute`) builds no context: `ACCESS_FORBIDDEN`, audited without its value.
+  (`UnreadableAttribute`), from any source, or a document the contract refuses
+  (`InvalidContext`), builds no context: `ACCESS_FORBIDDEN`, audited without its value.
 - **The rest of the fingerprint.** The server supplies the policy model's fingerprint and the
   snapshot of every managed-lake table the policies read, pinned once for the request. The
   context's fingerprint and the query's execution therefore use the same values; `access`
   never reads the lake.
-- Attributes come through `AttributeSource`s, the project's own first (`attributes.merged`).
+- Attributes come through `AttributeSource`s, the project's own first
+  (`attribute_sources.merged`).
 """
 
 from __future__ import annotations
@@ -24,13 +26,14 @@ from typing import Literal
 
 from orvex.access.audit.log import AuditLog
 from orvex.access.context import (
+    InvalidContext,
     SecurityContext,
     normalize_list,
     permission_fingerprint,
     read_context,
 )
 from orvex.access.directory import statements as sql
-from orvex.access.directory.attributes import (
+from orvex.access.directory.attribute_sources import (
     AttributeSource,
     ProjectAttributes,
     UnreadableAttribute,
@@ -76,16 +79,19 @@ class ServerContextProvider:
             raise _forbidden()
         user, project = request.user, request.project
         try:
-            with self._store.transaction(read_only=True) as transaction:
-                found = sql.user(transaction, user)
-                role = sql.role(transaction, project, user) if found is not None else None
-                if found is None or not found.active or role is None:
-                    raise _forbidden()
-                groups = normalize_list(sql.groups_of(transaction, project, user))
-                attributes = merged(self._sources, transaction, user, project)
-        except (AccessError, UnreadableAttribute) as error:
+            return self._built(user, project)
+        except (AccessError, UnreadableAttribute, InvalidContext) as error:
             self._audit.refusal("build_context", user, ACCESS_FORBIDDEN, project=project)
             raise _forbidden() from error
+
+    def _built(self, user: str, project: str) -> SecurityContext:
+        with self._store.transaction(read_only=True) as transaction:
+            found = sql.user(transaction, user)
+            role = sql.role(transaction, project, user) if found is not None else None
+            if found is None or not found.active or role is None:
+                raise _forbidden()
+            groups = normalize_list(sql.groups_of(transaction, project, user))
+            attributes = merged(self._sources, transaction, user, project)
         fingerprint = permission_fingerprint(
             user=user,
             project=project,

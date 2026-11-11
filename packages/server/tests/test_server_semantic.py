@@ -21,7 +21,15 @@ from orvex.server.cli import served_project
 from orvex.server.server_app import ServedProject, create_server_app
 from orvex.server.sign_in_http import cookie_name
 
-from tests.support.semantic_http import IDENTITY, VERSIONS, aggregate, detail, project, run
+from tests.support.semantic_http import (
+    IDENTITY,
+    VERSIONS,
+    aggregate,
+    detail,
+    project,
+    run,
+    write,
+)
 from tests.support.sign_in import PASSWORD
 
 ORIGIN = "https://bi.example.com"
@@ -42,9 +50,21 @@ column_policies:
 """
 
 
+MAPPED = """\
+version: 1
+row_policies:
+  - name: mapped_tariffs
+    dataset: readings
+    kind: predicate
+    predicate: "tariff IN (SELECT tariff FROM security.user_tariff WHERE user_id = $user_id)"
+"""
+
+
 class Server:
-    def __init__(self, tmp_path: Path) -> None:
-        project(tmp_path, POLICIES)
+    def __init__(self, tmp_path: Path, policies: str = POLICIES) -> None:
+        self.folder = tmp_path
+        project(tmp_path, policies)
+        self.mapping({})
         run(tmp_path)
         store = SqliteStore(tmp_path / "access.sqlite")
         self.store = store
@@ -59,10 +79,15 @@ class Server:
         settings = Settings(store, audit)
         settings.change(self.admin, public_origin=ORIGIN)
         self.sign_in = SignIn(store, audit)
+        built = semantic_http.server_context(store, audit)
+        self.contexts: list[tuple[str, int]] = []  # (policy fingerprint, mapping snapshot)
+
+        def context(request: object, policy_fingerprint: str, mapping_snapshot: int) -> Any:  # noqa: ANN401
+            self.contexts.append((policy_fingerprint, mapping_snapshot))
+            return built(request, policy_fingerprint, mapping_snapshot)
+
         semantic = semantic_http.Semantic(
-            served_project(tmp_path, IDENTITY),
-            semantic_http.server_context(store, audit),
-            semantic_http.session_settings(),
+            served_project(tmp_path, IDENTITY), context, semantic_http.session_settings()
         )
         self.app = create_server_app(
             VERSIONS,
@@ -75,6 +100,19 @@ class Server:
         self.directory.add_membership(self.admin, "project-1", self.builder, "builder")
         for group in ("finance", "auditors"):
             self.directory.create_group(self.builder, "project-1", group)
+
+    def mapping(self, tariffs: dict[str, list[str]]) -> None:
+        """The managed-lake table `security.user_tariff`, as the next run writes it."""
+        rows = [f"('{user}', '{t}')" for user, found in tariffs.items() for t in found]
+        values = ", ".join(rows or ["('nobody', 'none')"])
+        write(
+            self.folder,
+            {
+                "models/security/user_tariff.sql": (
+                    f"SELECT * FROM (VALUES {values}) AS t(user_id, tariff)"
+                )
+            },
+        )
 
     def person(self, name: str) -> str:
         created = self.directory.create_user(self.admin, name, name.title())
@@ -186,3 +224,68 @@ def test_a_mistyped_attribute_gives_zero_rows_never_all(server: Server) -> None:
     answer = ask(server.client("ana"), detail(10))
     assert answer.status_code == 200, answer.text
     assert answer.json()["result"]["rows"] == []  # an integer never equals text: no row
+
+
+@pytest.fixture
+def mapped(tmp_path: Path) -> Server:
+    return Server(tmp_path, MAPPED)
+
+
+def snapshot_of(answer: Any) -> int:  # noqa: ANN401
+    (source,) = [s for s in answer.json()["receipt"]["data"] if s["for"] == "dataset"]
+    return int(source["snapshot"]["id"])
+
+
+def test_a_mapping_reads_the_callers_own_user_id(mapped: Server) -> None:
+    ana = mapped.viewer("ana", tariff=None)
+    mapped.mapping({ana: ["residential"], "someone-else": ["commercial"]})
+    run(mapped.folder)
+    answer = ask(mapped.client("ana"), detail(10))
+    assert answer.status_code == 200, answer.text
+    assert [row[0] for row in answer.json()["result"]["rows"]] == [1, 2]
+
+
+def test_a_revoked_mapping_refuses_the_next_page(mapped: Server) -> None:
+    """SEC-REVOKE-001 over HTTP: the mapping that granted the next page's rows is removed
+    between the two pages; the cursor is refused and no row of the next page is returned."""
+    ana = mapped.viewer("ana", tariff=None)
+    mapped.mapping({ana: ["residential", "commercial"]})
+    run(mapped.folder)
+    http = mapped.client("ana")
+    first = ask(http, detail(2))
+    assert [row[0] for row in first.json()["result"]["rows"]] == [1, 2]
+    after = first.json()["result"]["page"]["next"]
+    mapped.mapping({ana: ["residential"]})
+    run(mapped.folder)
+    second = ask(http, detail(2, after))
+    assert (second.status_code, second.json()["error"]["code"]) == (400, "PAGE_CURSOR_INVALID")
+    assert "result" not in second.json()
+    again = ask(http, detail(2))  # starting again: the permissions in force now
+    assert [row[0] for row in again.json()["result"]["rows"]] == [1, 2]
+    assert again.json()["result"]["page"].get("next") is None
+
+
+def test_a_policy_changed_between_pages_refuses_the_next_page(mapped: Server) -> None:
+    ana = mapped.viewer("ana", tariff=None)
+    mapped.mapping({ana: ["residential", "commercial"]})
+    run(mapped.folder)
+    http = mapped.client("ana")
+    after = ask(http, detail(2)).json()["result"]["page"]["next"]
+    write(mapped.folder, {"security.yaml": MAPPED + "    exempt_groups: [finance]\n"})
+    run(mapped.folder)
+    second = ask(http, detail(2, after))
+    assert second.json()["error"]["code"] == "PAGE_CURSOR_INVALID"
+
+
+def test_the_context_names_the_snapshot_the_query_read(mapped: Server) -> None:
+    """AC6: the mapping snapshot in the fingerprint is the one the rows were read at, for the
+    first page and for the next. The Builder's receipt names the snapshot read."""
+    mapped.mapping({mapped.builder: ["residential", "commercial"]})
+    run(mapped.folder)
+    http = mapped.client("builder")
+    first = ask(http, detail(2))
+    second = ask(http, detail(2, first.json()["result"]["page"]["next"]))
+    assert second.status_code == 200, second.text
+    assert [row[0] for row in second.json()["result"]["rows"]] == [3, 4]
+    (_, at_first), (_, at_second) = mapped.contexts[-2:]
+    assert at_first == snapshot_of(first) == at_second == snapshot_of(second)

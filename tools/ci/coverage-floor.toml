@@ -20,6 +20,7 @@
 "packages/access/src/orvex/access/authentication/settings.py" = 100
 "packages/access/src/orvex/access/context.py" = 97
 "packages/access/src/orvex/access/directory/__init__.py" = 100
+"packages/access/src/orvex/access/directory/attribute_sources.py" = 100
 "packages/access/src/orvex/access/directory/attribute_values.py" = 100
 "packages/access/src/orvex/access/directory/attributes.py" = 94
 "packages/access/src/orvex/access/directory/bootstrap.py" = 94
