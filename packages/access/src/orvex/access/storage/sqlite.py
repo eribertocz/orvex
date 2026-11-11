@@ -24,7 +24,13 @@ from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
 from orvex.access.errors import ACCESS_STORE_UNSAFE, AccessError
-from orvex.access.storage.store import Row, Transaction, TransientConflict, UniqueViolation
+from orvex.access.storage.store import (
+    Row,
+    Transaction,
+    TransientConflict,
+    UniqueViolation,
+    UnreadableValue,
+)
 
 BUSY_TIMEOUT_S = 10.0
 
@@ -32,6 +38,11 @@ _ID = "length({c}) BETWEEN 1 AND 128 AND {c} NOT GLOB '*[^A-Za-z0-9_-]*'"
 _FINGERPRINT = "length({c}) = 71 AND {c} GLOB 'sha256:*' AND substr({c}, 8) NOT GLOB '*[^0-9a-f]*'"
 _HEX = "length({c}) = {n} AND {c} NOT GLOB '*[^0-9a-f]*'"
 _INSTANT = "length({c}) = 27 AND {c} GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T*Z'"
+# Every character spelled out, so no byte that is not text can hide behind a wildcard.
+_EXACT_INSTANT = (
+    "length({c}) = 27 AND {c} GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]-[0-3][0-9]"
+    "T[0-2][0-9]:[0-5][0-9]:[0-5][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]Z'"
+)
 
 MIGRATIONS: tuple[tuple[str, ...], ...] = (
     (
@@ -95,7 +106,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         f"""CREATE TABLE audit_events (
             seq INTEGER PRIMARY KEY CHECK (seq >= 1),
             id TEXT NOT NULL UNIQUE CHECK ({_ID.format(c="id")}),
-            at TEXT NOT NULL CHECK ({_INSTANT.format(c="at")}),
+            at TEXT NOT NULL CHECK ({_EXACT_INSTANT.format(c="at")}),
             kind TEXT NOT NULL CHECK (length(kind) BETWEEN 1 AND 64),
             document TEXT NOT NULL CHECK (length(document) BETWEEN 2 AND 65536),
             hash TEXT NOT NULL CHECK ({_HEX.format(c="hash", n=64)})
@@ -104,7 +115,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             seq INTEGER NOT NULL CHECK (seq >= 0),
             hash TEXT NOT NULL CHECK ({_HEX.format(c="hash", n=64)}),
-            at TEXT CHECK (at IS NULL OR ({_INSTANT.format(c="at")})),
+            at TEXT CHECK (at IS NULL OR ({_EXACT_INSTANT.format(c="at")})),
             key TEXT,
             signature TEXT CHECK (signature IS NULL OR ({_HEX.format(c="signature", n=128)}))
         ) STRICT""",
@@ -112,7 +123,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         f"""CREATE TABLE audit_keys (
             key TEXT PRIMARY KEY NOT NULL CHECK ({_FINGERPRINT.format(c="key")}),
             public_key TEXT NOT NULL UNIQUE CHECK ({_HEX.format(c="public_key", n=64)}),
-            created_at TEXT NOT NULL CHECK ({_INSTANT.format(c="created_at")}),
+            created_at TEXT NOT NULL CHECK ({_EXACT_INSTANT.format(c="created_at")}),
             previous TEXT,
             previous_signs TEXT CHECK (
                 previous_signs IS NULL OR ({_HEX.format(c="previous_signs", n=128)})
@@ -126,7 +137,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         f"""CREATE TABLE audit_checkpoints (
             seq INTEGER PRIMARY KEY CHECK (seq >= 1),
             hash TEXT NOT NULL CHECK ({_HEX.format(c="hash", n=64)}),
-            at TEXT NOT NULL CHECK ({_INSTANT.format(c="at")}),
+            at TEXT NOT NULL CHECK ({_EXACT_INSTANT.format(c="at")}),
             key TEXT NOT NULL CHECK ({_FINGERPRINT.format(c="key")}),
             signature TEXT NOT NULL CHECK ({_HEX.format(c="signature", n=128)})
         ) STRICT""",
@@ -175,7 +186,13 @@ class _Transaction:
         self._connection = connection
 
     def rows(self, sql: str, /, **parameters: object) -> list[Row]:
-        return [tuple(row) for row in self._execute(sql, parameters).fetchall()]
+        cursor = self._execute(sql, parameters)
+        try:
+            return [tuple(row) for row in cursor.fetchall()]
+        except sqlite3.OperationalError as error:
+            if str(error).startswith("Could not decode to UTF-8"):
+                raise UnreadableValue(str(error)) from error
+            raise
 
     def run(self, sql: str, /, **parameters: object) -> None:
         self._execute(sql, parameters)

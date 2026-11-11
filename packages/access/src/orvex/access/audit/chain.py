@@ -103,6 +103,13 @@ def _broken(event: str, seq: int, reason: str) -> AccessError:
     )
 
 
+def unreadable(table: str) -> AccessError:
+    """A stored row that cannot even be read: named after the part of the log it breaks."""
+    if table in ("audit_checkpoints", "audit_keys"):
+        return _invalid(0, "unreadable")
+    return _broken("", 0, "unreadable")
+
+
 def _invalid(seq: int, reason: str) -> AccessError:
     return AccessError(
         AUDIT_CHECKPOINT_INVALID,

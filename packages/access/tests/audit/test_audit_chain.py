@@ -117,3 +117,9 @@ def test_a_rotation_pointing_at_a_missing_key_trusts_only_the_current_one(
     old, new = keys.create(tmp_path / "old.key"), keys.create(tmp_path / "new.key")
     rows = rotation(old, new, vouched=True)[1:]  # the older key's own row is gone
     assert set(chain.trusted_keys(new.public, rows)) == {new.fingerprint}
+
+
+def test_an_unreadable_row_is_named_after_the_part_of_the_log_it_breaks() -> None:
+    assert chain.unreadable("audit_events").code == AUDIT_CHAIN_BROKEN
+    assert chain.unreadable("audit_keys").code == AUDIT_CHECKPOINT_INVALID
+    assert chain.unreadable("audit_checkpoints").details == {"seq": "0", "reason": "unreadable"}

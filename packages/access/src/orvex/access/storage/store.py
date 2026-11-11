@@ -27,6 +27,10 @@ class UniqueViolation(Exception):
     """A row would break a uniqueness constraint (another writer may have won the race)."""
 
 
+class UnreadableValue(Exception):
+    """A stored value cannot be decoded as text (planted bytes the database itself let in)."""
+
+
 class TransientConflict(Exception):
     """The database gave up on the transaction (a deadlock, a busy database): run it again."""
 

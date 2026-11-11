@@ -43,7 +43,13 @@ from orvex.access.errors import (
     AccessError,
 )
 from orvex.access.storage import retry
-from orvex.access.storage.store import Store, Transaction, TransientConflict
+from orvex.access.storage.store import (
+    Row,
+    Store,
+    Transaction,
+    TransientConflict,
+    UnreadableValue,
+)
 
 SCHEMA_FILE = "audit-event-v1.json"
 CHECKPOINT_EVERY = 1000
@@ -69,11 +75,20 @@ def _event_id() -> str:
     return secrets.token_urlsafe(16)
 
 
+def _read(transaction: Transaction, table: str, sql: str) -> list[Row]:
+    try:
+        return transaction.rows(sql)
+    except UnreadableValue as error:
+        raise chain.unreadable(table) from error
+
+
 def _checkpoints(transaction: Transaction) -> list[chain.CheckpointRow]:
     return [
         chain.CheckpointRow(int(str(s)), str(h), str(a), str(k), str(g))
-        for s, h, a, k, g in transaction.rows(
-            "SELECT seq, hash, at, key, signature FROM audit_checkpoints ORDER BY seq"
+        for s, h, a, k, g in _read(
+            transaction,
+            "audit_checkpoints",
+            "SELECT seq, hash, at, key, signature FROM audit_checkpoints ORDER BY seq",
         )
     ]
 
@@ -443,8 +458,10 @@ class AuditLog:
     def _verify(self, transaction: Transaction, anchors: Sequence[str]) -> int:
         events = [
             chain.EventRow(int(str(s)), str(i), str(a), str(k), str(d), str(h))
-            for s, i, a, k, d, h in transaction.rows(
-                "SELECT seq, id, at, kind, document, hash FROM audit_events ORDER BY seq"
+            for s, i, a, k, d, h in _read(
+                transaction,
+                "audit_events",
+                "SELECT seq, id, at, kind, document, hash FROM audit_events ORDER BY seq",
             )
         ]
         keys = [
@@ -455,12 +472,16 @@ class AuditLog:
                 None if a is None else str(a),
                 None if b is None else str(b),
             )
-            for k, p, v, a, b in transaction.rows(
-                "SELECT key, public_key, previous, previous_signs, signs_previous FROM audit_keys"
+            for k, p, v, a, b in _read(
+                transaction,
+                "audit_keys",
+                "SELECT key, public_key, previous, previous_signs, signs_previous FROM audit_keys",
             )
         ]
-        ((seq, hashed, key, signature),) = transaction.rows(
-            "SELECT seq, hash, key, signature FROM audit_head WHERE id = 1"
+        ((seq, hashed, key, signature),) = _read(
+            transaction,
+            "audit_head",
+            "SELECT seq, hash, key, signature FROM audit_head WHERE id = 1",
         )
         checkpoints = _checkpoints(transaction)
         head = chain.HeadRow(

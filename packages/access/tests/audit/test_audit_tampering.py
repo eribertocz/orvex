@@ -365,3 +365,53 @@ def test_the_stores_refuse_a_key_that_is_not_a_fingerprint(raw: Raw) -> None:
             k="sha256:" + "\u00e9" * 64,
             s="0" * 128,
         )
+
+
+NOT_TEXT = "CAST(x'7bff7d' AS TEXT)"  # '{', a byte that is no UTF-8, '}'
+
+
+def plant_unreadable_event(raw: Raw) -> None:
+    (seq,) = raw.rows("SELECT max(seq) FROM audit_events")[0]
+    raw.run(
+        "INSERT INTO audit_events VALUES (:seq, 'planted', '2026-11-10T00:00:00.000000Z',"
+        f" 'auth.logout', {NOT_TEXT}, :h)",
+        seq=int(str(seq)) + 1,
+        h="0" * 64,
+    )
+
+
+@pytest.mark.parametrize("backend", ["sqlite"], indirect=True)
+@pytest.mark.parametrize("action", ["verify", "retain"])
+def test_an_event_that_is_not_text_is_a_named_break(log: AuditLog, raw: Raw, action: str) -> None:
+    """SQLite stores the bytes (PostgreSQL refuses them, below); reading them back names the
+    break instead of crashing."""
+    plant_unreadable_event(raw)
+    with pytest.raises(AccessError) as caught:
+        log.verify() if action == "verify" else log.retain(30)
+    assert caught.value.code == AUDIT_CHAIN_BROKEN
+    assert caught.value.details["reason"] == "unreadable"
+
+
+@pytest.mark.parametrize("backend", ["postgres"], indirect=True)
+def test_postgres_refuses_an_event_that_is_not_text(raw: Raw) -> None:
+    with pytest.raises(DatabaseError):
+        raw.run(
+            "INSERT INTO audit_events VALUES (99, 'planted', '2026-11-10T00:00:00.000000Z',"
+            " 'auth.logout', convert_from('\\x7bff7d'::bytea, 'UTF8'), :h)",
+            h="0" * 64,
+        )
+
+
+def test_a_checkpoint_at_that_is_not_text_is_refused(raw: Raw) -> None:
+    """Every character of an instant is spelled out, so no wildcard lets bytes through."""
+    nearly = "323032362d31312d31305430303a30303a30302e3030303030ff5a"  # a 0xff for the last digit
+    at = f"CAST(x'{nearly}' AS TEXT)"
+    if raw.kind == "postgres":
+        at = f"convert_from('\\x{nearly}'::bytea, 'UTF8')"
+    with pytest.raises((sqlite3.IntegrityError, DatabaseError)):
+        raw.run(
+            f"INSERT INTO audit_checkpoints VALUES (2, :h, {at}, :k, :s)",
+            h="0" * 64,
+            k="sha256:" + "a" * 64,
+            s="0" * 128,
+        )
