@@ -6,7 +6,10 @@ Before any route:
    without a JSON body is `ORIGIN_REFUSED`;
 2. every API route but `health`, `version` and sign-in needs a live session, re-read now:
    `SESSION_EXPIRED` otherwise. A session opened with a temporary password reaches only the
-   session, sign-out and password routes: `PASSWORD_CHANGE_REQUIRED` elsewhere.
+   session, sign-out and password routes: `PASSWORD_CHANGE_REQUIRED` elsewhere. A provider
+   session whose groups are due to be read again reaches only sign-out:
+   `OIDC_REFRESH_REQUIRED`, naming the provider, for a silent re-authentication (#439).
+   The OIDC routes check their own session or binding.
 
 No route may accept both a method that changes state and one that does not: the application is
 refused at construction if one does. The composition of server mode (`--server`) comes later.
@@ -23,9 +26,15 @@ from fastapi import FastAPI, Request, Response
 from fastapi.routing import APIRoute
 from orvex.access.authentication.service import SignIn
 from orvex.access.authentication.settings import Settings
-from orvex.access.errors import PASSWORD_CHANGE_REQUIRED, SESSION_EXPIRED, AccessError
+from orvex.access.errors import (
+    OIDC_REFRESH_REQUIRED,
+    PASSWORD_CHANGE_REQUIRED,
+    SESSION_EXPIRED,
+    AccessError,
+)
+from orvex.access.oidc.service import OidcSignIn
 from orvex.contracts.http_api import v1
-from orvex.server import sign_in_http
+from orvex.server import oidc_http, sign_in_http
 from orvex.server.app import (
     REQUEST_ID_HEADER,
     error_response,
@@ -44,7 +53,11 @@ log = logging.getLogger("orvex.server.http")
 
 
 def create_server_app(
-    versions: Versions, sign_in: SignIn, settings: Settings, slug: str
+    versions: Versions,
+    sign_in: SignIn,
+    settings: Settings,
+    slug: str,
+    oidc: OidcSignIn | None = None,
 ) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     cookie = sign_in_http.cookie_name(slug)
@@ -91,7 +104,7 @@ def create_server_app(
                     [v1.ErrorDetail(name=name, value=value)],
                 )
         path = request.url.path
-        if not path.startswith(API_PREFIX) or path in PUBLIC:
+        if not path.startswith(API_PREFIX) or path in PUBLIC or path.startswith(oidc_http.PREFIX):
             return None
         session_id = request.cookies.get(cookie)
         if session_id is None:
@@ -107,6 +120,16 @@ def create_server_app(
                 AccessError(PASSWORD_CHANGE_REQUIRED, "Change the temporary password first."),
                 request_id,
             )
+        due = None if oidc is None else await run_in_threadpool(oidc.refresh_due, session_id)
+        if due is not None and path != sign_in_http.LOGOUT:
+            return access_error_response(
+                AccessError(
+                    OIDC_REFRESH_REQUIRED,
+                    "Sign in again with the provider.",
+                    {"provider": due},
+                ),
+                request_id,
+            )
         request.state.session = live
         request.state.session_id = session_id
         return None
@@ -114,6 +137,7 @@ def create_server_app(
     install_error_handlers(app, lambda path: None)
     mount_status(app, versions)
     sign_in_http.mount_sign_in(app, sign_in, settings, cookie)
+    oidc_http.mount_oidc(app, oidc, settings, cookie, slug)
     checked_route_table(app)
     return app
 

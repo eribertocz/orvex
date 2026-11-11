@@ -54,6 +54,7 @@ export interface AuditEvent {
 		| 'group.deleted'
 		| 'group.member_added'
 		| 'group.member_removed'
+		| 'instance.oidc_mapping_changed'
 		| 'instance.settings_changed'
 		| 'mcp.call'
 		| 'membership.added'
@@ -68,6 +69,8 @@ export interface AuditEvent {
 		| 'user.administrator_removed'
 		| 'user.created'
 		| 'user.deactivated'
+		| 'user.oidc_linked'
+		| 'user.oidc_unlinked'
 		| 'user.password_changed'
 		| 'user.password_reset'
 		| 'user.reactivated';
@@ -88,6 +91,7 @@ export interface AuditEvent {
 		| GroupDeletedDetails
 		| GroupMemberAddedDetails
 		| GroupMemberRemovedDetails
+		| InstanceOidcMappingChangedDetails
 		| InstanceSettingsChangedDetails
 		| McpCallDetails
 		| MembershipAddedDetails
@@ -102,6 +106,8 @@ export interface AuditEvent {
 		| UserAdministratorRemovedDetails
 		| UserCreatedDetails
 		| UserDeactivatedDetails
+		| UserOidcLinkedDetails
+		| UserOidcUnlinkedDetails
 		| UserPasswordChangedDetails
 		| UserPasswordResetDetails
 		| UserReactivatedDetails;
@@ -197,6 +203,13 @@ export interface GroupMemberAddedDetails {
 export interface GroupMemberRemovedDetails {
 	group: Group;
 	user: Id;
+}
+/**
+ * This interface was referenced by `AuditEvent`'s JSON-Schema
+ * via the `definition` "InstanceOidcMappingChangedDetails".
+ */
+export interface InstanceOidcMappingChangedDetails {
+	provider: string;
 }
 /**
  * This interface was referenced by `AuditEvent`'s JSON-Schema
@@ -313,6 +326,22 @@ export interface UserCreatedDetails {
  */
 export interface UserDeactivatedDetails {
 	user: Id;
+}
+/**
+ * This interface was referenced by `AuditEvent`'s JSON-Schema
+ * via the `definition` "UserOidcLinkedDetails".
+ */
+export interface UserOidcLinkedDetails {
+	user: Id;
+	provider: string;
+}
+/**
+ * This interface was referenced by `AuditEvent`'s JSON-Schema
+ * via the `definition` "UserOidcUnlinkedDetails".
+ */
+export interface UserOidcUnlinkedDetails {
+	user: Id;
+	provider: string;
 }
 /**
  * This interface was referenced by `AuditEvent`'s JSON-Schema

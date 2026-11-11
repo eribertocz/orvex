@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "id": "e-0001",
+  "at": "2026-11-11T12:00:00.000000Z",
+  "actor": "system",
+  "instance": "i-0001",
+  "kind": "instance.oidc_mapping_changed",
+  "outcome": "allowed",
+  "details": {
+    "provider": "corp"
+  }
+}

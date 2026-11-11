@@ -1,0 +1,56 @@
+{
+  "realm": "ci-realm",
+  "enabled": true,
+  "sslRequired": "external",
+  "groups": [{ "name": "finance" }, { "name": "ops" }],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "email": "alice@example.com",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Synthetic",
+      "credentials": [{ "type": "password", "value": "alice-disposable-password", "temporary": false }],
+      "groups": ["/finance"]
+    },
+    {
+      "username": "bob",
+      "enabled": true,
+      "email": "bob@example.com",
+      "emailVerified": true,
+      "firstName": "Bob",
+      "lastName": "Synthetic",
+      "credentials": [{ "type": "password", "value": "bob-disposable-password", "temporary": false }],
+      "groups": ["/ops"]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "bi-client",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "ci-disposable-client-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["https://bi.example.com/api/v1/auth/oidc/kc/callback"],
+      "attributes": { "pkce.code.challenge.method": "S256" },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "false",
+            "userinfo.token.claim": "false",
+            "claim.name": "groups"
+          }
+        }
+      ]
+    }
+  ]
+}

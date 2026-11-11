@@ -9,6 +9,8 @@ Module pack: [`docs/modules/access.md`](../../docs/modules/access.md).
   `admin create`'s bootstrap and recovery.
 - `orvex.access.authentication`: server mode's password sign-in (Argon2id), server-side
   sessions, the delay after failed sign-ins, and the administrator's sign-in settings.
+- `orvex.access.oidc`: OIDC sign-in (Authorization Code with PKCE), ID-token validation,
+  administrator links of provider identities, and the explicit group mapping.
 - `orvex.access.audit`: the audit log (`audit-event` v1), its hash chain, signed checkpoints,
   anchors, retention and key rotation.
 - `orvex.access.storage`: the module's own store, SQLite (local mode) or PostgreSQL (server mode).

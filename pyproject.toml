@@ -5,6 +5,7 @@
 # Runtime dependencies of the workspace packages, pinned exactly; each package declares the same
 # pins (tests/workspace/test_lock_files.py checks both). Locked together with `dev`.
 runtime = [
+  "joserfc==1.8.0",
   "argon2-cffi==25.1.0",
   "cryptography==50.0.2",
   "duckdb==2.0.0",

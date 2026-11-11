@@ -21,6 +21,9 @@ SENT_OVER_HTTP = {
     "PASSWORD_REJECTED",
     "SESSION_EXPIRED",
     "PASSWORD_CHANGE_REQUIRED",
+    "OIDC_FAILED",
+    "OIDC_NOT_CONFIGURED",
+    "OIDC_REFRESH_REQUIRED",
 }
 # They stop a start or a command, or report on the audit log; none reaches a response.
 STORE_ONLY = {

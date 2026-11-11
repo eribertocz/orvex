@@ -31,6 +31,13 @@ PASSWORD_REJECTED = "PASSWORD_REJECTED"
 SESSION_EXPIRED = "SESSION_EXPIRED"
 # A session opened with a temporary password may only change it.
 PASSWORD_CHANGE_REQUIRED = "PASSWORD_CHANGE_REQUIRED"
+# OIDC (#439). Every failed sign-in step gives the browser this one code; the audit log names
+# the step (a closed list of reasons).
+OIDC_FAILED = "OIDC_FAILED"
+# A provider that is not configured, or a configuration refused at start (naming the setting).
+OIDC_NOT_CONFIGURED = "OIDC_NOT_CONFIGURED"
+# A session from a provider whose groups are due to be read again: a silent re-authentication.
+OIDC_REFRESH_REQUIRED = "OIDC_REFRESH_REQUIRED"
 # The store was written by a newer version of the code; it is never migrated down.
 ACCESS_STORE_NEWER = "ACCESS_STORE_NEWER"
 # The store cannot be proven to be the access module's own: refused before it is used.

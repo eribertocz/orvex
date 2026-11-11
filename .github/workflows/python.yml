@@ -254,24 +254,114 @@ jobs:
           path: coverage-measured.toml
           if-no-files-found: ignore
 
+  python-oidc:
+    # The OIDC flow against a real identity provider (#439): Keycloak 26.8.1, pinned by digest,
+    # with the synthetic realm of tests/fixtures/keycloak/, over HTTPS with a certificate made
+    # for this job only. python-tests requires it.
+    name: python-oidc-${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.15", "3.14"]
+        include:
+          - python: "3.15"
+            lock: pylock.toml
+          - python: "3.14"
+            lock: pylock.py314.toml
+    env:
+      KEYCLOAK_TEST_URL: https://keycloak.test:8443
+      # A disposable administrator of a disposable container, not a secret.
+      KEYCLOAK_TEST_ADMIN_PASSWORD: ci-disposable-admin-password
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Start Keycloak with the realm fixture over HTTPS
+        # Started before the Python install and waited for after it: the image downloads while
+        # Python and the lock file install. keycloak.test points at this machine.
+        run: |
+          dir="$RUNNER_TEMP/keycloak-tls"
+          mkdir -p "$dir"
+          cd "$dir"
+          openssl req -x509 -newkey rsa:3072 -nodes -days 2 -subj "/CN=ci-test-ca" \
+            -addext "basicConstraints=critical,CA:TRUE" \
+            -addext "keyUsage=critical,keyCertSign,cRLSign" \
+            -keyout ca.key -out ca.crt
+          openssl req -newkey rsa:3072 -nodes -subj "/CN=keycloak.test" \
+            -keyout server.key -out server.csr
+          printf '%s\n' "basicConstraints=CA:FALSE" \
+            "keyUsage=critical,digitalSignature,keyEncipherment" \
+            "extendedKeyUsage=serverAuth" \
+            "subjectAltName=DNS:keycloak.test" > server.ext
+          openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 2 \
+            -extfile server.ext -out server.crt
+          rm ca.key server.csr
+          chmod 644 server.key server.crt
+          echo "127.0.0.1 keycloak.test" | sudo tee -a /etc/hosts > /dev/null
+          echo "KEYCLOAK_TEST_CA=$dir/ca.crt" >> "$GITHUB_ENV"
+          # keycloak/keycloak:26.8.1
+          docker run --detach --name keycloak --publish 8443:8443 \
+            --env KC_BOOTSTRAP_ADMIN_USERNAME=admin \
+            --env KC_BOOTSTRAP_ADMIN_PASSWORD="$KEYCLOAK_TEST_ADMIN_PASSWORD" \
+            --volume "$dir:/tls:ro" \
+            --volume "$GITHUB_WORKSPACE/tests/fixtures/keycloak:/opt/keycloak/data/import:ro" \
+            keycloak/keycloak@sha256:3f3c5f8e03c614774b4bd9173b88391fefa4153bfc010d8012d59ad825377332 \
+            start-dev --import-realm --http-enabled=false --https-port=8443 \
+            --https-certificate-file=/tls/server.crt --https-certificate-key-file=/tls/server.key \
+            --hostname=https://keycloak.test:8443
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: ${{ matrix.lock }}
+      - name: Install from the lock file and the workspace packages
+        run: |
+          python -m pip install --quiet pip==26.3
+          python -m pip install --quiet -r ${{ matrix.lock }}
+          for package in packages/*/; do
+            python -m pip install --quiet --no-deps --no-build-isolation -e "$package"
+          done
+      - name: Wait for Keycloak's realm
+        run: |
+          url="$KEYCLOAK_TEST_URL/realms/ci-realm/.well-known/openid-configuration"
+          for attempt in $(seq 120); do
+            if curl --silent --fail --cacert "$KEYCLOAK_TEST_CA" --output /dev/null "$url"; then break; fi
+            sleep 1
+          done
+          if ! curl --silent --fail --cacert "$KEYCLOAK_TEST_CA" --output /dev/null "$url"; then
+            docker logs keycloak | tail -50
+            exit 1
+          fi
+      - run: python -m pytest packages/server/tests/test_oidc_keycloak.py --junitxml=junit.xml
+      - name: Every Keycloak test ran
+        # A skip here would be a pass by not running: the job fails instead.
+        run: python -c "import sys, xml.etree.ElementTree as E; r=E.parse('junit.xml').getroot(); s=r.find('testsuite') if r.tag=='testsuites' else r; sys.exit(1 if int(s.get('skipped')) or not int(s.get('tests')) else 0)"
+      - name: Keycloak's log
+        if: failure()
+        run: docker logs keycloak | tail -100
+
   python-tests:
     # The required checks keep their names: one per Python version, green only when all of its
     # parts passed.
     name: python-tests-${{ matrix.python }}
-    needs: [python-tests-part, python-coverage]
+    needs: [python-tests-part, python-coverage, python-oidc]
     if: always()
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python: ["3.15", "3.14"]
     steps:
-      - name: Every part passed, and the coverage floors held
+      - name: Every part passed, the coverage floors held, and the OIDC flow passed
         env:
           RESULT: ${{ needs.python-tests-part.result }}
           COVERAGE: ${{ needs.python-coverage.result }}
+          OIDC: ${{ needs.python-oidc.result }}
         run: |
           test "$RESULT" = success
           test "$COVERAGE" = success
+          test "$OIDC" = success
 
   python-tests-windows:
     # Shared fixtures are read-only and private copies are writable on Windows too, where

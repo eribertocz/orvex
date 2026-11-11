@@ -31,6 +31,14 @@
 "packages/access/src/orvex/access/errors.py" = 100
 "packages/access/src/orvex/access/fixtures.py" = 96
 "packages/access/src/orvex/access/local.py" = 100
+"packages/access/src/orvex/access/oidc/__init__.py" = 100
+"packages/access/src/orvex/access/oidc/bindings.py" = 100
+"packages/access/src/orvex/access/oidc/configuration.py" = 100
+"packages/access/src/orvex/access/oidc/discovery.py" = 99
+"packages/access/src/orvex/access/oidc/group_mapping.py" = 95
+"packages/access/src/orvex/access/oidc/identities.py" = 100
+"packages/access/src/orvex/access/oidc/service.py" = 92
+"packages/access/src/orvex/access/oidc/tokens.py" = 100
 "packages/access/src/orvex/access/storage/__init__.py" = 100
 "packages/access/src/orvex/access/storage/instants.py" = 100
 "packages/access/src/orvex/access/storage/migrations.py" = 100

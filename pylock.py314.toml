@@ -464,6 +464,17 @@ url = "https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885
 sha256 = "a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64"
 
 [[packages]]
+name = "joserfc"
+version = "1.8.0"
+
+[[packages.wheels]]
+name = "joserfc-1.8.0-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/5e/7e/7ffaae13415e8f51c8e8d5d1845f2de7a27ebf2717e97a38d7e7446d6030/joserfc-1.8.0-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "176b836ac7ed9a46a88629e24076314b475f33a75d0bad7f26146e572eed7c79"
+
+[[packages]]
 name = "jsonschema"
 version = "4.26.0"
 

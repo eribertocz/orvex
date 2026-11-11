@@ -51,6 +51,7 @@
         "group.deleted",
         "group.member_added",
         "group.member_removed",
+        "instance.oidc_mapping_changed",
         "instance.settings_changed",
         "mcp.call",
         "membership.added",
@@ -65,6 +66,8 @@
         "user.administrator_removed",
         "user.created",
         "user.deactivated",
+        "user.oidc_linked",
+        "user.oidc_unlinked",
         "user.password_changed",
         "user.password_reset",
         "user.reactivated"
@@ -116,6 +119,9 @@
           "$ref": "#/$defs/GroupMemberRemovedDetails"
         },
         {
+          "$ref": "#/$defs/InstanceOidcMappingChangedDetails"
+        },
+        {
           "$ref": "#/$defs/InstanceSettingsChangedDetails"
         },
         {
@@ -156,6 +162,12 @@
         },
         {
           "$ref": "#/$defs/UserDeactivatedDetails"
+        },
+        {
+          "$ref": "#/$defs/UserOidcLinkedDetails"
+        },
+        {
+          "$ref": "#/$defs/UserOidcUnlinkedDetails"
         },
         {
           "$ref": "#/$defs/UserPasswordChangedDetails"
@@ -394,6 +406,25 @@
         "properties": {
           "details": {
             "$ref": "#/$defs/GroupMemberRemovedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "instance.oidc_mapping_changed"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/InstanceOidcMappingChangedDetails"
           }
         }
       }
@@ -660,6 +691,44 @@
         "properties": {
           "details": {
             "$ref": "#/$defs/UserDeactivatedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "user.oidc_linked"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/UserOidcLinkedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "user.oidc_unlinked"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/UserOidcUnlinkedDetails"
           }
         }
       }
@@ -943,6 +1012,19 @@
         }
       }
     },
+    "InstanceOidcMappingChangedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,31}$"
+        }
+      }
+    },
     "InstanceSettingsChangedDetails": {
       "type": "object",
       "additionalProperties": false,
@@ -1187,6 +1269,40 @@
       "properties": {
         "user": {
           "$ref": "#/$defs/Id"
+        }
+      }
+    },
+    "UserOidcLinkedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user",
+        "provider"
+      ],
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/Id"
+        },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,31}$"
+        }
+      }
+    },
+    "UserOidcUnlinkedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user",
+        "provider"
+      ],
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/Id"
+        },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,31}$"
         }
       }
     },
