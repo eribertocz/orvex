@@ -16,6 +16,11 @@ SENT_OVER_HTTP = {
     "USER_NAME_TAKEN",
     "VALIDATION_FAILED",
     "AUDIT_UNAVAILABLE",
+    "LOGIN_FAILED",
+    "LOGIN_DELAYED",
+    "PASSWORD_REJECTED",
+    "SESSION_EXPIRED",
+    "PASSWORD_CHANGE_REQUIRED",
 }
 # They stop a start or a command, or report on the audit log; none reaches a response.
 STORE_ONLY = {

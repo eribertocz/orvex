@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from orvex.access.directory.records import Role
-from orvex.access.errors import ACCESS_FORBIDDEN, LAST_ADMINISTRATOR, LAST_BUILDER
+from orvex.access.errors import ACCESS_FORBIDDEN, LAST_ADMINISTRATOR, LAST_BUILDER, AccessError
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +30,12 @@ class Caller:
     active: bool
     administrator: bool
     role: Role | None  # in the project the operation concerns, when it concerns one
+
+
+def refused(code: str | None) -> None:
+    """Raise the refusal a rule answered with, if any; its message never names the rule."""
+    if code is not None:
+        raise AccessError(code, "The operation is not allowed.")
 
 
 def manage_users(caller: Caller, target: str | None = None) -> str | None:

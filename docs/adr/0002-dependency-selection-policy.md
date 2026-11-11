@@ -12,7 +12,7 @@ The Owner wants a tool that never locks users into one vendor and that stays mai
 4. Packaging uses Python standards (`pyproject.toml`) so the project works with `pip`; tool-specific features (for example of `uv`) are prohibited.
 5. Exceptions are explicit and isolated: **Gridstack** (single main maintainer) is allowed only inside one component that stores positions in Orvex's own format, so it can be replaced without touching anything else.
 
-Choices derived from this policy: DuckDB's own parser instead of SQLGlot; `hashlib.scrypt` instead of Argon2 libraries; PyYAML instead of ruamel.yaml; Monaco instead of CodeMirror; own matrix component; `clickhouse-connect` (ClickHouse, Inc.) for ClickHouse.
+Choices derived from this policy: DuckDB's own parser instead of SQLGlot; `argon2-cffi` for password hashing (the Owner chose Argon2id over `hashlib.scrypt` on 2026-11-10, #438); PyYAML instead of ruamel.yaml; Monaco instead of CodeMirror; own matrix component; `clickhouse-connect` (ClickHouse, Inc.) for ClickHouse.
 
 ## Alternatives considered
 - Choosing by popularity only: ignores governance risk.

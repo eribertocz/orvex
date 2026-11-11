@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.14"
-dependencies = ["cryptography==50.0.2", "jsonschema==4.26.0", "pg8000==1.31.6"]
+dependencies = ["argon2-cffi==25.1.0", "cryptography==50.0.2", "jsonschema==4.26.0", "pg8000==1.31.6"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

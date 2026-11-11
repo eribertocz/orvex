@@ -52,7 +52,7 @@ class Flaky:
 def test_a_transaction_the_database_gave_up_on_runs_again(world: World) -> None:
     flaky = Flaky(world.store, failures=ATTEMPTS - 1)
     created = Directory(flaky, world.audit).create_user(world.admin, "ana", "Ana")
-    assert world.directory.user(created.id) == created
+    assert world.directory.user(created.id) == created.user
     assert flaky.failures == 0
 
 

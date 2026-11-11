@@ -4,8 +4,10 @@ first administrator (#436), and the audit log's commands (#437).
 It runs only with direct access to the instance: no HTTP route does this. Its store is server
 mode's PostgreSQL (`access_store.py`), so it is refused when that is not configured. The first
 run writes the instance's recovery file, owner-only, and says where it is; keep it offline.
-`--recover` needs that file. Every use is recorded in the audit log (#437), whose signing key
-the first run also creates; `admin audit` verifies, retains and rotates it (`audit_command.py`).
+`--recover` needs that file. The new administrator's temporary password (#438) is printed once:
+it expires after 24 hours and must be changed at the first sign-in. Every use is recorded in the
+audit log (#437), whose signing key the first run also creates; `admin audit` verifies, retains
+and rotates it (`audit_command.py`).
 """
 
 from __future__ import annotations
@@ -75,4 +77,9 @@ def admin(command: argparse.Namespace, identity: Identity, out: TextIO, err: Tex
     finally:
         store.close()
     print(f"administrator created: {created.id}", file=out)
+    print(
+        f"temporary password (shown once, valid 24 hours, to change at the first sign-in): "
+        f"{created.temporary_password}",
+        file=out,
+    )
     return 0

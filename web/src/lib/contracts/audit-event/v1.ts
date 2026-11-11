@@ -54,6 +54,7 @@ export interface AuditEvent {
 		| 'group.deleted'
 		| 'group.member_added'
 		| 'group.member_removed'
+		| 'instance.settings_changed'
 		| 'mcp.call'
 		| 'membership.added'
 		| 'membership.changed'
@@ -67,6 +68,8 @@ export interface AuditEvent {
 		| 'user.administrator_removed'
 		| 'user.created'
 		| 'user.deactivated'
+		| 'user.password_changed'
+		| 'user.password_reset'
 		| 'user.reactivated';
 	outcome: 'allowed' | 'refused';
 	/**
@@ -85,6 +88,7 @@ export interface AuditEvent {
 		| GroupDeletedDetails
 		| GroupMemberAddedDetails
 		| GroupMemberRemovedDetails
+		| InstanceSettingsChangedDetails
 		| McpCallDetails
 		| MembershipAddedDetails
 		| MembershipChangedDetails
@@ -98,6 +102,8 @@ export interface AuditEvent {
 		| UserAdministratorRemovedDetails
 		| UserCreatedDetails
 		| UserDeactivatedDetails
+		| UserPasswordChangedDetails
+		| UserPasswordResetDetails
 		| UserReactivatedDetails;
 }
 /**
@@ -191,6 +197,19 @@ export interface GroupMemberAddedDetails {
 export interface GroupMemberRemovedDetails {
 	group: Group;
 	user: Id;
+}
+/**
+ * This interface was referenced by `AuditEvent`'s JSON-Schema
+ * via the `definition` "InstanceSettingsChangedDetails".
+ */
+export interface InstanceSettingsChangedDetails {
+	/**
+	 * @minItems 1
+	 */
+	settings: [
+		'absolute_lifetime' | 'idle_lifetime' | 'public_origin' | 'trusted_proxies',
+		...('absolute_lifetime' | 'idle_lifetime' | 'public_origin' | 'trusted_proxies')[]
+	];
 }
 /**
  * This interface was referenced by `AuditEvent`'s JSON-Schema
@@ -293,6 +312,20 @@ export interface UserCreatedDetails {
  * via the `definition` "UserDeactivatedDetails".
  */
 export interface UserDeactivatedDetails {
+	user: Id;
+}
+/**
+ * This interface was referenced by `AuditEvent`'s JSON-Schema
+ * via the `definition` "UserPasswordChangedDetails".
+ */
+export interface UserPasswordChangedDetails {
+	user: Id;
+}
+/**
+ * This interface was referenced by `AuditEvent`'s JSON-Schema
+ * via the `definition` "UserPasswordResetDetails".
+ */
+export interface UserPasswordResetDetails {
 	user: Id;
 }
 /**

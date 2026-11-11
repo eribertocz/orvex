@@ -159,6 +159,50 @@ def migrations_for(schema: str) -> tuple[tuple[str, ...], ...]:
             "REVOKE UPDATE, DELETE, TRUNCATE ON audit_events, audit_checkpoints, audit_keys "
             "FROM CURRENT_USER",
         ),
+        (
+            f"""CREATE TABLE credentials (
+                user_id text PRIMARY KEY REFERENCES users (id),
+                hash text NOT NULL CHECK (
+                    char_length(hash) BETWEEN 32 AND 512
+                    AND hash ~ '^[$]argon2id[$][A-Za-z0-9$=,+/]+$'
+                ),
+                temporary boolean NOT NULL,
+                expires_at text CHECK (
+                    expires_at IS NULL OR ({_INSTANT.format(c="expires_at")})
+                ),
+                changed_at text NOT NULL CHECK ({_INSTANT.format(c="changed_at")}),
+                CHECK (temporary = (expires_at IS NOT NULL))
+            )""",
+            f"""CREATE TABLE sessions (
+                id_hash text PRIMARY KEY CHECK (id_hash ~ '^[0-9a-f]{{64}}$'),
+                user_id text NOT NULL REFERENCES users (id),
+                authz_version bigint NOT NULL CHECK (authz_version >= 1),
+                created_at text NOT NULL CHECK ({_INSTANT.format(c="created_at")}),
+                seen_at text NOT NULL CHECK ({_INSTANT.format(c="seen_at")}),
+                password_change_only boolean NOT NULL
+            )""",
+            "CREATE INDEX sessions_user ON sessions (user_id)",
+            f"""CREATE TABLE login_delays (
+                key text PRIMARY KEY CHECK (key ~ '^[0-9a-f]{{64}}$'),
+                account boolean NOT NULL,
+                failures bigint NOT NULL CHECK (failures >= 1),
+                failed_at text NOT NULL CHECK ({_INSTANT.format(c="failed_at")}),
+                delayed_until text NOT NULL CHECK ({_INSTANT.format(c="delayed_until")})
+            )""",
+            "CREATE INDEX login_delays_age ON login_delays (failed_at)",
+            """CREATE TABLE sign_in_settings (
+                id integer PRIMARY KEY CHECK (id = 1),
+                absolute_seconds bigint NOT NULL CHECK (absolute_seconds >= 1),
+                idle_seconds bigint NOT NULL CHECK (
+                    idle_seconds >= 1 AND idle_seconds <= absolute_seconds
+                ),
+                public_origin text CHECK (
+                    public_origin IS NULL OR char_length(public_origin) <= 300
+                ),
+                trusted_proxies text NOT NULL CHECK (char_length(trusted_proxies) <= 8192)
+            )""",
+            "INSERT INTO sign_in_settings VALUES (1, 43200, 3600, NULL, '[]')",
+        ),
     )
 
 

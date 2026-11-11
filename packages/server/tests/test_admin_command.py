@@ -4,17 +4,22 @@ file and the refusals, each recorded in the audit log; `admin audit verify`, `re
 
 from __future__ import annotations
 
+import json
+import os
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from orvex.server.access_store import postgres_variables
+from orvex.access.audit import open_audit_log
+from orvex.access.authentication.service import SignIn
+from orvex.server.access_store import access_store, postgres_variables
+from orvex.server.audit_settings import audit_settings
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.instance import home_variable
 
-from tests.support.access_directory import access_role, postgres_connection
+from tests.support.access_directory import access_role, audit_events, postgres_connection
 
 IDENTITY = load_identity()
 PREFIX = IDENTITY.slug.upper().replace("-", "_")
@@ -98,3 +103,23 @@ def test_a_retention_setting_below_30_days_is_refused(
     monkeypatch.setenv(f"{PREFIX}_AUDIT_RETENTION_DAYS", "29")
     assert main(["admin", "audit", "retain"]) == 1
     assert "AUDIT_RETENTION_INVALID" in capsys.readouterr().err
+
+
+def test_the_first_administrator_signs_in_once_with_the_printed_temporary_password(
+    server_instance: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#438: the password is printed once, never logged, and opens a session that may only
+    change it."""
+    assert main(create()) == 0
+    out = capsys.readouterr().out
+    (line,) = [line for line in out.splitlines() if line.startswith("temporary password")]
+    temporary = line.rsplit(" ", 1)[1]
+    store = access_store("server", IDENTITY, server_instance, os.environ)
+    try:
+        settings = audit_settings(IDENTITY, server_instance, os.environ)
+        log = open_audit_log(store, settings.key, settings.anchors)
+        signed = SignIn(store, log).login("root", temporary, "127.0.0.1")
+        assert signed.password_change_only
+        assert temporary not in json.dumps(audit_events(store))
+    finally:
+        store.close()

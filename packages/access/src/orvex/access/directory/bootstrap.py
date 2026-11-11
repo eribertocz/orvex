@@ -20,12 +20,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from orvex.access.audit.log import SYSTEM, AuditLog
+from orvex.access.authentication import credentials, passwords
 from orvex.access.directory import locks, recovery_file
 from orvex.access.directory import statements as sql
 from orvex.access.directory.names import checked_display_name, checked_user_name
-from orvex.access.directory.records import User
-from orvex.access.directory.service import instant, new_user_id
+from orvex.access.directory.records import NewUser
+from orvex.access.directory.service import new_user_id
 from orvex.access.errors import ACCESS_FORBIDDEN, USER_NAME_TAKEN, AccessError
+from orvex.access.storage.instants import instant
 from orvex.access.storage.migrations import migrate
 from orvex.access.storage.store import Store, UniqueViolation
 
@@ -64,11 +66,13 @@ class Bootstrap:
         *,
         recover: bool = False,
         recovery: Path | None = None,
-    ) -> User:
-        """Create an active administrator; `recover` with the recovery file at `recovery` (the
-        instance's own by default)."""
+    ) -> NewUser:
+        """Create an active administrator with a temporary password (#438), returned once;
+        `recover` with the recovery file at `recovery` (the instance's own by default)."""
         operation = "admin_recover" if recover else "admin_create"
         self.initialize()
+        temporary = passwords.temporary()
+        hashed_temporary = passwords.hashed(temporary)
         try:
             name = checked_user_name(user_name)
             display = checked_display_name(display_name)
@@ -84,12 +88,12 @@ class Bootstrap:
                 if sql.user_by_name(transaction, name) is not None:
                     raise AccessError(USER_NAME_TAKEN, "That user name is taken.")
                 created = self._new_id()
+                now = self._clock()
                 try:
-                    sql.insert_user(
-                        transaction, created, name, display, True, instant(self._clock())
-                    )
+                    sql.insert_user(transaction, created, name, display, True, instant(now))
                 except UniqueViolation as error:
                     raise AccessError(USER_NAME_TAKEN, "That user name is taken.") from error
+                credentials.store(transaction, created, hashed_temporary, now, temporary=True)
                 self._audit.record(
                     transaction, "user.created", SYSTEM, {"user": created, "via": operation}
                 )
@@ -103,4 +107,4 @@ class Bootstrap:
         if found is None:
             raise AccessError(ACCESS_FORBIDDEN, "The operation is not allowed.")
         self._audit.committed()
-        return found
+        return NewUser(found, temporary)

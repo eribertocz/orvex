@@ -149,7 +149,7 @@
 | P3-01 | Normative cases: security scenarios (`conformance/security/scenarios/`) for pages, page-bound queries, rows, columns, masking, cache, export, possible values, MCP and missing attributes, plus the Direct Query cases of ADR-0027 §6 (callers with no mapping under allow- and deny-lists, registered deny-list callers with nothing blocked, cap, `NULL`, mapping tables outside the managed lake, views and macros, files, symbolic links and hard links reaching outside the data location, files of Route A file sources and of other projects in the instance, locations registered later inside an existing lake, catalog files replaced by links, catalog roles that read outside their schema, overlapping locations, reused snapshot ids, revoked mapping or registration in cache) *(Owner merges)* | conformance |
 | P3-02 | Users, project memberships, roles and the instance administrator (SQLite locally, PostgreSQL schema in server mode) | access |
 | P3-03 | `audit-event` contract v1; append-only audit log with hash chain; configurable retention | access |
-| P3-04 | Local authentication (`hashlib.scrypt`), server-side sessions, cookie and `Origin` rules | access |
+| P3-04 | Local authentication (Argon2id), server-side sessions, cookie and `Origin` rules | access |
 | P3-05 | OIDC (Authorization Code + PKCE, `response_mode=query`, identity by issuer + subject), groups and explicit group mapping | access |
 | P3-06 | Real `security-context` provider and permission fingerprint | access |
 | P3-07 | Row policies: evaluation and placement before aggregation on every path | semantic |

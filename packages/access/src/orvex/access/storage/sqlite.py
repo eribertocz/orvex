@@ -160,6 +160,45 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         """CREATE TRIGGER audit_keys_kept BEFORE DELETE ON audit_keys
             BEGIN SELECT RAISE(ABORT, 'audit keys are never removed'); END""",
     ),
+    # 3: sign-in (#438): passwords, server-side sessions, failed-sign-in delays, the settings.
+    (
+        f"""CREATE TABLE credentials (
+            user_id TEXT PRIMARY KEY NOT NULL REFERENCES users (id),
+            hash TEXT NOT NULL CHECK (
+                length(hash) BETWEEN 32 AND 512 AND hash GLOB '$argon2id$*'
+                AND hash NOT GLOB '*[^A-Za-z0-9$=,+/]*'
+            ),
+            temporary INTEGER NOT NULL CHECK (temporary IN (0, 1)),
+            expires_at TEXT CHECK (expires_at IS NULL OR ({_EXACT_INSTANT.format(c="expires_at")})),
+            changed_at TEXT NOT NULL CHECK ({_EXACT_INSTANT.format(c="changed_at")}),
+            CHECK ((temporary = 1) = (expires_at IS NOT NULL))
+        ) STRICT""",
+        f"""CREATE TABLE sessions (
+            id_hash TEXT PRIMARY KEY NOT NULL CHECK ({_HEX.format(c="id_hash", n=64)}),
+            user_id TEXT NOT NULL REFERENCES users (id),
+            authz_version INTEGER NOT NULL CHECK (authz_version >= 1),
+            created_at TEXT NOT NULL CHECK ({_EXACT_INSTANT.format(c="created_at")}),
+            seen_at TEXT NOT NULL CHECK ({_EXACT_INSTANT.format(c="seen_at")}),
+            password_change_only INTEGER NOT NULL CHECK (password_change_only IN (0, 1))
+        ) STRICT""",
+        "CREATE INDEX sessions_user ON sessions (user_id)",
+        f"""CREATE TABLE login_delays (
+            key TEXT PRIMARY KEY NOT NULL CHECK ({_HEX.format(c="key", n=64)}),
+            account INTEGER NOT NULL CHECK (account IN (0, 1)),
+            failures INTEGER NOT NULL CHECK (failures >= 1),
+            failed_at TEXT NOT NULL CHECK ({_EXACT_INSTANT.format(c="failed_at")}),
+            delayed_until TEXT NOT NULL CHECK ({_EXACT_INSTANT.format(c="delayed_until")})
+        ) STRICT""",
+        "CREATE INDEX login_delays_age ON login_delays (failed_at)",
+        """CREATE TABLE sign_in_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            absolute_seconds INTEGER NOT NULL CHECK (absolute_seconds >= 1),
+            idle_seconds INTEGER NOT NULL CHECK (idle_seconds BETWEEN 1 AND absolute_seconds),
+            public_origin TEXT CHECK (public_origin IS NULL OR length(public_origin) <= 300),
+            trusted_proxies TEXT NOT NULL CHECK (length(trusted_proxies) <= 8192)
+        ) STRICT""",
+        "INSERT INTO sign_in_settings VALUES (1, 43200, 3600, NULL, '[]')",
+    ),
 )
 
 

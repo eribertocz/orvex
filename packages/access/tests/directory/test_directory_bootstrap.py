@@ -59,8 +59,8 @@ def test_create_makes_an_active_administrator_and_audits_it(
 ) -> None:
     bootstrap, events, _ = made
     created = bootstrap.create_administrator("root", "Root")
-    assert created.administrator
-    assert created.active
+    assert created.user.administrator
+    assert created.user.active
     assert events.last() == ("user.created", "allowed", {"user": created.id, "via": "admin_create"})
     assert events.all()[-1]["actor"] == "system"
 
@@ -83,7 +83,7 @@ def test_recover_with_the_recovery_file_creates_another_administrator(
     bootstrap, events, _ = made
     bootstrap.create_administrator("root", "Root")
     recovered = bootstrap.create_administrator("rescue", "Rescue", recover=True)
-    assert recovered.administrator
+    assert recovered.user.administrator
     via = {"user": recovered.id, "via": "admin_recover"}
     assert events.last() == ("user.created", "allowed", via)
 
@@ -130,7 +130,9 @@ def test_recover_reads_a_file_moved_elsewhere(made: Made, tmp_path: Path) -> Non
     bootstrap.create_administrator("root", "Root")
     moved = tmp_path / "offline.key"
     recovery.rename(moved)
-    assert bootstrap.create_administrator("rescue", "Rescue", recover=True, recovery=moved).active
+    assert bootstrap.create_administrator(
+        "rescue", "Rescue", recover=True, recovery=moved
+    ).user.active
 
 
 def test_create_refuses_a_taken_user_name(
@@ -151,7 +153,8 @@ def test_the_recovery_secret_never_reaches_an_event(
     bootstrap.create_administrator("rescue", "Rescue", recover=True)
     secret = recovery.read_text("ascii").strip()
     assert all(secret not in json.dumps(event) for event in events.all())
-    assert os.environ.get("ACCESS_TEST_POSTGRES_PASSWORD", "-") not in json.dumps(events.all())
+    password = os.environ.get("ACCESS_TEST_POSTGRES_PASSWORD")
+    assert password is None or password not in json.dumps(events.all())
 
 
 def test_a_log_failure_refuses_the_creation_without_a_second_attempt(

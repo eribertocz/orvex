@@ -102,6 +102,81 @@ paths:
             application/json:
               schema: { x-contract: catalog/v1, description: "A catalog v1 document." }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/login:
+    post:
+      operationId: postSignIn
+      summary: Sign in with a user name and a password (server mode, #438).
+      description: >-
+        Issues a new session in the `__Host-<slug>_session` cookie (`HttpOnly`, `Secure`,
+        `SameSite=Strict`, `Path=/`) and ends the one the browser sent, if any. A wrong password
+        and an unknown user get the same `LOGIN_FAILED`, in content and in time. After failed
+        sign-ins the account and the address wait a growing delay (`LOGIN_DELAYED`, with
+        `Retry-After`). A session opened with a temporary password may only change it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SignIn" }
+      responses:
+        "200":
+          description: Signed in; the session is in the cookie only.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+            Set-Cookie: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionView" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/session:
+    get:
+      operationId: getSession
+      summary: The caller's live session (server mode, #438).
+      security: [{ serverSession: [] }]
+      responses:
+        "200":
+          description: The session is live; its user as they are now.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionView" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/logout:
+    post:
+      operationId: postSignOut
+      summary: End the caller's session (server mode, #438).
+      security: [{ serverSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, maxProperties: 0 }
+      responses:
+        "204":
+          description: The session has ended and the cookie is cleared.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/password:
+    post:
+      operationId: postPasswordChange
+      summary: Change the caller's own password (server mode, #438).
+      description: >-
+        Every session of the user ends, and the one that made the change gets a new id in the
+        cookie. The current password is checked under the same delay as a sign-in.
+      security: [{ serverSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PasswordChange" }
+      responses:
+        "204":
+          description: Changed; the session's new id is in the cookie.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+            Set-Cookie: { schema: { type: string } }
+        default: { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     session:
@@ -111,6 +186,15 @@ components:
       description: >-
         A session cookie issued by exchanging the serve session's one-time bootstrap code
         (`/?code=…`); `HttpOnly`, `SameSite=Strict`.
+    serverSession:
+      type: apiKey
+      in: cookie
+      name: "__Host-<slug>_session"
+      description: >-
+        Server mode's session (#438): `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`. Every
+        `POST`, `PUT`, `PATCH` or `DELETE` must also carry the instance's public origin in
+        `Origin`, `Sec-Fetch-Site: same-origin` when the browser sends that header, and an
+        `application/json` body.
     bearer:
       type: http
       scheme: bearer
@@ -161,6 +245,22 @@ components:
     AUDIT_UNAVAILABLE: >-
       The action's audit event could not be recorded, so the action did not happen and no result
       was delivered (#437).
+    LOGIN_FAILED: >-
+      The user name or the password is wrong (#438). An unknown user, a deactivated user and an
+      expired temporary password get this same answer.
+    LOGIN_DELAYED: >-
+      Earlier failed sign-ins set a delay for this account or address; `Retry-After` says when to
+      try again (#438). The answer is the same for every account.
+    PASSWORD_REJECTED: >-
+      A new password has fewer than 12 or more than 1,024 characters, or is the user name (#438).
+    SESSION_EXPIRED: >-
+      There is no live session: it ended, expired or never existed, and the answer never says
+      which (#438).
+    PASSWORD_CHANGE_REQUIRED: >-
+      The session was opened with a temporary password; it may only change it (#438).
+    ORIGIN_REFUSED: >-
+      A state-changing request in server mode without the instance's public origin in `Origin`,
+      sent from another site (`Sec-Fetch-Site`), or without an `application/json` body (#438).
   headers:
     RequestId:
       description: >-
@@ -209,6 +309,35 @@ components:
         product: { $ref: "#/components/schemas/SemanticVersion" }
         modules: { type: array, items: { $ref: "#/components/schemas/ModuleVersion" } }
         contracts: { type: array, items: { $ref: "#/components/schemas/ContractVersion" } }
+    SignIn:
+      type: object
+      additionalProperties: false
+      required: [user_name, password]
+      properties:
+        user_name: { type: string, minLength: 1, maxLength: 256 }
+        password: { type: string, minLength: 1, maxLength: 4096 }
+    PasswordChange:
+      type: object
+      additionalProperties: false
+      required: [current_password, new_password]
+      properties:
+        current_password: { type: string, minLength: 1, maxLength: 4096 }
+        new_password: { type: string, minLength: 1, maxLength: 4096 }
+    SessionView:
+      type: object
+      additionalProperties: false
+      required: [user, password_change_required]
+      properties:
+        user:
+          type: object
+          additionalProperties: false
+          required: [id, user_name, display_name, administrator]
+          properties:
+            id: { type: string, pattern: "^[A-Za-z0-9_-]{1,128}$" }
+            user_name: { type: string, minLength: 1 }
+            display_name: { type: string, minLength: 1 }
+            administrator: { type: boolean }
+        password_change_required: { type: boolean }
     ErrorDetail:
       type: object
       additionalProperties: false

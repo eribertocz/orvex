@@ -41,6 +41,35 @@ export interface Version {
 }
 /**
  * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "SignIn".
+ */
+export interface SignIn {
+	user_name: string;
+	password: string;
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "PasswordChange".
+ */
+export interface PasswordChange {
+	current_password: string;
+	new_password: string;
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "SessionView".
+ */
+export interface SessionView {
+	user: {
+		id: string;
+		user_name: string;
+		display_name: string;
+		administrator: boolean;
+	};
+	password_change_required: boolean;
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
  * via the `definition` "ErrorDetail".
  */
 export interface ErrorDetail {

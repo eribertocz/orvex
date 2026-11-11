@@ -43,6 +43,7 @@ from orvex.access.errors import (
     AccessError,
 )
 from orvex.access.storage import retry
+from orvex.access.storage.instants import instant, parsed
 from orvex.access.storage.store import (
     Row,
     Store,
@@ -65,10 +66,6 @@ type Outcome = Literal["allowed", "refused"]
 def _validator() -> Draft202012Validator:
     schema = json.loads(files("orvex.access").joinpath(SCHEMA_FILE).read_text("utf-8"))
     return Draft202012Validator(schema)
-
-
-def _instant(moment: datetime) -> str:
-    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _event_id() -> str:
@@ -161,7 +158,7 @@ class AuditLog:
         ((seq, previous, last_at),) = transaction.rows(
             f"SELECT seq, hash, at FROM audit_head WHERE id = 1{transaction.locking}"
         )
-        now = _instant(self._clock())
+        now = instant(self._clock())
         at = max(now, str(last_at)) if last_at is not None else now
         ((instance,),) = transaction.rows("SELECT instance_id FROM instance")
         document: dict[str, Any] = {
@@ -285,7 +282,7 @@ class AuditLog:
                 "INSERT INTO audit_keys (key, public_key, created_at) VALUES (:key, :public, :at)",
                 key=self._key.fingerprint,
                 public=self._key.public.hex(),
-                at=_instant(self._clock()),
+                at=instant(self._clock()),
             )
             return
         names = {str(key) for key, _ in rows}
@@ -301,8 +298,8 @@ class AuditLog:
         ((last,),) = transaction.rows("SELECT max(at) FROM audit_checkpoints")
         if last is None:
             return seq == 1
-        then = datetime.strptime(str(last), "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
-        now = datetime.strptime(at, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=UTC)
+        then = parsed(str(last))
+        now = parsed(at)
         return now - then >= self._period
 
     def _checkpoint(self, transaction: Transaction, seq: int, hashed: str, at: str) -> None:
@@ -370,7 +367,7 @@ class AuditLog:
                 f"Audit retention is at least {MINIMUM_RETENTION_DAYS} days.",
                 {"retention_days": str(retention_days)},
             )
-        cutoff = _instant(self._clock() - timedelta(days=retention_days))
+        cutoff = instant(self._clock() - timedelta(days=retention_days))
 
         def work(transaction: Transaction) -> tuple[int, int] | None:
             transaction.rows(f"SELECT seq FROM audit_head WHERE id = 1{transaction.locking}")
@@ -422,7 +419,7 @@ class AuditLog:
                 "VALUES (:key, :public, :at, :previous, :previous_signs, :signs_previous)",
                 key=new_key.fingerprint,
                 public=new_key.public.hex(),
-                at=_instant(self._clock()),
+                at=instant(self._clock()),
                 previous=old.fingerprint,
                 previous_signs=old.sign(chain.next_key_payload(new_key.public)).hex(),
                 signs_previous=new_key.sign(chain.previous_key_payload(old.public)).hex(),

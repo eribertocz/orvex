@@ -49,6 +49,40 @@ class Version(BaseModel):
     contracts: list[ContractVersion]
 
 
+class SignIn(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    user_name: Annotated[str, Field(max_length=256, min_length=1)]
+    password: Annotated[str, Field(max_length=4096, min_length=1)]
+
+
+class PasswordChange(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    current_password: Annotated[str, Field(max_length=4096, min_length=1)]
+    new_password: Annotated[str, Field(max_length=4096, min_length=1)]
+
+
+class User(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    id: Annotated[str, Field(pattern="^[A-Za-z0-9_-]{1,128}$")]
+    user_name: Annotated[str, Field(min_length=1)]
+    display_name: Annotated[str, Field(min_length=1)]
+    administrator: bool
+
+
+class SessionView(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    user: User
+    password_change_required: bool
+
+
 class ErrorDetail(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
