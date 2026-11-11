@@ -142,7 +142,12 @@ def verify(
     by_seq: dict[int, CheckpointRow] = {}
     for checkpoint in checkpoints:
         public = trusted.get(checkpoint.key)
-        payload = checkpoint_payload(checkpoint.seq, checkpoint.hash, checkpoint.at, checkpoint.key)
+        try:
+            payload = checkpoint_payload(
+                checkpoint.seq, checkpoint.hash, checkpoint.at, checkpoint.key
+            )
+        except UnicodeError:  # a planted value no signed checkpoint can hold
+            raise _invalid(checkpoint.seq, "signature") from None
         if public is None or not verifies(public, _bytes(checkpoint.signature), payload):
             raise _invalid(checkpoint.seq, "signature")
         by_seq[checkpoint.seq] = checkpoint

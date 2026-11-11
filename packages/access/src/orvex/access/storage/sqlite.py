@@ -29,6 +29,7 @@ from orvex.access.storage.store import Row, Transaction, TransientConflict, Uniq
 BUSY_TIMEOUT_S = 10.0
 
 _ID = "length({c}) BETWEEN 1 AND 128 AND {c} NOT GLOB '*[^A-Za-z0-9_-]*'"
+_FINGERPRINT = "length({c}) = 71 AND {c} GLOB 'sha256:*' AND substr({c}, 8) NOT GLOB '*[^0-9a-f]*'"
 _HEX = "length({c}) = {n} AND {c} NOT GLOB '*[^0-9a-f]*'"
 _INSTANT = "length({c}) = 27 AND {c} GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T*Z'"
 
@@ -109,7 +110,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         ) STRICT""",
         "INSERT INTO audit_head (id, seq, hash) VALUES (1, 0, '" + "0" * 64 + "')",
         f"""CREATE TABLE audit_keys (
-            key TEXT PRIMARY KEY NOT NULL CHECK (length(key) = 71 AND key GLOB 'sha256:*'),
+            key TEXT PRIMARY KEY NOT NULL CHECK ({_FINGERPRINT.format(c="key")}),
             public_key TEXT NOT NULL UNIQUE CHECK ({_HEX.format(c="public_key", n=64)}),
             created_at TEXT NOT NULL CHECK ({_INSTANT.format(c="created_at")}),
             previous TEXT,
@@ -126,7 +127,7 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
             seq INTEGER PRIMARY KEY CHECK (seq >= 1),
             hash TEXT NOT NULL CHECK ({_HEX.format(c="hash", n=64)}),
             at TEXT NOT NULL CHECK ({_INSTANT.format(c="at")}),
-            key TEXT NOT NULL CHECK (length(key) = 71 AND key GLOB 'sha256:*'),
+            key TEXT NOT NULL CHECK ({_FINGERPRINT.format(c="key")}),
             signature TEXT NOT NULL CHECK ({_HEX.format(c="signature", n=128)})
         ) STRICT""",
         """CREATE TABLE audit_retention (

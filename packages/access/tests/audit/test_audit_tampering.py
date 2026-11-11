@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -15,6 +16,7 @@ import pytest
 from orvex.access.audit import AuditLog, chain
 from orvex.access.errors import AUDIT_CHAIN_BROKEN, AUDIT_CHECKPOINT_INVALID, AccessError
 from orvex.access.storage import PostgresStore
+from pg8000.exceptions import DatabaseError
 
 from tests.support.access_directory import Raw, World
 
@@ -341,3 +343,25 @@ def test_a_planted_signature_that_is_not_hex_is_an_invalid_checkpoint(
         chain.verify([], [forged], head, trusted)
     assert caught.value.code == AUDIT_CHECKPOINT_INVALID
     assert caught.value.details == {"seq": str(checkpoint.seq), "reason": "signature"}
+
+
+def test_a_planted_key_that_is_not_ascii_is_an_invalid_checkpoint(log: AuditLog) -> None:
+    """Both stores' CHECK constraints refuse it; past them, `verify` still names it."""
+    checkpoint = log.checkpoints()[0]
+    forged = chain.CheckpointRow(
+        checkpoint.seq, checkpoint.hash, checkpoint.at, "sha256:" + "\u00e9" * 64, "0" * 128
+    )
+    head = chain.HeadRow(checkpoint.seq, checkpoint.hash, None, None)
+    with pytest.raises(AccessError) as caught:
+        chain.verify([], [forged], head, {})
+    assert caught.value.details == {"seq": str(checkpoint.seq), "reason": "signature"}
+
+
+def test_the_stores_refuse_a_key_that_is_not_a_fingerprint(raw: Raw) -> None:
+    with pytest.raises((sqlite3.IntegrityError, DatabaseError)):
+        raw.run(
+            "INSERT INTO audit_checkpoints VALUES (2, :h, '2026-11-10T00:00:00.000000Z', :k, :s)",
+            h="0" * 64,
+            k="sha256:" + "\u00e9" * 64,
+            s="0" * 128,
+        )
