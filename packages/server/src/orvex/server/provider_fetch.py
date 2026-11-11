@@ -59,7 +59,7 @@ def _connect(address: str, port: int, timeout: float) -> socket.socket:
 
 
 _EMBEDDING = (
-    ipaddress.ip_network("::/96"),  # IPv4-compatible
+    ipaddress.ip_network("::/96"),  # IPv4-compatible (`::` and `::1` are refused before this)
     ipaddress.ip_network("::ffff:0:0:0/96"),  # IPv4-translated
     ipaddress.ip_network("64:ff9b::/96"),  # NAT64
     ipaddress.ip_network("64:ff9b:1::/48"),  # local-use NAT64
@@ -81,17 +81,17 @@ def _embedded(address: ipaddress.IPv6Address) -> list[ipaddress.IPv4Address]:
 def allowed(address: Address, provider: Provider) -> bool:
     """Whether a provider's request may reach `address`; an IPv6 address that carries an IPv4
     one is allowed only if that one is too."""
-    if isinstance(address, ipaddress.IPv6Address):
-        carried = _embedded(address)
-        if carried:
-            return all(allowed(inner, provider) for inner in carried)
     if (
         address.is_loopback
         or address.is_link_local
         or address.is_unspecified
         or address.is_multicast
     ):
-        return False
+        return False  # the outer address first, whatever it carries
+    if isinstance(address, ipaddress.IPv6Address):
+        carried = _embedded(address)
+        if carried:
+            return all(allowed(inner, provider) for inner in carried)
     if address.is_global:
         return True
     return provider.internal and any(
@@ -193,7 +193,9 @@ class ProviderFetch:
         deadline = time.monotonic() + self._timeout
         address = self._checked_address(provider, host, port, deadline)
         path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
-        remaining = max(0.0, deadline - time.monotonic())
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise failed("network")
         connection = _Pinned(host, port, address, self._context, self._connector, remaining)
         watchdog = threading.Timer(remaining, _abort, [connection])  # the rest of the deadline
         watchdog.daemon = True

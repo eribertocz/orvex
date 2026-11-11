@@ -230,6 +230,18 @@ def delete_group_member(transaction: Transaction, project: str, name: str, user_
     return bool(present)
 
 
+def forget_grant(transaction: Transaction, project: str, name: str, user_id: str) -> None:
+    """A Builder's own change to a membership makes it theirs: an OIDC mapping (#439) never takes
+    back what a Builder set by hand."""
+    transaction.run(
+        "DELETE FROM oidc_grants WHERE user_id = :user AND project = :project "
+        "AND group_name = :name",
+        project=project,
+        name=name,
+        user=user_id,
+    )
+
+
 def groups_of(transaction: Transaction, project: str, user_id: str) -> frozenset[str]:
     found = transaction.rows(
         "SELECT group_name FROM group_members WHERE project = :project AND user_id = :user",

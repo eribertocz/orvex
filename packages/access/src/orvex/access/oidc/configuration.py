@@ -56,6 +56,20 @@ _MAPPING_KEYS = frozenset({"provider", "claim", "value", "project", "group"})
 
 type Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 
+_NEVER: tuple[Network, ...] = tuple(
+    ipaddress.ip_network(network)
+    for network in (
+        "0.0.0.0/8",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "224.0.0.0/4",
+        "::/96",  # unspecified, loopback and the IPv4-compatible forms
+        "::ffff:0:0/96",  # IPv4-mapped
+        "fe80::/10",
+        "ff00::/8",
+    )
+)
+
 
 @dataclass(frozen=True, slots=True)
 class Provider:
@@ -171,8 +185,13 @@ def _ranges(table: Mapping[str, object], internal: bool, setting: str) -> tuple[
         raise _refused(setting) from error
     if internal and not found:
         raise _refused(setting)
-    if any(network.is_loopback or network.is_link_local for network in found):
-        raise _refused(setting)
+    if any(
+        network.overlaps(never)
+        for network in found
+        for never in _NEVER
+        if network.version == never.version
+    ):
+        raise _refused(setting)  # loopback, link-local, unspecified and multicast stay refused
     return found
 
 

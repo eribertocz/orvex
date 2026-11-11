@@ -15,6 +15,7 @@ from joserfc import jwt
 from joserfc.jwk import RSAKey
 from orvex.access.errors import OIDC_FAILED, AccessError
 from orvex.access.oidc.configuration import parsed
+from orvex.access.oidc.identities import Identities
 from orvex.access.oidc.service import OidcSignIn
 
 from tests.support.access_directory import World
@@ -527,3 +528,45 @@ def test_one_issuer_is_one_provider() -> None:
     with pytest.raises(AccessError) as caught:
         parsed(twice, ENVIRONMENT)
     assert caught.value.details["setting"].endswith(".issuer")
+
+
+def test_a_sign_in_through_one_provider_takes_back_anothers_grants(
+    oidc: Oidc, world: World
+) -> None:
+    other = FakeProvider(issuer="https://other.example.com/realms/x", now=oidc.provider.now)
+    both = document()
+    both["providers"]["other"] = {  # type: ignore[index]
+        "issuer": other.issuer,
+        "client_id": "bi-client",
+        "client_secret_variable": "CORP_SECRET",
+        "algorithms": ["RS256"],
+    }
+    configuration = parsed(both, ENVIRONMENT)
+    service = OidcSignIn(
+        world.store, world.audit, configuration, FakeFetcher(oidc.provider, other), oidc.clock
+    )
+    service.start_up()
+    ana = linked(oidc)
+    Identities(world.store, world.audit, configuration).link(world.admin, ana, "other", "sub-x")
+    with_project(oidc, ana)
+    started = service.start("corp")
+    service.callback(
+        "corp",
+        oidc.provider.authorize(started.location, "sub-ana", groups=["finance"]),
+        started.reference,
+    )
+    assert "finance" in groups(oidc, ana)
+    started = service.start("other")
+    service.callback("other", other.authorize(started.location, "sub-x"), started.reference)
+    assert groups(oidc, ana) == {"manual"}  # corp's grant is not refreshed by an `other` session
+
+
+def test_a_builders_own_change_makes_a_membership_theirs(oidc: Oidc) -> None:
+    ana = linked(oidc)
+    with_project(oidc, ana)
+    oidc.sign_in_as("sub-ana", groups=["finance"])
+    builder = next(e["actor"] for e in oidc.world.events() if e["kind"] == "group.created")
+    oidc.world.directory.remove_group_member(builder, "p1", "finance", ana)
+    oidc.world.directory.add_group_member(builder, "p1", "finance", ana)
+    oidc.sign_in_as("sub-ana", groups=[])
+    assert "finance" in groups(oidc, ana)  # set by hand now: the mapping leaves it

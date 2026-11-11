@@ -8,9 +8,11 @@ explicit mapping, and only memberships the mapping itself granted.
   joins when one of its rules' claim values is present, the group exists, and the user already
   has a membership in the project (the mapping never grants a role). A grant whose claim is gone,
   or whose rule is gone, is taken back. A claim value with no rule grants nothing.
-- **Nowhere else.** Grants live only as long as provider sessions keep them fresh: a sign-in by
-  any other method takes back every grant first (`revoke`), so provider groups never outlive
-  `group_refresh` in a session that is not refreshed.
+- **Nowhere else.** Grants live only as long as provider sessions keep them fresh. A sign-in by
+  password takes back every grant first (`revoke`), and a sign-in or refresh through one
+  provider takes back every other provider's, so provider groups never outlive `group_refresh`
+  in a session that does not refresh them.
+- A Builder's own change to a membership makes it theirs (`statements.forget_grant`).
 - **A changed mapping** (its digest differs from the one stored), and a provider removed from the
   configuration, take back the grants no rule supports any longer. They also end the sessions of
   every user linked through that provider.
@@ -112,9 +114,13 @@ def apply(
     for rule in rules:
         target = (rule.project, rule.group)
         wanted[target] = wanted.get(target, False) or rule.value in _values(claims, rule.claim)
+    changed = False
+    for target, owner in sorted(_grants(transaction, user_id).items()):
+        if owner != provider:  # another provider's: never refreshed by this session
+            _take_back(transaction, audit, user_id, target)
+            changed = True
     held = _grants(transaction, user_id, provider)
     everyone = _grants(transaction, user_id)
-    changed = False
     for target in sorted(set(held) - set(wanted)):  # its rule is gone
         _take_back(transaction, audit, user_id, target)
         changed = True

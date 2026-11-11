@@ -286,3 +286,5 @@ def test_an_internal_provider_reaches_its_range_and_nothing_else(
     network(lambda: fetch(server, ["10.21.0.1"]).get(internal, f"https://{HOST}/ok"))
     network(lambda: fetch(server, ["127.0.0.1"]).get(internal, f"https://{HOST}/ok"))
     assert not allowed(ipaddress.ip_address("169.254.169.254"), internal)
+    for address in ("::1", "::", "::7f00:1", "::ffff:127.0.0.1", "fe80::1"):
+        assert not allowed(ipaddress.ip_address(address), internal)
