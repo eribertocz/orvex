@@ -1,0 +1,66 @@
+id: SEC-DQ-014
+area: direct-query
+title: A location registered later inside an existing lake stops it serving
+intent: 'A managed-lake location or file source of another project registered inside the lake''s location:
+  nothing is served.'
+fixture: direct-query
+caller: &id001
+  kind: security_context
+  version: 1
+  user: u-open
+  project: direct-query
+  role: author
+  groups:
+  - operations
+  attributes: {}
+  permission_fingerprint: sha256:75728b6bd97e5fb584a6076b75cdee35a2b414905635756ff9eaad4bb872d3b7
+request:
+  kind: sequence
+  steps:
+  - caller: *id001
+    request:
+      kind: lake-change
+      change:
+        op: register_location_inside
+        kind: managed_lake_or_file_source
+  - caller: *id001
+    request:
+      kind: semantic-query
+      body:
+        kind: semantic_query
+        version: 1
+        mode: detail
+        fields:
+        - member: outages.outage_id
+        - member: outages.zone_id
+        - member: outages.minutes
+        order:
+        - by: outages.outage_id
+          direction: asc
+        page:
+          size: '100'
+expect:
+  outcome: error
+  code: STORE_SOURCE_INVALID
+  forbidden:
+  - Z9
+  - '999.99'
+  - '15.00'
+  - '25.50'
+  - '40.25'
+control:
+  caller: *id001
+  outcome: rows
+  rows: 'outages.outage_id,outages.zone_id,outages.minutes
+
+    1,Z1,15.00
+
+    2,Z2,25.50
+
+    3,Z3,40.25
+
+    '
+  without_changes: true
+engines:
+- existing-ducklake
+adr_0027: location-registered-later

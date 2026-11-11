@@ -1,0 +1,51 @@
+id: SEC-PAGES-003
+area: pages
+title: A page changed after it was opened is refused
+intent: A query bound to the version the caller opened is refused once a new version is published (#449
+  Q6).
+fixture: utility
+caller: &id001
+  kind: security_context
+  version: 1
+  user: u-zone1
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:44b2b208870918c65d8d4ccb3c04b4116a39b8538fb96def9fc82a19a59f52e1
+request:
+  kind: sequence
+  steps:
+  - caller: *id001
+    request:
+      kind: page
+      page: consumption/overview
+  - caller: *id001
+    request:
+      kind: page-query
+      page: consumption/overview
+      visual_id: kwh_by_zone
+      interaction_state: {}
+    change:
+      op: publish_page
+      page: consumption/overview
+      from: drafts/overview.yaml
+expect:
+  outcome: error
+  code: PAGE_CHANGED
+  forbidden:
+  - '30.75'
+  - Ana
+  - ID-111
+control:
+  caller: *id001
+  outcome: rows
+  rows: 'readings.zone_id,total_kwh
+
+    Z1,30.75
+
+    '
+  without_changes: true
+engines:
+- managed
+pending: P6-07

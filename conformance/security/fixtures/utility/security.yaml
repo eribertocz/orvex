@@ -1,0 +1,27 @@
+version: 1
+row_policies:
+  - name: own_zone_readings
+    dataset: readings
+    kind: predicate
+    predicate: "zone_id IN (SELECT zone_id FROM security.user_zone WHERE user_id = $user_id)"
+    exempt_groups: [management]
+  - name: own_zone_consumers
+    dataset: consumers
+    kind: predicate
+    predicate: "zone_id IN (SELECT zone_id FROM security.user_zone WHERE user_id = $user_id)"
+    exempt_groups: [management]
+  - name: own_region_tariffs
+    dataset: tariffs
+    kind: predicate
+    predicate: "region = $region"
+column_policies:
+  - member: consumers.national_id
+    default: hidden
+    visible_to_groups: [collections]
+  - member: consumers.phone
+    default: masked
+    mask: "***"
+    visible_to_groups: [collections]
+  - member: readings.meter_id
+    default: hidden
+    visible_to_groups: [engineering]

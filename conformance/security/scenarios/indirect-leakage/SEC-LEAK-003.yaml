@@ -1,0 +1,61 @@
+id: SEC-LEAK-003
+area: indirect-leakage
+title: Filtering on a hidden member is refused as if it did not exist
+intent: A filter would let the caller test guesses of a hidden value.
+fixture: utility
+caller:
+  kind: security_context
+  version: 1
+  user: u-zone1
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:44b2b208870918c65d8d4ccb3c04b4116a39b8538fb96def9fc82a19a59f52e1
+request:
+  kind: semantic-query
+  body:
+    kind: semantic_query
+    version: 1
+    mode: detail
+    fields:
+    - member: consumers.consumer_id
+    order:
+    - by: consumers.consumer_id
+      direction: asc
+    filters:
+    - scope: visual
+      member: consumers.national_id
+      predicate:
+        op: in
+        values:
+        - type: text
+          value: ID-111
+    page:
+      size: '100'
+expect:
+  outcome: error
+  code: MEMBER_NOT_FOUND
+  forbidden:
+  - C1
+  - ID-111
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-coll
+    project: utility
+    role: author
+    groups:
+    - collections
+    attributes: {}
+    permission_fingerprint: sha256:6b813403c5da3e617657e7c9aaaa7394c75e41d70c7ad09b9541eb83c52d2d95
+  outcome: rows
+  rows: 'consumers.consumer_id
+
+    C1
+
+    '
+engines:
+- managed
+pending: 442

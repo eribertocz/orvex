@@ -1,0 +1,75 @@
+id: SEC-REVOKE-003
+area: revocation
+title: A cached result is never served after a revocation
+intent: The same question after the mapping is removed is answered from current permissions.
+fixture: utility
+caller: &id001
+  kind: security_context
+  version: 1
+  user: u-multi
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:2fb37a9d05dee53e210e110367256efed5254f5f76d78929c75688078f58020e
+request:
+  kind: sequence
+  steps:
+  - caller: *id001
+    request:
+      kind: semantic-query
+      body:
+        kind: semantic_query
+        version: 1
+        mode: aggregate
+        metrics:
+        - metric: total_kwh
+        group_by:
+        - member: readings.zone_id
+        order:
+        - by: readings.zone_id
+          direction: asc
+  - caller: *id001
+    request:
+      kind: semantic-query
+      body:
+        kind: semantic_query
+        version: 1
+        mode: aggregate
+        metrics:
+        - metric: total_kwh
+        group_by:
+        - member: readings.zone_id
+        order:
+        - by: readings.zone_id
+          direction: asc
+    change:
+      op: delete_row
+      table: security.user_zone
+      row:
+        user_id: u-multi
+        zone_id: Z2
+expect:
+  outcome: rows
+  rows: 'readings.zone_id,total_kwh
+
+    Z1,30.75
+
+    '
+  forbidden:
+  - Z2
+  - '30.00'
+control:
+  caller: *id001
+  outcome: rows
+  rows: 'readings.zone_id,total_kwh
+
+    Z1,30.75
+
+    Z2,30.00
+
+    '
+  without_changes: true
+engines:
+- managed
+pending: 444

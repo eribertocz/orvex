@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.invalid/conformance/security/scenario.schema.json",
+  "title": "SecurityScenario",
+  "description": "One normative security case (#435): what a caller asks, what it must get and never get, and what an authorized caller gets for the same request (the control). Implementation-neutral: callers are `security-context` v1 documents, semantic requests are `semantic-query` v1 bodies, outcomes are exact.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "area", "title", "intent", "fixture", "caller", "request", "expect", "control"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^SEC-[A-Z]+-[0-9]{3}$"},
+    "area": {
+      "enum": ["pages", "page-queries", "rows", "columns", "missing-attributes", "possible-values", "indirect-leakage", "revocation", "cache", "export", "mcp", "direct-query"]
+    },
+    "title": {"type": "string", "minLength": 10, "maxLength": 120},
+    "intent": {"type": "string", "minLength": 20},
+    "fixture": {"enum": ["utility", "direct-query"]},
+    "caller": {"type": "object", "description": "A security-context v1 document (validated against that contract)."},
+    "request": {"$ref": "#/$defs/Request"},
+    "expect": {"$ref": "#/$defs/Expect"},
+    "control": {"$ref": "#/$defs/Control"},
+    "engines": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {"enum": ["managed", "existing-ducklake", "clickhouse"]}
+    },
+    "pending": {
+      "description": "Where the behavior is built: an issue number, or the roadmap ID of a later phase.",
+      "oneOf": [{"type": "integer", "minimum": 1}, {"type": "string", "pattern": "^P[0-9]+-[0-9]{2}[a-z]?$"}]
+    },
+    "adr_0027": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "The item of ADR-0027 §6's case list this case covers."},
+    "variants": {
+      "type": "array", "minItems": 2,
+      "items": {"type": "object", "minProperties": 1},
+      "description": "Each variant is run as its own case, with the same expectation."
+    }
+  },
+  "$defs": {
+    "Csv": {"type": "string", "pattern": "^[^\\n]+\\n([^\\n]*\\n)*$", "description": "Header row, then one line per row; `NULL` for a null; decimals at their scale."},
+    "Code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]+$"},
+    "Forbidden": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "Request": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["semantic-query", "explain", "catalog", "possible-values", "page", "page-query", "navigation", "export", "mcp", "sequence", "next-page", "async-start", "async-result", "lake-change", "draft-preview"]}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"enum": ["semantic-query", "explain"]}}}, "then": {"required": ["body"]}},
+        {"if": {"properties": {"kind": {"const": "possible-values"}}}, "then": {"required": ["member"]}},
+        {"if": {"properties": {"kind": {"enum": ["page", "draft-preview"]}}}, "then": {"required": ["page"]}},
+        {"if": {"properties": {"kind": {"const": "page-query"}}}, "then": {"required": ["page", "visual_id", "interaction_state"]}},
+        {"if": {"properties": {"kind": {"const": "export"}}}, "then": {"required": ["format", "body"]}},
+        {"if": {"properties": {"kind": {"const": "mcp"}}}, "then": {"required": ["tool", "arguments"]}},
+        {"if": {"properties": {"kind": {"const": "sequence"}}}, "then": {"required": ["steps"], "properties": {"steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/Step"}}}}},
+        {"if": {"properties": {"kind": {"const": "lake-change"}}}, "then": {"required": ["change"]}}
+      ]
+    },
+    "Step": {
+      "type": "object", "additionalProperties": false, "required": ["caller", "request"],
+      "properties": {"caller": {"type": "object"}, "request": {"$ref": "#/$defs/Request"}, "change": {"$ref": "#/$defs/Change"}}
+    },
+    "Change": {
+      "type": "object", "required": ["op"],
+      "properties": {"op": {"enum": ["delete_row", "remove_group", "publish_page", "create_view", "create_macro", "add_file", "swap_file_for_link", "register_location_inside", "replace_catalog_file", "postgres_catalog", "replace_policy", "set_location", "restore_catalog_reusing_id"]}}
+    },
+    "Expect": {
+      "type": "object", "required": ["outcome", "forbidden"],
+      "properties": {
+        "outcome": {"enum": ["rows", "zero-rows", "error", "absent", "contains"]},
+        "rows": {"$ref": "#/$defs/Csv"},
+        "types": {"type": "object", "additionalProperties": {"type": "string"}},
+        "code": {"$ref": "#/$defs/Code"},
+        "notice": {"$ref": "#/$defs/Code"},
+        "members": {"type": "array", "items": {"type": "string"}},
+        "pages": {"type": "array", "items": {"type": "string"}},
+        "text": {"type": "array", "items": {"type": "string"}},
+        "same_as_alternate": {"type": "boolean"},
+        "audited": {"type": "boolean"},
+        "forbidden": {"$ref": "#/$defs/Forbidden"}
+      },
+      "allOf": [
+        {"if": {"properties": {"outcome": {"const": "rows"}}}, "then": {"required": ["rows"]}},
+        {"if": {"properties": {"outcome": {"const": "error"}}}, "then": {"required": ["code"]}},
+        {"if": {"properties": {"outcome": {"const": "absent"}}}, "then": {"required": ["members"]}},
+        {"if": {"properties": {"outcome": {"const": "contains"}}}, "then": {"anyOf": [{"required": ["pages"]}, {"required": ["members"]}, {"required": ["text"]}]}}
+      ]
+    },
+    "Control": {
+      "type": "object", "required": ["caller", "outcome"],
+      "properties": {
+        "caller": {"type": "object"},
+        "outcome": {"enum": ["rows", "contains"]},
+        "rows": {"$ref": "#/$defs/Csv"},
+        "members": {"type": "array", "items": {"type": "string"}},
+        "pages": {"type": "array", "items": {"type": "string"}},
+        "text": {"type": "array", "items": {"type": "string"}},
+        "request": {"$ref": "#/$defs/Request"},
+        "without_changes": {"type": "boolean", "description": "Run the case's sequence without its changes."}
+      },
+      "allOf": [
+        {"if": {"properties": {"outcome": {"const": "rows"}}}, "then": {"required": ["rows"]}},
+        {"if": {"properties": {"outcome": {"const": "contains"}}}, "then": {"anyOf": [{"required": ["pages"]}, {"required": ["members"]}, {"required": ["text"]}]}}
+      ]
+    }
+  }
+}

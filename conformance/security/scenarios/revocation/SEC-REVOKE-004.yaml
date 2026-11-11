@@ -1,0 +1,68 @@
+id: SEC-REVOKE-004
+area: revocation
+title: An export started after a revocation holds only rows still allowed
+intent: An export is answered from the permissions current when it runs.
+fixture: utility
+caller: &id001
+  kind: security_context
+  version: 1
+  user: u-multi
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:2fb37a9d05dee53e210e110367256efed5254f5f76d78929c75688078f58020e
+request:
+  kind: sequence
+  steps:
+  - caller: *id001
+    request:
+      kind: export
+      format: csv
+      body:
+        kind: semantic_query
+        version: 1
+        mode: detail
+        fields:
+        - member: readings.reading_id
+        order:
+        - by: readings.reading_id
+          direction: asc
+        page:
+          size: '100'
+    change:
+      op: delete_row
+      table: security.user_zone
+      row:
+        user_id: u-multi
+        zone_id: Z2
+expect:
+  outcome: rows
+  rows: 'readings.reading_id
+
+    1
+
+    2
+
+    '
+  forbidden:
+  - '3'
+  - '5'
+control:
+  caller: *id001
+  outcome: rows
+  rows: 'readings.reading_id
+
+    1
+
+    2
+
+    3
+
+    5
+
+    '
+  without_changes: true
+engines:
+- managed
+pending: P6-18

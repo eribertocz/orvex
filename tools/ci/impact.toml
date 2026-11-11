@@ -35,12 +35,22 @@ paths = [
 # Paths with a known, narrower effect: each selects the listed test folders (and nothing is
 # guessed beyond them). `modules` adds those packages as if they had changed.
 [[narrow]]
+# The roadmap names the phases the security scenarios' pending references must not have reached (#435).
+paths = ["docs/roadmap.md"]
+tests = ["tests/tools", "tests/workspace", "tests/conformance"]
+
+[[narrow]]
 paths = ["docs/", "AGENTS.md", "CLAUDE.md", "README.md", "CONTRIBUTING.md", "CHANGELOG.md", "NOTICE", "LICENSE"]
 tests = ["tests/tools", "tests/workspace"]
 
 [[narrow]]
 paths = ["benchmarks/", "tools/benchmarks/"]
 tests = ["tests/tools"]
+
+[[narrow]]
+# The error-code registry the security scenarios' expected codes are checked against (#435).
+paths = ["tools/checks/__init__.py", "tools/checks/error_codes.py", "tools/checks/reserved-error-codes.toml"]
+tests = ["tests/tools", "tests/workspace", "tests/conformance"]
 
 [[narrow]]
 paths = ["tools/checks/", "tools/licenses/", "tools/rename/"]

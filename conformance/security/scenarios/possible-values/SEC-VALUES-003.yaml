@@ -1,0 +1,44 @@
+id: SEC-VALUES-003
+area: possible-values
+title: A hidden member has no possible values
+intent: It does not exist for the caller.
+fixture: utility
+caller:
+  kind: security_context
+  version: 1
+  user: u-zone1
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:44b2b208870918c65d8d4ccb3c04b4116a39b8538fb96def9fc82a19a59f52e1
+request:
+  kind: possible-values
+  member: consumers.national_id
+expect:
+  outcome: error
+  code: MEMBER_NOT_FOUND
+  forbidden:
+  - ID-111
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-coll
+    project: utility
+    role: author
+    groups:
+    - collections
+    attributes: {}
+    permission_fingerprint: sha256:6b813403c5da3e617657e7c9aaaa7394c75e41d70c7ad09b9541eb83c52d2d95
+  outcome: rows
+  rows: 'consumers.national_id
+
+    ID-111
+
+    ID-222
+
+    '
+engines:
+- managed
+pending: P5-03

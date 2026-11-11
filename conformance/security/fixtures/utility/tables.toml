@@ -1,0 +1,21 @@
+# The fixture's tables: the file each is read from, and its columns (name, DuckDB type, nullable).
+# Data files are CSV: a header row, comma-separated, no quoting, `NULL` for a null value.
+[tables."marts.readings"]
+file = "data/readings.csv"
+columns = [["reading_id", "BIGINT", false], ["consumer_id", "VARCHAR", false], ["meter_id", "VARCHAR", false], ["zone_id", "VARCHAR", false], ["kwh", "DECIMAL(18,2)", true]]
+
+[tables."marts.consumers"]
+file = "data/consumers.csv"
+columns = [["consumer_id", "VARCHAR", false], ["zone_id", "VARCHAR", false], ["name", "VARCHAR", false], ["national_id", "VARCHAR", false], ["phone", "VARCHAR", false], ["segment", "VARCHAR", false]]
+
+[tables."marts.meters"]
+file = "data/meters.csv"
+columns = [["meter_id", "VARCHAR", false], ["model", "VARCHAR", false]]
+
+[tables."marts.tariffs"]
+file = "data/tariffs.csv"
+columns = [["tariff_id", "VARCHAR", false], ["region", "VARCHAR", false], ["price", "DECIMAL(18,2)", false]]
+
+[tables."security.user_zone"]
+file = "data/user_zone.csv"
+columns = [["user_id", "VARCHAR", false], ["zone_id", "VARCHAR", false]]

@@ -1,0 +1,212 @@
+{
+  "version": "0.2.0.dev0",
+  "name": "utility",
+  "datasets": [
+    {
+      "name": "readings",
+      "source": "marts.readings",
+      "primary_key": [
+        "reading_id"
+      ],
+      "fields": [
+        {
+          "name": "reading_id",
+          "expression": {
+            "sql": "reading_id"
+          }
+        },
+        {
+          "name": "consumer_id",
+          "expression": {
+            "sql": "consumer_id"
+          }
+        },
+        {
+          "name": "meter_id",
+          "expression": {
+            "sql": "meter_id"
+          }
+        },
+        {
+          "name": "zone_id",
+          "expression": {
+            "sql": "zone_id"
+          }
+        },
+        {
+          "name": "kwh",
+          "expression": {
+            "sql": "kwh"
+          }
+        }
+      ]
+    },
+    {
+      "name": "consumers",
+      "source": "marts.consumers",
+      "primary_key": [
+        "consumer_id"
+      ],
+      "fields": [
+        {
+          "name": "consumer_id",
+          "expression": {
+            "sql": "consumer_id"
+          }
+        },
+        {
+          "name": "zone_id",
+          "expression": {
+            "sql": "zone_id"
+          }
+        },
+        {
+          "name": "name",
+          "expression": {
+            "sql": "name"
+          }
+        },
+        {
+          "name": "national_id",
+          "expression": {
+            "sql": "national_id"
+          }
+        },
+        {
+          "name": "phone",
+          "expression": {
+            "sql": "phone"
+          }
+        },
+        {
+          "name": "segment",
+          "expression": {
+            "sql": "segment"
+          }
+        }
+      ]
+    },
+    {
+      "name": "meters",
+      "source": "marts.meters",
+      "primary_key": [
+        "meter_id"
+      ],
+      "fields": [
+        {
+          "name": "meter_id",
+          "expression": {
+            "sql": "meter_id"
+          }
+        },
+        {
+          "name": "model",
+          "expression": {
+            "sql": "model"
+          }
+        }
+      ]
+    },
+    {
+      "name": "tariffs",
+      "source": "marts.tariffs",
+      "primary_key": [
+        "tariff_id"
+      ],
+      "fields": [
+        {
+          "name": "tariff_id",
+          "expression": {
+            "sql": "tariff_id"
+          }
+        },
+        {
+          "name": "region",
+          "expression": {
+            "sql": "region"
+          }
+        },
+        {
+          "name": "price",
+          "expression": {
+            "sql": "price"
+          }
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "name": "consumer",
+      "from": "readings",
+      "to": "consumers",
+      "from_columns": [
+        "consumer_id"
+      ],
+      "to_columns": [
+        "consumer_id"
+      ],
+      "custom_extensions": [
+        {
+          "vendor_name": "{{vendor}}",
+          "data": "{\"cardinality\": \"many_to_one\", \"element\": \"relationship\", \"version\": 1}"
+        }
+      ]
+    },
+    {
+      "name": "meter",
+      "from": "readings",
+      "to": "meters",
+      "from_columns": [
+        "meter_id"
+      ],
+      "to_columns": [
+        "meter_id"
+      ],
+      "custom_extensions": [
+        {
+          "vendor_name": "{{vendor}}",
+          "data": "{\"cardinality\": \"many_to_one\", \"element\": \"relationship\", \"version\": 1}"
+        }
+      ]
+    }
+  ],
+  "metrics": [
+    {
+      "name": "total_kwh",
+      "expression": {
+        "sql": "SUM(readings.kwh)"
+      }
+    },
+    {
+      "name": "reading_count",
+      "expression": {
+        "sql": "COUNT(readings.reading_id)"
+      }
+    },
+    {
+      "name": "tariff_count",
+      "expression": {
+        "sql": "COUNT(tariffs.tariff_id)"
+      }
+    },
+    {
+      "name": "national_id_count",
+      "expression": {
+        "sql": "COUNT(DISTINCT consumers.national_id)"
+      },
+      "custom_extensions": [
+        {
+          "vendor_name": "{{vendor}}",
+          "data": "{\"additivity\": \"non_additive\", \"aggregate_class\": \"holistic\", \"element\": \"metric\", \"version\": 1}"
+        }
+      ]
+    }
+  ],
+  "custom_extensions": [
+    {
+      "vendor_name": "{{vendor}}",
+      "data": "{\"default_time_zone\": \"UTC\", \"element\": \"model\", \"version\": 1}"
+    }
+  ]
+}

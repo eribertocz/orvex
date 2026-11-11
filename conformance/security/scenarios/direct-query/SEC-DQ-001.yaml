@@ -1,0 +1,58 @@
+id: SEC-DQ-001
+area: direct-query
+title: A caller with no mapping under an allow-list sees zero rows
+intent: 'No row of the allow-list mapping names the caller: zero rows on every engine, never all rows.'
+fixture: direct-query
+caller:
+  kind: security_context
+  version: 1
+  user: u-none
+  project: direct-query
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:7f73b4c172aefa0efe3731845c9af6ab164fffd2888c79dd059dc78ff02f8265
+request:
+  kind: semantic-query
+  body:
+    kind: semantic_query
+    version: 1
+    mode: detail
+    fields:
+    - member: outages.outage_id
+    - member: outages.zone_id
+    - member: outages.minutes
+    order:
+    - by: outages.outage_id
+      direction: asc
+    page:
+      size: '100'
+expect:
+  outcome: zero-rows
+  notice: POLICY_MAPPING_MISSING
+  forbidden:
+  - Z1
+  - '15.00'
+  - allowed_zones
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-zone1
+    project: direct-query
+    role: author
+    groups: []
+    attributes: {}
+    permission_fingerprint: sha256:4c2139ed6b722f61ff8cc5d035270ebb22e38be499f7edd125f50dea54983790
+  outcome: rows
+  rows: 'outages.outage_id,outages.zone_id,outages.minutes
+
+    1,Z1,15.00
+
+    '
+engines:
+- managed
+- existing-ducklake
+- clickhouse
+adr_0027: no-mapping-allow-list
+pending: 441

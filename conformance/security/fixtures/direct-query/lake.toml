@@ -1,0 +1,13 @@
+# The existing DuckLake that serves `lake.outages` on the `existing-ducklake` engine (ADR-0027 §3),
+# and the same rows on every other enabled engine. Built by the runner (#447), deterministically:
+# one snapshot per entry of `snapshots`, in order; the last one is the snapshot served.
+catalogs = ["sqlite", "postgres"]   # every case runs on each catalog
+data_location = "lake-data/"
+
+[[snapshots]]
+table = "outages"
+file = "data/outages.csv"
+
+# Rows an adversarial change tries to bring in: they must never be served.
+[foreign]
+file = "data/foreign_outages.csv"

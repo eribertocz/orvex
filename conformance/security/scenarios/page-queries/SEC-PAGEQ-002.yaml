@@ -1,0 +1,49 @@
+id: SEC-PAGEQ-002
+area: page-queries
+title: Invalid interaction state is refused
+intent: A filter value of the wrong type, or an unknown key, refuses the query.
+fixture: utility
+caller: &id001
+  kind: security_context
+  version: 1
+  user: u-view
+  project: utility
+  role: viewer
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:5dad8e06d64dc67c26bc0f8e2aea81332ae6ab01d0385589b60074ef0894d3c4
+request:
+  kind: page-query
+  page: consumption/overview
+  visual_id: kwh_by_zone
+  interaction_state:
+    filters:
+    - scope: visual
+      member: readings.zone_id
+      predicate:
+        op: in
+        values:
+        - type: integer
+          value: '1'
+    unknown: true
+expect:
+  outcome: error
+  code: PAGE_FORBIDDEN
+  forbidden:
+  - '30.75'
+control:
+  caller: *id001
+  outcome: rows
+  rows: 'readings.zone_id,total_kwh
+
+    Z1,30.75
+
+    '
+  request:
+    kind: page-query
+    page: consumption/overview
+    visual_id: kwh_by_zone
+    interaction_state: {}
+engines:
+- managed
+pending: P6-08

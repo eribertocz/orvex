@@ -1,0 +1,62 @@
+id: SEC-MISSING-001
+area: missing-attributes
+title: A missing attribute gives zero rows and a generic notice
+intent: 'The caller has no region attribute: the policy yields no rows, the notice names no policy, table
+  or value.'
+fixture: utility
+caller:
+  kind: security_context
+  version: 1
+  user: u-zone1
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:44b2b208870918c65d8d4ccb3c04b4116a39b8538fb96def9fc82a19a59f52e1
+request:
+  kind: semantic-query
+  body:
+    kind: semantic_query
+    version: 1
+    mode: detail
+    fields:
+    - member: tariffs.tariff_id
+    order:
+    - by: tariffs.tariff_id
+      direction: asc
+    page:
+      size: '100'
+expect:
+  outcome: zero-rows
+  notice: POLICY_ATTRIBUTE_MISSING
+  forbidden:
+  - T1
+  - T2
+  - own_region_tariffs
+  - own_zone_readings
+  - security.user_zone
+  - region
+  - north
+  - south
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-north
+    project: utility
+    role: author
+    groups: []
+    attributes:
+      region:
+        type: text
+        value: north
+    permission_fingerprint: sha256:164609b02001f54e34b70d67f4b261cc88f586932449d2d3b1b975dc7507f1e6
+  outcome: rows
+  rows: 'tariffs.tariff_id
+
+    T1
+
+    '
+engines:
+- managed
+pending: 443

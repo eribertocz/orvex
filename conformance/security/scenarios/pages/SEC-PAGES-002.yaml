@@ -1,0 +1,41 @@
+id: SEC-PAGES-002
+area: pages
+title: Navigation lists only the pages the caller may see
+intent: A page without access is listed for every member who may view; a restricted one only for its groups.
+fixture: utility
+caller:
+  kind: security_context
+  version: 1
+  user: u-view
+  project: utility
+  role: viewer
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:5dad8e06d64dc67c26bc0f8e2aea81332ae6ab01d0385589b60074ef0894d3c4
+request:
+  kind: navigation
+expect:
+  outcome: contains
+  pages:
+  - consumption/overview
+  forbidden:
+  - consumption/arrears
+  - Arrears
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-coll
+    project: utility
+    role: author
+    groups:
+    - collections
+    attributes: {}
+    permission_fingerprint: sha256:6b813403c5da3e617657e7c9aaaa7394c75e41d70c7ad09b9541eb83c52d2d95
+  outcome: contains
+  pages:
+  - consumption/arrears
+  - consumption/overview
+engines:
+- managed
+pending: P6-07

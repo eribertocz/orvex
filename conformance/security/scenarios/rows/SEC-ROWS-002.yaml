@@ -1,0 +1,57 @@
+id: SEC-ROWS-002
+area: rows
+title: A filter cannot reach rows the policy hides
+intent: 'Filtering on another zone returns nothing for a caller who may not see it: the filter narrows,
+  never widens.'
+fixture: utility
+caller:
+  kind: security_context
+  version: 1
+  user: u-zone1
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:44b2b208870918c65d8d4ccb3c04b4116a39b8538fb96def9fc82a19a59f52e1
+request:
+  kind: semantic-query
+  body:
+    kind: semantic_query
+    version: 1
+    mode: aggregate
+    metrics:
+    - metric: total_kwh
+    group_by:
+    - member: readings.zone_id
+    filters:
+    - scope: visual
+      member: readings.zone_id
+      predicate:
+        op: in
+        values:
+        - type: text
+          value: Z2
+expect:
+  outcome: zero-rows
+  forbidden:
+  - '30.00'
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-exempt
+    project: utility
+    role: author
+    groups:
+    - management
+    attributes: {}
+    permission_fingerprint: sha256:5fb34253cadda8267259755dd39445d7947212f596678f2d76f028ec1e1ee39a
+  outcome: rows
+  rows: 'readings.zone_id,total_kwh
+
+    Z2,30.00
+
+    '
+engines:
+- managed
+pending: 441

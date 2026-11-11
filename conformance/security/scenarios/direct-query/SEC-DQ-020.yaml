@@ -1,0 +1,67 @@
+id: SEC-DQ-020
+area: direct-query
+title: A mapping or registration revoked while a result is cached is honored
+intent: 'On every engine, a revoked registration is never served from cache: the managed-lake snapshot
+  of the registration is checked on every lookup.'
+fixture: direct-query
+caller: &id001
+  kind: security_context
+  version: 1
+  user: u-deny
+  project: direct-query
+  role: author
+  groups:
+  - operations
+  attributes: {}
+  permission_fingerprint: sha256:c3ac0a9a96434df70548bcaf514f7e407c33c4cb9044b6a99e9424a660c259c3
+request:
+  kind: sequence
+  steps:
+  - caller: *id001
+    request:
+      kind: semantic-query
+      body: &id002
+        kind: semantic_query
+        version: 1
+        mode: detail
+        fields:
+        - member: outages.outage_id
+        - member: outages.zone_id
+        - member: outages.minutes
+        order:
+        - by: outages.outage_id
+          direction: asc
+        page:
+          size: '100'
+  - caller: *id001
+    request:
+      kind: semantic-query
+      body: *id002
+    change:
+      op: delete_row
+      table: security.registered
+      row:
+        user_id: u-deny
+expect:
+  outcome: zero-rows
+  notice: POLICY_MAPPING_MISSING
+  forbidden:
+  - Z1
+  - Z2
+control:
+  caller: *id001
+  outcome: rows
+  rows: 'outages.outage_id,outages.zone_id,outages.minutes
+
+    1,Z1,15.00
+
+    2,Z2,25.50
+
+    '
+  without_changes: true
+engines:
+- managed
+- existing-ducklake
+- clickhouse
+pending: 444
+adr_0027: revoked-while-cached

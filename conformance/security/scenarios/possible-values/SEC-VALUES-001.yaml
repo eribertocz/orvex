@@ -1,0 +1,51 @@
+id: SEC-VALUES-001
+area: possible-values
+title: Possible values come from the caller's rows only
+intent: The values offered for a filter never include values of hidden rows.
+fixture: utility
+caller:
+  kind: security_context
+  version: 1
+  user: u-zone1
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:44b2b208870918c65d8d4ccb3c04b4116a39b8538fb96def9fc82a19a59f52e1
+request:
+  kind: possible-values
+  member: readings.zone_id
+expect:
+  outcome: rows
+  rows: 'readings.zone_id
+
+    Z1
+
+    '
+  forbidden:
+  - Z2
+  - Z3
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-exempt
+    project: utility
+    role: author
+    groups:
+    - management
+    attributes: {}
+    permission_fingerprint: sha256:5fb34253cadda8267259755dd39445d7947212f596678f2d76f028ec1e1ee39a
+  outcome: rows
+  rows: 'readings.zone_id
+
+    Z1
+
+    Z2
+
+    Z3
+
+    '
+engines:
+- managed
+pending: P5-03

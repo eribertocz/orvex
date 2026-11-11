@@ -1,0 +1,68 @@
+id: SEC-DQ-003
+area: direct-query
+title: A registered deny-list caller with nothing blocked sees every row
+intent: 'Registration adds no value to the deny-list: nothing blocked means every row, with no notice.'
+fixture: direct-query
+caller:
+  kind: security_context
+  version: 1
+  user: u-open
+  project: direct-query
+  role: author
+  groups:
+  - operations
+  attributes: {}
+  permission_fingerprint: sha256:75728b6bd97e5fb584a6076b75cdee35a2b414905635756ff9eaad4bb872d3b7
+request:
+  kind: semantic-query
+  body:
+    kind: semantic_query
+    version: 1
+    mode: detail
+    fields:
+    - member: outages.outage_id
+    - member: outages.zone_id
+    - member: outages.minutes
+    order:
+    - by: outages.outage_id
+      direction: asc
+    page:
+      size: '100'
+expect:
+  outcome: rows
+  rows: 'outages.outage_id,outages.zone_id,outages.minutes
+
+    1,Z1,15.00
+
+    2,Z2,25.50
+
+    3,Z3,40.25
+
+    '
+  forbidden:
+  - POLICY_MAPPING_MISSING
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-deny
+    project: direct-query
+    role: author
+    groups:
+    - operations
+    attributes: {}
+    permission_fingerprint: sha256:c3ac0a9a96434df70548bcaf514f7e407c33c4cb9044b6a99e9424a660c259c3
+  outcome: rows
+  rows: 'outages.outage_id,outages.zone_id,outages.minutes
+
+    1,Z1,15.00
+
+    2,Z2,25.50
+
+    '
+engines:
+- managed
+- existing-ducklake
+- clickhouse
+adr_0027: registered-nothing-blocked
+pending: 441

@@ -1,0 +1,44 @@
+id: SEC-VALUES-002
+area: possible-values
+title: A masked member has no possible values
+intent: Listing them would reveal the real values.
+fixture: utility
+caller:
+  kind: security_context
+  version: 1
+  user: u-zone1
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:44b2b208870918c65d8d4ccb3c04b4116a39b8538fb96def9fc82a19a59f52e1
+request:
+  kind: possible-values
+  member: consumers.phone
+expect:
+  outcome: error
+  code: MEMBER_MASKED
+  forbidden:
+  - 555-0101
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-coll
+    project: utility
+    role: author
+    groups:
+    - collections
+    attributes: {}
+    permission_fingerprint: sha256:6b813403c5da3e617657e7c9aaaa7394c75e41d70c7ad09b9541eb83c52d2d95
+  outcome: rows
+  rows: 'consumers.phone
+
+    555-0101
+
+    555-0102
+
+    '
+engines:
+- managed
+pending: P5-03
