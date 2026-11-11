@@ -9,6 +9,7 @@ runtime = [
   "duckdb==2.0.0",
   "fastapi==0.162.3",
   "jsonschema==4.26.0",
+  "pg8000==1.31.6",
   "pyarrow==26.0.1",
   "pydantic==2.14.3",
   "pyyaml==6.0.3",
@@ -101,5 +102,5 @@ filterwarnings = ["error"]
 
 # pyarrow ships no type information (no py.typed); its values are typed as Any at the boundary.
 [[tool.mypy.overrides]]
-module = ["pyarrow", "pyarrow.*"]
+module = ["pyarrow", "pyarrow.*", "pg8000", "pg8000.*"]
 ignore_missing_imports = true

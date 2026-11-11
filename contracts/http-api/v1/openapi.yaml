@@ -152,6 +152,12 @@ components:
     MCP_FORBIDDEN: >-
       A Viewer called an MCP tool where the project's `mcp.viewers` is `false` (reserved until
       P9-03).
+    ACCESS_FORBIDDEN: >-
+      The caller may not perform this administration operation (#436). The message never says
+      which rule refused it.
+    LAST_BUILDER: The change would leave a project without an active Builder (#436).
+    LAST_ADMINISTRATOR: The change would leave the instance without an active administrator (#436).
+    USER_NAME_TAKEN: Another user already has this user name, compared without regard to case (#436).
   headers:
     RequestId:
       description: >-
