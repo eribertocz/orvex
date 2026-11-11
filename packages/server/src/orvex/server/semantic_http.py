@@ -8,11 +8,12 @@ server opened, composed from `store`, `semantic` and `access`.
   page is read there. A snapshot no longer kept is `PAGE_CURSOR_INVALID`, reason `expired`;
   nothing falls back to the current one.
 - **The caller** comes from a `ContextSource`: in local mode, `access`'s one local Builder,
-  only for a request the HTTP layer authenticated. No CLI grant is used here.
+  only for a request the HTTP layer authenticated; in server mode, the session's user as the
+  directory knows them at that request (`server_context`, #440). No CLI grant is used here.
 - **JSON and Arrow carry the same answer** (Owner precision 3): the Arrow form is the result's
   own Arrow table, whose schema metadata also holds the JSON envelope (`semantic.envelope`)
   and the receipt view (`semantic.receipt`), byte for byte as in the JSON answer.
-- **Errors** are the engine's `semantic-error` v1 messages for the builder audience, with an
+- **Errors** are the engine's `semantic-error` v1 messages for the caller's audience, with an
   HTTP status chosen by code and category (`status_of`).
 """
 
@@ -30,7 +31,11 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import pyarrow as pa
+from orvex.access.audit.log import AuditLog
+from orvex.access.context import InvalidContext
 from orvex.access.local import LocalContextProvider, LocalRequest
+from orvex.access.server_context import Audience, ServerContextProvider
+from orvex.access.storage.store import Store
 from orvex.semantic.catalog.building import catalog_for_context
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import Answer, Engine, answer
@@ -74,7 +79,7 @@ class ContextSource(Protocol):
     """The caller's `security-context` v1 document for one request, policies and snapshot."""
 
     def __call__(
-        self, request: LocalRequest, policies: PolicyModel, snapshot: int
+        self, request: object, policies: PolicyModel, snapshot: int
     ) -> Mapping[str, Any]: ...
 
 
@@ -87,9 +92,11 @@ class LakeSource(Protocol):
     def model(self, lake: Lake, snapshot: int) -> semantic_model.Loaded: ...
 
 
-def local_context(request: LocalRequest, policies: PolicyModel, snapshot: int) -> dict[str, Any]:
+def local_context(request: object, policies: PolicyModel, snapshot: int) -> dict[str, Any]:
     """Local mode: the one local Builder, for an authenticated request only. Every managed table
     the policies may read is read on `snapshot`, which the permission fingerprint records."""
+    if not isinstance(request, LocalRequest):
+        raise InvalidContext("the request is not an authenticated local request")
     provider = LocalContextProvider(request.project, policies.fingerprint, {"lake": str(snapshot)})
     return provider.context_for(request).document()
 
@@ -157,9 +164,23 @@ def status_of(error: SemanticError) -> int:
     return _BY_CODE.get(error.code, _BY_CATEGORY.get(error.category, 500))
 
 
-def semantic_message(error: SemanticError) -> dict[str, Any]:
-    """The `semantic-error` v1 message, builder audience (local mode)."""
-    document: dict[str, Any] = json.loads(error.to_json(LOCALE, "builder"))
+def server_context(store: Store, audit: AuditLog) -> ContextSource:
+    """Server mode (#440): the session's user as the directory knows them now, on the policy
+    model and the snapshot this request pinned, which the permission fingerprint records."""
+
+    def build(request: object, policies: PolicyModel, snapshot: int) -> dict[str, Any]:
+        provider = ServerContextProvider(
+            store, audit, policies.fingerprint, {"lake": str(snapshot)}
+        )
+        return provider.context_for(request).document()
+
+    return build
+
+
+def semantic_message(error: SemanticError, audience: Audience) -> dict[str, Any]:
+    """The `semantic-error` v1 message for the caller's audience: `builder` for a Builder,
+    the generic view for anyone else (#440; never fixed)."""
+    document: dict[str, Any] = json.loads(error.to_json(LOCALE, audience))
     return document
 
 
@@ -273,7 +294,7 @@ def _question(
     semantic: Semantic,
     lake: Lake,
     body: bytes,
-    request: LocalRequest,
+    request: object,
     read: Callable[[Any], pa.RecordBatchReader],
 ) -> _Question:
     """Everything a question needs on the one snapshot it uses: the current one, or the one
@@ -316,7 +337,7 @@ def _question(
     return _Question(model, policies, context, engine)
 
 
-def ask(semantic: Semantic, body: bytes, request: LocalRequest) -> Asked:
+def ask(semantic: Semantic, body: bytes, request: object) -> Asked:
     """The answer to the `semantic-query` v1 document `body` for the caller of `request`."""
     with semantic.source.session() as lake:
         question = _question(semantic, lake, body, request, lake.read)
@@ -326,7 +347,7 @@ def ask(semantic: Semantic, body: bytes, request: LocalRequest) -> Asked:
         return Asked(found, found.receipt.view(viewer))
 
 
-def explanation(semantic: Semantic, body: bytes, request: LocalRequest) -> dict[str, Any]:
+def explanation(semantic: Semantic, body: bytes, request: object) -> dict[str, Any]:
     """The `semantic-explain` v1 document of `body` for the caller of `request` (#364): the
     same snapshot, model, policies and caller as `ask`, and a read that is never called."""
     with semantic.source.session() as lake:
@@ -336,7 +357,7 @@ def explanation(semantic: Semantic, body: bytes, request: LocalRequest) -> dict[
         return explain(body, compiled, question.policies, question.context, question.engine, viewer)
 
 
-def catalog(semantic: Semantic, request: LocalRequest) -> dict[str, Any]:
+def catalog(semantic: Semantic, request: object) -> dict[str, Any]:
     """The caller's `catalog` v1 document, on the lake's current snapshot."""
     with semantic.source.session() as lake:
         snapshot = lake.current_snapshot().id

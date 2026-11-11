@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "e-0001",
+  "at": "2026-11-11T12:00:00.000000Z",
+  "actor": "u-builder",
+  "instance": "i-0001",
+  "project": "p1",
+  "kind": "attribute.removed",
+  "outcome": "allowed",
+  "details": {
+    "user": "u-ana",
+    "name": "region"
+  }
+}

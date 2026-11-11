@@ -244,6 +244,22 @@ def migrations_for(schema: str) -> tuple[tuple[str, ...], ...]:
                 PRIMARY KEY (user_id, project, group_name)
             )""",
         ),
+        (
+            f"""CREATE TABLE attributes (
+                project text NOT NULL,
+                user_id text NOT NULL,
+                name text NOT NULL CHECK (
+                    name ~ '^[a-z][a-z0-9_]{{0,62}}$'
+                    AND name NOT IN ('user_id', 'user', 'project', 'role', 'groups')
+                ),
+                type text NOT NULL CHECK (type IN ('text', 'integer', 'boolean', 'list')),
+                value text NOT NULL CHECK (char_length(value) BETWEEN 1 AND 1100000),
+                set_at text NOT NULL CHECK ({_INSTANT.format(c="set_at")}),
+                PRIMARY KEY (project, user_id, name),
+                FOREIGN KEY (project, user_id) REFERENCES memberships (project, user_id)
+                    ON DELETE CASCADE
+            )""",
+        ),
     )
 
 

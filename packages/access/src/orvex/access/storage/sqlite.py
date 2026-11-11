@@ -239,6 +239,24 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
             PRIMARY KEY (user_id, project, group_name)
         ) STRICT""",
     ),
+    # 5: per-project user attributes (#440), gone with the membership they belong to.
+    (
+        f"""CREATE TABLE attributes (
+            project TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL CHECK (
+                length(name) BETWEEN 1 AND 63 AND name GLOB '[a-z]*'
+                AND name NOT GLOB '*[^a-z0-9_]*'
+                AND name NOT IN ('user_id', 'user', 'project', 'role', 'groups')
+            ),
+            type TEXT NOT NULL CHECK (type IN ('text', 'integer', 'boolean', 'list')),
+            value TEXT NOT NULL CHECK (length(value) BETWEEN 1 AND 1100000),
+            set_at TEXT NOT NULL CHECK ({_EXACT_INSTANT.format(c="set_at")}),
+            PRIMARY KEY (project, user_id, name),
+            FOREIGN KEY (project, user_id) REFERENCES memberships (project, user_id)
+                ON DELETE CASCADE
+        ) STRICT""",
+    ),
 )
 
 

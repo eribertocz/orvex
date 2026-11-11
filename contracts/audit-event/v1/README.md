@@ -28,6 +28,7 @@ Every object is closed.
 - Data: `page.view`, `query`, `export`, `mcp.call`.
 - Policies and refusals: `policy.attribute_missing`, `policy.mapping_missing`, `access.refused`.
 - Model: `model.certified`.
+- Attributes (#440): `attribute.set` (the user, the attribute, its type, the SHA-256 of its canonical value, and the value itself when it is at most 1,024 characters) and `attribute.removed`, by a Builder of the project.
 - The instance: `instance.settings_changed`, which names the sign-in settings that changed, never their values; `instance.oidc_mapping_changed`, when a provider's group mapping differs from the one last in force (#439).
 - An OIDC sign-in is `auth.login` or `auth.login_failed` with `method: oidc`. A failure's `reason` is one of `STATE`, `ERROR_RESPONSE`, `ISSUER`, `TOKEN_EXCHANGE`, `SIGNATURE`, `CLAIMS`, `NONCE`, `UNLINKED`, `DEACTIVATED`, `NETWORK` and `REFRESH`; a group the mapping sets is `group.member_added` or `group.member_removed` by `system`.
 - The log itself: `audit.retention`, `audit.key_rotated`.
