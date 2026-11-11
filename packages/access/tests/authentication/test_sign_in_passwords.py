@@ -141,3 +141,20 @@ def test_no_password_reaches_the_audit_log(
     logged = json.dumps(world.events())
     for secret in (PASSWORD, "a wrong password", created.temporary_password):
         assert secret not in logged
+
+
+def test_a_value_that_is_no_hash_must_be_replaced() -> None:
+    assert passwords.needs_rehash("not a hash")
+
+
+def test_a_user_without_a_password_cannot_sign_in(
+    accounts: Accounts, world: World, sign_in: SignIn
+) -> None:
+    ana = accounts.with_password("ana")
+    with world.store.transaction() as transaction:
+        transaction.run("DELETE FROM credentials WHERE user_id = :user", user=ana)
+        assert credentials.of(transaction, ana) is None
+    with pytest.raises(AccessError) as caught:
+        sign_in.login("ana", PASSWORD, ADDRESS)
+    assert caught.value.code == LOGIN_FAILED
+    assert world.events()[-1]["details"]["reason"] == "NO_PASSWORD"
