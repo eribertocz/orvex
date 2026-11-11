@@ -273,11 +273,38 @@ reason = "combines the coverage data of the whole suite's CI parts"
 
 [[job]]
 workflow = "python.yml"
+job = "python-oidc"
+kind = "check"
+# Gated through python-tests, which needs it (#439).
+required = false
+contexts = ["python-oidc-3.15", "python-oidc-3.14"]
+digest = "3aafb43e34fe4381"
+pythons = ["3.15", "3.14"]
+setup = [
+  'dir="$RUNNER_TEMP/keycloak-tls"',
+  "python -m pip install --quiet pip==26.3",
+  'url="$KEYCLOAK_TEST_URL/realms/ci-realm/.well-known/openid-configuration"',
+]
+reports = ["docker logs keycloak | tail -100"]
+[[job.check]]
+# The OIDC flow against Keycloak (#439); the job then fails if any of its tests was skipped.
+name = "python-oidc"
+run = "python -m pytest packages/server/tests/test_oidc_keycloak.py --junitxml=junit.xml"
+local = false
+reason = "needs the Keycloak container the CI job starts"
+[[job.check]]
+name = "python-oidc-ran"
+run = "python -c \"import sys, xml.etree.ElementTree as E; r=E.parse('junit.xml').getroot(); s=r.find('testsuite') if r.tag=='testsuites' else r; sys.exit(1 if int(s.get('skipped')) or not int(s.get('tests')) else 0)\""
+local = false
+reason = "reads the junit report of the Keycloak run above"
+
+[[job]]
+workflow = "python.yml"
 job = "python-tests"
 kind = "check"
 required = true
 contexts = ["python-tests-3.15", "python-tests-3.14"]
-digest = "fc5c4ab145de44e7"
+digest = "185e4e8547e8b5ac"
 pythons = ["3.15", "3.14"]
 setup = ['test "$RESULT" = success']
 # Reports the parts of python-tests-part and the coverage floors as the required checks;

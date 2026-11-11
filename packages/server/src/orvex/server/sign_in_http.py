@@ -33,6 +33,21 @@ def cookie_name(slug: str) -> str:
     return f"__Host-{slug}_session"
 
 
+def set_session_cookie(
+    response: Response, cookie: str, session_id: str, lifetime: timedelta
+) -> None:
+    """The session cookie: `__Host-`, `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`."""
+    response.set_cookie(
+        cookie,
+        session_id,
+        max_age=int(lifetime.total_seconds()),
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+
+
 def session_view(user: User, password_change_only: bool) -> v1.SessionView:
     return v1.SessionView(
         user=v1.User(
@@ -50,15 +65,7 @@ def mount_sign_in(app: FastAPI, sign_in: SignIn, settings: Settings, cookie: str
     session route has a live session (`request.state.session`)."""
 
     def set_session(response: Response, session_id: str, lifetime: timedelta) -> None:
-        response.set_cookie(
-            cookie,
-            session_id,
-            max_age=int(lifetime.total_seconds()),
-            path="/",
-            secure=True,
-            httponly=True,
-            samesite="strict",
-        )
+        set_session_cookie(response, cookie, session_id, lifetime)
 
     @app.post(LOGIN)
     async def login(request: Request) -> Response:

@@ -13,6 +13,9 @@ from orvex.access.errors import (
     AUDIT_UNAVAILABLE,
     LOGIN_DELAYED,
     LOGIN_FAILED,
+    OIDC_FAILED,
+    OIDC_NOT_CONFIGURED,
+    OIDC_REFRESH_REQUIRED,
     PASSWORD_CHANGE_REQUIRED,
     PASSWORD_REJECTED,
     SESSION_EXPIRED,
@@ -32,8 +35,13 @@ STATUS = {
     LOGIN_DELAYED: 429,
     VALIDATION_FAILED: 422,
     AUDIT_UNAVAILABLE: 503,
+    OIDC_FAILED: 400,
+    OIDC_NOT_CONFIGURED: 404,
+    OIDC_REFRESH_REQUIRED: 401,
 }
-_HIDDEN = frozenset({"retry_after"})
+# A delay's length goes to `Retry-After` only; which OIDC step or setting failed goes to the audit
+# log and the operator, never to the browser.
+_HIDDEN = frozenset({"retry_after", "reason", "setting"})
 
 
 def access_error_response(error: AccessError, request_id: str) -> JSONResponse:

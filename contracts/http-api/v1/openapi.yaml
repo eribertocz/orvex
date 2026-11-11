@@ -177,6 +177,55 @@ paths:
             X-Request-Id: { $ref: "#/components/headers/RequestId" }
             Set-Cookie: { schema: { type: string } }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/oidc/{provider}/start:
+    get:
+      operationId: getOidcStart
+      summary: Begin an OIDC sign-in with a configured provider (server mode, #439).
+      description: >-
+        Redirects to the provider (Authorization Code with PKCE S256, `response_mode=query`) and
+        sets the binding cookie `__Secure-<slug>_oidc` (`HttpOnly`, `Secure`, `SameSite=Lax`,
+        `Path=/api/v1/auth/oidc`, at most 10 minutes). With `refresh=true`, the silent
+        re-authentication (`prompt=none`) of the caller's live provider session.
+      parameters:
+        - { name: provider, in: path, required: true, schema: { type: string, pattern: "^[a-z][a-z0-9-]{0,31}$" } }
+        - { name: refresh, in: query, required: false, schema: { type: string, enum: ["true"] } }
+      responses:
+        "303":
+          description: To the provider's authorization endpoint.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+            Location: { schema: { type: string } }
+            Set-Cookie: { schema: { type: string } }
+        "400":
+          description: The generic `OIDC_FAILED` page (text/html).
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/oidc/{provider}/callback:
+    get:
+      operationId: getOidcCallback
+      summary: Finish an OIDC sign-in (server mode, #439).
+      description: >-
+        Checks the binding, the authorization response, the token exchange and the ID token,
+        then sets the session cookie (#438) and answers a page that opens `/`. Every failure is
+        the one generic `OIDC_FAILED` page; the audit log names the step.
+      parameters:
+        - { name: provider, in: path, required: true, schema: { type: string, pattern: "^[a-z][a-z0-9-]{0,31}$" } }
+        - { name: code, in: query, required: false, schema: { type: string, maxLength: 4096 } }
+        - { name: state, in: query, required: false, schema: { type: string, maxLength: 4096 } }
+        - { name: error, in: query, required: false, schema: { type: string, maxLength: 4096 } }
+        - { name: iss, in: query, required: false, schema: { type: string, maxLength: 4096 } }
+      responses:
+        "200":
+          description: Signed in (text/html); the session is in the cookie only.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+            Set-Cookie: { schema: { type: string } }
+        "400":
+          description: The generic `OIDC_FAILED` page (text/html).
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        default: { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     session:
@@ -261,6 +310,15 @@ components:
     ORIGIN_REFUSED: >-
       A state-changing request in server mode without the instance's public origin in `Origin`,
       sent from another site (`Sec-Fetch-Site`), or without an `application/json` body (#438).
+    OIDC_FAILED: >-
+      An OIDC sign-in failed at some step; the browser is never told which (#439). The audit log
+      names it.
+    OIDC_NOT_CONFIGURED: >-
+      No such sign-in provider, or the instance's sign-in configuration is not complete (#439).
+    OIDC_REFRESH_REQUIRED: >-
+      The session's provider groups are due to be read again: open
+      `/api/v1/auth/oidc/{provider}/start?refresh=true` for a silent re-authentication. If it
+      fails, the session ends (#439).
   headers:
     RequestId:
       description: >-

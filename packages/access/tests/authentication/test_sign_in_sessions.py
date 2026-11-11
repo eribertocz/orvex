@@ -232,5 +232,5 @@ def test_only_the_hash_of_a_session_id_is_stored(
     with world.store.transaction(read_only=True) as transaction:
         stored = [str(row[0]) for row in transaction.rows("SELECT id_hash FROM sessions")]
     assert session_id not in stored
-    assert sessions._hash(session_id) in stored
+    assert sessions.session_hash(session_id) in stored
     assert session_id not in json.dumps(world.events())

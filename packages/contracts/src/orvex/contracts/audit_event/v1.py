@@ -118,6 +118,13 @@ class GroupMemberRemovedDetails(BaseModel):
     user: Id
 
 
+class InstanceOidcMappingChangedDetails(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    provider: Annotated[str, Field(pattern="^[a-z][a-z0-9-]{0,31}$")]
+
+
 class InstanceSettingsChangedDetails(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -231,6 +238,22 @@ class UserDeactivatedDetails(BaseModel):
     user: Id
 
 
+class UserOidcLinkedDetails(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    user: Id
+    provider: Annotated[str, Field(pattern="^[a-z][a-z0-9-]{0,31}$")]
+
+
+class UserOidcUnlinkedDetails(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    user: Id
+    provider: Annotated[str, Field(pattern="^[a-z][a-z0-9-]{0,31}$")]
+
+
 class UserPasswordChangedDetails(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -287,6 +310,7 @@ class AuditEvent(BaseModel):
         "group.deleted",
         "group.member_added",
         "group.member_removed",
+        "instance.oidc_mapping_changed",
         "instance.settings_changed",
         "mcp.call",
         "membership.added",
@@ -301,6 +325,8 @@ class AuditEvent(BaseModel):
         "user.administrator_removed",
         "user.created",
         "user.deactivated",
+        "user.oidc_linked",
+        "user.oidc_unlinked",
         "user.password_changed",
         "user.password_reset",
         "user.reactivated",
@@ -322,6 +348,7 @@ class AuditEvent(BaseModel):
         | GroupDeletedDetails
         | GroupMemberAddedDetails
         | GroupMemberRemovedDetails
+        | InstanceOidcMappingChangedDetails
         | InstanceSettingsChangedDetails
         | McpCallDetails
         | MembershipAddedDetails
@@ -336,6 +363,8 @@ class AuditEvent(BaseModel):
         | UserAdministratorRemovedDetails
         | UserCreatedDetails
         | UserDeactivatedDetails
+        | UserOidcLinkedDetails
+        | UserOidcUnlinkedDetails
         | UserPasswordChangedDetails
         | UserPasswordResetDetails
         | UserReactivatedDetails

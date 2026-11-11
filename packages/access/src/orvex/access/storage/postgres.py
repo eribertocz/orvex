@@ -203,6 +203,47 @@ def migrations_for(schema: str) -> tuple[tuple[str, ...], ...]:
             )""",
             "INSERT INTO sign_in_settings VALUES (1, 43200, 3600, NULL, '[]')",
         ),
+        (
+            f"""CREATE TABLE oidc_identities (
+                issuer text NOT NULL CHECK (
+                    char_length(issuer) BETWEEN 9 AND 512 AND issuer LIKE 'https://%'
+                ),
+                subject text NOT NULL CHECK (char_length(subject) BETWEEN 1 AND 255),
+                provider text NOT NULL CHECK (char_length(provider) BETWEEN 1 AND 32),
+                user_id text NOT NULL REFERENCES users (id),
+                linked_at text NOT NULL CHECK ({_INSTANT.format(c="linked_at")}),
+                PRIMARY KEY (issuer, subject)
+            )""",
+            "CREATE INDEX oidc_identities_user ON oidc_identities (user_id)",
+            f"""CREATE TABLE oidc_bindings (
+                reference text PRIMARY KEY CHECK (reference ~ '^[0-9a-f]{{64}}$'),
+                provider text NOT NULL CHECK (char_length(provider) BETWEEN 1 AND 32),
+                state text NOT NULL CHECK (char_length(state) = 43),
+                nonce text NOT NULL CHECK (char_length(nonce) = 43),
+                verifier text NOT NULL CHECK (char_length(verifier) = 43),
+                created_at text NOT NULL CHECK ({_INSTANT.format(c="created_at")}),
+                refreshing text CHECK (refreshing IS NULL OR refreshing ~ '^[0-9a-f]{{64}}$')
+            )""",
+            "CREATE INDEX oidc_bindings_age ON oidc_bindings (created_at)",
+            f"""CREATE TABLE oidc_sessions (
+                session text PRIMARY KEY REFERENCES sessions (id_hash) ON DELETE CASCADE,
+                provider text NOT NULL CHECK (char_length(provider) BETWEEN 1 AND 32),
+                issuer text NOT NULL,
+                subject text NOT NULL,
+                refreshed_at text NOT NULL CHECK ({_INSTANT.format(c="refreshed_at")})
+            )""",
+            """CREATE TABLE oidc_mapping_state (
+                provider text PRIMARY KEY CHECK (char_length(provider) BETWEEN 1 AND 32),
+                digest text NOT NULL CHECK (digest ~ '^[0-9a-f]{64}$')
+            )""",
+            """CREATE TABLE oidc_grants (
+                user_id text NOT NULL REFERENCES users (id),
+                project text NOT NULL,
+                group_name text NOT NULL,
+                provider text NOT NULL CHECK (char_length(provider) BETWEEN 1 AND 32),
+                PRIMARY KEY (user_id, project, group_name)
+            )""",
+        ),
     )
 
 

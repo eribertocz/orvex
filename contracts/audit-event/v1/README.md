@@ -22,13 +22,14 @@ Every object is closed.
 
 **Kinds.**
 - Sign-in: `auth.login`, `auth.login_failed`, `auth.logout`, `auth.session_expired`.
-- Users: `user.created`, `user.deactivated`, `user.reactivated`, `user.administrator_granted`, `user.administrator_removed`, `user.password_changed` (by the user), `user.password_reset` (by an administrator, who receives a temporary password).
+- Users: `user.created`, `user.deactivated`, `user.reactivated`, `user.administrator_granted`, `user.administrator_removed`, `user.password_changed` (by the user), `user.password_reset` (by an administrator, who receives a temporary password), `user.oidc_linked` and `user.oidc_unlinked` (an administrator's links of a provider identity, #439).
 - Memberships: `membership.added`, `membership.changed`, `membership.removed`.
 - Groups: `group.created`, `group.deleted`, `group.member_added`, `group.member_removed`.
 - Data: `page.view`, `query`, `export`, `mcp.call`.
 - Policies and refusals: `policy.attribute_missing`, `policy.mapping_missing`, `access.refused`.
 - Model: `model.certified`.
-- The instance: `instance.settings_changed`, which names the sign-in settings that changed, never their values.
+- The instance: `instance.settings_changed`, which names the sign-in settings that changed, never their values; `instance.oidc_mapping_changed`, when a provider's group mapping differs from the one last in force (#439).
+- An OIDC sign-in is `auth.login` or `auth.login_failed` with `method: oidc`. A failure's `reason` is one of `STATE`, `ERROR_RESPONSE`, `ISSUER`, `TOKEN_EXCHANGE`, `SIGNATURE`, `CLAIMS`, `NONCE`, `UNLINKED`, `DEACTIVATED`, `NETWORK` and `REFRESH`; a group the mapping sets is `group.member_added` or `group.member_removed` by `system`.
 - The log itself: `audit.retention`, `audit.key_rotated`.
 
 Adding a kind is a compatible change. Removing one, or changing its meaning, needs `v2`.

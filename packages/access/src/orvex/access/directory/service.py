@@ -285,6 +285,7 @@ class Directory:
                 return
             try:
                 sql.insert_group_member(transaction, project, name, member)
+                sql.forget_grant(transaction, project, name, member)
             except UniqueViolation:
                 return  # a concurrent call added the same member
             sql.bump(transaction, member, now)
@@ -296,6 +297,7 @@ class Directory:
     def remove_group_member(self, actor: str, project: str, name: str, member: str) -> None:
         def work(transaction: Transaction, now: str) -> None:
             refused(rules.manage_groups(sql.caller(transaction, actor, project), member))
+            sql.forget_grant(transaction, project, name, member)
             if sql.delete_group_member(transaction, project, name, member):
                 sql.bump(transaction, member, now)
                 details = {"group": name, "user": member}

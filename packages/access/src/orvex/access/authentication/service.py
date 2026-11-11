@@ -12,6 +12,9 @@
   session of the user ends, and the one that made the change gets a new id.
 - **Reset.** An administrator sets a temporary password, shown once, and every session of the
   user ends.
+- **Provider groups** (#439) are never carried into a password session: signing in with a
+  password takes back every group an OIDC mapping granted. A password change in a provider
+  session keeps it a provider session, so its groups are still refreshed.
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ from orvex.access.errors import (
     VALIDATION_FAILED,
     AccessError,
 )
+from orvex.access.oidc import group_mapping, provider_sessions
 from orvex.access.storage import retry
 from orvex.access.storage.instants import instant
 from orvex.access.storage.store import Store, Transaction
@@ -119,6 +123,8 @@ class SignIn:
             if current is None or not current.active:
                 return None  # deactivated meanwhile
             delays.succeeded(transaction, found, now)
+            if group_mapping.revoke(transaction, self._audit, current.id, now):
+                current = directory_sql.user(transaction, current.id) or current  # bumped
             if presented is not None:
                 sessions.end(transaction, presented)
             if stronger is not None:
@@ -201,8 +207,11 @@ class SignIn:
             ):
                 raise _failed()  # an administrator reset it meanwhile
             delays.succeeded(transaction, found, now)
+            provider = provider_sessions.of(transaction, sessions.session_hash(session_id))
             sessions.end_all(transaction, user.id)
             renewed = sessions.issue(transaction, live.user, now, password_change_only=False)
+            if provider is not None:  # still a provider session, refreshed on the same clock
+                provider_sessions.record(transaction, renewed, *provider)
             self._audit.record(transaction, "user.password_changed", user.id, {"user": user.id})
             return renewed
 

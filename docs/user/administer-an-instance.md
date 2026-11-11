@@ -80,3 +80,16 @@ orvex admin audit rotate-key                          # a new key, signed by the
 `verify` names the first event or checkpoint that does not hold (`AUDIT_CHAIN_BROKEN`, `AUDIT_CHECKPOINT_INVALID`). `retain` removes old events only up to a signed checkpoint, which stays, so what remains still verifies. It verifies the whole log first and holds the store's write lock meanwhile, so run it at a quiet hour. It refuses when no checkpoint can be kept (`AUDIT_RETENTION_INVALID`).
 
 If `rotate-key` stops between recording the rotation and replacing the file, the new key is left as `audit-signing.key.new`. Until you move it into place, the log refuses to write with the old one. Restart a running server after a rotation: it keeps the key it loaded, and refuses to write with it once it has been replaced.
+
+## Single sign-on with OIDC
+
+- **Configuration.** The providers and the group mapping are in `oidc.toml` in the instance directory, or in the file that `<SLUG>_OIDC_CONFIG` names. Each provider has:
+  - an `issuer` (`https`, written exactly as the provider publishes it);
+  - a `client_id`;
+  - `client_secret_variable`: the environment variable that holds the client secret, which is never in the file;
+  - the allowed signature `algorithms`.
+
+  Optional settings: `scopes`, `group_refresh_minutes` (5 to 1,440, 60 by default), `endpoint_hosts`, and `internal` with `internal_ranges` for a provider on a private network. A setting that is not valid stops the instance and is named.
+- **Linking.** A person signs in with the provider only after an administrator links their provider identity (issuer and subject) to their user. E-mail addresses are never used to match users.
+- **Groups.** A `[[mapping]]` entry turns a claim value into a project group (`provider`, `claim`, `value`, `project`, `group`). It never grants a role, applies only where the user is already a member of the project, and never touches groups set by hand.
+- **Freshness.** Provider groups are read again after `group_refresh_minutes`, without the user noticing. If the provider no longer signs them in, their session ends. Changing the mapping, unlinking or deactivating a user ends their sessions at once.

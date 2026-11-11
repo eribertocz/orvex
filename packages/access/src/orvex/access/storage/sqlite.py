@@ -199,6 +199,46 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         ) STRICT""",
         "INSERT INTO sign_in_settings VALUES (1, 43200, 3600, NULL, '[]')",
     ),
+    # 4: OIDC sign-in (#439): linked identities, sign-in bindings, provider sessions, the mapping.
+    (
+        f"""CREATE TABLE oidc_identities (
+            issuer TEXT NOT NULL CHECK (length(issuer) BETWEEN 9 AND 512 AND issuer GLOB 'https://*'),
+            subject TEXT NOT NULL CHECK (length(subject) BETWEEN 1 AND 255),
+            provider TEXT NOT NULL CHECK (length(provider) BETWEEN 1 AND 32),
+            user_id TEXT NOT NULL REFERENCES users (id),
+            linked_at TEXT NOT NULL CHECK ({_EXACT_INSTANT.format(c="linked_at")}),
+            PRIMARY KEY (issuer, subject)
+        ) STRICT""",
+        "CREATE INDEX oidc_identities_user ON oidc_identities (user_id)",
+        f"""CREATE TABLE oidc_bindings (
+            reference TEXT PRIMARY KEY NOT NULL CHECK ({_HEX.format(c="reference", n=64)}),
+            provider TEXT NOT NULL CHECK (length(provider) BETWEEN 1 AND 32),
+            state TEXT NOT NULL CHECK (length(state) = 43),
+            nonce TEXT NOT NULL CHECK (length(nonce) = 43),
+            verifier TEXT NOT NULL CHECK (length(verifier) = 43),
+            created_at TEXT NOT NULL CHECK ({_EXACT_INSTANT.format(c="created_at")}),
+            refreshing TEXT CHECK (refreshing IS NULL OR ({_HEX.format(c="refreshing", n=64)}))
+        ) STRICT""",
+        "CREATE INDEX oidc_bindings_age ON oidc_bindings (created_at)",
+        f"""CREATE TABLE oidc_sessions (
+            session TEXT PRIMARY KEY NOT NULL REFERENCES sessions (id_hash) ON DELETE CASCADE,
+            provider TEXT NOT NULL CHECK (length(provider) BETWEEN 1 AND 32),
+            issuer TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            refreshed_at TEXT NOT NULL CHECK ({_EXACT_INSTANT.format(c="refreshed_at")})
+        ) STRICT""",
+        f"""CREATE TABLE oidc_mapping_state (
+            provider TEXT PRIMARY KEY NOT NULL CHECK (length(provider) BETWEEN 1 AND 32),
+            digest TEXT NOT NULL CHECK ({_HEX.format(c="digest", n=64)})
+        ) STRICT""",
+        """CREATE TABLE oidc_grants (
+            user_id TEXT NOT NULL REFERENCES users (id),
+            project TEXT NOT NULL,
+            group_name TEXT NOT NULL,
+            provider TEXT NOT NULL CHECK (length(provider) BETWEEN 1 AND 32),
+            PRIMARY KEY (user_id, project, group_name)
+        ) STRICT""",
+    ),
 )
 
 

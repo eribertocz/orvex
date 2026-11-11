@@ -44,7 +44,8 @@ class Ended:
     reason: Ending
 
 
-def _hash(session_id: str) -> str:
+def session_hash(session_id: str) -> str:
+    """The only form of a session id the store holds."""
     return hashlib.sha256(session_id.encode()).hexdigest()
 
 
@@ -56,7 +57,7 @@ def issue(
     transaction.run(
         "INSERT INTO sessions (id_hash, user_id, authz_version, created_at, seen_at, "
         "password_change_only) VALUES (:id, :user, :version, :now, :now, :only)",
-        id=_hash(session_id),
+        id=session_hash(session_id),
         user=user.id,
         version=user.authz_version,
         now=instant(now),
@@ -87,7 +88,7 @@ def check(
     found = transaction.rows(
         "SELECT user_id, authz_version, created_at, seen_at, password_change_only "
         "FROM sessions WHERE id_hash = :id",
-        id=_hash(session_id),
+        id=session_hash(session_id),
     )
     if not found:
         return None
@@ -112,7 +113,7 @@ def check(
     if touch:
         transaction.run(
             "UPDATE sessions SET seen_at = :now WHERE id_hash = :id",
-            id=_hash(session_id),
+            id=session_hash(session_id),
             now=instant(now),
         )
     return Session(user, bool(only))
@@ -121,7 +122,7 @@ def check(
 def end(transaction: Transaction, session_id: str) -> str | None:
     """End one session; return its user, or None when there was no such session."""
     gone = transaction.rows(
-        "DELETE FROM sessions WHERE id_hash = :id RETURNING user_id", id=_hash(session_id)
+        "DELETE FROM sessions WHERE id_hash = :id RETURNING user_id", id=session_hash(session_id)
     )
     return str(gone[0][0]) if gone else None
 
