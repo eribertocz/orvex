@@ -29,3 +29,15 @@ class User:
     @property
     def active(self) -> bool:
         return self.state == "active"
+
+
+@dataclass(frozen=True, slots=True)
+class NewUser:
+    """A user just created, and their temporary password: shown once, never stored (#438)."""
+
+    user: User
+    temporary_password: str
+
+    @property
+    def id(self) -> str:
+        return self.user.id

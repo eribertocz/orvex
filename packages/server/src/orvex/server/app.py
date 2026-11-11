@@ -163,6 +163,82 @@ def refused_address(request: Request, port: int) -> JSONResponse | None:
     return None
 
 
+def mount_status(app: FastAPI, versions: Versions) -> None:
+    """`health` and `version`, which every mode answers without a session."""
+
+    @app.get("/api/v1/health")
+    async def health() -> v1.Health:
+        return v1.Health(status="ok")
+
+    @app.get("/api/v1/version")
+    async def version() -> v1.Version:
+        return v1.Version(
+            product=v1.SemanticVersion(versions.product),
+            modules=[
+                v1.ModuleVersion(name=name, version=v1.SemanticVersion(number))
+                for name, number in versions.modules
+            ],
+            contracts=[
+                v1.ContractVersion(name=name, version=number) for name, number in versions.contracts
+            ],
+        )
+
+
+def install_error_handlers(app: FastAPI, web_page: Callable[[str], Path | None]) -> None:
+    """Every routing and validation error as an ErrorEnvelope; a page of the web build for an
+    unknown non-API path, when `web_page` finds one."""
+
+    @app.exception_handler(HTTPException)
+    async def http_error(request: Request, error: HTTPException) -> Response:
+        if error.status_code == 404 and request.method == "GET":
+            page = web_page(request.url.path)
+            if page is not None:
+                return FileResponse(page)
+        if error.status_code == 404:
+            return error_response(
+                404,
+                "NOT_FOUND",
+                f"No route for {request.url.path}",
+                request_id_of(request),
+                [v1.ErrorDetail(name="path", value=request.url.path)],
+            )
+        if error.status_code == 405:
+            response = error_response(
+                405,
+                "METHOD_NOT_ALLOWED",
+                f"{request.method} is not allowed on {request.url.path}",
+                request_id_of(request),
+                [
+                    v1.ErrorDetail(name="method", value=request.method),
+                    v1.ErrorDetail(name="path", value=request.url.path),
+                ],
+            )
+            allowed = (error.headers or {}).get("Allow")
+            if allowed is not None:  # RFC 9110 §15.5.6: a 405 lists the accepted methods
+                response.headers["Allow"] = allowed
+            return response
+        return error_response(
+            error.status_code, "INTERNAL_ERROR", str(error.detail), request_id_of(request)
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, error: RequestValidationError) -> JSONResponse:
+        details = [
+            v1.ErrorDetail(
+                name=".".join(str(part) for part in problem.get("loc", ())) or "request",
+                value=str(problem.get("msg", "invalid")),
+            )
+            for problem in error.errors()
+        ]
+        return error_response(
+            422,
+            "VALIDATION_FAILED",
+            "The request does not match the contract",
+            request_id_of(request),
+            details,
+        )
+
+
 @dataclass(frozen=True)
 class LocalSemantic:
     """The semantic routes of local mode: the project's id, the session's access and the
@@ -250,72 +326,9 @@ def create_app(
         response.headers["Referrer-Policy"] = "no-referrer"
         return response
 
-    @app.exception_handler(HTTPException)
-    async def http_error(request: Request, error: HTTPException) -> Response:
-        if error.status_code == 404 and request.method == "GET":
-            page = web_page(request.url.path)
-            if page is not None:
-                return FileResponse(page)
-        if error.status_code == 404:
-            return error_response(
-                404,
-                "NOT_FOUND",
-                f"No route for {request.url.path}",
-                request_id_of(request),
-                [v1.ErrorDetail(name="path", value=request.url.path)],
-            )
-        if error.status_code == 405:
-            response = error_response(
-                405,
-                "METHOD_NOT_ALLOWED",
-                f"{request.method} is not allowed on {request.url.path}",
-                request_id_of(request),
-                [
-                    v1.ErrorDetail(name="method", value=request.method),
-                    v1.ErrorDetail(name="path", value=request.url.path),
-                ],
-            )
-            allowed = (error.headers or {}).get("Allow")
-            if allowed is not None:  # RFC 9110 §15.5.6: a 405 lists the accepted methods
-                response.headers["Allow"] = allowed
-            return response
-        return error_response(
-            error.status_code, "INTERNAL_ERROR", str(error.detail), request_id_of(request)
-        )
+    install_error_handlers(app, web_page)
 
-    @app.exception_handler(RequestValidationError)
-    async def validation_error(request: Request, error: RequestValidationError) -> JSONResponse:
-        details = [
-            v1.ErrorDetail(
-                name=".".join(str(part) for part in problem.get("loc", ())) or "request",
-                value=str(problem.get("msg", "invalid")),
-            )
-            for problem in error.errors()
-        ]
-        return error_response(
-            422,
-            "VALIDATION_FAILED",
-            "The request does not match the contract",
-            request_id_of(request),
-            details,
-        )
-
-    @app.get("/api/v1/health")
-    async def health() -> v1.Health:
-        return v1.Health(status="ok")
-
-    @app.get("/api/v1/version")
-    async def version() -> v1.Version:
-        return v1.Version(
-            product=v1.SemanticVersion(versions.product),
-            modules=[
-                v1.ModuleVersion(name=name, version=v1.SemanticVersion(number))
-                for name, number in versions.modules
-            ],
-            contracts=[
-                v1.ContractVersion(name=name, version=number) for name, number in versions.contracts
-            ],
-        )
+    mount_status(app, versions)
 
     if local is not None:
         mount_semantic(app, local)

@@ -29,6 +29,8 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 
 from orvex.access.audit.log import AuditLog
+from orvex.access.audit.operation import audited
+from orvex.access.authentication import credentials, passwords
 from orvex.access.directory import locks, rules
 from orvex.access.directory import statements as sql
 from orvex.access.directory.names import (
@@ -38,25 +40,16 @@ from orvex.access.directory.names import (
     checked_role,
     checked_user_name,
 )
-from orvex.access.directory.records import Role, User
+from orvex.access.directory.records import NewUser, Role, User
+from orvex.access.directory.rules import refused
 from orvex.access.errors import USER_NAME_TAKEN, VALIDATION_FAILED, AccessError
-from orvex.access.storage import retry
+from orvex.access.storage.instants import instant, parsed
 from orvex.access.storage.store import Store, Transaction, UniqueViolation
-
-
-def instant(moment: datetime) -> str:
-    """The stored form of an instant: UTC, microseconds, `Z`."""
-    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def new_user_id() -> str:
     """128 random bits in the alphabet of `security-context` v1 ids; never reused."""
     return secrets.token_urlsafe(16)
-
-
-def _refuse(code: str | None) -> None:
-    if code is not None:
-        raise AccessError(code, "The operation is not allowed.")
 
 
 def _invalid(field: str) -> AccessError:
@@ -103,9 +96,13 @@ class Directory:
 
     # --- users and the administrator flag (administrators only) --------------------------------
 
-    def create_user(self, actor: str, user_name: str, display_name: str) -> User:
-        def work(transaction: Transaction, now: str) -> User:
-            _refuse(rules.manage_users(sql.caller(transaction, actor)))
+    def create_user(self, actor: str, user_name: str, display_name: str) -> NewUser:
+        """Create an active user with a temporary password (#438), returned once."""
+        temporary = passwords.temporary()
+        stored = passwords.hashed(temporary)
+
+        def work(transaction: Transaction, now: str) -> NewUser:
+            refused(rules.manage_users(sql.caller(transaction, actor)))
             name = checked_user_name(user_name)
             display = checked_display_name(display_name)
             if sql.user_by_name(transaction, name) is not None:
@@ -115,13 +112,14 @@ class Directory:
                 sql.insert_user(transaction, created, name, display, False, now)
             except UniqueViolation as error:
                 raise AccessError(USER_NAME_TAKEN, "That user name is taken.") from error
+            credentials.store(transaction, created, stored, parsed(now), temporary=True)
             self._event(
                 transaction, "user.created", actor, {"user": created, "via": "administrator"}
             )
             found = sql.user(transaction, created)
             if found is None:
                 raise _invalid("user")
-            return found
+            return NewUser(found, temporary)
 
         return self._write("create_user", actor, None, None, work)
 
@@ -130,18 +128,18 @@ class Directory:
 
         def work(transaction: Transaction, now: str) -> None:
             self._lowering_oneself(transaction, actor, target, administrator=True, projects=None)
-            _refuse(rules.manage_users(sql.caller(transaction, actor), target))
+            refused(rules.manage_users(sql.caller(transaction, actor), target))
             locks.lock_users(transaction, target, administrators=True)
             found = self._existing(transaction, target)
             if not found.active:
                 return
             for project in sql.builder_projects(transaction, target):
                 locks.lock_builders(transaction, project)
-                _refuse(
+                refused(
                     rules.keeps_a_builder(sql.other_active_builders(transaction, project, target))
                 )
             if found.administrator:
-                _refuse(
+                refused(
                     rules.keeps_an_administrator(
                         sql.other_active_administrators(transaction, target)
                     )
@@ -153,7 +151,7 @@ class Directory:
 
     def reactivate_user(self, actor: str, target: str) -> None:
         def work(transaction: Transaction, now: str) -> None:
-            _refuse(rules.manage_users(sql.caller(transaction, actor), target))
+            refused(rules.manage_users(sql.caller(transaction, actor), target))
             locks.lock_users(transaction, target)
             if not self._existing(transaction, target).active:
                 sql.set_state(transaction, target, True, now)
@@ -165,13 +163,13 @@ class Directory:
         def work(transaction: Transaction, now: str) -> None:
             if not value:
                 self._lowering_oneself(transaction, actor, target, administrator=True, projects=())
-            _refuse(rules.manage_users(sql.caller(transaction, actor), target))
+            refused(rules.manage_users(sql.caller(transaction, actor), target))
             locks.lock_users(transaction, target, administrators=True)
             found = self._existing(transaction, target)
             if found.administrator == value:
                 return
             if not value and found.active:
-                _refuse(
+                refused(
                     rules.keeps_an_administrator(
                         sql.other_active_administrators(transaction, target)
                     )
@@ -190,7 +188,7 @@ class Directory:
             place = checked_id(project, "project")
             caller = sql.caller(transaction, actor, place)
             has_builder = sql.has_active_builder(transaction, place)
-            _refuse(
+            refused(
                 rules.manage_membership(
                     caller, target, adding=True, role=granted, project_has_builder=has_builder
                 )
@@ -249,7 +247,7 @@ class Directory:
     def create_group(self, actor: str, project: str, name: str) -> None:
         def work(transaction: Transaction, now: str) -> None:
             group = checked_group(name)
-            _refuse(rules.manage_groups(sql.caller(transaction, actor, project)))
+            refused(rules.manage_groups(sql.caller(transaction, actor, project)))
             if sql.group_exists(transaction, project, group):
                 raise _invalid("group")
             try:
@@ -263,11 +261,11 @@ class Directory:
     def delete_group(self, actor: str, project: str, name: str) -> None:
         def work(transaction: Transaction, now: str) -> None:
             caller = sql.caller(transaction, actor, project)
-            _refuse(rules.manage_groups(caller))
+            refused(rules.manage_groups(caller))
             if not sql.group_exists(transaction, project, name):
                 raise _invalid("group")
             members = sql.group_members(transaction, project, name)
-            _refuse(rules.manage_groups(caller, actor if actor in members else None))
+            refused(rules.manage_groups(caller, actor if actor in members else None))
             sql.delete_group(transaction, project, name)
             for member in members:
                 sql.bump(transaction, member, now)
@@ -278,7 +276,7 @@ class Directory:
 
     def add_group_member(self, actor: str, project: str, name: str, member: str) -> None:
         def work(transaction: Transaction, now: str) -> None:
-            _refuse(rules.manage_groups(sql.caller(transaction, actor, project), member))
+            refused(rules.manage_groups(sql.caller(transaction, actor, project), member))
             if not sql.group_exists(transaction, project, name):
                 raise _invalid("group")
             if sql.role(transaction, project, member) is None:
@@ -297,7 +295,7 @@ class Directory:
 
     def remove_group_member(self, actor: str, project: str, name: str, member: str) -> None:
         def work(transaction: Transaction, now: str) -> None:
-            _refuse(rules.manage_groups(sql.caller(transaction, actor, project), member))
+            refused(rules.manage_groups(sql.caller(transaction, actor, project), member))
             if sql.delete_group_member(transaction, project, name, member):
                 sql.bump(transaction, member, now)
                 details = {"group": name, "user": member}
@@ -319,7 +317,7 @@ class Directory:
         """Check a change or removal of an existing membership; return the role it has now."""
         caller = sql.caller(transaction, actor, project)
         has_builder = sql.has_active_builder(transaction, project)
-        _refuse(
+        refused(
             rules.manage_membership(
                 caller, target, adding=False, role=role, project_has_builder=has_builder
             )
@@ -350,14 +348,14 @@ class Directory:
             return  # the rule refuses a deactivated caller
         locks.lock_users(transaction, actor, administrators=administrator)
         if administrator and caller.administrator:
-            _refuse(
+            refused(
                 rules.keeps_an_administrator(sql.other_active_administrators(transaction, actor))
             )
         places = sql.builder_projects(transaction, actor) if projects is None else projects
         for project in places:
             if sql.role(transaction, project, actor) == "builder":
                 locks.lock_builders(transaction, project)
-                _refuse(
+                refused(
                     rules.keeps_a_builder(sql.other_active_builders(transaction, project, actor))
                 )
 
@@ -367,7 +365,7 @@ class Directory:
         if not self._existing(transaction, target).active:
             return
         locks.lock_builders(transaction, project)
-        _refuse(rules.keeps_a_builder(sql.other_active_builders(transaction, project, target)))
+        refused(rules.keeps_a_builder(sql.other_active_builders(transaction, project, target)))
 
     def _event(
         self,
@@ -388,15 +386,12 @@ class Directory:
         target: str | None,
         work: Callable[[Transaction, str], T],
     ) -> T:
-        try:
-            done = retry.write(
-                self._store, lambda transaction: work(transaction, instant(self._clock()))
-            )
-        except AccessError as error:
-            if error.code.startswith("AUDIT_"):
-                self._audit.unavailable()  # the log itself failed: no second attempt through it
-            else:
-                self._audit.refusal(operation, actor, error.code, project=project, target=target)
-            raise
-        self._audit.committed()
-        return done
+        return audited(
+            self._store,
+            self._audit,
+            operation,
+            actor,
+            lambda transaction: work(transaction, instant(self._clock())),
+            project=project,
+            target=target,
+        )

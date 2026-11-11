@@ -22,4 +22,4 @@
 3 (security by design), 9 (audit), anti-patterns A3, A9.
 
 ## Conformance
-Security suite; OIDC integration tests against a real identity provider in a container; password hashing with `hashlib.scrypt`; threat model in every pull request.
+Security suite; OIDC integration tests against a real identity provider in a container; password hashing with Argon2id (`argon2-cffi`, #438); threat model in every pull request.

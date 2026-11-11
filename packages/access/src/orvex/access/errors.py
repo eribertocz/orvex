@@ -21,6 +21,16 @@ LAST_ADMINISTRATOR = "LAST_ADMINISTRATOR"
 USER_NAME_TAKEN = "USER_NAME_TAKEN"
 # A name, id or role outside the shapes the directory accepts.
 VALIDATION_FAILED = "VALIDATION_FAILED"
+# Sign-in (#438). A wrong password and an unknown user get the same refusal, in time as well.
+LOGIN_FAILED = "LOGIN_FAILED"
+# A sign-in during the delay that earlier failures set; the same for every account.
+LOGIN_DELAYED = "LOGIN_DELAYED"
+# A password under 12 characters, over 1,024, or equal to the user name.
+PASSWORD_REJECTED = "PASSWORD_REJECTED"
+# No live session: ended, expired or unknown, and never which.
+SESSION_EXPIRED = "SESSION_EXPIRED"
+# A session opened with a temporary password may only change it.
+PASSWORD_CHANGE_REQUIRED = "PASSWORD_CHANGE_REQUIRED"
 # The store was written by a newer version of the code; it is never migrated down.
 ACCESS_STORE_NEWER = "ACCESS_STORE_NEWER"
 # The store cannot be proven to be the access module's own: refused before it is used.

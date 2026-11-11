@@ -14,7 +14,7 @@ Rank 3 in the precedence order (`docs/README.md`). Changes require Owner approva
 | Mode | Authentication |
 |---|---|
 | Local | No login. A single implicit Builder bound to the local machine (loopback only) |
-| Server | Local users (password hashed with `hashlib.scrypt`) and/or OIDC single sign-on (Authorization Code flow with PKCE and `response_mode=query`) |
+| Server | Local users (password hashed with Argon2id, #438) and/or OIDC single sign-on (Authorization Code flow with PKCE and `response_mode=query`) |
 
 - **Local mode's serve session (P2-27a, #363).** Loopback alone is not enough. Each serve session has three separate credentials, each random (256 bits), compared in constant time, kept only in the server's memory, never logged, and revoked when the server stops:
   - a **bootstrap code** for the browser, single-use and valid for a few minutes. It is written only into an owner-only launcher page, which the server opens by its path, so the code never appears on a command line. It is exchanged at `/?code=…` for a session cookie and a redirect without the code, under `Referrer-Policy: no-referrer`;
@@ -27,7 +27,12 @@ Rank 3 in the precedence order (`docs/README.md`). Changes require Owner approva
   - The files' permissions protect against other users of the machine. They do not isolate the server from a malicious process of the same user, which can read that user's files and memory; only isolation by the operating system (another user, a container, a sandbox) does.
   - Browsers do not keep cookies apart by port. The session cookie is therefore also sent to any other server on 127.0.0.1 the user opens, including another user's; over plain-HTTP loopback nothing prevents it.
 - Users are global to the instance. Users are identified by an internal id; with OIDC, by issuer + subject, never by email.
-- Sessions are server-side, in `HttpOnly`, `Secure` (HTTPS), `SameSite=Strict` cookies; mutating requests validate `Origin`.
+- **Server mode's local users (P3-04, #438).**
+  - **Passwords.** Argon2id (RFC 9106) with at least OWASP's parameters (m = 19 MiB, t = 2, p = 1), stored in each hash; a weaker hash is replaced at the next sign-in. At least 12 characters, at most 1,024, no composition rules, never the user name; normalized to NFKC.
+  - **Temporary passwords.** A user created or reset by an administrator, and the first administrator (`admin create`), gets a random one, shown once. It expires after 24 hours, and its session may only change it (`PASSWORD_CHANGE_REQUIRED`). There is no self-service recovery by e-mail in v1.
+  - **Failed sign-ins.** A delay per account and per address (IPv4, or IPv6 /64), doubling from 1 s up to 15 minutes, never a permanent lock-out. An unknown user gets the same answer as a wrong password, after the same Argon2id work. The counters are bounded and stored as hashes. `X-Forwarded-For` counts only from the administrator's `trusted_proxies`. Every failure is audited.
+- Sessions are server-side: a random 256-bit id in the `__Host-<slug>_session` cookie (`HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`), only its hash in the store. A session ends after its absolute lifetime (12 h) or idle lifetime (1 h), both the administrator's, and at once at sign-out, deactivation, a change to the user's permissions (`authz_version`) or a password change or reset. Every request re-reads the user.
+- A state-changing request (any method but `GET`, `HEAD` and `OPTIONS`) needs `Origin` equal to the instance's public origin, `Sec-Fetch-Site: same-origin` when sent, and an `application/json` body: `ORIGIN_REFUSED` otherwise. No route takes both a safe and a state-changing method.
 - The OIDC flow uses a separate short-lived binding cookie (`state`, `nonce`, PKCE verifier; at most 10 minutes) with `SameSite=Lax`, because the identity provider's redirect back is a cross-site navigation. It is deleted when the session cookie is issued and is never accepted as a session.
 - OIDC group claims can map to Orvex groups only through an explicit mapping in instance configuration; a claim alone grants nothing.
 

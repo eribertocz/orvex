@@ -23,14 +23,14 @@ def code_of(error: pytest.ExceptionInfo[AccessError]) -> str:
 
 def test_an_administrator_creates_an_active_user_with_a_random_id(world: World) -> None:
     created = world.directory.create_user(world.admin, "ana", "Ana Pérez")
-    assert created.active
-    assert not created.administrator
-    assert created.user_name == "ana"
-    assert created.display_name == "Ana Pérez"
-    assert created.authz_version == 1
+    assert created.user.active
+    assert not created.user.administrator
+    assert created.user.user_name == "ana"
+    assert created.user.display_name == "Ana Pérez"
+    assert created.user.authz_version == 1
     assert len(created.id) == 22
     assert created.id != world.admin
-    assert world.directory.user(created.id) == created
+    assert world.directory.user(created.id) == created.user
 
 
 def test_r1_a_non_administrator_cannot_create_a_user(world: World) -> None:

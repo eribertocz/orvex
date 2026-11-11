@@ -51,6 +51,7 @@
         "group.deleted",
         "group.member_added",
         "group.member_removed",
+        "instance.settings_changed",
         "mcp.call",
         "membership.added",
         "membership.changed",
@@ -64,6 +65,8 @@
         "user.administrator_removed",
         "user.created",
         "user.deactivated",
+        "user.password_changed",
+        "user.password_reset",
         "user.reactivated"
       ]
     },
@@ -113,6 +116,9 @@
           "$ref": "#/$defs/GroupMemberRemovedDetails"
         },
         {
+          "$ref": "#/$defs/InstanceSettingsChangedDetails"
+        },
+        {
           "$ref": "#/$defs/McpCallDetails"
         },
         {
@@ -150,6 +156,12 @@
         },
         {
           "$ref": "#/$defs/UserDeactivatedDetails"
+        },
+        {
+          "$ref": "#/$defs/UserPasswordChangedDetails"
+        },
+        {
+          "$ref": "#/$defs/UserPasswordResetDetails"
         },
         {
           "$ref": "#/$defs/UserReactivatedDetails"
@@ -382,6 +394,25 @@
         "properties": {
           "details": {
             "$ref": "#/$defs/GroupMemberRemovedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "instance.settings_changed"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/InstanceSettingsChangedDetails"
           }
         }
       }
@@ -637,6 +668,44 @@
       "if": {
         "properties": {
           "kind": {
+            "const": "user.password_changed"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/UserPasswordChangedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "user.password_reset"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/UserPasswordResetDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
             "const": "user.reactivated"
           }
         },
@@ -874,6 +943,28 @@
         }
       }
     },
+    "InstanceSettingsChangedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "settings"
+      ],
+      "properties": {
+        "settings": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "absolute_lifetime",
+              "idle_lifetime",
+              "public_origin",
+              "trusted_proxies"
+            ]
+          }
+        }
+      }
+    },
     "McpCallDetails": {
       "type": "object",
       "additionalProperties": false,
@@ -1088,6 +1179,30 @@
       }
     },
     "UserDeactivatedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user"
+      ],
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/Id"
+        }
+      }
+    },
+    "UserPasswordChangedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user"
+      ],
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/Id"
+        }
+      }
+    },
+    "UserPasswordResetDetails": {
       "type": "object",
       "additionalProperties": false,
       "required": [

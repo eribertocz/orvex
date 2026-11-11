@@ -118,6 +118,16 @@ class GroupMemberRemovedDetails(BaseModel):
     user: Id
 
 
+class InstanceSettingsChangedDetails(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    settings: Annotated[
+        list[Literal["absolute_lifetime", "idle_lifetime", "public_origin", "trusted_proxies"]],
+        Field(min_length=1),
+    ]
+
+
 class McpCallDetails(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -221,6 +231,20 @@ class UserDeactivatedDetails(BaseModel):
     user: Id
 
 
+class UserPasswordChangedDetails(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    user: Id
+
+
+class UserPasswordResetDetails(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    user: Id
+
+
 class UserReactivatedDetails(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -263,6 +287,7 @@ class AuditEvent(BaseModel):
         "group.deleted",
         "group.member_added",
         "group.member_removed",
+        "instance.settings_changed",
         "mcp.call",
         "membership.added",
         "membership.changed",
@@ -276,6 +301,8 @@ class AuditEvent(BaseModel):
         "user.administrator_removed",
         "user.created",
         "user.deactivated",
+        "user.password_changed",
+        "user.password_reset",
         "user.reactivated",
     ]
     """
@@ -295,6 +322,7 @@ class AuditEvent(BaseModel):
         | GroupDeletedDetails
         | GroupMemberAddedDetails
         | GroupMemberRemovedDetails
+        | InstanceSettingsChangedDetails
         | McpCallDetails
         | MembershipAddedDetails
         | MembershipChangedDetails
@@ -308,6 +336,8 @@ class AuditEvent(BaseModel):
         | UserAdministratorRemovedDetails
         | UserCreatedDetails
         | UserDeactivatedDetails
+        | UserPasswordChangedDetails
+        | UserPasswordResetDetails
         | UserReactivatedDetails
     )
     """

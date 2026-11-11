@@ -8,7 +8,7 @@ import json
 import logging
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -179,9 +179,8 @@ def test_ac7_the_tables_refuse_update_and_delete(world: World) -> None:
 
 
 def test_a_checkpoint_is_written_every_n_events_and_daily(world: World) -> None:
-    moments = iter(
-        [datetime(2026, 11, 10, 12, tzinfo=UTC)] * 5 + [datetime(2026, 11, 12, 12, tzinfo=UTC)]
-    )
+    today = datetime.now(UTC)  # after the world's own events, whatever the date
+    moments = iter([today] * 5 + [today + timedelta(days=2)])
     log = AuditLog(
         world.store,
         world.audit.signing_key,

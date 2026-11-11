@@ -9,7 +9,15 @@
 "packages/access/src/orvex/access/audit/chain.py" = 89
 "packages/access/src/orvex/access/audit/log.py" = 93
 "packages/access/src/orvex/access/audit/opening.py" = 100
+"packages/access/src/orvex/access/audit/operation.py" = 100
 "packages/access/src/orvex/access/audit/signing_key.py" = 90
+"packages/access/src/orvex/access/authentication/__init__.py" = 100
+"packages/access/src/orvex/access/authentication/credentials.py" = 94
+"packages/access/src/orvex/access/authentication/delays.py" = 96
+"packages/access/src/orvex/access/authentication/passwords.py" = 97
+"packages/access/src/orvex/access/authentication/service.py" = 89
+"packages/access/src/orvex/access/authentication/sessions.py" = 100
+"packages/access/src/orvex/access/authentication/settings.py" = 100
 "packages/access/src/orvex/access/context.py" = 97
 "packages/access/src/orvex/access/directory/__init__.py" = 100
 "packages/access/src/orvex/access/directory/bootstrap.py" = 94
@@ -24,6 +32,7 @@
 "packages/access/src/orvex/access/fixtures.py" = 96
 "packages/access/src/orvex/access/local.py" = 100
 "packages/access/src/orvex/access/storage/__init__.py" = 100
+"packages/access/src/orvex/access/storage/instants.py" = 100
 "packages/access/src/orvex/access/storage/migrations.py" = 100
 "packages/access/src/orvex/access/storage/postgres.py" = 83
 "packages/access/src/orvex/access/storage/retry.py" = 100

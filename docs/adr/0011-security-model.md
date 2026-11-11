@@ -10,7 +10,7 @@ Studied: Power BI row-level security (roles with DAX filters, dynamic security w
 - Single enforcement point: the semantic engine, for every consumer including cache, export and MCP.
 - Policies are declarative YAML (`security.yaml`) evaluated by the engine's own evaluator, with attributes bound as parameters. The policy contract is designed so a Cedar-based evaluator can implement it later.
 - Column security levels: visible, masked, hidden.
-- Authentication: local users (`hashlib.scrypt`) and OIDC (Authorization Code + PKCE) in server mode.
+- Authentication: local users (Argon2id; `hashlib.scrypt` until the Owner chose Argon2id on 2026-11-10, #438) and OIDC (Authorization Code + PKCE) in server mode.
 - Fail closed when attributes are missing; append-only audit log with hash chain.
 
 ## Alternatives considered
