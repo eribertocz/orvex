@@ -45,24 +45,19 @@ control:
   caller:
     kind: security_context
     version: 1
-    user: u-deny
+    user: u-unreg
     project: direct-query
     role: author
     groups:
     - operations
     attributes: {}
-    permission_fingerprint: sha256:c3ac0a9a96434df70548bcaf514f7e407c33c4cb9044b6a99e9424a660c259c3
-  outcome: rows
-  rows: 'outages.outage_id,outages.zone_id,outages.minutes
-
-    1,Z1,15.00
-
-    2,Z2,25.50
-
-    '
+    permission_fingerprint: sha256:8e6d18df9d9015182d759c96c9e1fb35828e48922d4e48f11e852d1aff99e302
+  outcome: contains
+  text:
+  - POLICY_MAPPING_MISSING
 engines:
 - managed
 - existing-ducklake
 - clickhouse
-adr_0027: registered-nothing-blocked
 pending: 441
+adr_0027: registered-nothing-blocked

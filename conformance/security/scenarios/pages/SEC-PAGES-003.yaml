@@ -1,8 +1,7 @@
 id: SEC-PAGES-003
 area: pages
 title: A page changed after it was opened is refused
-intent: A query bound to the version the caller opened is refused once a new version is published (#449
-  Q6).
+intent: A query bound to the version the caller opened is refused once a new version is published.
 fixture: utility
 caller: &id001
   kind: security_context

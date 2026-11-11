@@ -22,7 +22,7 @@ request:
       change:
         op: replace_policy
         policy: allowed_zones
-        predicate: zone_id IN (SELECT zone_id FROM lake.outages)
+        predicate: zone_id IN (SELECT zone_id FROM lake.user_zone WHERE user_id = $user_id)
   - caller: *id001
     request:
       kind: semantic-query
@@ -66,4 +66,3 @@ engines:
 - existing-ducklake
 - clickhouse
 adr_0027: mapping-outside-lake
-pending: 441

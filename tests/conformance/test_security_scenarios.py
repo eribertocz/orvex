@@ -2,9 +2,11 @@
 cannot pass by refusing everything.
 
 A case is checked against its own schema and against the contracts it uses. Its fixture must be
-a valid project: a model that compiles and policies that read. Each code it expects must be
-registered or reserved. Its control must show the data the caller must not get. Its `pending`
-must name where the behavior is built. Running the cases on the engines is #447.
+a valid project, committed: a model that compiles and policies that read. Each code it expects
+must be registered or reserved. Its control must show a value the caller must not get, and its
+expected result must show none. Its `pending` must name where the behavior is built. A case
+already enforced at policy validation is proven here against the real reader. Running the cases
+on the engines is #447.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import csv
 import io
 import json
 import re
+import subprocess
 import tomllib
 from collections.abc import Iterator, Mapping
 from functools import cache
@@ -23,7 +26,8 @@ import jsonschema
 import pytest
 import yaml
 from orvex.semantic.compiler.catalog import SourceColumn
-from orvex.semantic.compiler.compiled import compile_model
+from orvex.semantic.compiler.compiled import CompiledModel, compile_model
+from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies.model import read_policies
 from orvex.server.identity import load_identity
@@ -37,6 +41,8 @@ IDENTITY = load_identity()
 VENDORS = (IDENTITY.ossie_vendor_name, *IDENTITY.previous_vendor_names)
 # A request carries a semantic-query body under one of these keys.
 BODIES = ("body", "alternate")
+# How a forbidden value is matched: whole, against tokens split on every other character.
+SEPARATOR = re.compile(r"[^A-Za-z0-9_./*-]+")
 
 
 def schema(path: Path) -> jsonschema.Draft202012Validator:
@@ -97,11 +103,31 @@ def defined_codes() -> set[str]:
     )
 
 
-def control_shows(case: Mapping[str, Any]) -> str:
-    control = case["control"]
-    shown = [control.get("rows", "")]
-    shown += [*control.get("members", []), *control.get("pages", []), *control.get("text", [])]
-    return "\n".join(shown)
+def tokens(owner: Mapping[str, Any], keys: tuple[str, ...]) -> set[str]:
+    """Every whole value `owner` shows under `keys`: cells, column names, items and their tokens."""
+    shown: set[str] = set()
+    if "rows" in keys and "rows" in owner:
+        shown |= {cell for row in csv.reader(io.StringIO(owner["rows"])) for cell in row}
+    shown |= {item for key in keys if key != "rows" for item in owner.get(key, [])}
+    return shown | {token for value in shown for token in SEPARATOR.split(value) if token}
+
+
+def control_shows(case: Mapping[str, Any]) -> set[str]:
+    return tokens(case["control"], ("rows", "members", "pages", "text"))
+
+
+def expected_shows(case: Mapping[str, Any]) -> set[str]:
+    """What the expected result shows; an `absent` outcome lists what must not be there."""
+    expect = case["expect"]
+    if expect["outcome"] == "absent":
+        return set()
+    return tokens(expect, ("rows", "members", "pages", "text"))
+
+
+@cache
+def pending_issues() -> dict[int, str]:
+    loaded = tomllib.loads((SECURITY / "pending-issues.toml").read_text("utf-8"))
+    return {int(number): row for number, row in loaded["issues"].items()}
 
 
 def current_phase() -> int:
@@ -142,26 +168,38 @@ def problems(case: Mapping[str, Any], name: str, area: str) -> list[str]:
     for code in (expect.get("code"), expect.get("notice")):
         if code is not None and code not in codes:
             found.append(f"SCENARIO_CODE_UNKNOWN {name}: {code} is neither registered nor reserved")
-    if expect["outcome"] != "rows" and not any(
-        f in control_shows(case) for f in expect["forbidden"]
-    ):
+    if not set(expect["forbidden"]) & control_shows(case):
         found.append(f"SCENARIO_CONTROL_SHOWS_NOTHING {name}: the control shows no forbidden value")
+    if shown := sorted(set(expect["forbidden"]) & expected_shows(case)):
+        found.append(f"SCENARIO_EXPECT_SHOWS_FORBIDDEN {name}: {', '.join(shown)}")
+    if "code_defined_by" in expect and expect["code_defined_by"] != case.get("pending"):
+        found.append(f"SCENARIO_CODE_OWNER_MISMATCH {name}: code_defined_by is not the pending")
     for key in ("rows",):
         for owner in (expect, case["control"]):
             if key in owner:
                 rows = list(csv.reader(io.StringIO(owner[key])))
                 if len({len(row) for row in rows}) != 1:
                     found.append(f"SCENARIO_ROWS_RAGGED {name}: every row needs every column")
-    pending = case.get("pending")
-    if isinstance(pending, str):
-        phase = int(pending[1:].split("-")[0])
-        if pending not in roadmap_ids():
-            found.append(f"SCENARIO_PENDING_UNKNOWN {name}: {pending} is not in the roadmap")
-        elif phase <= current_phase():
-            found.append(
-                f"SCENARIO_PENDING_STARTED {name}: phase P{phase} has started; name its issue"
-            )
-    return found
+    return found + pending_problems(case.get("pending"), name)
+
+
+def pending_problems(pending: int | str | None, name: str) -> list[str]:
+    """A roadmap ID must be of a later phase; an issue must be one of this phase's issues."""
+    if pending is None:
+        return []
+    if isinstance(pending, int):
+        row = pending_issues().get(pending)
+        if row is None:
+            return [f"SCENARIO_PENDING_UNKNOWN {name}: #{pending} is not in pending-issues.toml"]
+        if row not in roadmap_ids() or int(row[1:].split("-")[0]) != current_phase():
+            return [f"SCENARIO_PENDING_UNKNOWN {name}: #{pending} maps to {row}, not this phase"]
+        return []
+    if pending not in roadmap_ids():
+        return [f"SCENARIO_PENDING_UNKNOWN {name}: {pending} is not in the roadmap"]
+    phase = int(pending[1:].split("-")[0])
+    if phase <= current_phase():
+        return [f"SCENARIO_PENDING_STARTED {name}: phase P{phase} has started; name its issue"]
+    return []
 
 
 @pytest.mark.parametrize("path", files(), ids=lambda p: p.stem)
@@ -229,8 +267,9 @@ def fixture_catalog(
     return catalog, managed
 
 
-@pytest.mark.parametrize("name", ["utility", "direct-query"])
-def test_each_fixture_compiles_and_its_policies_read(name: str) -> None:
+@cache
+def fixture(name: str) -> tuple[CompiledModel, dict[str, list[str]], frozenset[str]]:
+    """The fixture's compiled model, its managed-lake tables, and every group its cases name."""
     folder = SECURITY / "fixtures" / name
     catalog, managed = fixture_catalog(folder)
     text = (folder / "model.ossie.json").read_text("utf-8").replace("{{vendor}}", VENDORS[0])
@@ -242,13 +281,77 @@ def test_each_fixture_compiles_and_its_policies_read(name: str) -> None:
         for who in callers(case)
         for g in who["groups"]
     }
-    policies = (folder / "security.yaml").read_text("utf-8")
-    read_policies(
-        policies,
+    return (
         compiled,
-        groups=groups | {"collections", "engineering", "management", "operations"},
-        managed_tables=managed,
+        managed,
+        frozenset(groups | {"collections", "engineering", "management", "operations"}),
     )
+
+
+def read_fixture_policies(name: str, document: Mapping[str, Any]) -> None:
+    compiled, managed, groups = fixture(name)
+    read_policies(yaml.safe_dump(dict(document)), compiled, groups=groups, managed_tables=managed)
+
+
+def fixture_policies(name: str) -> dict[str, Any]:
+    loaded: dict[str, Any] = yaml.safe_load(
+        (SECURITY / "fixtures" / name / "security.yaml").read_text("utf-8")
+    )
+    return loaded
+
+
+@pytest.mark.parametrize("name", ["utility", "direct-query"])
+def test_each_fixture_compiles_and_its_policies_read(name: str) -> None:
+    read_fixture_policies(name, fixture_policies(name))
+
+
+def test_every_fixture_file_is_committed() -> None:
+    ignored = subprocess.run(
+        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "--", str(SECURITY)],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert ignored == []
+
+
+# A policy change a case makes, applied to the fixture's policy document.
+def changed_policies(name: str, change: Mapping[str, Any]) -> dict[str, Any]:
+    document = fixture_policies(name)
+    if change["op"] == "replace_policy":
+        (rule,) = [r for r in document["row_policies"] if r["name"] == change["policy"]]
+        rule["predicate"] = change["predicate"]
+    else:
+        rules = [r for r in document["column_policies"] if r["member"] != change["member"]]
+        added = {"member": change["member"], "default": change["default"]}
+        document["column_policies"] = [
+            *rules,
+            added | ({"mask": change["mask"]} if "mask" in change else {}),
+        ]
+    return document
+
+
+def policy_changes(case: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    found = []
+    for request in requests(case["request"]):
+        found += [request["change"]] if request.get("kind") == "lake-change" else []
+        found += [step["change"] for step in request.get("steps", []) if "change" in step]
+    return [c for c in found if c["op"] in {"replace_policy", "replace_column_policy"}]
+
+
+ENFORCED_AT_VALIDATION = sorted(
+    name for name, case in cases().items() if policy_changes(case) and "pending" not in case
+)
+
+
+@pytest.mark.parametrize("name", ENFORCED_AT_VALIDATION)
+def test_a_case_enforced_at_validation_is_refused_by_the_real_reader(name: str) -> None:
+    case = cases()[name]
+    (change,) = policy_changes(case)
+    with pytest.raises(SemanticError) as raised:
+        read_fixture_policies(case["fixture"], changed_policies(case["fixture"], change))
+    assert raised.value.code == case["expect"]["code"]
 
 
 # --- the rules refuse what they must (R1-R5) ------------------------------------------------
@@ -277,6 +380,15 @@ def test_r1_a_case_without_forbidden_or_control_or_a_telling_control_fails() -> 
     assert codes_of(problems(*planted(control=None))) == ["SCENARIO_INVALID"]
     refused = planted("SEC-COLUMNS-002", control__rows="consumers.consumer_id\nC1\n")
     assert codes_of(problems(*refused)) == ["SCENARIO_CONTROL_SHOWS_NOTHING"]
+    # A rows case is held to the same rule: a control showing only the caller's rows proves nothing.
+    own = planted(control__rows="readings.zone_id,total_kwh\nZ1,30.75\n")
+    assert codes_of(problems(*own)) == ["SCENARIO_CONTROL_SHOWS_NOTHING"]
+    leaked = planted(expect__rows="readings.zone_id,total_kwh\nZ1,30.75\nZ2,30.00\n")
+    assert codes_of(problems(*leaked)) == ["SCENARIO_EXPECT_SHOWS_FORBIDDEN"]
+    # Matching is whole: `2` is not shown by `20.25` or `Z2`, and a value is one token.
+    whole = planted(expect__forbidden=["2"], control__rows="readings.zone_id,total_kwh\nZ2,20.25\n")
+    assert codes_of(problems(*whole)) == ["SCENARIO_CONTROL_SHOWS_NOTHING"]
+    assert codes_of(problems(*planted(expect__forbidden=["Z2 Z3"]))) == ["SCENARIO_INVALID"]
 
 
 def test_r2_a_code_neither_raised_nor_reserved_fails() -> None:
@@ -308,3 +420,8 @@ def test_r5_a_pending_without_a_reference_or_on_a_started_phase_fails() -> None:
     assert codes_of(problems(*planted("SEC-EXPORT-001", pending="P8-99"))) == [
         "SCENARIO_PENDING_UNKNOWN"
     ]
+    assert codes_of(problems(*planted("SEC-ROWS-001", pending=99999))) == [
+        "SCENARIO_PENDING_UNKNOWN"
+    ]
+    owner = planted("SEC-REVOKE-002", pending=444)
+    assert codes_of(problems(*owner)) == ["SCENARIO_CODE_OWNER_MISMATCH"]

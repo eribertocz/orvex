@@ -26,7 +26,7 @@ request:
   - caller: *id001
     request:
       kind: semantic-query
-      body:
+      body: &id002
         kind: semantic_query
         version: 1
         mode: detail
@@ -64,8 +64,23 @@ control:
 
     3,Z3,40.25
 
+    90,Z9,999.99
+
     '
-  without_changes: true
+  request:
+    kind: sequence
+    steps:
+    - caller: *id001
+      request:
+        kind: lake-change
+        change:
+          op: add_file
+          rows: foreign
+          where: inside_location
+    - caller: *id001
+      request:
+        kind: semantic-query
+        body: *id002
 engines:
 - existing-ducklake
 variants:

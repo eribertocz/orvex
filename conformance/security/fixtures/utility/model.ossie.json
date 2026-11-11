@@ -191,9 +191,33 @@
       }
     },
     {
+      "name": "consumer_count",
+      "expression": {
+        "sql": "COUNT(DISTINCT readings.consumer_id)"
+      },
+      "custom_extensions": [
+        {
+          "vendor_name": "{{vendor}}",
+          "data": "{\"additivity\": \"non_additive\", \"aggregate_class\": \"holistic\", \"element\": \"metric\", \"version\": 1}"
+        }
+      ]
+    },
+    {
       "name": "national_id_count",
       "expression": {
         "sql": "COUNT(DISTINCT consumers.national_id)"
+      },
+      "custom_extensions": [
+        {
+          "vendor_name": "{{vendor}}",
+          "data": "{\"additivity\": \"non_additive\", \"aggregate_class\": \"holistic\", \"element\": \"metric\", \"version\": 1}"
+        }
+      ]
+    },
+    {
+      "name": "phone_count",
+      "expression": {
+        "sql": "COUNT(DISTINCT consumers.phone)"
       },
       "custom_extensions": [
         {

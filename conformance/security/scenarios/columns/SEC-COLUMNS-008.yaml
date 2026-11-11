@@ -1,0 +1,47 @@
+id: SEC-COLUMNS-008
+area: columns
+title: Distinct counting a masked member is refused
+intent: A distinct count would reveal how many different real values the mask hides.
+fixture: utility
+caller:
+  kind: security_context
+  version: 1
+  user: u-zone1
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:44b2b208870918c65d8d4ccb3c04b4116a39b8538fb96def9fc82a19a59f52e1
+request:
+  kind: semantic-query
+  body:
+    kind: semantic_query
+    version: 1
+    mode: aggregate
+    metrics:
+    - metric: phone_count
+expect:
+  outcome: error
+  code: MEMBER_MASKED
+  forbidden:
+  - '2'
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-coll
+    project: utility
+    role: author
+    groups:
+    - collections
+    attributes: {}
+    permission_fingerprint: sha256:6b813403c5da3e617657e7c9aaaa7394c75e41d70c7ad09b9541eb83c52d2d95
+  outcome: rows
+  rows: 'phone_count
+
+    2
+
+    '
+engines:
+- managed
+pending: 442

@@ -1,7 +1,7 @@
 id: SEC-REVOKE-005
 area: revocation
 title: An open page is refused once the caller leaves its group
-intent: Every page query re-checks the caller's current groups (#449 Q6).
+intent: Every page query re-checks the caller's current groups.
 fixture: utility
 caller: &id001
   kind: security_context

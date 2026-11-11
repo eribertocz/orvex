@@ -2,7 +2,8 @@ id: SEC-DQ-004
 area: direct-query
 title: A mapping above the cap is refused without revealing its size
 intent: 'Three mapped values exceed the cap of two: the question is refused, the policy is never skipped,
-  and no count is revealed.'
+  and no count is revealed. Not on the managed lake: the cap applies only to values bound into another
+  engine''s query.'
 fixture: direct-query
 caller:
   kind: security_context
@@ -55,5 +56,5 @@ control:
 engines:
 - existing-ducklake
 - clickhouse
-adr_0027: mapping-above-cap
 pending: 441
+adr_0027: mapping-above-cap

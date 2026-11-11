@@ -1,7 +1,8 @@
 id: SEC-REVOKE-004
 area: revocation
-title: An export started after a revocation holds only rows still allowed
-intent: An export is answered from the permissions current when it runs.
+title: A permission revoked during an export produces no file
+intent: 'The caller''s Z2 mapping is removed while the export runs: no file is produced, not even a partial
+  one; P6-18 defines the refusal.'
 fixture: utility
 caller: &id001
   kind: security_context
@@ -17,7 +18,7 @@ request:
   steps:
   - caller: *id001
     request:
-      kind: export
+      kind: export-start
       format: csv
       body:
         kind: semantic_query
@@ -25,11 +26,15 @@ request:
         mode: detail
         fields:
         - member: readings.reading_id
+        - member: readings.consumer_id
         order:
         - by: readings.reading_id
           direction: asc
         page:
           size: '100'
+  - caller: *id001
+    request:
+      kind: export-result
     change:
       op: delete_row
       table: security.user_zone
@@ -37,29 +42,24 @@ request:
         user_id: u-multi
         zone_id: Z2
 expect:
-  outcome: rows
-  rows: 'readings.reading_id
-
-    1
-
-    2
-
-    '
+  outcome: error
+  code_defined_by: P6-18
+  no_file: true
   forbidden:
-  - '3'
-  - '5'
+  - C1
+  - C3
 control:
   caller: *id001
   outcome: rows
-  rows: 'readings.reading_id
+  rows: 'readings.reading_id,readings.consumer_id
 
-    1
+    1,C1
 
-    2
+    2,C2
 
-    3
+    3,C3
 
-    5
+    5,C3
 
     '
   without_changes: true

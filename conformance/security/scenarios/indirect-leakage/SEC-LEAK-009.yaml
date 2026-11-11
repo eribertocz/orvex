@@ -1,0 +1,60 @@
+id: SEC-LEAK-009
+area: indirect-leakage
+title: Explaining an allowed question names no policy, mapping table or mapping value
+intent: 'semantic-explain of a question under a row policy describes the plan only: never the policy,
+  its mapping table or the caller''s mapped zones.'
+fixture: utility
+caller: &id001
+  kind: security_context
+  version: 1
+  user: u-zone1
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:44b2b208870918c65d8d4ccb3c04b4116a39b8538fb96def9fc82a19a59f52e1
+request:
+  kind: explain
+  body:
+    kind: semantic_query
+    version: 1
+    mode: aggregate
+    metrics:
+    - metric: total_kwh
+    group_by:
+    - member: readings.zone_id
+    order:
+    - by: readings.zone_id
+      direction: asc
+expect:
+  outcome: contains
+  text:
+  - planned
+  forbidden:
+  - own_zone_readings
+  - security.user_zone
+  - Z1
+control:
+  caller: *id001
+  outcome: rows
+  rows: 'readings.zone_id,total_kwh
+
+    Z1,30.75
+
+    '
+  request:
+    kind: semantic-query
+    body:
+      kind: semantic_query
+      version: 1
+      mode: aggregate
+      metrics:
+      - metric: total_kwh
+      group_by:
+      - member: readings.zone_id
+      order:
+      - by: readings.zone_id
+        direction: asc
+engines:
+- managed
+pending: 442

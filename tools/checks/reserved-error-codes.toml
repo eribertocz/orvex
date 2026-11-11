@@ -15,5 +15,5 @@ REAGGREGATION_NOT_ALLOWED = { phase = "P4", raised_by = "re-aggregation of store
 WINDOW_UNDEFINED_AT_TOTAL = { phase = "P4", raised_by = "windows at total levels (ADR-0029 S9)" }
 EXPORT_FORBIDDEN = { phase = "P6", raised_by = "P6-18 export: a Viewer where export.viewers is false (#435)" }
 MCP_FORBIDDEN = { phase = "P9", raised_by = "P9-03 MCP acting as the user: a Viewer where mcp.viewers is false (#435)" }
-PAGE_CHANGED = { phase = "P6", raised_by = "P6-07 page access: a page published again after it was opened (#449 Q6)" }
+PAGE_CHANGED = { phase = "P6", raised_by = "P6-07 page access: a page published again after it was opened (#435, Owner 2026-11-10)" }
 PAGE_FORBIDDEN = { phase = "P6", raised_by = "P6-07 page access and P6-08 page-bound queries (security.md §3.2)" }

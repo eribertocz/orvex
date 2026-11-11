@@ -18,4 +18,4 @@ columns = [["tariff_id", "VARCHAR", false], ["region", "VARCHAR", false], ["pric
 
 [tables."security.user_zone"]
 file = "data/user_zone.csv"
-columns = [["user_id", "VARCHAR", false], ["zone_id", "VARCHAR", false]]
+columns = [["user_id", "VARCHAR", false], ["zone_id", "VARCHAR", true]]

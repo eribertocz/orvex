@@ -1,0 +1,4 @@
+outage_id,zone_id,minutes
+1,Z1,15.00
+2,Z2,25.50
+3,Z3,40.25

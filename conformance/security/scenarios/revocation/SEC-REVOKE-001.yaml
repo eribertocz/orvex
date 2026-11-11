@@ -1,7 +1,9 @@
 id: SEC-REVOKE-001
 area: revocation
-title: A permission revoked between two pages is honored on the next page
-intent: After the caller's Z2 mapping is removed, the next page of a detail result holds no Z2 row.
+title: A permission revoked between two pages refuses the next page
+intent: 'After the caller''s Z2 mapping is removed, the next page re-checks current permissions and is
+  refused (#449 Q6): the cursor was issued under other permissions, so it is invalid and the caller starts
+  again.'
 fixture: utility
 caller: &id001
   kind: security_context
@@ -40,7 +42,8 @@ request:
         user_id: u-multi
         zone_id: Z2
 expect:
-  outcome: zero-rows
+  outcome: error
+  code: PAGE_CURSOR_INVALID
   forbidden:
   - C3
 control:
@@ -56,4 +59,4 @@ control:
   without_changes: true
 engines:
 - managed
-pending: 445
+pending: 440

@@ -1,0 +1,51 @@
+id: SEC-ROWS-008
+area: rows
+title: A distinct count holds only the caller's rows
+intent: Counting distinct consumers never counts the consumers of hidden readings.
+fixture: utility
+caller:
+  kind: security_context
+  version: 1
+  user: u-zone1
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:44b2b208870918c65d8d4ccb3c04b4116a39b8538fb96def9fc82a19a59f52e1
+request:
+  kind: semantic-query
+  body:
+    kind: semantic_query
+    version: 1
+    mode: aggregate
+    metrics:
+    - metric: consumer_count
+expect:
+  outcome: rows
+  rows: 'consumer_count
+
+    2
+
+    '
+  forbidden:
+  - '4'
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-exempt
+    project: utility
+    role: author
+    groups:
+    - management
+    attributes: {}
+    permission_fingerprint: sha256:5fb34253cadda8267259755dd39445d7947212f596678f2d76f028ec1e1ee39a
+  outcome: rows
+  rows: 'consumer_count
+
+    4
+
+    '
+engines:
+- managed
+pending: 441
