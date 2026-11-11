@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from orvex.access.audit import AuditLog, chain
 from orvex.access.errors import AUDIT_CHAIN_BROKEN, AUDIT_CHECKPOINT_INVALID, AccessError
+from orvex.access.storage import PostgresStore
 
 from tests.support.access_directory import Raw, World
 
@@ -217,3 +218,66 @@ def test_a_rollback_with_the_key_is_caught_by_an_anchor_shipped_outside(
     assert log.verify() == keep  # the database alone cannot tell
     problem = refused(log, anchors)
     assert problem.details == {"seq": str(newest), "reason": "anchor"}
+
+
+def test_events_removed_from_the_start_without_retention_are_found(
+    log: AuditLog, raw: Raw, world: World, tmp_path: Path
+) -> None:
+    """A database writer deletes the oldest events up to a checkpoint: only retention may do
+    that, and it says so in the chain. Caught with or without anchors."""
+    anchors = shipped(world, tmp_path / "outside")
+    raw.run("DELETE FROM audit_events WHERE seq <= 8")
+    for given in ([], anchors):
+        problem = refused(log, given)
+        assert problem.code == AUDIT_CHAIN_BROKEN
+        assert problem.details["reason"] == "start"
+
+
+def test_a_rollback_without_the_key_is_caught_only_by_an_anchor_shipped_outside(
+    log: AuditLog, raw: Raw, world: World, tmp_path: Path
+) -> None:
+    """The stated limit: the head as it was signed, put back after newer events, verifies
+    against the database alone. A checkpoint anchored in between gives it away."""
+    ((seq, hashed, at, key, signature),) = raw.rows(
+        "SELECT seq, hash, at, key, signature FROM audit_head WHERE id = 1"
+    )
+    for _ in range(4):  # far enough to write and anchor a new checkpoint
+        log.record_alone("auth.logout", world.admin, {})
+    anchors = shipped(world, tmp_path / "outside")
+    raw.run("DELETE FROM audit_events WHERE seq > :s", s=seq)
+    raw.run("DELETE FROM audit_checkpoints WHERE seq > :s", s=seq)
+    raw.run(
+        "UPDATE audit_head SET seq = :s, hash = :h, at = :a, key = :k, signature = :g WHERE id = 1",
+        s=seq,
+        h=hashed,
+        a=at,
+        k=key,
+        g=signature,
+    )
+    assert log.verify() == int(str(seq))  # the database alone cannot tell
+    assert refused(log, anchors).details["reason"] == "anchor"
+
+
+@pytest.mark.parametrize("backend", ["postgres"], indirect=True)
+def test_an_owner_role_that_grants_itself_delete_is_still_caught(
+    log: AuditLog, world: World
+) -> None:
+    """On PostgreSQL the store's role owns the tables and can grant itself DELETE again: the
+    grants are defense in depth, and the chain is what catches the removal."""
+    assert isinstance(world.store, PostgresStore)
+    with world.store.transaction() as transaction:
+        transaction.run("GRANT DELETE ON audit_events TO CURRENT_USER")
+        transaction.run("DELETE FROM audit_events WHERE seq = 3")
+    assert refused(log).code == AUDIT_CHAIN_BROKEN
+
+
+def test_retention_refuses_a_log_whose_ages_were_changed(log: AuditLog, raw: Raw) -> None:
+    """A database writer makes recent events look old: retention verifies first, finds the
+    `at` columns no longer match the signed documents, and removes nothing."""
+    before = raw.rows("SELECT count(*) FROM audit_events")
+    raw.run("UPDATE audit_events SET at = '2001-01-01T00:00:00.000000Z' WHERE seq <= 8")
+    with pytest.raises(AccessError) as caught:
+        log.retain(30)
+    assert caught.value.code == AUDIT_CHAIN_BROKEN
+    assert caught.value.details["reason"] == "columns"
+    assert raw.rows("SELECT count(*) FROM audit_events") == before

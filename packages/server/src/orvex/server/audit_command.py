@@ -6,7 +6,8 @@ rotate its signing key (#437).
 - `retain` removes the events older than the retention setting, up to a signed checkpoint.
 - `rotate-key` makes a new key, records the rotation, and only then replaces the key file. If
   the replacement fails, the new key is left beside the old one as `<key>.new` and the log
-  refuses to write with the old one until it is moved into place.
+  refuses to write with the old one until it is moved into place. A running server keeps the
+  key it loaded, so it refuses to write after a rotation until it is restarted.
 """
 
 from __future__ import annotations
@@ -50,6 +51,13 @@ def audit(
                 print(f"audit retention: removed events {removed[0]} to {removed[1]}", file=out)
         else:
             staged = key.with_name(key.name + ".new")
+            if staged.exists() or staged.is_symlink():
+                print(
+                    f"AUDIT_KEY_UNSAFE: {staged} exists: a rotation was interrupted. Move it into "
+                    "place if the log already uses it (verify says which), or remove it.",
+                    file=err,
+                )
+                return 1
             new = keys.create(staged)
             log.rotate(new)
             os.replace(staged, key)

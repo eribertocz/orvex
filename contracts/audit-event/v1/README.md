@@ -50,19 +50,27 @@ Adding a kind is a compatible change. Removing one, or changing its meaning, nee
 
 ## What is detected, and what is not
 
-**Detected by `verify`:**
-- Any change, removal, reordering or insertion of an event, or of a checkpoint, by someone who can write the database but cannot read the signing key. That includes a whole chain rewritten with consistent hashes, because no new signature can be made.
-- Any change made before the newest anchor that was shipped outside, even by someone who also holds the key: `verify` compares the anchors it is given with the checkpoints.
+**Detected by `verify`**, by anyone who can write the database but cannot read the signing key:
+- a change, reordering or insertion of an event, or a change of a checkpoint, anywhere in the log, including a whole chain rewritten with consistent hashes, because no new signature can be made;
+- a removal of events from the start of the log, unless retention made it: the log must start right after the newest `audit.retention` event's range, at a signed checkpoint;
+- a removal from the middle, which leaves a gap.
+
+**Detected only with an anchor shipped outside:** any change made before the newest anchor that was shipped, even by someone who also holds the key. `verify` compares the anchors it is given with the checkpoints.
 
 **Not detected:**
+- A **rollback** made after the last anchor that was shipped outside, by anyone who can write the database: the newest events removed, and the head and the checkpoints put back as they were signed then. The signed values are genuine, only older, and the database holds nothing newer to compare them with. Only an anchor shipped after that point shows it.
 - A change by someone who holds both database access and the signing key, made after the last anchor that was shipped outside.
-- A rollback to an earlier complete state, made after the last anchor that was shipped outside: the newest events removed, and the head and the checkpoints put back as they were signed then. Only an anchor shipped after that point shows it.
 
-Shipping the anchor file often is what makes the second list short.
+Shipping the anchor file often is what shortens both.
+
+**What the database itself enforces.** This is defense in depth, not the guarantee:
+- On SQLite, triggers refuse changes, and anyone who can write the file can drop them.
+- On PostgreSQL, the store's role holds no `UPDATE`, `DELETE` or `TRUNCATE` grant on the log's tables. But it owns them, so it can grant itself those rights again. Only a separate owning role would close that, and the guarantee above does not depend on it.
 
 ## Retention
 
 - The administrator sets `audit.retention_days`: 730 by default, at least 30 (`AUDIT_RETENTION_INVALID` below that).
+- Retention first verifies the whole log, with the local anchor file, in the same transaction. A log that does not verify is not trimmed: the ages it would trust are then those of the signed, chained documents, which no database writer can change.
 - Events older than that are removed, but only up to a signed checkpoint, which stays. The remaining chain therefore verifies from that checkpoint's hash.
 - Retention with old events but no checkpoint to stop at is refused (`AUDIT_RETENTION_INVALID`).
 - Each removal is itself an event, `audit.retention`, with the range removed.

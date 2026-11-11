@@ -13,9 +13,11 @@ from datetime import UTC, datetime
 import pytest
 from jsonschema import Draft202012Validator
 from orvex.access.audit import AuditLog
+from orvex.access.directory import Directory
 from orvex.access.errors import (
     ACCESS_FORBIDDEN,
     AUDIT_EVENT_INVALID,
+    AUDIT_KEY_UNSAFE,
     AUDIT_UNAVAILABLE,
     AccessError,
 )
@@ -195,3 +197,73 @@ def test_a_checkpoint_is_written_every_n_events_and_daily(world: World) -> None:
     assert start + 6 in covered  # two days later: the daily checkpoint
     anchored = world.audit.anchors.read_text("ascii").splitlines()
     assert [row.anchor() for row in log.checkpoints()] == anchored
+
+
+def test_a_log_failure_during_an_action_is_not_retried_through_the_log(
+    world: World, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC5: the action's own event fails (here, the key check): the action is refused and
+    rolled back, one process-log line is written, and no refusal is attempted through the log."""
+    calls: list[str] = []
+    original = world.audit.record_alone
+
+    def counted(kind: str, *more: object, **named: object) -> str:
+        calls.append(kind)
+        return original(kind, *more, **named)  # type: ignore[arg-type]
+
+    def broken(transaction: object) -> None:
+        raise AccessError(AUDIT_KEY_UNSAFE, "simulated", {})
+
+    monkeypatch.setattr(world.audit, "record_alone", counted)
+    monkeypatch.setattr(world.audit, "_known_key", broken)
+    with caplog.at_level(logging.ERROR), pytest.raises(AccessError) as refused:
+        world.directory.create_user(world.admin, "ana", "Ana")
+    assert refused.value.code == AUDIT_KEY_UNSAFE
+    assert calls == []
+    assert world.audit.unrecorded == 1
+    assert len(caplog.records) == 1
+    with world.store.transaction(read_only=True) as transaction:
+        assert transaction.rows("SELECT count(*) FROM users WHERE user_name = 'ana'") == [(0,)]
+
+
+def test_a_store_failure_inside_record_is_audit_unavailable(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failing(transaction: object) -> None:
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(world.audit, "_known_key", failing)
+    with pytest.raises(AccessError) as refused:
+        world.directory.create_user(world.admin, "ana", "Ana")
+    assert refused.value.code == AUDIT_UNAVAILABLE
+
+
+def test_an_anchor_failure_after_commit_never_fails_the_committed_action(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    """AC5 and the anchor file: the change is committed, so it is reported as done; the
+    anchoring is logged, counted and retried at the next commit."""
+    anchors = world.audit.anchors
+    anchors.unlink()
+    anchors.mkdir()  # the file cannot be written
+    log = AuditLog(world.store, world.audit.signing_key, anchors, checkpoint_every=1)
+    directory = Directory(world.store, log)
+    with caplog.at_level(logging.ERROR):
+        created = directory.create_user(world.admin, "ana", "Ana")
+    assert world.directory.user(created.id) is not None
+    assert log.unanchored == 1
+    anchors.rmdir()
+    directory.create_user(world.admin, "ben", "Ben")  # the next commit catches up
+    assert len(anchors.read_text("ascii").splitlines()) == len(log.checkpoints())
+
+
+def test_a_partial_last_anchor_line_is_repaired(world: World) -> None:
+    """A crash cut the last append short: the partial line is dropped and anchoring goes on."""
+    log = AuditLog(world.store, world.audit.signing_key, world.audit.anchors, checkpoint_every=1)
+    log.record_alone("auth.logout", world.admin, {})
+    with world.audit.anchors.open("a", encoding="ascii") as file:
+        file.write('{"seq": 99, "ha')
+    log.record_alone("auth.logout", world.admin, {})
+    lines = world.audit.anchors.read_text("ascii").splitlines()
+    assert lines == [row.anchor() for row in log.checkpoints()]
+    assert log.verify(lines) == len(world.events())

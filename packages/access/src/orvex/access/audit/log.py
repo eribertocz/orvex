@@ -43,7 +43,7 @@ from orvex.access.errors import (
     AccessError,
 )
 from orvex.access.storage import retry
-from orvex.access.storage.store import Store, Transaction
+from orvex.access.storage.store import Store, Transaction, TransientConflict
 
 SCHEMA_FILE = "audit-event-v1.json"
 CHECKPOINT_EVERY = 1000
@@ -100,7 +100,8 @@ class AuditLog:
         self._new_id = new_id
         self._every = checkpoint_every
         self._period = checkpoint_period
-        self.unrecorded = 0  # refusals whose own event could not be recorded
+        self.unrecorded = 0  # actions or refusals whose event could not be recorded
+        self.unanchored = 0  # anchor-file writes that failed and wait for the next commit
         self._unanchored = True  # a checkpoint may be missing from the anchor file
 
     @property
@@ -123,7 +124,24 @@ class AuditLog:
         outcome: Outcome = "allowed",
         project: str | None = None,
     ) -> str:
-        """Append one event inside `transaction`; return its id."""
+        """Append one event inside `transaction`; return its id. Any failure but a transient
+        conflict (which the caller retries) is `AUDIT_*`: the caller's transaction rolls back."""
+        try:
+            return self._append(transaction, kind, actor, details, outcome, project)
+        except AccessError, TransientConflict:
+            raise
+        except Exception as error:
+            raise AccessError(AUDIT_UNAVAILABLE, "The audit log cannot record now.", {}) from error
+
+    def _append(
+        self,
+        transaction: Transaction,
+        kind: str,
+        actor: str,
+        details: Mapping[str, Any],
+        outcome: Outcome,
+        project: str | None,
+    ) -> str:
         self._known_key(transaction)
         ((seq, previous, last_at),) = transaction.rows(
             f"SELECT seq, hash, at FROM audit_head WHERE id = 1{transaction.locking}"
@@ -223,10 +241,24 @@ class AuditLog:
 
     def committed(self) -> None:
         """Call after a transaction that recorded events committed: anchors its checkpoints, if
-        it wrote any (and, the first time, any an earlier process left unanchored)."""
-        if self._unanchored:
+        it wrote any (and, the first time, any an earlier process left unanchored). The action
+        is committed already, so a failure here is never reported as its failure: one
+        process-log line, counted, and the next commit tries again."""
+        if not self._unanchored:
+            return
+        try:
             self.sync_anchors()
-            self._unanchored = False
+        except OSError, ValueError, AccessError:
+            self.unanchored += 1
+            LOG.error("audit: the anchor file could not be written")
+            return
+        self._unanchored = False
+
+    def unavailable(self) -> None:
+        """The audit log failed during an action, which is refused: one process-log line and a
+        count, and no second attempt through the log (#437 item 6)."""
+        self.unrecorded += 1
+        LOG.error("audit: an action was refused because its event could not be recorded")
 
     # --- checkpoints and anchors ---------------------------------------------------------------
 
@@ -276,6 +308,17 @@ class AuditLog:
         with self._store.transaction(read_only=True) as transaction:
             return _checkpoints(transaction)
 
+    def _local_anchors(self) -> list[str]:
+        """The anchor file's complete lines; a partial last line (a cut append) is left out."""
+        try:
+            text = self._anchors.read_text("ascii")
+        except FileNotFoundError:
+            return []
+        lines = text.splitlines()
+        if text and not text.endswith("\n"):
+            lines = lines[:-1]
+        return [line for line in lines if line.strip()]
+
     def sync_anchors(self) -> None:
         """Append to the anchor file every checkpoint it does not hold yet. A process lock keeps
         two writers from appending the same line twice."""
@@ -284,8 +327,15 @@ class AuditLog:
         with os.fdopen(descriptor, "r+", encoding="ascii") as file:
             fcntl.flock(file, fcntl.LOCK_EX)
             file.seek(0)
-            lines = [line for line in file.read().splitlines() if line.strip()]
-            last = json.loads(lines[-1])["seq"] if lines else 0
+            text = file.read()
+            lines = [line for line in text.splitlines() if line.strip()]
+            if text and not text.endswith("\n"):
+                # A crash cut the last append short: drop the partial line, keep the rest.
+                lines = lines[:-1]
+                file.seek(0)
+                file.truncate()
+                file.write("".join(line + "\n" for line in lines))
+            last = int(json.loads(lines[-1])["seq"]) if lines else 0
             fresh = [row for row in self.checkpoints() if row.seq > last]
             if fresh:
                 file.write("".join(row.anchor() + "\n" for row in fresh))
@@ -307,6 +357,9 @@ class AuditLog:
 
         def work(transaction: Transaction) -> tuple[int, int] | None:
             transaction.rows(f"SELECT seq FROM audit_head WHERE id = 1{transaction.locking}")
+            # Only a log that verifies is trimmed: its `at` columns then equal the signed,
+            # chained documents, so no database writer can make old what is recent.
+            self._verify(transaction, self._local_anchors())
             ((oldest, first),) = transaction.rows(
                 "SELECT max(seq), min(seq) FROM audit_events WHERE at < :cutoff", cutoff=cutoff
             )
@@ -334,7 +387,7 @@ class AuditLog:
             return removed
 
         removed = retry.write(self._store, work)
-        self.sync_anchors()
+        self.committed()
         return removed
 
     # --- key rotation --------------------------------------------------------------------------
@@ -374,7 +427,8 @@ class AuditLog:
         except BaseException:
             self._key = old
             raise
-        self.sync_anchors()
+        self._unanchored = True
+        self.committed()
 
     # --- verification --------------------------------------------------------------------------
 
@@ -382,29 +436,31 @@ class AuditLog:
         """Check the whole log against the current key and `anchors` (lines shipped outside);
         return how many events verified, or raise the first problem."""
         with self._store.transaction(read_only=True) as transaction:
-            events = [
-                chain.EventRow(int(str(s)), str(i), str(a), str(k), str(d), str(h))
-                for s, i, a, k, d, h in transaction.rows(
-                    "SELECT seq, id, at, kind, document, hash FROM audit_events ORDER BY seq"
-                )
-            ]
-            keys = [
-                chain.KeyRow(
-                    str(k),
-                    str(p),
-                    None if v is None else str(v),
-                    None if a is None else str(a),
-                    None if b is None else str(b),
-                )
-                for k, p, v, a, b in transaction.rows(
-                    "SELECT key, public_key, previous, previous_signs, signs_previous "
-                    "FROM audit_keys"
-                )
-            ]
-            ((seq, hashed, key, signature),) = transaction.rows(
-                "SELECT seq, hash, key, signature FROM audit_head WHERE id = 1"
+            return self._verify(transaction, anchors)
+
+    def _verify(self, transaction: Transaction, anchors: Sequence[str]) -> int:
+        events = [
+            chain.EventRow(int(str(s)), str(i), str(a), str(k), str(d), str(h))
+            for s, i, a, k, d, h in transaction.rows(
+                "SELECT seq, id, at, kind, document, hash FROM audit_events ORDER BY seq"
             )
-            checkpoints = _checkpoints(transaction)
+        ]
+        keys = [
+            chain.KeyRow(
+                str(k),
+                str(p),
+                None if v is None else str(v),
+                None if a is None else str(a),
+                None if b is None else str(b),
+            )
+            for k, p, v, a, b in transaction.rows(
+                "SELECT key, public_key, previous, previous_signs, signs_previous FROM audit_keys"
+            )
+        ]
+        ((seq, hashed, key, signature),) = transaction.rows(
+            "SELECT seq, hash, key, signature FROM audit_head WHERE id = 1"
+        )
+        checkpoints = _checkpoints(transaction)
         head = chain.HeadRow(
             int(str(seq)),
             str(hashed),

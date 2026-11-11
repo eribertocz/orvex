@@ -71,4 +71,4 @@ orvex admin audit rotate-key                          # a new key, signed by the
 
 `verify` names the first event or checkpoint that does not hold (`AUDIT_CHAIN_BROKEN`, `AUDIT_CHECKPOINT_INVALID`). `retain` removes old events only up to a signed checkpoint, which stays, so what remains still verifies. It refuses when no checkpoint can be kept (`AUDIT_RETENTION_INVALID`).
 
-If `rotate-key` stops between recording the rotation and replacing the file, the new key is left as `audit-signing.key.new`. Until you move it into place, the log refuses to write with the old one.
+If `rotate-key` stops between recording the rotation and replacing the file, the new key is left as `audit-signing.key.new`. Until you move it into place, the log refuses to write with the old one. Restart a running server after a rotation: it keeps the key it loaded, and refuses to write with it once it has been replaced.

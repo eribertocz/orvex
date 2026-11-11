@@ -95,7 +95,10 @@ class Bootstrap:
                 )
                 found = sql.user(transaction, created)
         except AccessError as error:
-            self._audit.refusal(operation, SYSTEM, error.code)
+            if error.code.startswith("AUDIT_"):
+                self._audit.unavailable()  # the log itself failed: no second attempt through it
+            else:
+                self._audit.refusal(operation, SYSTEM, error.code)
             raise
         if found is None:
             raise AccessError(ACCESS_FORBIDDEN, "The operation is not allowed.")

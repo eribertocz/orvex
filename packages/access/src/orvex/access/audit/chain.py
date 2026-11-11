@@ -5,7 +5,9 @@
 - Signed payloads carry a domain line, so a signature made for one purpose is never valid for
   another: the head, a checkpoint, and each direction of a key rotation.
 - `verify` reads rows already loaded and raises the first problem it finds, naming the event or
-  the checkpoint (`audit-event` v1 README, "What is detected").
+  the checkpoint (`audit-event` v1 README, "What is detected"). A log that no longer starts at
+  1 must start right after the newest `audit.retention` event's `last_seq`, and from a signed
+  checkpoint at that place: nothing else may remove events.
 """
 
 from __future__ import annotations
@@ -154,6 +156,16 @@ def verify(
             previous = by_seq[first - 1].hash  # retention removed what came before
         else:
             raise _broken(events[0].id, first, "start")
+        if first > 1:
+            # Only retention removes events, and it records how far it went in the chain itself:
+            # a start no signed retention event explains is a removal by someone else.
+            reached = [
+                json.loads(event.document)["details"]["last_seq"]
+                for event in events
+                if event.kind == "audit.retention"
+            ]
+            if not reached or max(reached) != first - 1:
+                raise _broken(events[0].id, first, "start")
         expected_seq = first
         for event in events:
             if event.seq != expected_seq:

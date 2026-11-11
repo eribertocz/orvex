@@ -393,7 +393,10 @@ class Directory:
                 self._store, lambda transaction: work(transaction, instant(self._clock()))
             )
         except AccessError as error:
-            self._audit.refusal(operation, actor, error.code, project=project, target=target)
+            if error.code.startswith("AUDIT_"):
+                self._audit.unavailable()  # the log itself failed: no second attempt through it
+            else:
+                self._audit.refusal(operation, actor, error.code, project=project, target=target)
             raise
         self._audit.committed()
         return done
