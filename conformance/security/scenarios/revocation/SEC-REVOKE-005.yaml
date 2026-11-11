@@ -1,0 +1,52 @@
+id: SEC-REVOKE-005
+area: revocation
+title: An open page is refused once the caller leaves its group
+intent: Every page query re-checks the caller's current groups.
+fixture: utility
+caller: &id001
+  kind: security_context
+  version: 1
+  user: u-coll
+  project: utility
+  role: author
+  groups:
+  - collections
+  attributes: {}
+  permission_fingerprint: sha256:6b813403c5da3e617657e7c9aaaa7394c75e41d70c7ad09b9541eb83c52d2d95
+request:
+  kind: sequence
+  steps:
+  - caller: *id001
+    request:
+      kind: page
+      page: consumption/arrears
+  - caller: *id001
+    request:
+      kind: page-query
+      page: consumption/arrears
+      visual_id: consumers_list
+      interaction_state: {}
+    change:
+      op: remove_group
+      user: u-coll
+      group: collections
+expect:
+  outcome: error
+  code: PAGE_FORBIDDEN
+  forbidden:
+  - Ana
+  - Ben
+control:
+  caller: *id001
+  outcome: rows
+  rows: 'consumers.consumer_id,consumers.name
+
+    C1,Ana
+
+    C2,Ben
+
+    '
+  without_changes: true
+engines:
+- managed
+pending: P6-07

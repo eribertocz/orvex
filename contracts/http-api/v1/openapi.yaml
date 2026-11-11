@@ -140,6 +140,18 @@ components:
     SEMANTIC_MODEL_NOT_FOUND: The project has no semantic model.
     SEMANTIC_MODEL_INVALID: >-
       The project's semantic model or its policies have problems; `details` names each one.
+    PAGE_FORBIDDEN: >-
+      The caller may not see this page, or a page-bound query asks for something its published
+      visual does not declare (`security.md` §3.2; reserved until P6-07).
+    PAGE_CHANGED: >-
+      The page was published again after the caller opened it; the caller reopens it (#435,
+      Owner 2026-11-10; reserved until P6-07).
+    EXPORT_FORBIDDEN: >-
+      A Viewer asked to export where the dashboard's `export.viewers` is `false` (reserved until
+      P6-18).
+    MCP_FORBIDDEN: >-
+      A Viewer called an MCP tool where the project's `mcp.viewers` is `false` (reserved until
+      P9-03).
   headers:
     RequestId:
       description: >-

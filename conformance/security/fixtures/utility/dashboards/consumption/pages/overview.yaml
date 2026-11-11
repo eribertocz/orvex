@@ -1,0 +1,12 @@
+version: 1
+title: Overview
+visuals:
+  - id: kwh_by_zone
+    query:
+      kind: semantic_query
+      version: 1
+      mode: aggregate
+      metrics: [{metric: total_kwh}]
+      group_by: [{member: readings.zone_id}]
+    interactions:
+      filters: [readings.zone_id]

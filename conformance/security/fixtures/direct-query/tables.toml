@@ -1,0 +1,17 @@
+# The managed-lake tables of the fixture (the mapping and registration tables of its policies).
+# `lake.toml` describes the existing DuckLake the `outages` dataset is read from.
+[tables."security.user_zone"]
+file = "data/user_zone.csv"
+columns = [["user_id", "VARCHAR", false], ["zone_id", "VARCHAR", false]]
+
+[tables."security.blocked_zone"]
+file = "data/blocked_zone.csv"
+columns = [["user_id", "VARCHAR", false], ["zone_id", "VARCHAR", true]]
+
+[tables."security.registered"]
+file = "data/registered.csv"
+columns = [["user_id", "VARCHAR", false]]
+
+[tables."lake.outages"]
+file = "data/outages.csv"
+columns = [["outage_id", "BIGINT", false], ["zone_id", "VARCHAR", false], ["minutes", "DECIMAL(18,2)", false]]

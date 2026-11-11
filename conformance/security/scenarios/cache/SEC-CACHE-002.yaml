@@ -1,0 +1,70 @@
+id: SEC-CACHE-002
+area: cache
+title: A cached result is never served after the caller loses a group
+intent: Losing the collections group hides national_id at once, cached results included.
+fixture: utility
+caller: &id001
+  kind: security_context
+  version: 1
+  user: u-coll
+  project: utility
+  role: author
+  groups:
+  - collections
+  attributes: {}
+  permission_fingerprint: sha256:6b813403c5da3e617657e7c9aaaa7394c75e41d70c7ad09b9541eb83c52d2d95
+request:
+  kind: sequence
+  steps:
+  - caller: *id001
+    request:
+      kind: semantic-query
+      body:
+        kind: semantic_query
+        version: 1
+        mode: detail
+        fields:
+        - member: consumers.national_id
+        order:
+        - by: consumers.national_id
+          direction: asc
+        page:
+          size: '100'
+  - caller: *id001
+    request:
+      kind: semantic-query
+      body:
+        kind: semantic_query
+        version: 1
+        mode: detail
+        fields:
+        - member: consumers.national_id
+        order:
+        - by: consumers.national_id
+          direction: asc
+        page:
+          size: '100'
+    change:
+      op: remove_group
+      user: u-coll
+      group: collections
+expect:
+  outcome: error
+  code: MEMBER_NOT_FOUND
+  forbidden:
+  - ID-111
+  - ID-222
+control:
+  caller: *id001
+  outcome: rows
+  rows: 'consumers.national_id
+
+    ID-111
+
+    ID-222
+
+    '
+  without_changes: true
+engines:
+- managed
+pending: 444

@@ -1,0 +1,11 @@
+version: 1
+title: Overview (draft)
+visuals:
+  - id: kwh_by_zone
+    query:
+      kind: semantic_query
+      version: 1
+      mode: detail
+      fields: [{member: consumers.name}, {member: consumers.national_id}]
+      order: [{by: consumers.name, direction: asc}]
+      page: {size: "100"}

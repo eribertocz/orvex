@@ -1,0 +1,47 @@
+{
+  "version": "0.2.0.dev0",
+  "name": "direct_query",
+  "datasets": [
+    {
+      "name": "outages",
+      "source": "lake.outages",
+      "primary_key": [
+        "outage_id"
+      ],
+      "fields": [
+        {
+          "name": "outage_id",
+          "expression": {
+            "sql": "outage_id"
+          }
+        },
+        {
+          "name": "zone_id",
+          "expression": {
+            "sql": "zone_id"
+          }
+        },
+        {
+          "name": "minutes",
+          "expression": {
+            "sql": "minutes"
+          }
+        }
+      ]
+    }
+  ],
+  "metrics": [
+    {
+      "name": "outage_minutes",
+      "expression": {
+        "sql": "SUM(outages.minutes)"
+      }
+    }
+  ],
+  "custom_extensions": [
+    {
+      "vendor_name": "{{vendor}}",
+      "data": "{\"default_time_zone\": \"UTC\", \"element\": \"model\", \"version\": 1}"
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+id: SEC-REVOKE-004
+area: revocation
+title: A permission revoked during an export produces no file
+intent: 'The caller''s Z2 mapping is removed while the export runs: no file is produced, not even a partial
+  one; P6-18 defines the refusal.'
+fixture: utility
+caller: &id001
+  kind: security_context
+  version: 1
+  user: u-multi
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:2fb37a9d05dee53e210e110367256efed5254f5f76d78929c75688078f58020e
+request:
+  kind: sequence
+  steps:
+  - caller: *id001
+    request:
+      kind: export-start
+      format: csv
+      body:
+        kind: semantic_query
+        version: 1
+        mode: detail
+        fields:
+        - member: readings.reading_id
+        - member: readings.consumer_id
+        order:
+        - by: readings.reading_id
+          direction: asc
+        page:
+          size: '100'
+  - caller: *id001
+    request:
+      kind: export-result
+    change:
+      op: delete_row
+      table: security.user_zone
+      row:
+        user_id: u-multi
+        zone_id: Z2
+expect:
+  outcome: error
+  code_defined_by: P6-18
+  no_file: true
+  forbidden:
+  - C1
+  - C3
+control:
+  caller: *id001
+  outcome: rows
+  rows: 'readings.reading_id,readings.consumer_id
+
+    1,C1
+
+    2,C2
+
+    3,C3
+
+    5,C3
+
+    '
+  without_changes: true
+engines:
+- managed
+pending: P6-18

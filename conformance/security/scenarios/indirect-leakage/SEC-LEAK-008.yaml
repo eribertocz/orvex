@@ -1,0 +1,68 @@
+id: SEC-LEAK-008
+area: indirect-leakage
+title: A hidden member and a member that never existed give the same error
+intent: 'Same code, same HTTP status, same body shape: the error never confirms that the member exists.'
+fixture: utility
+caller:
+  kind: security_context
+  version: 1
+  user: u-zone1
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:44b2b208870918c65d8d4ccb3c04b4116a39b8538fb96def9fc82a19a59f52e1
+request:
+  kind: semantic-query
+  body:
+    kind: semantic_query
+    version: 1
+    mode: detail
+    fields:
+    - member: consumers.national_id
+    order:
+    - by: consumers.national_id
+      direction: asc
+    page:
+      size: '100'
+  alternate:
+    kind: semantic_query
+    version: 1
+    mode: detail
+    fields:
+    - member: consumers.no_such_field
+    order:
+    - by: consumers.no_such_field
+      direction: asc
+    page:
+      size: '100'
+expect:
+  outcome: error
+  code: MEMBER_NOT_FOUND
+  same_as_alternate: true
+  forbidden:
+  - ID-111
+  - hidden
+  - collections
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-coll
+    project: utility
+    role: author
+    groups:
+    - collections
+    attributes: {}
+    permission_fingerprint: sha256:6b813403c5da3e617657e7c9aaaa7394c75e41d70c7ad09b9541eb83c52d2d95
+  outcome: rows
+  rows: 'consumers.national_id
+
+    ID-111
+
+    ID-222
+
+    '
+engines:
+- managed
+pending: 442

@@ -1,0 +1,5 @@
+consumer_id,zone_id,name,national_id,phone,segment
+C1,Z1,Ana,ID-111,555-0101,residential
+C2,Z1,Ben,ID-222,555-0102,commercial
+C3,Z2,Cid,ID-333,555-0103,residential
+C4,Z3,Dee,ID-444,555-0104,commercial

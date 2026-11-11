@@ -1,0 +1,62 @@
+id: SEC-REVOKE-001
+area: revocation
+title: A permission revoked between two pages refuses the next page
+intent: 'After the caller''s Z2 mapping is removed, the next page re-checks current permissions and is
+  refused (#449 Q6): the cursor was issued under other permissions, so it is invalid and the caller starts
+  again.'
+fixture: utility
+caller: &id001
+  kind: security_context
+  version: 1
+  user: u-multi
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:2fb37a9d05dee53e210e110367256efed5254f5f76d78929c75688078f58020e
+request:
+  kind: sequence
+  steps:
+  - caller: *id001
+    request:
+      kind: semantic-query
+      body:
+        kind: semantic_query
+        version: 1
+        mode: detail
+        fields:
+        - member: readings.reading_id
+        - member: readings.consumer_id
+        order:
+        - by: readings.reading_id
+          direction: asc
+        page:
+          size: '2'
+  - caller: *id001
+    request:
+      kind: next-page
+    change:
+      op: delete_row
+      table: security.user_zone
+      row:
+        user_id: u-multi
+        zone_id: Z2
+expect:
+  outcome: error
+  code: PAGE_CURSOR_INVALID
+  forbidden:
+  - C3
+control:
+  caller: *id001
+  outcome: rows
+  rows: 'readings.reading_id,readings.consumer_id
+
+    3,C3
+
+    5,C3
+
+    '
+  without_changes: true
+engines:
+- managed
+pending: 440

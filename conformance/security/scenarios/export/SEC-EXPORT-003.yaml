@@ -1,0 +1,57 @@
+id: SEC-EXPORT-003
+area: export
+title: A Viewer exports only where the dashboard allows it
+intent: 'export.viewers is false for the dashboard: a Viewer''s export is refused.'
+fixture: utility
+caller:
+  kind: security_context
+  version: 1
+  user: u-view
+  project: utility
+  role: viewer
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:5dad8e06d64dc67c26bc0f8e2aea81332ae6ab01d0385589b60074ef0894d3c4
+request:
+  kind: export
+  format: csv
+  dashboard: consumption
+  body:
+    kind: semantic_query
+    version: 1
+    mode: detail
+    fields:
+    - member: readings.reading_id
+    - member: readings.consumer_id
+    order:
+    - by: readings.reading_id
+      direction: asc
+    page:
+      size: '100'
+expect:
+  outcome: error
+  code: EXPORT_FORBIDDEN
+  forbidden:
+  - C1
+  - C2
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-zone1
+    project: utility
+    role: author
+    groups: []
+    attributes: {}
+    permission_fingerprint: sha256:44b2b208870918c65d8d4ccb3c04b4116a39b8538fb96def9fc82a19a59f52e1
+  outcome: rows
+  rows: 'readings.reading_id,readings.consumer_id
+
+    1,C1
+
+    2,C2
+
+    '
+engines:
+- managed
+pending: P6-18

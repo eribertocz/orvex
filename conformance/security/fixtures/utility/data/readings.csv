@@ -1,0 +1,6 @@
+reading_id,consumer_id,meter_id,zone_id,kwh
+1,C1,M1,Z1,10.50
+2,C2,M2,Z1,20.25
+3,C3,M1,Z2,30.00
+4,C4,M2,Z3,40.75
+5,C3,M2,Z2,NULL

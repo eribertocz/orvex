@@ -1,0 +1,11 @@
+version: 1
+title: Arrears
+access:
+  groups: [collections]
+visuals:
+  - id: consumers_list
+    query:
+      kind: semantic_query
+      version: 1
+      mode: detail
+      fields: [{member: consumers.consumer_id}, {member: consumers.name}]

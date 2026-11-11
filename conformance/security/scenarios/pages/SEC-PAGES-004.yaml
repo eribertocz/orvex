@@ -1,0 +1,35 @@
+id: SEC-PAGES-004
+area: pages
+title: A page without access opens for every member who may view
+intent: The overview page declares no access, so a Viewer opens it; the restricted arrears page refuses
+  the same Viewer.
+fixture: utility
+caller: &id001
+  kind: security_context
+  version: 1
+  user: u-view
+  project: utility
+  role: viewer
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:5dad8e06d64dc67c26bc0f8e2aea81332ae6ab01d0385589b60074ef0894d3c4
+request:
+  kind: page
+  page: consumption/overview
+expect:
+  outcome: contains
+  text:
+  - kwh_by_zone
+  forbidden:
+  - PAGE_FORBIDDEN
+control:
+  caller: *id001
+  outcome: contains
+  text:
+  - PAGE_FORBIDDEN
+  request:
+    kind: page
+    page: consumption/arrears
+engines:
+- managed
+pending: P6-07

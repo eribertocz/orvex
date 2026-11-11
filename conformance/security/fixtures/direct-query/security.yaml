@@ -1,0 +1,17 @@
+version: 1
+row_policies:
+  - name: allowed_zones
+    dataset: outages
+    kind: predicate
+    predicate: "zone_id IN (SELECT zone_id FROM security.user_zone WHERE user_id = $user_id)"
+    exempt_groups: [operations]
+  - name: blocked_zones
+    dataset: outages
+    kind: predicate
+    predicate: "zone_id NOT IN (SELECT zone_id FROM security.blocked_zone WHERE user_id = $user_id)"
+    registration:
+      table: security.registered
+      key: user_id
+limits:
+  policy_values: 2
+  policy_value_bytes: 65536

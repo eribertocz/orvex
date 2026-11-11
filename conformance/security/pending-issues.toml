@@ -1,0 +1,12 @@
+# The issues a case's numeric `pending` may name, each with its roadmap row (#435).
+# tests/conformance/test_security_scenarios.py refuses any other issue number, and a row that is
+# not in the roadmap or not in the current phase. Governed with the cases: the Owner merges every
+# change here.
+
+[issues]
+440 = "P3-06"
+441 = "P3-07"
+442 = "P3-08"
+443 = "P3-09"
+444 = "P3-10"
+445 = "P3-11"

@@ -1,0 +1,60 @@
+id: SEC-DQ-004
+area: direct-query
+title: A mapping above the cap is refused without revealing its size
+intent: 'Three mapped values exceed the cap of two: the question is refused, the policy is never skipped,
+  and no count is revealed. Not on the managed lake: the cap applies only to values bound into another
+  engine''s query.'
+fixture: direct-query
+caller:
+  kind: security_context
+  version: 1
+  user: u-wide
+  project: direct-query
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:f5840272f3506204848c6f9e8fbc4f1f5c1832cf08367240b7c18d12694b0b87
+request:
+  kind: semantic-query
+  body:
+    kind: semantic_query
+    version: 1
+    mode: detail
+    fields:
+    - member: outages.outage_id
+    - member: outages.zone_id
+    - member: outages.minutes
+    order:
+    - by: outages.outage_id
+      direction: asc
+    page:
+      size: '100'
+expect:
+  outcome: error
+  code: POLICY_NOT_SUPPORTED_ON_ENGINE
+  forbidden:
+  - '3'
+  - Z1
+  - Z2
+  - Z3
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-zone1
+    project: direct-query
+    role: author
+    groups: []
+    attributes: {}
+    permission_fingerprint: sha256:4c2139ed6b722f61ff8cc5d035270ebb22e38be499f7edd125f50dea54983790
+  outcome: rows
+  rows: 'outages.outage_id,outages.zone_id,outages.minutes
+
+    1,Z1,15.00
+
+    '
+engines:
+- existing-ducklake
+- clickhouse
+pending: 441
+adr_0027: mapping-above-cap

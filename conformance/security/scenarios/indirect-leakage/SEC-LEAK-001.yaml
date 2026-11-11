@@ -1,0 +1,61 @@
+id: SEC-LEAK-001
+area: indirect-leakage
+title: An aggregate across a join holds only the caller's rows
+intent: Totals by a joined attribute never include rows hidden on either side.
+fixture: utility
+caller:
+  kind: security_context
+  version: 1
+  user: u-zone1
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:44b2b208870918c65d8d4ccb3c04b4116a39b8538fb96def9fc82a19a59f52e1
+request:
+  kind: semantic-query
+  body:
+    kind: semantic_query
+    version: 1
+    mode: aggregate
+    metrics:
+    - metric: total_kwh
+    group_by:
+    - member: consumers.segment
+    order:
+    - by: consumers.segment
+      direction: asc
+expect:
+  outcome: rows
+  rows: 'consumers.segment,total_kwh
+
+    commercial,20.25
+
+    residential,10.50
+
+    '
+  forbidden:
+  - '61.00'
+  - '40.50'
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-exempt
+    project: utility
+    role: author
+    groups:
+    - management
+    attributes: {}
+    permission_fingerprint: sha256:5fb34253cadda8267259755dd39445d7947212f596678f2d76f028ec1e1ee39a
+  outcome: rows
+  rows: 'consumers.segment,total_kwh
+
+    commercial,61.00
+
+    residential,40.50
+
+    '
+engines:
+- managed
+pending: 441

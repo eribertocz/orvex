@@ -1,0 +1,89 @@
+id: SEC-DQ-012
+area: direct-query
+title: A file of a Route A file source is never served
+intent: Registered by absolute path or by hard link, it holds the snapshot back.
+fixture: direct-query
+caller: &id001
+  kind: security_context
+  version: 1
+  user: u-open
+  project: direct-query
+  role: author
+  groups:
+  - operations
+  attributes: {}
+  permission_fingerprint: sha256:75728b6bd97e5fb584a6076b75cdee35a2b414905635756ff9eaad4bb872d3b7
+request:
+  kind: sequence
+  steps:
+  - caller: *id001
+    request:
+      kind: lake-change
+      change:
+        op: add_file
+        rows: foreign
+        where: route_a_file
+  - caller: *id001
+    request:
+      kind: semantic-query
+      body: &id002
+        kind: semantic_query
+        version: 1
+        mode: detail
+        fields:
+        - member: outages.outage_id
+        - member: outages.zone_id
+        - member: outages.minutes
+        order:
+        - by: outages.outage_id
+          direction: asc
+        page:
+          size: '100'
+expect:
+  outcome: rows
+  rows: 'outages.outage_id,outages.zone_id,outages.minutes
+
+    1,Z1,15.00
+
+    2,Z2,25.50
+
+    3,Z3,40.25
+
+    '
+  forbidden:
+  - Z9
+  - '999.99'
+control:
+  caller: *id001
+  outcome: rows
+  rows: 'outages.outage_id,outages.zone_id,outages.minutes
+
+    1,Z1,15.00
+
+    2,Z2,25.50
+
+    3,Z3,40.25
+
+    90,Z9,999.99
+
+    '
+  request:
+    kind: sequence
+    steps:
+    - caller: *id001
+      request:
+        kind: lake-change
+        change:
+          op: add_file
+          rows: foreign
+          where: inside_location
+    - caller: *id001
+      request:
+        kind: semantic-query
+        body: *id002
+engines:
+- existing-ducklake
+variants:
+- by: absolute_path
+- by: hard_link
+adr_0027: route-a-file

@@ -28,6 +28,8 @@ Thumbs.db
 
 # Synthetic datasets generated locally (tools/synthetic/README.md).
 data/
+# The security fixtures' data is normative (#435): committed, never generated.
+!conformance/security/fixtures/*/data/
 
 # The release workflow copies the web build into the server package; never commit it.
 packages/server/src/*/server/web/

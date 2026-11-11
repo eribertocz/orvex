@@ -1,0 +1,58 @@
+id: SEC-ROWS-005
+area: rows
+title: Sorting and a limit choose among the caller's rows only
+intent: The largest zone for the caller is among its own zones; a hidden larger one is never chosen.
+fixture: utility
+caller:
+  kind: security_context
+  version: 1
+  user: u-zone1
+  project: utility
+  role: author
+  groups: []
+  attributes: {}
+  permission_fingerprint: sha256:44b2b208870918c65d8d4ccb3c04b4116a39b8538fb96def9fc82a19a59f52e1
+request:
+  kind: semantic-query
+  body:
+    kind: semantic_query
+    version: 1
+    mode: aggregate
+    metrics:
+    - metric: total_kwh
+    group_by:
+    - member: readings.zone_id
+    order:
+    - by: total_kwh
+      direction: desc
+    limit: '1'
+expect:
+  outcome: rows
+  rows: 'readings.zone_id,total_kwh
+
+    Z1,30.75
+
+    '
+  forbidden:
+  - Z3
+  - '40.75'
+control:
+  caller:
+    kind: security_context
+    version: 1
+    user: u-exempt
+    project: utility
+    role: author
+    groups:
+    - management
+    attributes: {}
+    permission_fingerprint: sha256:5fb34253cadda8267259755dd39445d7947212f596678f2d76f028ec1e1ee39a
+  outcome: rows
+  rows: 'readings.zone_id,total_kwh
+
+    Z3,40.75
+
+    '
+engines:
+- managed
+pending: 441
