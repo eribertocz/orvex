@@ -46,3 +46,29 @@ you, and readable by nobody else; anything else is refused, without saying which
 
 Every use of `admin create`, done or refused, is recorded. Until the audit log arrives, the
 record is a line on standard error.
+
+## The audit log
+
+Every sign-in, every change to who may do what, every refusal, and the log's own maintenance are recorded in the access store's audit log (`contracts/audit-event/v1`). Nothing in it can be edited. An event holds identifiers, codes and fingerprints, never a password, a token or a result value.
+
+**Tampering is detectable.** Each event is chained to the one before it with SHA-256. The chain is signed with the instance's **audit signing key**, an Ed25519 key that `admin create` writes the first time, readable only by you.
+
+| Setting | Variable | Default |
+|---|---|---|
+| Signing key | `ORVEX_AUDIT_SIGNING_KEY` | `audit-signing.key` in the instance directory |
+| Anchor file | `ORVEX_AUDIT_ANCHORS` | `audit-anchors.log` in the instance directory |
+| Retention | `ORVEX_AUDIT_RETENTION_DAYS` | 730 (at least 30) |
+
+- **Keep the key away from the database server.** In server mode, put it on a disk the PostgreSQL server cannot read. Anyone who can write the database *and* read the key could rewrite the log.
+- **Ship the anchor file elsewhere, often.** Every 1,000 events, and at least daily while events are written, a signed checkpoint is appended to the anchor file. A copy kept outside the server (a write-once bucket, another machine) proves the log up to that copy, even against someone who holds the key.
+
+```bash
+orvex admin audit verify                              # the chain and every signature
+orvex admin audit verify --anchors /backup/anchors.log  # also against a copy shipped outside
+orvex admin audit retain                              # remove events older than the retention
+orvex admin audit rotate-key                          # a new key, signed by the old one
+```
+
+`verify` names the first event or checkpoint that does not hold (`AUDIT_CHAIN_BROKEN`, `AUDIT_CHECKPOINT_INVALID`). `retain` removes old events only up to a signed checkpoint, which stays, so what remains still verifies. It refuses when no checkpoint can be kept (`AUDIT_RETENTION_INVALID`).
+
+If `rotate-key` stops between recording the rotation and replacing the file, the new key is left as `audit-signing.key.new`. Until you move it into place, the log refuses to write with the old one.

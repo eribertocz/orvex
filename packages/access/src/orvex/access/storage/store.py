@@ -51,6 +51,10 @@ class Store(Protocol):
         """The version the store is at; 0 for an empty store."""
         ...
 
+    def remove_audit_through(self, transaction: Transaction, seq: int) -> None:
+        """Remove the audit events up to `seq`: the one removal the log's tables allow."""
+        ...
+
     def migration_transaction(self) -> AbstractContextManager[Transaction]:
         """A write transaction that a second migrator of the same store waits for before it
         reads anything, so it sees the first one's version."""

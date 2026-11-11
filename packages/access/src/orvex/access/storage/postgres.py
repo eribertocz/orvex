@@ -6,14 +6,17 @@
 - **TLS.** A server on another machine is reached only with `sslmode=verify-full`, which
   encrypts and checks that the certificate is the named host's. Without TLS
   (`sslmode=disable`, or no `sslmode`), only a loopback host or a Unix socket is accepted.
+- **Not a superuser.** A superuser bypasses every grant, so the store refuses one: its role must
+  be an ordinary role that owns its schema.
 - **Its own schema.** All tables live in one schema, `access` by default, created by the first
   migration with the connected role as its owner and no privilege for `PUBLIC`. A schema that
   exists and belongs to another role is refused: another module's role could otherwise read or
   write it. The session's `search_path` is that schema alone.
-- **Isolation.** A write transaction is `SERIALIZABLE`: its outcome is the outcome of some order
-  of the transactions one at a time, so no decision rests on a fact another transaction changed
-  meanwhile (the caller's own role or flag included). PostgreSQL ends a transaction that could
-  break this (`40001`), and the directory runs it again. A read that decides a last-Builder or
+- **One writer at a time.** A write transaction first takes the store's write lock (a session
+  advisory lock), then starts `SERIALIZABLE`. Writers therefore run one after the other, as on
+  SQLite, so no decision rests on a fact another transaction changed meanwhile, and the audit
+  log's head is never contended. PostgreSQL may still end a transaction (`40001`, `40P01`); the
+  directory runs it again. A read that decides a last-Builder or
   last-administrator rule also locks the rows it counts (`FOR UPDATE`), so the two transactions
   that compete for them wait in turn. A read-only transaction is `REPEATABLE READ READ ONLY`: its
   reads see one state.
@@ -30,8 +33,8 @@ from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass
 
 import pg8000.native
-from orvex.access.directory.store import Row, Transaction, TransientConflict, UniqueViolation
 from orvex.access.errors import ACCESS_STORE_UNSAFE, VALIDATION_FAILED, AccessError
+from orvex.access.storage.store import Row, Transaction, TransientConflict, UniqueViolation
 from pg8000.exceptions import DatabaseError, InterfaceError
 
 CONNECT_TIMEOUT_S = 10
@@ -97,6 +100,64 @@ def migrations_for(schema: str) -> tuple[tuple[str, ...], ...]:
                     REFERENCES memberships (project, user_id) ON DELETE CASCADE
             )""",
             "CREATE INDEX group_members_member ON group_members (project, user_id)",
+        ),
+        # 2: the audit log (#437). The role holds no UPDATE, DELETE or TRUNCATE grant on the
+        # log's tables; retention runs through `audit_remove_through` alone.
+        # No foreign key names `audit_keys`: checking one needs a row lock, which needs an UPDATE
+        # grant. `verify` trusts a key only through the signatures that lead to it.
+        (
+            f"""CREATE TABLE instance (
+                id integer PRIMARY KEY CHECK (id = 1),
+                instance_id text NOT NULL CHECK ({_ID.format(c="instance_id")})
+            )""",
+            "INSERT INTO instance (id, instance_id) VALUES (1, gen_random_uuid()::text)",
+            f"""CREATE TABLE audit_events (
+                seq bigint PRIMARY KEY CHECK (seq >= 1),
+                id text NOT NULL UNIQUE CHECK ({_ID.format(c="id")}),
+                at text NOT NULL CHECK ({_INSTANT.format(c="at")}),
+                kind text NOT NULL CHECK (char_length(kind) BETWEEN 1 AND 64),
+                document text NOT NULL CHECK (char_length(document) BETWEEN 2 AND 65536),
+                hash text NOT NULL CHECK (hash ~ '^[0-9a-f]{{64}}$')
+            )""",
+            f"""CREATE TABLE audit_head (
+                id integer PRIMARY KEY CHECK (id = 1),
+                seq bigint NOT NULL CHECK (seq >= 0),
+                hash text NOT NULL CHECK (hash ~ '^[0-9a-f]{{64}}$'),
+                at text CHECK (at IS NULL OR ({_INSTANT.format(c="at")})),
+                key text,
+                signature text CHECK (signature IS NULL OR signature ~ '^[0-9a-f]{{128}}$')
+            )""",
+            "INSERT INTO audit_head (id, seq, hash) VALUES (1, 0, '" + "0" * 64 + "')",
+            """CREATE TABLE audit_keys (
+                key text PRIMARY KEY CHECK (key ~ '^sha256:[0-9a-f]{64}$'),
+                public_key text NOT NULL UNIQUE CHECK (public_key ~ '^[0-9a-f]{64}$'),
+                created_at text NOT NULL,
+                previous text,
+                previous_signs text CHECK (previous_signs ~ '^[0-9a-f]{128}$'),
+                signs_previous text CHECK (signs_previous ~ '^[0-9a-f]{128}$'),
+                CHECK ((previous IS NULL) = (previous_signs IS NULL)),
+                CHECK ((previous IS NULL) = (signs_previous IS NULL))
+            )""",
+            f"""CREATE TABLE audit_checkpoints (
+                seq bigint PRIMARY KEY CHECK (seq >= 1),
+                hash text NOT NULL CHECK (hash ~ '^[0-9a-f]{{64}}$'),
+                at text NOT NULL CHECK ({_INSTANT.format(c="at")}),
+                key text NOT NULL CHECK (key ~ '^sha256:[0-9a-f]{{64}}$'),
+                signature text NOT NULL CHECK (signature ~ '^[0-9a-f]{{128}}$')
+            )""",
+            """CREATE FUNCTION audit_remove_through(through bigint) RETURNS bigint
+                LANGUAGE plpgsql AS $body$
+                DECLARE removed bigint;
+                BEGIN
+                    EXECUTE format('GRANT DELETE ON TABLE audit_events TO %I', current_user);
+                    DELETE FROM audit_events WHERE seq <= through;
+                    GET DIAGNOSTICS removed = ROW_COUNT;
+                    EXECUTE format('REVOKE DELETE ON TABLE audit_events FROM %I', current_user);
+                    RETURN removed;
+                END
+                $body$""",
+            "REVOKE UPDATE, DELETE, TRUNCATE ON audit_events, audit_checkpoints, audit_keys "
+            "FROM CURRENT_USER",
         ),
     )
 
@@ -210,6 +271,14 @@ class PostgresStore:
             "WHERE nspname = :schema",
             schema=schema,
         )
+        superuser = connection.run("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+        if superuser != [[False]]:
+            connection.close()
+            raise AccessError(
+                ACCESS_STORE_UNSAFE,
+                "The access store's role is a superuser, which no grant can restrict.",
+                {},
+            )
         if owners and owners != [[True]]:
             connection.close()
             raise AccessError(
@@ -230,22 +299,29 @@ class PostgresStore:
         return connection
 
     def transaction(self, *, read_only: bool = False) -> AbstractContextManager[Transaction]:
-        return self._transaction(
-            "START TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
-            if read_only
-            else "START TRANSACTION ISOLATION LEVEL SERIALIZABLE"
-        )
+        if read_only:
+            return self._transaction("START TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        return self._serialized("START TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+
+    def remove_audit_through(self, transaction: Transaction, seq: int) -> None:
+        """The role holds no DELETE grant on the events: the dedicated function takes it for the
+        removal and gives it up again, in the same transaction."""
+        transaction.rows("SELECT audit_remove_through(:seq)", seq=seq)
+
+    def migration_transaction(self) -> AbstractContextManager[Transaction]:
+        """The schema change runs at `READ COMMITTED`, under the same write lock."""
+        return self._serialized("START TRANSACTION ISOLATION LEVEL READ COMMITTED")
 
     @contextmanager
-    def migration_transaction(self) -> Iterator[Transaction]:
-        """Take the store's migration lock before the transaction starts, so the transaction's
-        reads come after the other migrator's commit: a `SERIALIZABLE` snapshot taken while
-        waiting would not see it. The schema change itself runs at `READ COMMITTED`."""
+    def _serialized(self, begin: str) -> Iterator[Transaction]:
+        """Take the store's write lock before the transaction starts, so its snapshot comes after
+        the previous writer's commit: one writer at a time, as SQLite's `BEGIN IMMEDIATE`. A
+        `SERIALIZABLE` snapshot taken while waiting for a row would not see that commit."""
         connection = self._connection()
         key = f"access:{self.settings.schema}"
         connection.run("SELECT pg_advisory_lock(hashtext(:key))", key=key)
         try:
-            with self._transaction("START TRANSACTION ISOLATION LEVEL READ COMMITTED") as made:
+            with self._transaction(begin) as made:
                 yield made
         finally:
             with suppress(InterfaceError):

@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "id": "e-0001",
+  "at": "2026-11-10T12:00:00.000000Z",
+  "actor": "u-root",
+  "instance": "i-0001",
+  "kind": "auth.logout",
+  "outcome": "allowed",
+  "details": {
+    "token": "eyJhbGciOi"
+  }
+}

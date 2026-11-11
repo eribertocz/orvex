@@ -8,9 +8,9 @@ from contextlib import AbstractContextManager
 
 import pytest
 from orvex.access.directory import Directory
-from orvex.access.directory.service import ATTEMPTS
-from orvex.access.directory.store import Transaction, TransientConflict, UniqueViolation
 from orvex.access.errors import USER_NAME_TAKEN, AccessError
+from orvex.access.storage.retry import ATTEMPTS
+from orvex.access.storage.store import Transaction, TransientConflict, UniqueViolation
 
 from tests.support.access_directory import AnyStore, World
 
@@ -45,10 +45,13 @@ class Flaky:
     def stored_version(self, transaction: Transaction) -> int:
         return self._inner.stored_version(transaction)
 
+    def remove_audit_through(self, transaction: Transaction, seq: int) -> None:
+        self._inner.remove_audit_through(transaction, seq)
+
 
 def test_a_transaction_the_database_gave_up_on_runs_again(world: World) -> None:
     flaky = Flaky(world.store, failures=ATTEMPTS - 1)
-    created = Directory(flaky, world.events.append).create_user(world.admin, "ana", "Ana")
+    created = Directory(flaky, world.audit).create_user(world.admin, "ana", "Ana")
     assert world.directory.user(created.id) == created
     assert flaky.failures == 0
 
@@ -56,7 +59,7 @@ def test_a_transaction_the_database_gave_up_on_runs_again(world: World) -> None:
 def test_it_fails_after_the_last_attempt_and_changes_nothing(world: World) -> None:
     flaky = Flaky(world.store, failures=ATTEMPTS)
     with pytest.raises(TransientConflict):
-        Directory(flaky, world.events.append).create_user(world.admin, "ana", "Ana")
+        Directory(flaky, world.audit).create_user(world.admin, "ana", "Ana")
     assert world.refusals() == []  # not a refusal: the caller may try again
 
 

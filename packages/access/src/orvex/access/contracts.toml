@@ -2,5 +2,5 @@
 # produces: { "<contract>" = "vN" }; consumes: { "<contract>" = ["vN", ...] }.
 # The server checks the installed combination before it starts.
 
-produces = { "security-context" = "v1" }
+produces = { "audit-event" = "v1", "security-context" = "v1" }
 consumes = {}

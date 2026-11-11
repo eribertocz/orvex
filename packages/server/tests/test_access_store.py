@@ -6,8 +6,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from orvex.access.directory import PostgresStore, SqliteStore
 from orvex.access.errors import VALIDATION_FAILED, AccessError
+from orvex.access.storage import PostgresStore, SqliteStore
 from orvex.server.access_store import (
     ACCESS_STORE_NOT_CONFIGURED,
     access_store,

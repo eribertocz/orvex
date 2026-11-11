@@ -190,11 +190,11 @@ call = "fetchone"
 reason = "The instance's table function names (#399, PR 3): one aggregated row, read once before the lock; never data rows"
 
 [[allow]]
-file = "packages/access/src/orvex/access/directory/sqlite_store.py"
+file = "packages/access/src/orvex/access/storage/sqlite.py"
 call = "fetchall"
 reason = "The access store (module state, not analytical data, #436): a user, a membership, a group's members or one count per statement"
 
 [[allow]]
-file = "packages/access/src/orvex/access/directory/sqlite_store.py"
+file = "packages/access/src/orvex/access/storage/sqlite.py"
 call = "fetchone"
 reason = "The access store's connection setup (#436): the one row of PRAGMA foreign_keys"

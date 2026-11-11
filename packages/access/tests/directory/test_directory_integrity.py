@@ -13,16 +13,18 @@ from pathlib import Path
 
 import pg8000.native
 import pytest
-from orvex.access.directory import PostgresStore, SqliteStore, migrate, read_settings
-from orvex.access.directory.postgres_store import migrations_for
-from orvex.access.directory.sqlite_store import MIGRATIONS
 from orvex.access.errors import ACCESS_STORE_NEWER, ACCESS_STORE_UNSAFE, AccessError
+from orvex.access.storage import PostgresStore, SqliteStore, migrate, read_settings
+from orvex.access.storage.postgres import migrations_for
+from orvex.access.storage.sqlite import MIGRATIONS
 from pg8000.exceptions import DatabaseError
 
 from tests.support.access_directory import (
     AnyStore,
     Backend,
+    Raw,
     World,
+    access_role,
     postgres_connection,
     superuser,
 )
@@ -65,32 +67,6 @@ PLANTED = {
     "a group member's group exists": "INSERT INTO group_members VALUES ('p1', 'none', 'u1')",
     "one metadata row": "INSERT INTO store_meta (id, schema_version) VALUES (2, 1)",
 }
-
-
-class Raw:
-    """A direct connection to the store under test, bypassing the directory."""
-
-    def __init__(self, backend: Backend, world: World) -> None:
-        self.kind = backend.kind
-        if backend.kind == "sqlite":
-            assert isinstance(world.store, SqliteStore)
-            self._sqlite = sqlite3.connect(world.store.path, isolation_level=None)
-            self._sqlite.execute("PRAGMA foreign_keys = ON")
-        else:
-            self._postgres = superuser(*postgres_connection())
-            self._postgres.run(f"SET search_path TO {backend.schema}")
-
-    def run(self, sql: str) -> None:
-        if self.kind == "sqlite":
-            self._sqlite.execute(sql)
-        else:
-            self._postgres.run(sql)
-
-    def close(self) -> None:
-        if self.kind == "sqlite":
-            self._sqlite.close()
-        else:
-            self._postgres.close()
 
 
 @pytest.fixture
@@ -143,7 +119,7 @@ def test_a_migration_that_fails_halfway_leaves_the_version_unchanged(
     with pytest.raises((sqlite3.OperationalError, DatabaseError)):
         migrate(broken)
     with world.store.transaction(read_only=True) as transaction:
-        assert world.store.stored_version(transaction) == 1
+        assert world.store.stored_version(transaction) == len(MIGRATIONS)
         present = transaction.rows(
             "SELECT count(*) FROM sqlite_schema WHERE name = 'half_done'"
             if backend.kind == "sqlite"
@@ -157,17 +133,17 @@ def test_r4_a_store_newer_than_the_code_is_refused_not_migrated_down(
 ) -> None:
     current = MIGRATIONS if backend.kind == "sqlite" else migrations_for(str(backend.schema))
     newer = store_with(backend, (*current, ("CREATE TABLE later (x INTEGER)",)))
-    assert migrate(newer) == 2
+    assert migrate(newer) == len(MIGRATIONS) + 1
     with pytest.raises(AccessError) as refused:
         migrate(store_with(backend, current))
     assert refused.value.code == ACCESS_STORE_NEWER
     with world.store.transaction(read_only=True) as transaction:
-        assert world.store.stored_version(transaction) == 2
+        assert world.store.stored_version(transaction) == len(MIGRATIONS) + 1
 
 
 def test_migrating_twice_changes_nothing(backend: Backend, world: World) -> None:
-    assert migrate(world.store) == 1
-    assert migrate(world.store) == 1
+    assert migrate(world.store) == len(MIGRATIONS)
+    assert migrate(world.store) == len(MIGRATIONS)
 
 
 @pytest.mark.parametrize("backend", ["sqlite"], indirect=True)
@@ -178,20 +154,31 @@ def test_the_sqlite_file_is_owner_only(backend: Backend, world: World) -> None:
 
 def test_a_postgres_schema_owned_by_another_role_is_refused() -> None:
     connection, password = postgres_connection()
-    admin = superuser(connection, password)
-    role, schema = f"other_{uuid.uuid4().hex[:8]}", f"t_{uuid.uuid4().hex[:16]}"
-    admin.run(f"CREATE ROLE {role}")
-    admin.run(f"CREATE SCHEMA {schema} AUTHORIZATION {role}")
-    try:
-        store = PostgresStore(read_settings(connection, password, schema=schema))
-        with pytest.raises(AccessError) as refused:
-            migrate(store)
-        assert refused.value.code == ACCESS_STORE_UNSAFE
-        store.close()
-    finally:
-        admin.run(f"DROP SCHEMA {schema} CASCADE")
-        admin.run(f"DROP ROLE {role}")
-        admin.close()
+    with access_role(connection, password) as (store_connection, store_password):
+        admin = superuser(connection, password)
+        role, schema = f"other_{uuid.uuid4().hex[:8]}", f"t_{uuid.uuid4().hex[:16]}"
+        admin.run(f"CREATE ROLE {role}")
+        admin.run(f"CREATE SCHEMA {schema} AUTHORIZATION {role}")
+        try:
+            store = PostgresStore(read_settings(store_connection, store_password, schema=schema))
+            with pytest.raises(AccessError, match="another database role") as refused:
+                migrate(store)
+            assert refused.value.code == ACCESS_STORE_UNSAFE
+            store.close()
+        finally:
+            admin.run(f"DROP SCHEMA {schema} CASCADE")
+            admin.run(f"DROP ROLE {role}")
+            admin.close()
+
+
+def test_a_superuser_is_refused() -> None:
+    """A superuser bypasses every grant, so no grant could keep the audit log append-only."""
+    connection, password = postgres_connection()
+    store = PostgresStore(read_settings(connection, password, schema=f"t_{uuid.uuid4().hex[:16]}"))
+    with pytest.raises(AccessError, match="superuser") as refused:
+        migrate(store)
+    assert refused.value.code == ACCESS_STORE_UNSAFE
+    store.close()
 
 
 @pytest.mark.parametrize("backend", ["postgres"], indirect=True)
@@ -206,7 +193,8 @@ def test_the_postgres_schema_is_owned_by_the_store_and_closed_to_public(
             "FROM pg_namespace WHERE nspname = :schema",
             schema=backend.schema,
         )
-        assert rows == [[connection.split("user=")[1].split()[0], False]]
+        assert isinstance(world.store, PostgresStore)
+        assert rows == [[world.store.settings.keywords["user"], False]]
     finally:
         admin.close()
 
@@ -223,7 +211,8 @@ def test_two_first_migrations_at_once_both_succeed(backend: Backend) -> None:
                 return migrate(store)
 
             futures = [pool.submit(migrator) for _ in range(2)]
-            assert [future.result(timeout=60) for future in futures] == [1, 1]
+            done = [future.result(timeout=60) for future in futures]
+            assert done == [len(MIGRATIONS)] * 2
             store.close()
             fresh(backend, store)
 

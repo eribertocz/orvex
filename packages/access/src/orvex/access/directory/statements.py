@@ -11,7 +11,7 @@ from __future__ import annotations
 from orvex.access.directory.names import checked_role
 from orvex.access.directory.records import Role, User
 from orvex.access.directory.rules import Caller
-from orvex.access.directory.store import Row, Transaction
+from orvex.access.storage.store import Row, Transaction
 
 _USER = (
     "SELECT id, user_name, display_name, state, administrator, authz_version, created_at, "

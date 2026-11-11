@@ -23,12 +23,13 @@ from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
-from orvex.access.directory.store import Row, Transaction, TransientConflict, UniqueViolation
 from orvex.access.errors import ACCESS_STORE_UNSAFE, AccessError
+from orvex.access.storage.store import Row, Transaction, TransientConflict, UniqueViolation
 
 BUSY_TIMEOUT_S = 10.0
 
 _ID = "length({c}) BETWEEN 1 AND 128 AND {c} NOT GLOB '*[^A-Za-z0-9_-]*'"
+_HEX = "length({c}) = {n} AND {c} NOT GLOB '*[^0-9a-f]*'"
 _INSTANT = "length({c}) = 27 AND {c} GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T*Z'"
 
 MIGRATIONS: tuple[tuple[str, ...], ...] = (
@@ -80,6 +81,72 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
                 REFERENCES memberships (project, user_id) ON DELETE CASCADE
         ) STRICT""",
         "CREATE INDEX group_members_member ON group_members (project, user_id)",
+    ),
+    # 2: the audit log (#437). Append-only: the triggers refuse every change but retention's.
+    # The key columns are checked by `verify`, which trusts a key only through signatures, as on
+    # PostgreSQL, where a foreign key to `audit_keys` would need an UPDATE grant.
+    (
+        f"""CREATE TABLE instance (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            instance_id TEXT NOT NULL CHECK ({_ID.format(c="instance_id")})
+        ) STRICT""",
+        "INSERT INTO instance (id, instance_id) VALUES (1, lower(hex(randomblob(16))))",
+        f"""CREATE TABLE audit_events (
+            seq INTEGER PRIMARY KEY CHECK (seq >= 1),
+            id TEXT NOT NULL UNIQUE CHECK ({_ID.format(c="id")}),
+            at TEXT NOT NULL CHECK ({_INSTANT.format(c="at")}),
+            kind TEXT NOT NULL CHECK (length(kind) BETWEEN 1 AND 64),
+            document TEXT NOT NULL CHECK (length(document) BETWEEN 2 AND 65536),
+            hash TEXT NOT NULL CHECK ({_HEX.format(c="hash", n=64)})
+        ) STRICT""",
+        f"""CREATE TABLE audit_head (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            seq INTEGER NOT NULL CHECK (seq >= 0),
+            hash TEXT NOT NULL CHECK ({_HEX.format(c="hash", n=64)}),
+            at TEXT CHECK (at IS NULL OR ({_INSTANT.format(c="at")})),
+            key TEXT,
+            signature TEXT CHECK (signature IS NULL OR ({_HEX.format(c="signature", n=128)}))
+        ) STRICT""",
+        "INSERT INTO audit_head (id, seq, hash) VALUES (1, 0, '" + "0" * 64 + "')",
+        f"""CREATE TABLE audit_keys (
+            key TEXT PRIMARY KEY NOT NULL CHECK (length(key) = 71 AND key GLOB 'sha256:*'),
+            public_key TEXT NOT NULL UNIQUE CHECK ({_HEX.format(c="public_key", n=64)}),
+            created_at TEXT NOT NULL CHECK ({_INSTANT.format(c="created_at")}),
+            previous TEXT,
+            previous_signs TEXT CHECK (
+                previous_signs IS NULL OR ({_HEX.format(c="previous_signs", n=128)})
+            ),
+            signs_previous TEXT CHECK (
+                signs_previous IS NULL OR ({_HEX.format(c="signs_previous", n=128)})
+            ),
+            CHECK ((previous IS NULL) = (previous_signs IS NULL)),
+            CHECK ((previous IS NULL) = (signs_previous IS NULL))
+        ) STRICT""",
+        f"""CREATE TABLE audit_checkpoints (
+            seq INTEGER PRIMARY KEY CHECK (seq >= 1),
+            hash TEXT NOT NULL CHECK ({_HEX.format(c="hash", n=64)}),
+            at TEXT NOT NULL CHECK ({_INSTANT.format(c="at")}),
+            key TEXT NOT NULL CHECK (length(key) = 71 AND key GLOB 'sha256:*'),
+            signature TEXT NOT NULL CHECK ({_HEX.format(c="signature", n=128)})
+        ) STRICT""",
+        """CREATE TABLE audit_retention (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            through INTEGER NOT NULL CHECK (through >= 0)
+        ) STRICT""",
+        "INSERT INTO audit_retention (id, through) VALUES (1, 0)",
+        """CREATE TRIGGER audit_events_append_only BEFORE UPDATE ON audit_events
+            BEGIN SELECT RAISE(ABORT, 'audit events are append-only'); END""",
+        """CREATE TRIGGER audit_events_retention_only BEFORE DELETE ON audit_events
+            WHEN OLD.seq > (SELECT through FROM audit_retention)
+            BEGIN SELECT RAISE(ABORT, 'audit events are removed only by retention'); END""",
+        """CREATE TRIGGER audit_checkpoints_append_only BEFORE UPDATE ON audit_checkpoints
+            BEGIN SELECT RAISE(ABORT, 'audit checkpoints are append-only'); END""",
+        """CREATE TRIGGER audit_checkpoints_kept BEFORE DELETE ON audit_checkpoints
+            BEGIN SELECT RAISE(ABORT, 'audit checkpoints are never removed'); END""",
+        """CREATE TRIGGER audit_keys_append_only BEFORE UPDATE ON audit_keys
+            BEGIN SELECT RAISE(ABORT, 'audit keys are append-only'); END""",
+        """CREATE TRIGGER audit_keys_kept BEFORE DELETE ON audit_keys
+            BEGIN SELECT RAISE(ABORT, 'audit keys are never removed'); END""",
     ),
 )
 
@@ -203,6 +270,13 @@ class SqliteStore:
         if len(found) != 1 or not isinstance(found[0][0], int):
             raise AccessError(ACCESS_STORE_UNSAFE, "The access store's version is unreadable.", {})
         return found[0][0]
+
+    def remove_audit_through(self, transaction: Transaction, seq: int) -> None:
+        """Open the retention window to `seq`, remove, and close it again, in one transaction:
+        the delete trigger refuses any other removal."""
+        transaction.run("UPDATE audit_retention SET through = :seq", seq=seq)
+        transaction.run("DELETE FROM audit_events WHERE seq <= :seq", seq=seq)
+        transaction.run("UPDATE audit_retention SET through = 0")
 
     def migration_transaction(self) -> AbstractContextManager[Transaction]:
         """A write transaction: `BEGIN IMMEDIATE` already makes a second migrator wait."""

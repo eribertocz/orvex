@@ -12,7 +12,7 @@ database ends one of the two transactions (`40P01`) and the directory runs it ag
 
 from __future__ import annotations
 
-from orvex.access.directory.store import Transaction
+from orvex.access.storage.store import Transaction
 
 
 def lock_users(transaction: Transaction, target: str, *, administrators: bool = False) -> None:

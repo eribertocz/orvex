@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "e-0001",
+  "at": "2026-11-10T12:00:00.000000Z",
+  "actor": "u-root",
+  "instance": "i-0001",
+  "kind": "membership.added",
+  "outcome": "allowed",
+  "details": {
+    "user": "u-ana",
+    "role": "viewer"
+  },
+  "project": "p-billing"
+}

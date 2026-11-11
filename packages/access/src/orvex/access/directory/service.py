@@ -16,20 +16,21 @@
   or `LAST_BUILDER`; anyone else lowering their own gets `ACCESS_FORBIDDEN`.
 - **Revocation.** Every change to what a user may do (a role, a group, the state, the flag)
   bumps that user's `authz_version` in the same transaction.
+- **Audited** (#437). Every change records its event in its own transaction, so neither exists
+  without the other. A refusal changes nothing and is recorded on its own (`access.refused`).
 - A transaction the database gives up on (a deadlock, a busy database) is run again, a few
-  times, from the start.
+  times, from the start (`retry.py`).
 """
 
 from __future__ import annotations
 
 import secrets
-import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 
+from orvex.access.audit.log import AuditLog
 from orvex.access.directory import locks, rules
 from orvex.access.directory import statements as sql
-from orvex.access.directory.events import AuditHook, DirectoryEvent
 from orvex.access.directory.names import (
     checked_display_name,
     checked_group,
@@ -38,10 +39,9 @@ from orvex.access.directory.names import (
     checked_user_name,
 )
 from orvex.access.directory.records import Role, User
-from orvex.access.directory.store import Store, Transaction, TransientConflict, UniqueViolation
 from orvex.access.errors import USER_NAME_TAKEN, VALIDATION_FAILED, AccessError
-
-ATTEMPTS = 5
+from orvex.access.storage import retry
+from orvex.access.storage.store import Store, Transaction, UniqueViolation
 
 
 def instant(moment: datetime) -> str:
@@ -69,7 +69,7 @@ class Directory:
     def __init__(
         self,
         store: Store,
-        audit: AuditHook,
+        audit: AuditLog,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         new_id: Callable[[], str] = new_user_id,
     ) -> None:
@@ -115,6 +115,9 @@ class Directory:
                 sql.insert_user(transaction, created, name, display, False, now)
             except UniqueViolation as error:
                 raise AccessError(USER_NAME_TAKEN, "That user name is taken.") from error
+            self._event(
+                transaction, "user.created", actor, {"user": created, "via": "administrator"}
+            )
             found = sql.user(transaction, created)
             if found is None:
                 raise _invalid("user")
@@ -144,6 +147,7 @@ class Directory:
                     )
                 )
             sql.set_state(transaction, target, False, now)
+            self._event(transaction, "user.deactivated", actor, {"user": target})
 
         self._write("deactivate_user", actor, None, target, work)
 
@@ -153,6 +157,7 @@ class Directory:
             locks.lock_users(transaction, target)
             if not self._existing(transaction, target).active:
                 sql.set_state(transaction, target, True, now)
+                self._event(transaction, "user.reactivated", actor, {"user": target})
 
         self._write("reactivate_user", actor, None, target, work)
 
@@ -172,6 +177,8 @@ class Directory:
                     )
                 )
             sql.set_administrator(transaction, target, value, now)
+            kind = "user.administrator_granted" if value else "user.administrator_removed"
+            self._event(transaction, kind, actor, {"user": target})
 
         self._write("set_administrator", actor, None, target, work)
 
@@ -198,6 +205,8 @@ class Directory:
             except UniqueViolation as error:
                 raise _invalid("membership") from error
             sql.bump(transaction, target, now)
+            details = {"user": target, "role": granted}
+            self._event(transaction, "membership.added", actor, details, place)
 
         self._write("add_membership", actor, project, target, work)
 
@@ -215,6 +224,8 @@ class Directory:
                 self._keep_a_builder(transaction, project, target)
             sql.update_role(transaction, project, target, granted)
             sql.bump(transaction, target, now)
+            details = {"user": target, "role": granted, "previous_role": current}
+            self._event(transaction, "membership.changed", actor, details, project)
 
         self._write("change_role", actor, project, target, work)
 
@@ -228,6 +239,8 @@ class Directory:
                 self._keep_a_builder(transaction, project, target)
             sql.delete_membership(transaction, project, target)
             sql.bump(transaction, target, now)
+            details = {"user": target, "previous_role": current}
+            self._event(transaction, "membership.removed", actor, details, project)
 
         self._write("remove_membership", actor, project, target, work)
 
@@ -243,6 +256,7 @@ class Directory:
                 sql.insert_group(transaction, project, group)
             except UniqueViolation as error:
                 raise _invalid("group") from error
+            self._event(transaction, "group.created", actor, {"group": group}, project)
 
         self._write("create_group", actor, project, None, work)
 
@@ -257,6 +271,8 @@ class Directory:
             sql.delete_group(transaction, project, name)
             for member in members:
                 sql.bump(transaction, member, now)
+            details = {"group": name, "members": len(members)}
+            self._event(transaction, "group.deleted", actor, details, project)
 
         self._write("delete_group", actor, project, None, work)
 
@@ -274,6 +290,8 @@ class Directory:
             except UniqueViolation:
                 return  # a concurrent call added the same member
             sql.bump(transaction, member, now)
+            details = {"group": name, "user": member}
+            self._event(transaction, "group.member_added", actor, details, project)
 
         self._write("add_group_member", actor, project, member, work)
 
@@ -282,6 +300,8 @@ class Directory:
             _refuse(rules.manage_groups(sql.caller(transaction, actor, project), member))
             if sql.delete_group_member(transaction, project, name, member):
                 sql.bump(transaction, member, now)
+                details = {"group": name, "user": member}
+                self._event(transaction, "group.member_removed", actor, details, project)
 
         self._write("remove_group_member", actor, project, member, work)
 
@@ -349,6 +369,17 @@ class Directory:
         locks.lock_builders(transaction, project)
         _refuse(rules.keeps_a_builder(sql.other_active_builders(transaction, project, target)))
 
+    def _event(
+        self,
+        transaction: Transaction,
+        kind: str,
+        actor: str,
+        details: Mapping[str, object],
+        project: str | None = None,
+    ) -> None:
+        """The change's audit event, in the change's own transaction (#437)."""
+        self._audit.record(transaction, kind, actor, details, project=project)
+
     def _write[T](
         self,
         operation: str,
@@ -357,17 +388,12 @@ class Directory:
         target: str | None,
         work: Callable[[Transaction, str], T],
     ) -> T:
-        attempt = 1
         try:
-            while True:
-                try:
-                    with self._store.transaction() as transaction:
-                        return work(transaction, instant(self._clock()))
-                except TransientConflict:
-                    if attempt == ATTEMPTS:
-                        raise
-                    time.sleep(0.01 * attempt + secrets.randbelow(10) / 1000)
-                    attempt += 1
+            done = retry.write(
+                self._store, lambda transaction: work(transaction, instant(self._clock()))
+            )
         except AccessError as error:
-            self._audit(DirectoryEvent(operation, "refused", actor, project, target, error.code))
+            self._audit.refusal(operation, actor, error.code, project=project, target=target)
             raise
+        self._audit.committed()
+        return done

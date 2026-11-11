@@ -7,8 +7,8 @@ from __future__ import annotations
 import ssl
 
 import pytest
-from orvex.access.directory import PostgresStore, read_settings
 from orvex.access.errors import VALIDATION_FAILED, AccessError
+from orvex.access.storage import PostgresStore, read_settings
 
 BASE = "port=5432 dbname=bi user=access"
 
