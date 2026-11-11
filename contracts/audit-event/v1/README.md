@@ -70,7 +70,7 @@ Shipping the anchor file often is what shortens both.
 ## Retention
 
 - The administrator sets `audit.retention_days`: 730 by default, at least 30 (`AUDIT_RETENTION_INVALID` below that).
-- Retention first verifies the whole log, with the local anchor file, in the same transaction. A log that does not verify is not trimmed: the ages it would trust are then those of the signed, chained documents, which no database writer can change.
+- Retention first verifies the whole log, with the local anchor file, in the same transaction, holding the store's write lock: writers wait meanwhile (about a minute for ten million events), so run it at a quiet hour. A log that does not verify is not trimmed: the ages it would trust are then those of the signed, chained documents, which no database writer can change.
 - Events older than that are removed, but only up to a signed checkpoint, which stays. The remaining chain therefore verifies from that checkpoint's hash.
 - Retention with old events but no checkpoint to stop at is refused (`AUDIT_RETENTION_INVALID`).
 - Each removal is itself an event, `audit.retention`, with the range removed.

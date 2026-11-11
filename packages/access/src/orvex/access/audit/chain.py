@@ -156,16 +156,7 @@ def verify(
             previous = by_seq[first - 1].hash  # retention removed what came before
         else:
             raise _broken(events[0].id, first, "start")
-        if first > 1:
-            # Only retention removes events, and it records how far it went in the chain itself:
-            # a start no signed retention event explains is a removal by someone else.
-            reached = [
-                json.loads(event.document)["details"]["last_seq"]
-                for event in events
-                if event.kind == "audit.retention"
-            ]
-            if not reached or max(reached) != first - 1:
-                raise _broken(events[0].id, first, "start")
+        reached: list[int] = []  # how far each retention removed, read from verified documents
         expected_seq = first
         for event in events:
             if event.seq != expected_seq:
@@ -179,12 +170,25 @@ def verify(
                 raise _broken(event.id, event.seq, "columns")
             if link(previous, event.document.encode("utf-8")) != event.hash:
                 raise _broken(event.id, event.seq, "hash")
+            if event.kind == "audit.retention":
+                last = document.get("details", {}).get("last_seq")
+                if not isinstance(last, int) or isinstance(last, bool):
+                    raise _broken(event.id, event.seq, "columns")
+                reached.append(last)
             covering = by_seq.get(event.seq)
             if covering is not None and covering.hash != event.hash:
                 raise _invalid(event.seq, "hash")
             previous, expected_seq = event.hash, event.seq + 1
+        if first > 1 and (not reached or max(reached) != first - 1):
+            # Only retention removes events, and it records how far it went in the chain itself:
+            # a start no signed retention event explains is a removal by someone else.
+            raise _broken(events[0].id, first, "start")
         last_seq, last_hash = events[-1].seq, events[-1].hash
     else:
+        if head.seq > 0:
+            # Retention always records its own event after removing: an empty log whose head has
+            # moved was emptied by someone else.
+            raise _broken("", head.seq, "start")
         last_seq, last_hash = (max(by_seq), by_seq[max(by_seq)].hash) if by_seq else (0, ZERO)
     if max(by_seq, default=0) > last_seq:
         raise _invalid(max(by_seq), "beyond_head")

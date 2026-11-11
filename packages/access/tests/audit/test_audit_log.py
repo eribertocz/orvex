@@ -267,3 +267,18 @@ def test_a_partial_last_anchor_line_is_repaired(world: World) -> None:
     lines = world.audit.anchors.read_text("ascii").splitlines()
     assert lines == [row.anchor() for row in log.checkpoints()]
     assert log.verify(lines) == len(world.events())
+
+
+def test_any_failure_after_commit_never_fails_the_committed_action(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Even the store failing as the anchors are synced: the change is done, and reported so."""
+    log = AuditLog(world.store, world.audit.signing_key, world.audit.anchors, checkpoint_every=1)
+
+    def failing() -> list[object]:
+        raise RuntimeError("the store went away after the commit")
+
+    monkeypatch.setattr(log, "checkpoints", failing)
+    created = Directory(world.store, log).create_user(world.admin, "ana", "Ana")
+    assert world.directory.user(created.id) is not None
+    assert log.unanchored == 1

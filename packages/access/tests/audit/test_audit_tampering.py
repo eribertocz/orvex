@@ -281,3 +281,31 @@ def test_retention_refuses_a_log_whose_ages_were_changed(log: AuditLog, raw: Raw
     assert caught.value.code == AUDIT_CHAIN_BROKEN
     assert caught.value.details["reason"] == "columns"
     assert raw.rows("SELECT count(*) FROM audit_events") == before
+
+
+def test_a_log_emptied_without_retention_is_found(
+    log: AuditLog, raw: Raw, world: World, tmp_path: Path
+) -> None:
+    """Every event deleted: retention always leaves its own event, so an empty log whose head
+    has moved was emptied by someone else, even when the head sits on a checkpoint."""
+    log.record_alone("auth.logout", world.admin, {})
+    while int(str(raw.rows("SELECT seq FROM audit_head")[0][0])) % 4:
+        log.record_alone("auth.logout", world.admin, {})
+    anchors = shipped(world, tmp_path / "outside")
+    raw.run("DELETE FROM audit_events")
+    for given in ([], anchors):
+        problem = refused(log, given)
+        assert problem.code == AUDIT_CHAIN_BROKEN
+        assert problem.details["reason"] == "start"
+
+
+def test_a_forged_kind_column_is_a_broken_chain_never_a_crash(log: AuditLog, raw: Raw) -> None:
+    """R3 holds for every planted row: a row whose kind column claims a retention it is not."""
+    raw.run("DELETE FROM audit_events WHERE seq <= 4")
+    raw.run("UPDATE audit_events SET kind = 'audit.retention' WHERE seq = 6")
+    problem = refused(log)
+    assert problem.code == AUDIT_CHAIN_BROKEN
+    assert problem.details["seq"] == "6"
+    with pytest.raises(AccessError) as caught:
+        log.retain(30)  # retention verifies first, with the same answer
+    assert caught.value.code == AUDIT_CHAIN_BROKEN

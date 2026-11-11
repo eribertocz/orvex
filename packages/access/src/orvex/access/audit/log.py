@@ -248,7 +248,7 @@ class AuditLog:
             return
         try:
             self.sync_anchors()
-        except OSError, ValueError, AccessError:
+        except Exception:  # noqa: BLE001 - the action is committed: nothing may fail it now
             self.unanchored += 1
             LOG.error("audit: the anchor file could not be written")
             return
@@ -314,6 +314,8 @@ class AuditLog:
             text = self._anchors.read_text("ascii")
         except FileNotFoundError:
             return []
+        except (OSError, UnicodeDecodeError) as error:
+            raise AccessError(AUDIT_UNAVAILABLE, "The anchor file cannot be read.", {}) from error
         lines = text.splitlines()
         if text and not text.endswith("\n"):
             lines = lines[:-1]
