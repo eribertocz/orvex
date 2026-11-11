@@ -10,7 +10,7 @@ import pytest
 from orvex.access.directory import PostgresStore, read_settings
 from orvex.access.errors import VALIDATION_FAILED, AccessError
 
-BASE = "port=5432 dbname=orvex user=access"
+BASE = "port=5432 dbname=bi user=access"
 
 
 @pytest.mark.parametrize(
@@ -25,7 +25,7 @@ BASE = "port=5432 dbname=orvex user=access"
     ],
 )
 def test_accepted_connections(connection: str) -> None:
-    assert read_settings(connection, "secret").keywords["dbname"] == "orvex"
+    assert read_settings(connection, "secret").keywords["dbname"] == "bi"
 
 
 @pytest.mark.parametrize(
@@ -37,7 +37,7 @@ def test_accepted_connections(connection: str) -> None:
         f"host=localhost {BASE} sslmode=prefer",
         f"host=localhost {BASE} password=inline",  # the password never travels in the string
         f"host=localhost {BASE} service=other",  # a service file can name any host
-        "port=5432 dbname=orvex user=access",  # no host
+        "port=5432 dbname=bi user=access",  # no host
         f"host=localhost {BASE} options=-csearch_path=public",
         f"host=localhost {BASE} broken",
     ],

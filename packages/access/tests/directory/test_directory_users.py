@@ -8,6 +8,7 @@ from functools import partial
 import pytest
 from orvex.access.errors import (
     ACCESS_FORBIDDEN,
+    LAST_ADMINISTRATOR,
     USER_NAME_TAKEN,
     VALIDATION_FAILED,
     AccessError,
@@ -137,17 +138,19 @@ def test_a_change_to_what_a_user_may_do_bumps_their_authz_version(world: World) 
     assert versions == [2, 3, 4, 5]
 
 
-def test_r5_the_last_administrator_cannot_be_removed(world: World) -> None:
-    """No path removes the one active administrator: they cannot touch their own flag or state,
-    and nobody else may. A concurrent removal is refused too
-    (`test_directory_concurrency.py`)."""
+def test_r5_the_last_active_administrator_cannot_be_removed(world: World) -> None:
+    """Only the last administrator can try to remove themselves (no one else is an
+    administrator); the answer names the rule. Another administrator removing their own flag
+    gets ACCESS_FORBIDDEN (`test_no_caller_changes_their_own_flag_or_state`)."""
     for attempt in (
         partial(world.directory.set_administrator, world.admin, world.admin, False),
         partial(world.directory.deactivate_user, world.admin, world.admin),
     ):
-        with pytest.raises(AccessError):
+        with pytest.raises(AccessError) as refused:
             attempt()
+        assert code_of(refused) == LAST_ADMINISTRATOR
     found = world.directory.user(world.admin)
     assert found is not None
     assert found.administrator
     assert found.active
+    assert world.refusals() == [LAST_ADMINISTRATOR, LAST_ADMINISTRATOR]

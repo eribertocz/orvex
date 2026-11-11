@@ -3,9 +3,11 @@ transaction ends.
 
 On PostgreSQL each read takes row locks (`FOR UPDATE`); on SQLite the transaction's
 `BEGIN IMMEDIATE` already holds the database's only write lock and the reads lock nothing more.
-Every operation takes its locks in the same order, so two operations never wait on each other in
-a cycle: first the users (one read, in id order), then each project's Builder memberships (in
-project order). The first-administrator command locks only the store's one metadata row.
+Every operation takes these locks in the same order: first the users (one read, in id order),
+then each project's Builder memberships (in project order). The first-administrator command
+locks only the store's one metadata row. A foreign key's own lock can still meet them in a
+cycle (adding a group member takes a share lock on the membership before the user row); the
+database ends one of the two transactions (`40P01`) and the directory runs it again.
 """
 
 from __future__ import annotations

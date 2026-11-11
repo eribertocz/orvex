@@ -1,7 +1,7 @@
 """The SQLite access store of local mode (adapter); server mode always uses PostgreSQL.
 
 - One file, created owner-only (`0600`); SQLite gives its `-wal` and `-shm` files the same
-  permissions.
+  permissions. A file others can read or write, or a link, is refused.
 - Every connection turns foreign keys on and checks that they are on; a connection without them
   is refused.
 - A write transaction starts with `BEGIN IMMEDIATE`, which takes the database's one write lock at
@@ -14,11 +14,13 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import sqlite3
 import threading
+import time
 from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
 from orvex.access.directory.store import Row, Transaction, TransientConflict, UniqueViolation
@@ -82,6 +84,22 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
 )
 
 
+def _write_ahead_log(connection: sqlite3.Connection) -> None:
+    """Switch the file to WAL, which it keeps from then on. The switch needs the file to itself,
+    and SQLite does not wait for that: another connection opening the same new file at the same
+    moment makes it fail at once with `database is locked`, so it is tried again for a while."""
+    deadline = time.monotonic() + BUSY_TIMEOUT_S
+    while True:
+        try:
+            connection.execute("PRAGMA journal_mode = WAL")
+            return
+        except sqlite3.OperationalError as error:
+            if "database is locked" not in str(error) or time.monotonic() > deadline:
+                connection.close()
+                raise TransientConflict(str(error)) from error
+            time.sleep(0.01)
+
+
 class _Transaction:
     locking = ""
 
@@ -121,8 +139,24 @@ class SqliteStore:
         connection: sqlite3.Connection | None = getattr(self._local, "connection", None)
         if connection is not None:
             return connection
-        if not self.path.exists():
-            descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        # Created owner-only if missing (two threads may race here: neither truncates), never
+        # through a link, and refused when someone else can read or write it.
+        try:
+            descriptor = os.open(
+                self.path, os.O_CREAT | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), 0o600
+            )
+        except OSError as error:
+            if error.errno != errno.ELOOP:
+                raise
+            raise AccessError(
+                ACCESS_STORE_UNSAFE, "The access store's file is a link.", {}
+            ) from error
+        try:
+            if os.fstat(descriptor).st_mode & 0o077:
+                raise AccessError(
+                    ACCESS_STORE_UNSAFE, "Others can read or write the access store's file.", {}
+                )
+        finally:
             os.close(descriptor)
         connection = sqlite3.connect(
             # Used only by the thread that opened it; `close` may close it from another one.
@@ -132,7 +166,7 @@ class SqliteStore:
             check_same_thread=False,
         )
         connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
+        _write_ahead_log(connection)
         connection.execute("PRAGMA synchronous = FULL")
         if connection.execute("PRAGMA foreign_keys").fetchone() != (1,):
             connection.close()
@@ -170,8 +204,9 @@ class SqliteStore:
             raise AccessError(ACCESS_STORE_UNSAFE, "The access store's version is unreadable.", {})
         return found[0][0]
 
-    def serialize_migrations(self, transaction: Transaction) -> None:
-        """`BEGIN IMMEDIATE` already holds the database's only write lock."""
+    def migration_transaction(self) -> AbstractContextManager[Transaction]:
+        """A write transaction: `BEGIN IMMEDIATE` already makes a second migrator wait."""
+        return self.transaction()
 
     def close(self) -> None:
         """Close every thread's connection; call it once no transaction is running."""

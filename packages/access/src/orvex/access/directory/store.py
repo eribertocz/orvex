@@ -7,7 +7,7 @@ databases stays in their adapters:
   ends: `FOR UPDATE` on PostgreSQL, nothing on SQLite, whose `BEGIN IMMEDIATE` already holds the
   only write lock;
 - the schema and its migrations, how the stored version is read, and how two migrators are kept
-  apart.
+  apart (`migration_transaction`).
 
 A read-only transaction takes no write lock. A transaction commits when its block ends and
 rolls back when the block raises. The adapters turn their drivers' errors into the exceptions
@@ -51,6 +51,7 @@ class Store(Protocol):
         """The version the store is at; 0 for an empty store."""
         ...
 
-    def serialize_migrations(self, transaction: Transaction) -> None:
-        """Make a second process that migrates the same store wait for this transaction."""
+    def migration_transaction(self) -> AbstractContextManager[Transaction]:
+        """A write transaction that a second migrator of the same store waits for before it
+        reads anything, so it sees the first one's version."""
         ...

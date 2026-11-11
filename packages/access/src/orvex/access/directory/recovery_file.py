@@ -43,12 +43,16 @@ def write_new(path: Path) -> str:
 def read_digest(path: Path) -> str | None:
     """The digest of the secret in `path`, or None when the file is missing or unsafe."""
     try:
-        status = path.lstat()
-    except FileNotFoundError:
+        # `O_NOFOLLOW`: a link is refused when the file is opened, and the checks below are of
+        # the file actually opened, so nothing can be swapped in between.
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError, OSError:
         return None
-    if not stat.S_ISREG(status.st_mode) or status.st_mode & 0o077:
-        return None
-    if hasattr(os, "getuid") and status.st_uid != os.getuid():
-        return None
-    text = path.read_text("ascii", errors="replace").strip()
+    with os.fdopen(descriptor, "rb") as file:
+        status = os.fstat(file.fileno())
+        if not stat.S_ISREG(status.st_mode) or status.st_mode & 0o077:
+            return None
+        if hasattr(os, "getuid") and status.st_uid != os.getuid():
+            return None
+        text = file.read(128).decode("ascii", errors="replace").strip()
     return digest_of(text) if _SECRET.fullmatch(text) else None

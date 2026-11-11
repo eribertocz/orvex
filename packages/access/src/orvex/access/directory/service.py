@@ -10,8 +10,10 @@
   project's memberships and groups are its Builder's. No caller changes what they themselves may
   do.
 - **The last Builder and the last administrator.** A change that could lower a count first locks
-  the rows it counts (`locks.py`), then counts again. Two concurrent changes therefore never both
-  pass, and one of them gets `LAST_BUILDER` or `LAST_ADMINISTRATOR`.
+  the rows it counts (`locks.py`), then counts again, so two concurrent changes never both pass.
+  A deactivation that would leave a project without an active Builder gets `LAST_BUILDER`. The
+  last active administrator or Builder lowering their own permissions gets `LAST_ADMINISTRATOR`
+  or `LAST_BUILDER`; anyone else lowering their own gets `ACCESS_FORBIDDEN`.
 - **Revocation.** Every change to what a user may do (a role, a group, the state, the flag)
   bumps that user's `authz_version` in the same transaction.
 - A transaction the database gives up on (a deadlock, a busy database) is run again, a few
@@ -124,6 +126,7 @@ class Directory:
         """Stop the user's access at once; their memberships stay, for the audit log."""
 
         def work(transaction: Transaction, now: str) -> None:
+            self._lowering_oneself(transaction, actor, target, administrator=True, projects=None)
             _refuse(rules.manage_users(sql.caller(transaction, actor), target))
             locks.lock_users(transaction, target, administrators=True)
             found = self._existing(transaction, target)
@@ -155,6 +158,8 @@ class Directory:
 
     def set_administrator(self, actor: str, target: str, value: bool) -> None:
         def work(transaction: Transaction, now: str) -> None:
+            if not value:
+                self._lowering_oneself(transaction, actor, target, administrator=True, projects=())
             _refuse(rules.manage_users(sql.caller(transaction, actor), target))
             locks.lock_users(transaction, target, administrators=True)
             found = self._existing(transaction, target)
@@ -199,6 +204,10 @@ class Directory:
     def change_role(self, actor: str, project: str, target: str, role: str) -> None:
         def work(transaction: Transaction, now: str) -> None:
             granted = checked_role(role)
+            if granted != "builder":
+                self._lowering_oneself(
+                    transaction, actor, target, administrator=False, projects=(project,)
+                )
             current = self._membership(transaction, actor, project, target, role=granted)
             if current == granted:
                 return
@@ -211,6 +220,9 @@ class Directory:
 
     def remove_membership(self, actor: str, project: str, target: str) -> None:
         def work(transaction: Transaction, now: str) -> None:
+            self._lowering_oneself(
+                transaction, actor, target, administrator=False, projects=(project,)
+            )
             current = self._membership(transaction, actor, project, target, role=None)
             if current == "builder":
                 self._keep_a_builder(transaction, project, target)
@@ -297,6 +309,37 @@ class Directory:
         if current is None:
             raise _invalid("membership")
         return current
+
+    def _lowering_oneself(
+        self,
+        transaction: Transaction,
+        actor: str,
+        target: str,
+        *,
+        administrator: bool,
+        projects: tuple[str, ...] | None,
+    ) -> None:
+        """A caller lowering their own permissions is refused (`rules.py`). The last active
+        administrator, or a project's last active Builder, is told so with `LAST_ADMINISTRATOR`
+        or `LAST_BUILDER` rather than `ACCESS_FORBIDDEN` (#436 R2, R5). `projects` None means
+        every project where the caller is a Builder (a deactivation)."""
+        if target != actor:
+            return
+        caller = sql.caller(transaction, actor)
+        if not caller.active:
+            return  # the rule refuses a deactivated caller
+        locks.lock_users(transaction, actor, administrators=administrator)
+        if administrator and caller.administrator:
+            _refuse(
+                rules.keeps_an_administrator(sql.other_active_administrators(transaction, actor))
+            )
+        places = sql.builder_projects(transaction, actor) if projects is None else projects
+        for project in places:
+            if sql.role(transaction, project, actor) == "builder":
+                locks.lock_builders(transaction, project)
+                _refuse(
+                    rules.keeps_a_builder(sql.other_active_builders(transaction, project, actor))
+                )
 
     def _keep_a_builder(self, transaction: Transaction, project: str, target: str) -> None:
         """Lowering `target` from Builder must leave the project an active Builder, unless

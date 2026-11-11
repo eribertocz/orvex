@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import sqlite3
 import stat
+import threading
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pg8000.native
 import pytest
@@ -209,3 +212,51 @@ def test_the_postgres_schema_is_owned_by_the_store_and_closed_to_public(
         assert rows == [[connection.split("user=")[1].split()[0], False]]
     finally:
         admin.close()
+
+
+def test_two_first_migrations_at_once_both_succeed(backend: Backend) -> None:
+    """The second migrator waits for the first and then sees its version: neither fails."""
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for _ in range(10):
+            store = backend.store()
+            start = threading.Barrier(2)
+
+            def migrator(store: AnyStore = store, start: threading.Barrier = start) -> int:
+                start.wait(timeout=30)
+                return migrate(store)
+
+            futures = [pool.submit(migrator) for _ in range(2)]
+            assert [future.result(timeout=60) for future in futures] == [1, 1]
+            store.close()
+            fresh(backend, store)
+
+
+def fresh(backend: Backend, store: AnyStore) -> None:
+    """Remove the store, so the next round migrates an empty one again."""
+    if isinstance(store, SqliteStore):
+        for suffix in ("", "-wal", "-shm"):
+            Path(f"{store.path}{suffix}").unlink(missing_ok=True)
+        return
+    admin = superuser(*postgres_connection())
+    try:
+        admin.run(f"DROP SCHEMA {backend.schema} CASCADE")
+    finally:
+        admin.close()
+
+
+def test_a_sqlite_file_others_can_read_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "access.sqlite"
+    path.touch(mode=0o644)
+    path.chmod(0o644)
+    with pytest.raises(AccessError) as refused:
+        migrate(SqliteStore(path))
+    assert refused.value.code == ACCESS_STORE_UNSAFE
+
+
+def test_a_sqlite_file_that_is_a_link_is_refused(tmp_path: Path) -> None:
+    target = tmp_path / "elsewhere.sqlite"
+    target.touch(mode=0o600)
+    (tmp_path / "access.sqlite").symlink_to(target)
+    with pytest.raises(AccessError) as refused:
+        migrate(SqliteStore(tmp_path / "access.sqlite"))
+    assert refused.value.code == ACCESS_STORE_UNSAFE

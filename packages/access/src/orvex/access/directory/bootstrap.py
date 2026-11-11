@@ -1,5 +1,5 @@
 """The first administrator of a server instance, and its recovery (application): what
-`orvex admin create` does, with direct access to the instance and no HTTP route.
+`<slug> admin create` does, with direct access to the instance and no HTTP route.
 
 - **Initialization** migrates the store and, the first time only, writes the recovery file and
   records its digest. Once a digest is recorded, the file is never written again.
@@ -67,10 +67,10 @@ class Bootstrap:
         """Create an active administrator; `recover` with the recovery file at `recovery` (the
         instance's own by default)."""
         operation = "admin_recover" if recover else "admin_create"
-        name = checked_user_name(user_name)
-        display = checked_display_name(display_name)
-        self.initialize()
         try:
+            name = checked_user_name(user_name)
+            display = checked_display_name(display_name)
+            self.initialize()
             with self._store.transaction() as transaction:
                 locks.lock_meta(transaction)
                 if recover:

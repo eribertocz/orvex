@@ -12,7 +12,6 @@ from functools import partial
 import pytest
 from orvex.access.errors import (
     ACCESS_FORBIDDEN,
-    LAST_ADMINISTRATOR,
     LAST_BUILDER,
     AccessError,
 )
@@ -99,8 +98,8 @@ def test_two_administrators_removing_each_other(world: World, racer: Racer) -> N
             partial(directory.set_administrator, world.admin, other, False),
             partial(directory.set_administrator, other, world.admin, False),
         )
-        assert outcomes.count("done") == 1, (round, outcomes)
-        assert set(outcomes) - {"done"} <= {ACCESS_FORBIDDEN, LAST_ADMINISTRATOR}
+        # The one that runs second is no longer an administrator: it may do nothing.
+        assert sorted(outcomes) == sorted(["done", ACCESS_FORBIDDEN]), (round, outcomes)
         admins = [
             u for u in (world.admin, other) if (found := directory.user(u)) and found.administrator
         ]

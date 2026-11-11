@@ -15,8 +15,7 @@ from orvex.access.errors import ACCESS_STORE_NEWER, AccessError
 def migrate(store: Store) -> int:
     """Apply the store's pending migrations; return the version it is at."""
     latest = len(store.migrations)
-    with store.transaction() as transaction:
-        store.serialize_migrations(transaction)
+    with store.migration_transaction() as transaction:
         current = store.stored_version(transaction)
         if current > latest:
             raise AccessError(

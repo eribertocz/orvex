@@ -34,7 +34,7 @@ def test_local_mode_uses_sqlite_in_the_instance_directory(tmp_path: Path) -> Non
 
 
 def test_server_mode_uses_postgres(tmp_path: Path) -> None:
-    environment = {CONNECTION: "host=localhost dbname=orvex user=access", PASSWORD: "secret"}
+    environment = {CONNECTION: "host=localhost dbname=bi user=access", PASSWORD: "secret"}
     store = access_store("server", IDENTITY, tmp_path, environment)
     assert isinstance(store, PostgresStore)
     assert store.settings.schema == "access"
@@ -42,7 +42,7 @@ def test_server_mode_uses_postgres(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "environment",
-    [{}, {CONNECTION: "host=localhost dbname=orvex user=access"}, {PASSWORD: "secret"}],
+    [{}, {CONNECTION: "host=localhost dbname=bi user=access"}, {PASSWORD: "secret"}],
     ids=["nothing", "no password", "no connection"],
 )
 def test_server_mode_without_postgres_is_refused_never_sqlite(
@@ -55,7 +55,7 @@ def test_server_mode_without_postgres_is_refused_never_sqlite(
 
 
 def test_server_mode_refuses_a_remote_server_without_verified_tls(tmp_path: Path) -> None:
-    environment = {CONNECTION: "host=db.example.com dbname=orvex user=access", PASSWORD: "s"}
+    environment = {CONNECTION: "host=db.example.com dbname=bi user=access", PASSWORD: "s"}
     with pytest.raises(AccessError) as refused:
         access_store("server", IDENTITY, tmp_path, environment)
     assert refused.value.code == VALIDATION_FAILED

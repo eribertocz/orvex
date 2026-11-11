@@ -8,7 +8,9 @@ refuses the change, or `None`. A rule never reads anything itself.
   first Builder, whom an administrator assigns while the project has no active Builder.
 - A project's groups are its active Builder's to manage.
 - No caller changes their own role, group memberships, state or administrator flag: every
-  change to what a user may do is someone else's decision.
+  change to what a user may do is someone else's decision. The service first tells the last
+  active administrator or Builder that they are the last (`keeps_an_administrator`,
+  `keeps_a_builder`), which is the more useful answer.
 - A deactivated caller may do nothing.
 """
 

@@ -26,7 +26,7 @@ import re
 import ssl
 import threading
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass
 
 import pg8000.native
@@ -229,14 +229,31 @@ class PostgresStore:
                 self._open.append(connection)
         return connection
 
-    @contextmanager
-    def transaction(self, *, read_only: bool = False) -> Iterator[Transaction]:
-        connection = self._connection()
-        begin = (
+    def transaction(self, *, read_only: bool = False) -> AbstractContextManager[Transaction]:
+        return self._transaction(
             "START TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
             if read_only
             else "START TRANSACTION ISOLATION LEVEL SERIALIZABLE"
         )
+
+    @contextmanager
+    def migration_transaction(self) -> Iterator[Transaction]:
+        """Take the store's migration lock before the transaction starts, so the transaction's
+        reads come after the other migrator's commit: a `SERIALIZABLE` snapshot taken while
+        waiting would not see it. The schema change itself runs at `READ COMMITTED`."""
+        connection = self._connection()
+        key = f"access:{self.settings.schema}"
+        connection.run("SELECT pg_advisory_lock(hashtext(:key))", key=key)
+        try:
+            with self._transaction("START TRANSACTION ISOLATION LEVEL READ COMMITTED") as made:
+                yield made
+        finally:
+            with suppress(InterfaceError):
+                connection.run("SELECT pg_advisory_unlock(hashtext(:key))", key=key)
+
+    @contextmanager
+    def _transaction(self, begin: str) -> Iterator[Transaction]:
+        connection = self._connection()
         try:
             connection.run(begin)
         except InterfaceError:
@@ -269,11 +286,6 @@ class PostgresStore:
         if len(found) != 1 or not isinstance(found[0][0], int):
             raise AccessError(ACCESS_STORE_UNSAFE, "The access store's version is unreadable.", {})
         return found[0][0]
-
-    def serialize_migrations(self, transaction: Transaction) -> None:
-        transaction.run(
-            "SELECT pg_advisory_xact_lock(hashtext(:key))", key=f"access:{self.settings.schema}"
-        )
 
     def _drop(self) -> None:
         connection: pg8000.native.Connection | None = getattr(self._local, "connection", None)

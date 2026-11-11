@@ -92,6 +92,19 @@ def test_r2_deactivating_the_last_active_builder_is_refused(world: World) -> Non
     assert world.refusals() == [LAST_BUILDER]
 
 
+def test_r2_the_last_active_builder_cannot_remove_or_demote_themselves(world: World) -> None:
+    builder = world.user("builder")
+    world.project_with_builder("p1", builder)
+    for attempt in (
+        partial(world.directory.remove_membership, builder, "p1", builder),
+        partial(world.directory.change_role, builder, "p1", builder, "author"),
+    ):
+        with pytest.raises(AccessError) as refused:
+            attempt()
+        assert refused.value.code == LAST_BUILDER
+    assert world.directory.role_of(builder, "p1") == "builder"
+
+
 def test_a_deactivated_builder_does_not_count_as_one(world: World) -> None:
     first, second = world.user("first"), world.user("second")
     world.project_with_builder("p1", first)
