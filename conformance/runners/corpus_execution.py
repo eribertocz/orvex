@@ -201,14 +201,16 @@ CALLERS: Mapping[str, Mapping[str, Any]] = {
 def viewer_context(
     groups: Sequence[str] = (), attributes: Mapping[str, Any] | None = None
 ) -> dict[str, Any]:
+    typed = dict(attributes or {})
+    named = typed.get("user_id")  # `$user_id` is the context's own user (#440)
     return {
         "kind": "security_context",
         "version": 1,
-        "user": "corpus",
+        "user": str(named["value"]) if isinstance(named, Mapping) else "corpus",
         "project": "corpus",
         "role": "viewer",
         "groups": sorted(set(groups)),
-        "attributes": dict(attributes or {}),
+        "attributes": typed,
         "permission_fingerprint": "sha256:" + "0" * 64,
     }
 
