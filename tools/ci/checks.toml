@@ -235,7 +235,7 @@ contexts = [
   "python-tests-3.14-part-8",
   "python-tests-3.14-part-9",
 ]
-digest = "9b4e2cf138395b7c"
+digest = "f87e8bad813dbf9e"
 pythons = ["3.15", "3.14"]
 setup = [
   "python -m pip install --quiet pip==26.3",

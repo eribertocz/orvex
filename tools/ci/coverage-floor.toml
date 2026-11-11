@@ -5,6 +5,21 @@
 [floors]
 "packages/access/src/orvex/access/__init__.py" = 100
 "packages/access/src/orvex/access/context.py" = 97
+"packages/access/src/orvex/access/directory/__init__.py" = 100
+"packages/access/src/orvex/access/directory/bootstrap.py" = 94
+"packages/access/src/orvex/access/directory/events.py" = 100
+"packages/access/src/orvex/access/directory/locks.py" = 100
+"packages/access/src/orvex/access/directory/migrations.py" = 100
+"packages/access/src/orvex/access/directory/names.py" = 90
+"packages/access/src/orvex/access/directory/postgres_store.py" = 83
+"packages/access/src/orvex/access/directory/records.py" = 100
+"packages/access/src/orvex/access/directory/recovery_file.py" = 87
+"packages/access/src/orvex/access/directory/rules.py" = 100
+"packages/access/src/orvex/access/directory/service.py" = 88
+"packages/access/src/orvex/access/directory/sqlite_store.py" = 84
+"packages/access/src/orvex/access/directory/statements.py" = 100
+"packages/access/src/orvex/access/directory/store.py" = 100
+"packages/access/src/orvex/access/errors.py" = 100
 "packages/access/src/orvex/access/fixtures.py" = 96
 "packages/access/src/orvex/access/local.py" = 100
 "packages/semantic/src/orvex/semantic/adapters/__init__.py" = 100

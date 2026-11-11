@@ -19,6 +19,7 @@ from types import FrameType
 
 import uvicorn
 from orvex.server import clickhouse_engines, development_switch, existing_lakes
+from orvex.server.admin_command import add_admin_parser, admin
 from orvex.server.app import LocalSemantic, create_app
 from orvex.server.clickhouse_engines import ClickHouseEngines, clickhouse_connections
 from orvex.server.evidence_command import evidence
@@ -61,7 +62,7 @@ from orvex.server.versions import (
 from orvex.store.errors import StoreError
 
 LOCAL_HOST = "127.0.0.1"
-COMMANDS = frozenset({"validate", "run", "runs", "schedule", "maintain", "evidence"})
+COMMANDS = frozenset({"validate", "run", "runs", "schedule", "maintain", "evidence", "admin"})
 DEFAULT_PORT = 7878
 PORT_ATTEMPTS = 100
 MAX_PORT = 65_535
@@ -275,6 +276,7 @@ def command_parser(identity: Identity) -> argparse.ArgumentParser:
     )
     checked.add_argument("project", type=Path, help="project folder")
     checked.add_argument("--dataset", help="only this dataset's evidence and its relationships'")
+    add_admin_parser(commands)
     return parser
 
 
@@ -287,6 +289,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         command = command_parser(identity).parse_args(given)
         if command.command == "validate":
             return validate(command.project, sys.stdout, command.show_sql)
+        if command.command == "admin":
+            return admin(command, identity, sys.stdout, sys.stderr)
         if command.command == "schedule":
             if not (math.isfinite(command.stop_grace) and 0 <= command.stop_grace <= 86_400):
                 # `nan` and `inf` parse as floats, but no grace period can be waited out (#166).

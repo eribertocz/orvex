@@ -98,6 +98,9 @@ jobs:
     env:
       STORE_TEST_POSTGRES: host=localhost port=5432 dbname=postgres user=postgres
       STORE_TEST_POSTGRES_PASSWORD: ci-disposable-database
+      # The access store's PostgreSQL tests (#436): the same disposable server, a schema per test.
+      ACCESS_TEST_POSTGRES: host=localhost port=5432 dbname=postgres user=postgres
+      ACCESS_TEST_POSTGRES_PASSWORD: ci-disposable-database
       STORE_TEST_CLICKHOUSE: localhost:8123:ci
       STORE_TEST_CLICKHOUSE_PASSWORD: ci-disposable-database
       # The PostgreSQL with TLS started below (#120), reached through 127.0.0.2: a host that is

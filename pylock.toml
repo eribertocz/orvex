@@ -46,6 +46,17 @@ url = "https://files.pythonhosted.org/packages/46/bd/551ee6af426af84ca33e02622be
 sha256 = "6029205678bdd9c1c728a155f5f9ecf5812393f969eef58807641a2bc2aa5b19"
 
 [[packages]]
+name = "asn1crypto"
+version = "1.5.1"
+
+[[packages.wheels]]
+name = "asn1crypto-1.5.1-py2.py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/c9/7f/09065fd9e27da0eda08b4d6897f1c13535066174cc023af248fc2a8d5e5a/asn1crypto-1.5.1-py2.py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "db4e40728b728508912cbb3d44f19ce188f218e9eba635821bb4b68564f8fd67"
+
+[[packages]]
 name = "ast-serialize"
 version = "0.13.1"
 
@@ -662,6 +673,17 @@ url = "https://files.pythonhosted.org/packages/f1/d9/7fb5aa316bc299258e68c73ba3b
 sha256 = "a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189"
 
 [[packages]]
+name = "pg8000"
+version = "1.31.6"
+
+[[packages.wheels]]
+name = "pg8000-1.31.6-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/a4/f6/28aa670fead0076daf55a59cbcfa1bb0ace9568427eb2c463f2598e8bb23/pg8000-1.31.6-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "1ffe27af94fa5b37ce6885b98d591dc75562ff076859bf50ca7729af59345a80"
+
+[[packages]]
 name = "pip"
 version = "26.3"
 
@@ -957,6 +979,17 @@ url = "https://files.pythonhosted.org/packages/e2/a4/88f9e10498759121060b8050a15
 
 [packages.wheels.hashes]
 sha256 = "24eb7535804306355e31c952a90022bf5b2f9d760f9a11062c7493a217c08553"
+
+[[packages]]
+name = "scramp"
+version = "1.5.0"
+
+[[packages.wheels]]
+name = "scramp-1.5.0-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/ff/62/231ee179d8995d28981414432bf79492f0b909f5820452b77f422fdce259/scramp-1.5.0-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "8280608f568e81da9e9c9d69cac1331b836622d9b48bf5c5e400e16129c6d1fa"
 
 [[packages]]
 name = "setuptools"

@@ -48,9 +48,10 @@ paths = ["benchmarks/", "tools/benchmarks/"]
 tests = ["tests/tools"]
 
 [[narrow]]
-# The error-code registry the security scenarios' expected codes are checked against (#435).
+# The error-code registry the security scenarios' expected codes (#435) and the access module's
+# refusal codes (#436) are checked against.
 paths = ["tools/checks/__init__.py", "tools/checks/error_codes.py", "tools/checks/reserved-error-codes.toml"]
-tests = ["tests/tools", "tests/workspace", "tests/conformance"]
+tests = ["tests/tools", "tests/workspace", "tests/conformance", "packages/access/tests"]
 
 [[narrow]]
 paths = ["tools/checks/", "tools/licenses/", "tools/rename/"]
