@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from orvex.access.audit import open_audit_log
 from orvex.access.directory import Bootstrap
-from orvex.access.errors import ACCESS_FORBIDDEN, USER_NAME_TAKEN, AccessError
+from orvex.access.errors import ACCESS_FORBIDDEN, AUDIT_UNAVAILABLE, USER_NAME_TAKEN, AccessError
 
 from tests.support.access_directory import AnyStore, Backend, audit_events
 
@@ -21,14 +21,14 @@ class Events:
     """The audit events the bootstrap recorded, read back from the store."""
 
     def __init__(self, store: AnyStore) -> None:
-        self._store = store
+        self.store = store
 
     def last(self) -> tuple[str, str, dict[str, Any]]:
-        event = audit_events(self._store)[-1]
+        event = audit_events(self.store)[-1]
         return event["kind"], event["outcome"], event["details"]
 
     def all(self) -> list[dict[str, Any]]:
-        return audit_events(self._store)
+        return audit_events(self.store)
 
 
 type Made = tuple[Bootstrap, Events, Path]
@@ -152,3 +152,24 @@ def test_the_recovery_secret_never_reaches_an_event(
     secret = recovery.read_text("ascii").strip()
     assert all(secret not in json.dumps(event) for event in events.all())
     assert os.environ.get("ACCESS_TEST_POSTGRES_PASSWORD", "-") not in json.dumps(events.all())
+
+
+def test_a_log_failure_refuses_the_creation_without_a_second_attempt(
+    made: Made, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bootstrap, events, recovery = made
+    store = events.store
+    log = open_audit_log(
+        store, recovery.with_name("audit-signing.key"), recovery.with_name("a.log")
+    )
+    bootstrap = Bootstrap(store, recovery, log)
+
+    def broken(*_: object, **__: object) -> str:
+        raise AccessError(AUDIT_UNAVAILABLE, "simulated", {})
+
+    monkeypatch.setattr(log, "record", broken)
+    with pytest.raises(AccessError) as refused:
+        bootstrap.create_administrator("root", "Root")
+    assert refused.value.code == AUDIT_UNAVAILABLE
+    assert log.unrecorded == 1
+    assert [event["kind"] for event in events.all()] == []  # nothing, not even a refusal
