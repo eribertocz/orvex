@@ -113,9 +113,8 @@ def test_the_database_refuses_a_planted_bad_row(raw: Raw, constraint: str) -> No
         raw.run(statement)
 
 
+@pytest.mark.parametrize("backend", ["sqlite"], indirect=True)
 def test_sqlite_refuses_a_value_of_the_wrong_type(raw: Raw) -> None:
-    if raw.kind != "sqlite":
-        pytest.skip("PostgreSQL types every column")
     with pytest.raises(sqlite3.IntegrityError):
         raw.run(user_row(id="'u5'", name="'eve'", admin="0", version="'one'"))
 
@@ -171,9 +170,8 @@ def test_migrating_twice_changes_nothing(backend: Backend, world: World) -> None
     assert migrate(world.store) == 1
 
 
+@pytest.mark.parametrize("backend", ["sqlite"], indirect=True)
 def test_the_sqlite_file_is_owner_only(backend: Backend, world: World) -> None:
-    if backend.kind != "sqlite":
-        pytest.skip("a SQLite property")
     assert isinstance(world.store, SqliteStore)
     assert stat.S_IMODE(world.store.path.stat().st_mode) == 0o600
 
@@ -196,11 +194,10 @@ def test_a_postgres_schema_owned_by_another_role_is_refused() -> None:
         admin.close()
 
 
+@pytest.mark.parametrize("backend", ["postgres"], indirect=True)
 def test_the_postgres_schema_is_owned_by_the_store_and_closed_to_public(
     backend: Backend, world: World
 ) -> None:
-    if backend.kind != "postgres":
-        pytest.skip("a PostgreSQL property")
     connection, password = postgres_connection()
     admin: pg8000.native.Connection = superuser(connection, password)
     try:
