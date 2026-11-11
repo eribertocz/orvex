@@ -79,9 +79,14 @@ def replaced_by_a_link(path: Path) -> None:
     path.symlink_to(kept)
 
 
+def replaced_by_a_fifo(path: Path) -> None:
+    path.unlink()
+    os.mkfifo(path, 0o600)
+
+
 @pytest.mark.parametrize(
     "spoil",
-    [wrong_secret, readable_by_others, replaced_by_a_link, Path.unlink],
+    [wrong_secret, readable_by_others, replaced_by_a_link, replaced_by_a_fifo, Path.unlink],
     ids=lambda f: f.__name__,
 )
 def test_recover_without_the_right_safe_file_is_refused(

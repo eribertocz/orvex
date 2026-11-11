@@ -44,8 +44,10 @@ def read_digest(path: Path) -> str | None:
     """The digest of the secret in `path`, or None when the file is missing or unsafe."""
     try:
         # `O_NOFOLLOW`: a link is refused when the file is opened, and the checks below are of
-        # the file actually opened, so nothing can be swapped in between.
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        # the file actually opened, so nothing can be swapped in between. `O_NONBLOCK`: a FIFO
+        # planted there opens at once and is then refused as not a regular file.
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        descriptor = os.open(path, flags)
     except FileNotFoundError, OSError:
         return None
     with os.fdopen(descriptor, "rb") as file:
