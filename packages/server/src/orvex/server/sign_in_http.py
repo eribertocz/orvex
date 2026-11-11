@@ -8,6 +8,8 @@ written nowhere else: not in a body, a log or an error.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from orvex.access.authentication.service import SignIn
@@ -47,12 +49,11 @@ def mount_sign_in(app: FastAPI, sign_in: SignIn, settings: Settings, cookie: str
     """The routes above. The middleware has already checked a state change's origin, and that a
     session route has a live session (`request.state.session`)."""
 
-    def set_session(response: Response, session_id: str) -> None:
-        lifetime = int(settings.current().absolute.total_seconds())
+    def set_session(response: Response, session_id: str, lifetime: timedelta) -> None:
         response.set_cookie(
             cookie,
             session_id,
-            max_age=lifetime,
+            max_age=int(lifetime.total_seconds()),
             path="/",
             secure=True,
             httponly=True,
@@ -69,7 +70,7 @@ def mount_sign_in(app: FastAPI, sign_in: SignIn, settings: Settings, cookie: str
         current = await run_in_threadpool(settings.current)
         peer = request.client.host if request.client is not None else None
         address = client_address(
-            peer, request.headers.get("x-forwarded-for"), current.trusted_proxies
+            peer, request.headers.getlist("x-forwarded-for"), current.trusted_proxies
         )
         try:
             signed = await run_in_threadpool(
@@ -84,7 +85,7 @@ def mount_sign_in(app: FastAPI, sign_in: SignIn, settings: Settings, cookie: str
         response = JSONResponse(
             session_view(signed.user, signed.password_change_only).model_dump(mode="json")
         )
-        set_session(response, signed.session_id)
+        set_session(response, signed.session_id, current.absolute)
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -120,7 +121,7 @@ def mount_sign_in(app: FastAPI, sign_in: SignIn, settings: Settings, cookie: str
         current = await run_in_threadpool(settings.current)
         peer = request.client.host if request.client is not None else None
         address = client_address(
-            peer, request.headers.get("x-forwarded-for"), current.trusted_proxies
+            peer, request.headers.getlist("x-forwarded-for"), current.trusted_proxies
         )
         try:
             renewed = await run_in_threadpool(
@@ -133,5 +134,5 @@ def mount_sign_in(app: FastAPI, sign_in: SignIn, settings: Settings, cookie: str
         except AccessError as error:
             return access_error_response(error, request_id)
         response = Response(status_code=204)
-        set_session(response, renewed)
+        set_session(response, renewed, current.absolute)
         return response

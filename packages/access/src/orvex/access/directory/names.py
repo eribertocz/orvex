@@ -41,6 +41,12 @@ def checked_user_name(value: str) -> str:
     return value
 
 
+def canonical_user_name(typed: str) -> str | None:
+    """The one form a typed user name is looked up and counted under: ASCII lower case, or None
+    for text no user name can be (#438), so no other spelling reaches the same user."""
+    return typed.lower() if _USER_NAME.fullmatch(typed) else None
+
+
 def checked_display_name(value: str) -> str:
     if not 1 <= len(value) <= 200 or _CONTROL.search(value) or value != value.strip():
         raise _refuse("display_name")

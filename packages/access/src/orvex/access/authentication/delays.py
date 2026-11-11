@@ -1,14 +1,18 @@
 """The growing delay after failed sign-ins (application, #438, #449 Q4): per account and per
 address, never a permanent lock-out.
 
-- **Keys.** One counter per account, keyed by its user name as typed (normalized, without regard
-  to case), whether or not that user exists, so a delay says nothing about existence. One per
-  address: the IPv4 address, or the IPv6 /64. Only a SHA-256 of each is stored.
-- **Delay.** After `n` failures, `2^(n-1)` seconds from the last one, at most 15 minutes. An
-  attempt during a delay is refused and counts as a failure too.
-- **Reserved first.** `admit` counts the attempt as a failure before the password is checked, in
-  one transaction with the check of the delay, so concurrent attempts on one account cannot all
-  pass while the first is still hashing. A correct password then takes the attempt back
+- **Keys.** One counter per account, keyed by the user name in the one form it is looked up by
+  (`names.canonical_user_name`), whether or not that user exists, so a delay says nothing about
+  existence. One per address: the IPv4 address, or the IPv6 /64. Only a SHA-256 of each is
+  stored.
+- **Delay.** After `n` failures, `2^(n-1)` seconds from the last admitted one, at most 15
+  minutes.
+- **Refused during a delay.** The attempt is counted on the counters that already exist, so the
+  next delay is longer, but no delay is moved and no counter is created: the `Retry-After` it
+  answers holds, and a delayed address cannot fill the store with new account counters.
+- **Reserved first.** An admitted attempt is counted as a failure before the password is checked,
+  in one transaction with the check of the delay, so concurrent attempts on one account cannot
+  all pass while the first is still hashing. A correct password then takes the attempt back
   (`succeeded`): the account's counter is cleared, the address's lowered by one.
 - **Bounded.** A counter is forgotten a day after its last failure. At most `capacity` counters
   are kept: the oldest are dropped first, in batches of a tenth of the capacity, but never an
@@ -20,10 +24,10 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
-import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from orvex.access.directory.names import canonical_user_name
 from orvex.access.storage.instants import instant, parsed
 from orvex.access.storage.store import Transaction
 
@@ -59,7 +63,8 @@ def address_prefix(address: str | None) -> str:
 
 
 def keys(user_name: str, address: str | None) -> Keys:
-    account = unicodedata.normalize("NFKC", user_name).casefold()
+    canonical = canonical_user_name(user_name)
+    account = canonical if canonical is not None else "\0not a user name\0" + user_name
     return Keys(_digest("account", account), _digest("address", address_prefix(address)))
 
 
@@ -92,18 +97,22 @@ def _live(row: tuple[int, datetime, datetime] | None, now: datetime) -> bool:
 
 
 def admit(transaction: Transaction, found: Keys, now: datetime, capacity: int = CAPACITY) -> int:
-    """Count this attempt as a failure on both keys; return the seconds to wait (0: go on)."""
+    """Count this attempt; return the seconds to wait, or 0 when it may go on (then reserved as a
+    failure on both keys)."""
     rows = _rows(transaction, found)
-    waits = [
-        row[2] - now
-        for row in rows.values()
-        if row is not None and _live(row, now) and now < row[2]
-    ]
-    new = [key for key, row in rows.items() if not _live(row, now)]
+    live = {key: row for key, row in rows.items() if row is not None and _live(row, now)}
+    waits = [row[2] - now for row in live.values() if now < row[2]]
+    if waits:
+        for key in live:
+            transaction.run(
+                "UPDATE login_delays SET failures = failures + 1 WHERE key = :key", key=key
+            )
+        return _seconds(max(waits))
+    new = [key for key in rows if key not in live]
     if new and not _make_room(transaction, len(new), now, capacity, set(rows)):
         return _seconds(_earliest_end(transaction, now) - now)
-    for key, row in rows.items():
-        failures = row[0] + 1 if row is not None and _live(row, now) else 1
+    for key in rows:
+        failures = live[key][0] + 1 if key in live else 1
         transaction.run(
             "INSERT INTO login_delays (key, account, failures, failed_at, delayed_until) "
             "VALUES (:key, :account, :failures, :now, :until) "
@@ -115,7 +124,7 @@ def admit(transaction: Transaction, found: Keys, now: datetime, capacity: int = 
             now=instant(now),
             until=instant(now + delay_after(failures)),
         )
-    return _seconds(max(waits)) if waits else 0
+    return 0
 
 
 def succeeded(transaction: Transaction, found: Keys, now: datetime) -> None:

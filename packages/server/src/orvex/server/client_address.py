@@ -3,8 +3,9 @@ trusted proxy.
 
 `X-Forwarded-For` is believed only when the peer is in the administrator's `trusted_proxies`
 (none by default), and then only its right-most address that is not itself a trusted proxy:
-every address to the left of that one was written by the client and may be anything. A header
-that cannot be read leaves the peer as the address (fail closed: the proxy's own counter).
+every address to the left of that one was written by the client and may be anything. Every
+header line counts, in order, as one list. A header that cannot be read leaves the peer as the
+address (fail closed: the proxy's own counter).
 """
 
 from __future__ import annotations
@@ -30,10 +31,12 @@ def _trusted(
 
 
 def client_address(
-    peer: str | None, forwarded: str | None, proxies: Sequence[Network]
+    peer: str | None, lines: Sequence[str], proxies: Sequence[Network]
 ) -> str | None:
-    """The address the failed-sign-in delay counts this request under."""
+    """The address the failed-sign-in delay counts this request under. `lines` is every
+    `X-Forwarded-For` line, in order: a proxy may add its own line rather than extend one."""
     found = _address(peer or "")
+    forwarded = ", ".join(lines)
     if found is None or not _trusted(found, proxies) or not forwarded:
         return peer
     if len(forwarded) > _LONGEST_HEADER:

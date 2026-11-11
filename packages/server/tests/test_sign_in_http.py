@@ -351,4 +351,40 @@ def test_the_client_address(
     peer: str, forwarded: str | None, proxies: list[str], expected: str
 ) -> None:
     networks = [ip_network(item) for item in proxies]
-    assert client_address(peer, forwarded, networks) == expected
+    assert client_address(peer, [] if forwarded is None else [forwarded], networks) == expected
+
+
+def test_every_forwarded_for_line_counts_in_order() -> None:
+    """A proxy that adds its own line: the client's line comes first and is not believed."""
+    networks = [ip_network("203.0.113.0/24")]
+    assert client_address("203.0.113.5", ["9.9.9.9", "198.51.100.20"], networks) == (
+        "198.51.100.20"
+    )
+
+
+def test_a_trusted_proxys_added_line_names_the_client_over_http(instance: Instance) -> None:
+    instance.user("ana")
+    instance.settings.change(instance.admin, trusted_proxies=[f"{PEER}/32"])
+    client = instance.client()
+    for spoofed in ("9.9.9.1", "9.9.9.2"):
+        client.post(
+            "/api/v1/auth/login",
+            json={"user_name": "u1", "password": "wrong"},
+            headers=[
+                *SAME.items(),
+                ("Content-Type", "application/json"),
+                ("X-Forwarded-For", spoofed),
+                ("X-Forwarded-For", "198.51.100.7"),
+            ],
+        )
+    delayed = client.post(
+        "/api/v1/auth/login",
+        content=b'{"user_name": "ana", "password": "%s"}' % PASSWORD.encode(),
+        headers=[
+            *SAME.items(),
+            ("Content-Type", "application/json"),
+            ("X-Forwarded-For", "9.9.9.3"),
+            ("X-Forwarded-For", "198.51.100.7"),
+        ],
+    )
+    assert delayed.status_code == 429  # one client, whatever it wrote first

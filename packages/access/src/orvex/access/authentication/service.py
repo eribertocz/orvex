@@ -28,6 +28,7 @@ from orvex.access.authentication.credentials import Credential
 from orvex.access.authentication.sessions import NEEDS_WRITE, Ended, Session
 from orvex.access.directory import rules
 from orvex.access.directory import statements as directory_sql
+from orvex.access.directory.names import canonical_user_name
 from orvex.access.directory.records import User
 from orvex.access.directory.rules import refused
 from orvex.access.errors import (
@@ -41,7 +42,6 @@ from orvex.access.storage import retry
 from orvex.access.storage.instants import instant
 from orvex.access.storage.store import Store, Transaction
 
-_LONGEST_USER_NAME = 128
 METHOD = {"method": "password"}
 
 
@@ -114,10 +114,10 @@ class SignIn:
             else None
         )
 
-        def succeed(transaction: Transaction) -> SignedIn:
+        def succeed(transaction: Transaction) -> SignedIn | None:
             current = directory_sql.user(transaction, user.id)
             if current is None or not current.active:
-                raise _failed()
+                return None  # deactivated meanwhile
             delays.succeeded(transaction, found, now)
             if presented is not None:
                 sessions.end(transaction, presented)
@@ -131,7 +131,11 @@ class SignIn:
             self._audit.record(transaction, "auth.login", current.id, METHOD)
             return SignedIn(session_id, current, credential.temporary)
 
-        return self._write(succeed)
+        signed = self._write(succeed)
+        if signed is None:
+            self._record_alone("auth.login_failed", user, {**METHOD, "reason": "USER_DEACTIVATED"})
+            raise _failed()
+        return signed
 
     def logout(self, session_id: str) -> None:
         """End the session; one that is already gone needs nothing."""
@@ -228,9 +232,10 @@ class SignIn:
 
         def work(transaction: Transaction) -> tuple[int, _Attempt]:
             wait = delays.admit(transaction, found, now, self._capacity)
+            canonical = canonical_user_name(user_name)
             user = (
-                directory_sql.user_by_name(transaction, user_name)
-                if len(user_name) <= _LONGEST_USER_NAME
+                directory_sql.user_by_name(transaction, canonical)
+                if canonical is not None
                 else None
             )
             if wait:
