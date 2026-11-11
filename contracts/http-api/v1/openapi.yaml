@@ -193,10 +193,13 @@ paths:
         "303":
           description: To the provider's authorization endpoint.
           headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
             Location: { schema: { type: string } }
             Set-Cookie: { schema: { type: string } }
         "400":
           description: The generic `OIDC_FAILED` page (text/html).
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/auth/oidc/{provider}/callback:
     get:
@@ -216,9 +219,12 @@ paths:
         "200":
           description: Signed in (text/html); the session is in the cookie only.
           headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
             Set-Cookie: { schema: { type: string } }
         "400":
           description: The generic `OIDC_FAILED` page (text/html).
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
         default: { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:

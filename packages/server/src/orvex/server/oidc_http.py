@@ -37,7 +37,6 @@ _FAILED = (
     "<body><h1>Sign-in failed</h1><p>OIDC_FAILED</p>"
     '<p><a href="/">Back</a></p></body></html>'
 )
-_LONGEST_PARAMETER = 4096
 _PARAMETERS = ("code", "state", "error", "iss")
 
 
@@ -102,7 +101,6 @@ def mount_oidc(
             name: value
             for name in _PARAMETERS
             if (value := request.query_params.get(name)) is not None
-            and len(value) <= _LONGEST_PARAMETER
         }
         try:
             signed = await run_in_threadpool(

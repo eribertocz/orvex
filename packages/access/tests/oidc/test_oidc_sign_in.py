@@ -404,3 +404,126 @@ def test_a_mapping_change_ends_the_sessions_of_the_users_it_affects(
     count = len(world.events())
     unchanged.start_up()
     assert len(world.events()) == count  # the same mapping changes nothing
+
+
+def test_a_password_sign_in_takes_back_every_provider_group(oidc: Oidc) -> None:
+    """Provider groups never outlive `group_refresh` in a session that is not refreshed."""
+    from orvex.access.authentication import credentials, passwords
+
+    ana = linked(oidc)
+    with_project(oidc, ana)
+    oidc.sign_in_as("sub-ana", groups=["finance"])
+    assert groups(oidc, ana) == {"finance", "manual"}
+    with oidc.world.store.transaction() as transaction:
+        credentials.store(
+            transaction, ana, passwords.hashed("a local passphrase"), oidc.clock(), temporary=False
+        )
+    oidc.clock.move(hours=30)
+    session_id = oidc.sign_in.login("ana", "a local passphrase", "192.0.2.1").session_id
+    assert groups(oidc, ana) == {"manual"}  # hand-set groups stay
+    assert oidc.service.refresh_due(session_id) is None
+    assert oidc.sign_in.session(session_id).user.id == ana
+
+
+def test_a_password_change_keeps_a_provider_session_refreshed(oidc: Oidc) -> None:
+    from orvex.access.authentication import credentials, passwords
+
+    ana = linked(oidc)
+    with oidc.world.store.transaction() as transaction:
+        credentials.store(
+            transaction, ana, passwords.hashed("a local passphrase"), oidc.clock(), temporary=False
+        )
+    session_id = oidc.sign_in_as("sub-ana").session_id
+    renewed = oidc.sign_in.change_password(
+        session_id, "a local passphrase", "another passphrase", "192.0.2.1"
+    )
+    oidc.clock.move(hours=1)
+    assert oidc.service.refresh_due(renewed) == "corp"
+
+
+def test_a_removed_rule_takes_back_its_grants(oidc: Oidc, world: World) -> None:
+    ana = linked(oidc)
+    with_project(oidc, ana)
+    oidc.sign_in_as("sub-ana", groups=["finance", "ops"])
+    assert groups(oidc, ana) == {"finance", "ops", "manual"}
+    changed = document()
+    changed["mapping"] = changed["mapping"][1:]  # type: ignore[index]  # finance's rule is gone
+    service = OidcSignIn(
+        world.store, world.audit, parsed(changed, ENVIRONMENT), oidc.fetcher, oidc.clock
+    )
+    service.start_up()
+    assert groups(oidc, ana) == {"ops", "manual"}
+    without_ops = document()
+    without_ops["mapping"] = []
+    again = OidcSignIn(
+        world.store, world.audit, parsed(without_ops, ENVIRONMENT), oidc.fetcher, oidc.clock
+    )
+    again.start_up()
+    assert groups(oidc, ana) == {"manual"}
+
+
+def test_a_hand_set_membership_in_a_mapped_group_is_never_taken(oidc: Oidc) -> None:
+    ana = linked(oidc)
+    with_project(oidc, ana)
+    builder = next(e["actor"] for e in oidc.world.events() if e["kind"] == "group.created")
+    oidc.world.directory.add_group_member(builder, "p1", "finance", ana)
+    oidc.sign_in_as("sub-ana", groups=[])
+    assert "finance" in groups(oidc, ana)
+
+
+def test_an_unlink_between_the_checks_and_the_session_refuses_it(
+    oidc: Oidc, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ana = linked(oidc)
+    read = oidc.service._linked_user
+
+    def then_unlinked(identity: object) -> object:
+        user = read(identity)  # type: ignore[arg-type]
+        oidc.identities.unlink(oidc.world.admin, ana, "corp", "sub-ana")
+        return user
+
+    monkeypatch.setattr(oidc.service, "_linked_user", then_unlinked)
+    assert refused(oidc, lambda: oidc.sign_in_as("sub-ana")) == "UNLINKED"
+
+
+@pytest.mark.parametrize(
+    ("parameter", "reason"),
+    [
+        ("state", "STATE"),
+        ("error", "ERROR_RESPONSE"),
+        ("iss", "ISSUER"),
+        ("code", "TOKEN_EXCHANGE"),
+    ],
+)
+def test_an_overlong_parameter_is_refused_with_its_reason(
+    oidc: Oidc, parameter: str, reason: str
+) -> None:
+    linked(oidc)
+    started = oidc.service.start("corp")
+    answer = oidc.provider.authorize(started.location, "sub-ana")
+    answer[parameter] = "x" * 4097
+    assert refused(oidc, lambda: oidc.service.callback("corp", answer, started.reference)) == reason
+
+
+def test_a_provider_that_fails_during_a_refresh_ends_the_session(oidc: Oidc, world: World) -> None:
+    linked(oidc)
+    session_id = oidc.sign_in_as("sub-ana").session_id
+    oidc.clock.move(hours=1)
+    started = oidc.service.start("corp", refreshing=session_id)
+    answer = oidc.provider.authorize(started.location, "sub-ana")
+    unreachable = OidcSignIn(
+        world.store, world.audit, oidc.configuration, FakeFetcher(), oidc.clock
+    )
+    with pytest.raises(AccessError):
+        unreachable.callback("corp", answer, started.reference)
+    assert reason_of(oidc) == "REFRESH"
+    with pytest.raises(AccessError):
+        oidc.sign_in.session(session_id)
+
+
+def test_one_issuer_is_one_provider() -> None:
+    twice = document()
+    twice["providers"]["again"] = dict(twice["providers"]["corp"])  # type: ignore[index]
+    with pytest.raises(AccessError) as caught:
+        parsed(twice, ENVIRONMENT)
+    assert caught.value.details["setting"].endswith(".issuer")

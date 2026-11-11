@@ -16,7 +16,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from orvex.access.oidc.discovery import failed
+from orvex.access.oidc.failure import failed
 from orvex.access.storage.instants import instant, parsed
 from orvex.access.storage.store import Transaction
 

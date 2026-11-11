@@ -24,8 +24,9 @@ from urllib.parse import urlsplit
 
 from joserfc.errors import JoseError
 from joserfc.jwk import KeySet
-from orvex.access.errors import OIDC_FAILED, OIDC_NOT_CONFIGURED, AccessError
+from orvex.access.errors import OIDC_NOT_CONFIGURED, AccessError
 from orvex.access.oidc.configuration import Provider
+from orvex.access.oidc.failure import failed
 
 KEYS_REFRESH = timedelta(minutes=1)
 
@@ -38,11 +39,6 @@ class Fetcher(Protocol):
     def post_form(
         self, provider: Provider, url: str, form: Mapping[str, str], basic: tuple[str, str]
     ) -> bytes: ...
-
-
-def failed(reason: str) -> AccessError:
-    """The one refusal a browser sees; `reason` is for the audit log alone."""
-    return AccessError(OIDC_FAILED, "Sign-in failed.", {"reason": reason})
 
 
 @dataclass(frozen=True, slots=True)

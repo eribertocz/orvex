@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 from joserfc import jwt
 from joserfc.jwk import ECKey, OctKey, RSAKey
 from orvex.access.oidc.configuration import Provider
-from orvex.access.oidc.discovery import failed
+from orvex.access.oidc.failure import failed
 
 ISSUER = "https://idp.example.com/realms/corp"
 CLIENT_ID = "bi-client"

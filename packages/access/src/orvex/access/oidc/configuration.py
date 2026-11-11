@@ -248,6 +248,10 @@ def parsed(document: Mapping[str, object], environment: Mapping[str, str]) -> Co
     if not isinstance(tables, Mapping):
         raise _refused("providers")
     providers = {name: _provider(str(name), table, environment) for name, table in tables.items()}
+    issuers = [provider.issuer for provider in providers.values()]
+    for name, provider in providers.items():
+        if issuers.count(provider.issuer) > 1:  # one issuer is one provider: its links are its own
+            raise _refused(f"provider.{name}.issuer")
     rules = document.get("mapping", [])
     if not isinstance(rules, Sequence) or isinstance(rules, str):
         raise _refused("mapping")

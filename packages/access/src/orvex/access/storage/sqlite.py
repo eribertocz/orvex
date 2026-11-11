@@ -231,6 +231,13 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
             provider TEXT PRIMARY KEY NOT NULL CHECK (length(provider) BETWEEN 1 AND 32),
             digest TEXT NOT NULL CHECK ({_HEX.format(c="digest", n=64)})
         ) STRICT""",
+        """CREATE TABLE oidc_grants (
+            user_id TEXT NOT NULL REFERENCES users (id),
+            project TEXT NOT NULL,
+            group_name TEXT NOT NULL,
+            provider TEXT NOT NULL CHECK (length(provider) BETWEEN 1 AND 32),
+            PRIMARY KEY (user_id, project, group_name)
+        ) STRICT""",
     ),
 )
 

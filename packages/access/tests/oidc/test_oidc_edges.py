@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -177,11 +178,12 @@ def test_a_time_claim_of_the_wrong_type_is_refused(oidc: Oidc, claims: dict[str,
 def test_the_link_operations_refuse_what_does_not_exist(oidc: Oidc) -> None:
     ana = oidc.world.user("ana")
     admin = oidc.world.admin
-    for action in (
+    actions: tuple[Callable[[], None], ...] = (
         lambda: oidc.identities.link(admin, ana, "corp", ""),
         lambda: oidc.identities.link(admin, "u-nobody", "corp", "s"),
         lambda: oidc.identities.unlink(admin, ana, "corp", "never-linked"),
-    ):
+    )
+    for action in actions:
         with pytest.raises(AccessError) as caught:
             action()
         assert caught.value.code == VALIDATION_FAILED
@@ -203,3 +205,10 @@ def test_a_session_from_a_provider_no_longer_configured_is_always_due(oidc: Oidc
     assert oidc.service.refresh_due(session_id) is None
     assert oidc.service.refresh_due("unknown") is None
     assert timedelta(hours=1) == oidc.configuration.provider("corp").group_refresh
+
+
+def test_a_failure_reason_outside_the_closed_list_is_a_programming_error() -> None:
+    from orvex.access.oidc.failure import failed
+
+    with pytest.raises(ValueError, match="reason"):
+        failed("something else")

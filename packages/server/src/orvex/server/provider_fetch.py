@@ -12,8 +12,9 @@
   between the check and the connection (DNS rebinding) cannot redirect it.
 - **Refused:** any address that is not globally routable. That covers loopback, link-local
   (cloud metadata at 169.254.169.254 included), unspecified, multicast, private (RFC 1918,
-  ULA), carrier-grade NAT and reserved ranges. It applies to IPv4, IPv6 and IPv4-mapped IPv6
-  alike.
+  ULA), carrier-grade NAT and reserved ranges. It applies to IPv4 and IPv6 alike, and to every
+  IPv6 form that carries an IPv4 address (mapped, compatible, translated, NAT64, 6to4, Teredo):
+  each carried address must be allowed too.
 - **Authorized internal providers.** A provider marked `internal` may also reach addresses inside
   the networks listed for it. Loopback, link-local, unspecified and multicast stay refused even
   then.
@@ -25,6 +26,7 @@ the token endpoint. Its message never holds a URL's query, a form or a secret.
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import contextlib
 import http.client
 import ipaddress
@@ -36,7 +38,7 @@ from collections.abc import Callable, Mapping
 from urllib.parse import quote, urlencode, urlsplit
 
 from orvex.access.oidc.configuration import Provider
-from orvex.access.oidc.discovery import failed
+from orvex.access.oidc.failure import failed
 
 TIMEOUT = 5.0
 LIMIT = 1024 * 1024
@@ -56,10 +58,33 @@ def _connect(address: str, port: int, timeout: float) -> socket.socket:
     return socket.create_connection((address, port), timeout=timeout)
 
 
+_EMBEDDING = (
+    ipaddress.ip_network("::/96"),  # IPv4-compatible
+    ipaddress.ip_network("::ffff:0:0:0/96"),  # IPv4-translated
+    ipaddress.ip_network("64:ff9b::/96"),  # NAT64
+    ipaddress.ip_network("64:ff9b:1::/48"),  # local-use NAT64
+)
+
+
+def _embedded(address: ipaddress.IPv6Address) -> list[ipaddress.IPv4Address]:
+    """Every IPv4 address an IPv6 address may carry to a network that unwraps it."""
+    found = [
+        candidate for candidate in (address.ipv4_mapped, address.sixtofour) if candidate is not None
+    ]
+    if address.teredo is not None:
+        found.extend(address.teredo)
+    if any(address in network for network in _EMBEDDING):
+        found.append(ipaddress.IPv4Address(int(address) & 0xFFFFFFFF))
+    return found
+
+
 def allowed(address: Address, provider: Provider) -> bool:
-    """Whether a provider's request may reach `address`."""
-    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
-        address = address.ipv4_mapped
+    """Whether a provider's request may reach `address`; an IPv6 address that carries an IPv4
+    one is allowed only if that one is too."""
+    if isinstance(address, ipaddress.IPv6Address):
+        carried = _embedded(address)
+        if carried:
+            return all(allowed(inner, provider) for inner in carried)
     if (
         address.is_loopback
         or address.is_link_local
@@ -75,12 +100,13 @@ def allowed(address: Address, provider: Provider) -> bool:
     )
 
 
-def _abort(connection: http.client.HTTPSConnection) -> None:
-    """Cut a request past its deadline: a blocked read then fails at once."""
-    sock = connection.sock
-    if sock is not None:
-        with contextlib.suppress(OSError):
-            sock.shutdown(socket.SHUT_RDWR)
+def _abort(connection: _Pinned) -> None:
+    """Cut a request past its deadline, in its connection, handshake or reads alike: a blocked
+    call then fails at once."""
+    for sock in (connection.sock, connection.raw):
+        if sock is not None:
+            with contextlib.suppress(OSError):
+                sock.shutdown(socket.SHUT_RDWR)
 
 
 class _Pinned(http.client.HTTPSConnection):
@@ -99,9 +125,11 @@ class _Pinned(http.client.HTTPSConnection):
         self._address = address
         self._connector = connector
         self._tls = context
+        self.raw: socket.socket | None = None
 
     def connect(self) -> None:
         raw = self._connector(self._address, self.port, float(self.timeout or TIMEOUT))
+        self.raw = raw
         try:
             self.sock = self._tls.wrap_socket(raw, server_hostname=self.host)
         except BaseException:
@@ -163,10 +191,11 @@ class ProviderFetch:
         ):
             raise failed("network")
         deadline = time.monotonic() + self._timeout
-        address = self._checked_address(provider, host, port)
+        address = self._checked_address(provider, host, port, deadline)
         path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
-        connection = _Pinned(host, port, address, self._context, self._connector, self._timeout)
-        watchdog = threading.Timer(self._timeout, _abort, [connection])  # a whole-request deadline
+        remaining = max(0.0, deadline - time.monotonic())
+        connection = _Pinned(host, port, address, self._context, self._connector, remaining)
+        watchdog = threading.Timer(remaining, _abort, [connection])  # the rest of the deadline
         watchdog.daemon = True
         watchdog.start()
         answer: http.client.HTTPResponse | None = None
@@ -188,11 +217,19 @@ class ProviderFetch:
             raise failed("token_exchange" if method == "POST" and status < 500 else "network")
         return content
 
-    def _checked_address(self, provider: Provider, host: str, port: int) -> str:
+    def _checked_address(self, provider: Provider, host: str, port: int, deadline: float) -> str:
+        """Resolve once, within the deadline, and check every address."""
+        worker = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            found = [ipaddress.ip_address(item) for item in self._resolver(host, port)]
-        except (OSError, ValueError) as error:
+            answer = worker.submit(self._resolver, host, port)
+            found = [
+                ipaddress.ip_address(item)
+                for item in answer.result(timeout=max(0.0, deadline - time.monotonic()))
+            ]
+        except (OSError, ValueError, concurrent.futures.TimeoutError) as error:
             raise failed("network") from error
+        finally:
+            worker.shutdown(wait=False, cancel_futures=True)
         if not found or not all(allowed(address, provider) for address in found):
             raise failed("network")
         return str(found[0])

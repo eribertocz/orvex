@@ -26,7 +26,8 @@ from joserfc import jws, jwt
 from joserfc.errors import JoseError
 from joserfc.jwk import KeySet
 from orvex.access.oidc.configuration import Provider
-from orvex.access.oidc.discovery import Keys, failed
+from orvex.access.oidc.discovery import Keys
+from orvex.access.oidc.failure import failed
 
 SKEW = timedelta(seconds=60)
 _LONGEST_TOKEN = 64 * 1024

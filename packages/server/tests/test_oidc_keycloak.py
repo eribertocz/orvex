@@ -51,6 +51,11 @@ SLUG = load_identity().slug
 VERSIONS = Versions("0.1.0", (("server", "0.1.0"),), (("http-api", "v1"),))
 
 
+def _trust() -> ssl.SSLContext:
+    """The job's certificate authority, as httpx2 takes it (a path string is deprecated)."""
+    return ssl.create_default_context(cafile=CA)
+
+
 def _fetcher() -> ProviderFetch:
     port = urlsplit(KEYCLOAK).port or 443
 
@@ -58,7 +63,7 @@ def _fetcher() -> ProviderFetch:
         return socket.create_connection(("127.0.0.1", port), timeout=timeout)
 
     return ProviderFetch(
-        context=ssl.create_default_context(cafile=CA),
+        context=_trust(),
         resolver=lambda host, port: ["93.184.215.14"],
         connector=connect,
     )
@@ -106,7 +111,7 @@ class World:
         )
         app = create_server_app(VERSIONS, SignIn(self.store, audit), settings, SLUG, self.oidc)
         self.app = TestClient(app, base_url=ORIGIN, follow_redirects=False)
-        self.browser = httpx2.Client(verify=CA, follow_redirects=False, timeout=20)
+        self.browser = httpx2.Client(verify=_trust(), follow_redirects=False, timeout=20)
 
     def groups(self) -> set[str]:
         with self.store.transaction(read_only=True) as transaction:
@@ -142,7 +147,7 @@ class World:
 
 
 def _admin_token() -> str:
-    with httpx2.Client(verify=CA, timeout=20) as client:
+    with httpx2.Client(verify=_trust(), timeout=20) as client:
         answer = client.post(
             f"{KEYCLOAK}/realms/master/protocol/openid-connect/token",
             data={
@@ -157,7 +162,7 @@ def _admin_token() -> str:
 
 
 def _admin(method: str, path: str) -> object:
-    with httpx2.Client(verify=CA, timeout=20) as client:
+    with httpx2.Client(verify=_trust(), timeout=20) as client:
         answer = client.request(
             method,
             f"{KEYCLOAK}/admin/realms/{REALM}{path}",

@@ -236,6 +236,13 @@ def migrations_for(schema: str) -> tuple[tuple[str, ...], ...]:
                 provider text PRIMARY KEY CHECK (char_length(provider) BETWEEN 1 AND 32),
                 digest text NOT NULL CHECK (digest ~ '^[0-9a-f]{64}$')
             )""",
+            """CREATE TABLE oidc_grants (
+                user_id text NOT NULL REFERENCES users (id),
+                project text NOT NULL,
+                group_name text NOT NULL,
+                provider text NOT NULL CHECK (char_length(provider) BETWEEN 1 AND 32),
+                PRIMARY KEY (user_id, project, group_name)
+            )""",
         ),
     )
 

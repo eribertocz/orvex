@@ -17,8 +17,8 @@ provider groups.
   request needs a silent re-authentication (`OIDC_REFRESH_REQUIRED`). If it fails for any
   reason, the session ends: it never goes on with stale groups.
 - Every failure is the one `OIDC_FAILED` for the browser and `auth.login_failed` (`method: oidc`)
-  in the audit log, with one reason from `REASONS`. No token, code, verifier or secret is ever
-  recorded.
+  in the audit log, with one reason from `failure.REASONS`. No token, code, verifier or secret
+  is ever recorded.
 """
 
 from __future__ import annotations
@@ -36,34 +36,20 @@ from orvex.access.authentication.service import SignedIn
 from orvex.access.directory import statements as directory_sql
 from orvex.access.directory.records import User
 from orvex.access.errors import OIDC_FAILED, OIDC_NOT_CONFIGURED, AccessError
-from orvex.access.oidc import bindings, group_mapping, identities, tokens
+from orvex.access.oidc import bindings, group_mapping, identities, provider_sessions, tokens
 from orvex.access.oidc.configuration import Configuration, Provider
-from orvex.access.oidc.discovery import (
-    Fetcher,
-    Keys,
-    Metadata,
-    checked_metadata,
-    discovery_url,
-    failed,
-)
+from orvex.access.oidc.discovery import Fetcher, Keys, Metadata, checked_metadata, discovery_url
+from orvex.access.oidc.failure import failed
 from orvex.access.storage import retry
-from orvex.access.storage.instants import instant, parsed
 from orvex.access.storage.store import Store, Transaction
 
-REASONS = (
-    "state",
-    "error_response",
-    "issuer",
-    "token_exchange",
-    "signature",
-    "claims",
-    "nonce",
-    "unlinked",
-    "deactivated",
-    "network",
-    "refresh",
-)
 _LONGEST_PARAMETER = 4096
+_PARAMETER_REASONS = {
+    "state": "state",
+    "error": "error_response",
+    "iss": "issuer",
+    "code": "token_exchange",
+}
 METHOD = "oidc"
 
 
@@ -189,23 +175,26 @@ class OidcSignIn:
         reference: str | None,
         presented: str | None = None,
     ) -> SignedIn:
-        """Finish a sign-in or a refresh; `OIDC_FAILED` for any failed step."""
-        provider, known = self._provider(name)
+        """Finish a sign-in or a refresh; `OIDC_FAILED` for any failed step, every one audited,
+        and the refreshed session ended whatever made it fail."""
+        provider = self._configuration.provider(name)
         now = self._clock()
         taken = self._write(lambda transaction: bindings.take(transaction, reference))
         refreshing = taken.binding.refreshing if taken is not None else None
         user: User | None = None
         try:
             binding = bindings.checked(taken, name, parameters.get("state"), now)
+            known = self._known.get(name) or self._learn(provider, at_start=False)
             identity = self._identity(provider, known, binding, parameters, now)
             user = self._linked_user(identity)
             return self._open(provider, identity, user, refreshing, presented, now)
         except AccessError as error:
-            if error.code != OIDC_FAILED:
-                raise
+            if error.code.startswith("AUDIT_"):
+                raise  # the log itself failed: nothing more can be recorded through it
             if isinstance(error, _DeactivatedError):
                 user = error.user
-            reason = "refresh" if refreshing is not None else str(error.details["reason"])
+            given = str(error.details["reason"]) if error.code == OIDC_FAILED else "network"
+            reason = "refresh" if refreshing is not None else given
             self._refused(user, reason, refreshing)
             raise failed(reason) from None
 
@@ -217,6 +206,9 @@ class OidcSignIn:
         parameters: Mapping[str, str],
         now: datetime,
     ) -> tokens.Identity:
+        for parameter, reason in _PARAMETER_REASONS.items():
+            if len(parameters.get(parameter, "")) > _LONGEST_PARAMETER:
+                raise failed(reason)
         if "error" in parameters:
             raise failed("error_response")
         issued_by = parameters.get("iss")
@@ -225,7 +217,7 @@ class OidcSignIn:
         ):
             raise failed("issuer")
         code = parameters.get("code")
-        if not code or len(code) > _LONGEST_PARAMETER:
+        if not code:
             raise failed("token_exchange")
         id_token = self._exchange(provider, known, binding, code)
         return tokens.validated(provider, known.keys, id_token, binding.nonce, now)
@@ -281,26 +273,26 @@ class OidcSignIn:
         rules = self._configuration.rules_for(provider.name)
 
         def work(transaction: Transaction) -> SignedIn:
+            # The link and the user's state are read again where the session is issued.
+            linked = identities.linked_user(transaction, identity.issuer, identity.subject)
+            if linked != user.id:
+                raise failed("unlinked")
             current = directory_sql.user(transaction, user.id)
             if current is None or not current.active:
                 raise failed("deactivated")
             if refreshing is not None and not _same_holder(transaction, refreshing, identity):
                 raise failed("refresh")
-            group_mapping.apply(transaction, self._audit, rules, user.id, identity.claims, now)
+            group_mapping.apply(
+                transaction, self._audit, provider.name, rules, user.id, identity.claims, now
+            )
             if refreshing is not None:
                 transaction.run("DELETE FROM sessions WHERE id_hash = :id", id=refreshing)
             if presented is not None:
                 sessions.end(transaction, presented)
             fresh = directory_sql.user(transaction, user.id) or current  # after any bump
             session_id = sessions.issue(transaction, fresh, now, password_change_only=False)
-            transaction.run(
-                "INSERT INTO oidc_sessions (session, provider, issuer, subject, refreshed_at) "
-                "VALUES (:session, :provider, :issuer, :subject, :now)",
-                session=sessions.session_hash(session_id),
-                provider=provider.name,
-                issuer=identity.issuer,
-                subject=identity.subject,
-                now=instant(now),
+            provider_sessions.record(
+                transaction, session_id, provider.name, identity.issuer, identity.subject, now
             )
             self._audit.record(transaction, "auth.login", fresh.id, {"method": METHOD})
             return SignedIn(session_id, fresh, False)
@@ -327,13 +319,10 @@ class OidcSignIn:
         """The provider whose groups a live session must read again now, or None (not a
         provider session, or not due). A provider no longer configured is always due."""
         with self._store.transaction(read_only=True) as transaction:
-            found = transaction.rows(
-                "SELECT provider, refreshed_at FROM oidc_sessions WHERE session = :session",
-                session=sessions.session_hash(session_id),
-            )
-        if not found:
+            found = provider_sessions.of(transaction, sessions.session_hash(session_id))
+        if found is None:
             return None
-        name, refreshed = str(found[0][0]), parsed(str(found[0][1]))
+        name, _, _, refreshed = found
         provider = self._configuration.providers.get(name)
         if provider is None or self._clock() >= refreshed + provider.group_refresh:
             return name
@@ -359,10 +348,5 @@ class _DeactivatedError(AccessError):
 
 
 def _same_holder(transaction: Transaction, held: str, identity: tokens.Identity) -> bool:
-    found = transaction.rows(
-        "SELECT issuer, subject FROM oidc_sessions WHERE session = :session", session=held
-    )
-    return bool(found) and (str(found[0][0]), str(found[0][1])) == (
-        identity.issuer,
-        identity.subject,
-    )
+    found = provider_sessions.of(transaction, held)
+    return found is not None and found[1:3] == (identity.issuer, identity.subject)
