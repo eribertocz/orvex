@@ -8,8 +8,8 @@ is refused and never migrated down: older code cannot know what the newer schema
 
 from __future__ import annotations
 
-from orvex.access.directory.store import Store
 from orvex.access.errors import ACCESS_STORE_NEWER, AccessError
+from orvex.access.storage.store import Store
 
 
 def migrate(store: Store) -> int:

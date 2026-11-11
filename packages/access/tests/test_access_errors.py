@@ -15,8 +15,18 @@ SENT_OVER_HTTP = {
     "LAST_ADMINISTRATOR",
     "USER_NAME_TAKEN",
     "VALIDATION_FAILED",
+    "AUDIT_UNAVAILABLE",
 }
-STORE_ONLY = {"ACCESS_STORE_NEWER", "ACCESS_STORE_UNSAFE"}
+# They stop a start or a command, or report on the audit log; none reaches a response.
+STORE_ONLY = {
+    "ACCESS_STORE_NEWER",
+    "ACCESS_STORE_UNSAFE",
+    "AUDIT_EVENT_INVALID",
+    "AUDIT_RETENTION_INVALID",
+    "AUDIT_CHAIN_BROKEN",
+    "AUDIT_CHECKPOINT_INVALID",
+    "AUDIT_KEY_UNSAFE",
+}
 
 
 def test_the_module_raises_exactly_these_codes() -> None:

@@ -8,7 +8,7 @@ configuration contract `admin create` and the server-mode start share.
 - **No fallback** (Owner, 2026-11-10). Server mode without both variables is refused with
   `ACCESS_STORE_NOT_CONFIGURED`. It never falls back to SQLite, which would make a second,
   silent set of users.
-- **The connection's rules** are the store's (`postgres_store.read_settings`): a restricted
+- **The connection's rules** are the store's (`access.storage.postgres.read_settings`): a restricted
   libpq string, and `sslmode=verify-full` (certificate and host name checked) for any server
   that is not this machine. Nothing is weakened when a variable is wrong: the start is refused.
 """
@@ -19,8 +19,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
-from orvex.access.directory import PostgresStore, SqliteStore, read_settings
 from orvex.access.errors import AccessError
+from orvex.access.storage import PostgresStore, SqliteStore, read_settings
 from orvex.server.identity import Identity
 
 ACCESS_STORE_NOT_CONFIGURED = "ACCESS_STORE_NOT_CONFIGURED"

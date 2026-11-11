@@ -1,11 +1,11 @@
-"""The `<slug> admin create` command: create, or recover, a server instance's first
-administrator, on the server machine (#436).
+"""The `<slug> admin` commands, on the server machine: create, or recover, a server instance's
+first administrator (#436), and the audit log's commands (#437).
 
 It runs only with direct access to the instance: no HTTP route does this. Its store is server
 mode's PostgreSQL (`access_store.py`), so it is refused when that is not configured. The first
 run writes the instance's recovery file, owner-only, and says where it is; keep it offline.
-`--recover` needs that file. Until the audit log exists (#437), every use is recorded as one line
-on standard error.
+`--recover` needs that file. Every use is recorded in the audit log (#437), whose signing key
+the first run also creates; `admin audit` verifies, retains and rotates it (`audit_command.py`).
 """
 
 from __future__ import annotations
@@ -15,9 +15,12 @@ import os
 from pathlib import Path
 from typing import TextIO
 
-from orvex.access.directory import Bootstrap, DirectoryEvent
+from orvex.access.audit import open_audit_log
+from orvex.access.directory import Bootstrap
 from orvex.access.errors import AccessError
 from orvex.server.access_store import access_store
+from orvex.server.audit_command import add_audit_parser, audit
+from orvex.server.audit_settings import audit_settings
 from orvex.server.identity import Identity
 from orvex.server.instance import instance_directory
 
@@ -41,22 +44,23 @@ def add_admin_parser(commands: argparse._SubParsersAction[argparse.ArgumentParse
         default=None,
         help="the recovery file, when it is not in the instance directory",
     )
+    add_audit_parser(actions)
 
 
 def admin(command: argparse.Namespace, identity: Identity, out: TextIO, err: TextIO) -> int:
-    def audit(event: DirectoryEvent) -> None:
-        detail = f" code={event.code}" if event.code else f" user={event.target}"
-        print(f"audit: {event.operation} {event.outcome}{detail}", file=err)
-
     instance = instance_directory(identity)
     recovery = instance / RECOVERY_FILE
     try:
+        settings = audit_settings(identity, instance, os.environ)
         store = access_store("server", identity, instance, os.environ)
     except AccessError as error:
         print(f"{error.code}: {error.message}", file=err)
         return 1
     try:
-        bootstrap = Bootstrap(store, recovery, audit)
+        log = open_audit_log(store, settings.key, settings.anchors)
+        if command.action == "audit":
+            return audit(command, log, settings.key, settings.retention_days, out, err)
+        bootstrap = Bootstrap(store, recovery, log)
         if bootstrap.initialize():
             print(f"recovery file written: {recovery} (keep a copy offline)", file=out)
         created = bootstrap.create_administrator(

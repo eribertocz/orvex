@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "e-0001",
+  "at": "2026-11-10T08:00:00-04:00",
+  "actor": "u-root",
+  "instance": "i-0001",
+  "kind": "auth.logout",
+  "outcome": "allowed",
+  "details": {}
+}

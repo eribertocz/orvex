@@ -77,8 +77,9 @@ paths = ["vendor/apache-ossie/", "vendor/iso-4217/"]
 modules = ["semantic"]
 
 [[narrow]]
+# RFC 8785 test data: the engine's canonical JSON (#287) and the audit log's (#437).
 paths = ["vendor/json-canonicalization/"]
-modules = ["semantic", "contracts"]
+modules = ["semantic", "contracts", "access"]
 
 [[narrow]]
 # What a release ships, read by the SBOM's tests (#242).

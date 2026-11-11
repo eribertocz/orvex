@@ -15,9 +15,11 @@ import ssl
 import uuid
 from collections.abc import Iterator
 
-import pg8000.native
 import pytest
-from orvex.access.directory import PostgresStore, migrate, read_settings
+from orvex.access.storage import PostgresStore, migrate, read_settings
+from orvex.access.storage.postgres import migrations_for
+
+from tests.support.access_directory import access_role
 
 TLS = "STORE_TEST_POSTGRES_TLS"
 AUTHORITY = "STORE_TEST_POSTGRES_TLS_CA"
@@ -26,27 +28,16 @@ PASSWORD = "STORE_TEST_POSTGRES_PASSWORD"
 
 @pytest.fixture
 def server() -> Iterator[tuple[str, str, str, str]]:
+    """The TLS server, reached as an ordinary role made for the test (the store refuses a
+    superuser), and a schema of the test's own; the role and all it owns go afterwards."""
     connection, authority = os.environ.get(TLS, ""), os.environ.get(AUTHORITY, "")
     password = os.environ.get(PASSWORD, "")
     if not connection or not authority or not password:
         if os.environ.get("CI"):
             pytest.fail(f"{TLS}, {AUTHORITY} and {PASSWORD} are required in CI")
         pytest.skip("no PostgreSQL with TLS configured for this run")
-    schema = f"t_{uuid.uuid4().hex[:16]}"
-    yield connection, authority, password, schema
-    keywords = dict(pair.split("=", 1) for pair in connection.split())
-    # Cleanup only: TLS without checks is acceptable for dropping a test's schema.
-    admin = pg8000.native.Connection(
-        keywords["user"],
-        password=password,
-        host=keywords["host"],
-        port=int(keywords["port"]),
-        database=keywords["dbname"],
-    )
-    try:
-        admin.run(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-    finally:
-        admin.close()
+    with access_role(connection, password) as (as_role, role_password):
+        yield as_role, authority, role_password, f"t_{uuid.uuid4().hex[:16]}"
 
 
 def test_verify_full_with_the_authority_connects_over_tls(
@@ -58,7 +49,7 @@ def test_verify_full_with_the_authority_connects_over_tls(
     )
     store = PostgresStore(settings)
     try:
-        assert migrate(store) == 1
+        assert migrate(store) == len(migrations_for(schema))
         with store.transaction(read_only=True) as transaction:
             rows = transaction.rows("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
         assert rows == [(True,)]

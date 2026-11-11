@@ -1,0 +1,1115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.invalid/audit-event/v1/schema.json",
+  "title": "AuditEvent",
+  "description": "One security-relevant event of the audit log (#437): produced by `access`, recorded by `access` for every module (README). `details` is a closed object per `kind`, holding identifiers, codes, counts and fingerprints only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "id",
+    "at",
+    "actor",
+    "instance",
+    "kind",
+    "outcome",
+    "details"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "id": {
+      "$ref": "#/$defs/Id"
+    },
+    "at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-5][0-9][.][0-9]{6}Z$"
+    },
+    "actor": {
+      "description": "A user id, or `system` for the product itself.",
+      "$ref": "#/$defs/Id"
+    },
+    "instance": {
+      "$ref": "#/$defs/Id"
+    },
+    "project": {
+      "$ref": "#/$defs/Id"
+    },
+    "kind": {
+      "description": "What happened: a closed list (README).",
+      "enum": [
+        "access.refused",
+        "audit.key_rotated",
+        "audit.retention",
+        "auth.login",
+        "auth.login_failed",
+        "auth.logout",
+        "auth.session_expired",
+        "export",
+        "group.created",
+        "group.deleted",
+        "group.member_added",
+        "group.member_removed",
+        "mcp.call",
+        "membership.added",
+        "membership.changed",
+        "membership.removed",
+        "model.certified",
+        "page.view",
+        "policy.attribute_missing",
+        "policy.mapping_missing",
+        "query",
+        "user.administrator_granted",
+        "user.administrator_removed",
+        "user.created",
+        "user.deactivated",
+        "user.reactivated"
+      ]
+    },
+    "outcome": {
+      "enum": [
+        "allowed",
+        "refused"
+      ]
+    },
+    "details": {
+      "description": "Closed per `kind`: identifiers, codes, counts and fingerprints only.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AccessRefusedDetails"
+        },
+        {
+          "$ref": "#/$defs/AuditKeyRotatedDetails"
+        },
+        {
+          "$ref": "#/$defs/AuditRetentionDetails"
+        },
+        {
+          "$ref": "#/$defs/AuthLoginDetails"
+        },
+        {
+          "$ref": "#/$defs/AuthLoginFailedDetails"
+        },
+        {
+          "$ref": "#/$defs/AuthLogoutDetails"
+        },
+        {
+          "$ref": "#/$defs/AuthSessionExpiredDetails"
+        },
+        {
+          "$ref": "#/$defs/ExportDetails"
+        },
+        {
+          "$ref": "#/$defs/GroupCreatedDetails"
+        },
+        {
+          "$ref": "#/$defs/GroupDeletedDetails"
+        },
+        {
+          "$ref": "#/$defs/GroupMemberAddedDetails"
+        },
+        {
+          "$ref": "#/$defs/GroupMemberRemovedDetails"
+        },
+        {
+          "$ref": "#/$defs/McpCallDetails"
+        },
+        {
+          "$ref": "#/$defs/MembershipAddedDetails"
+        },
+        {
+          "$ref": "#/$defs/MembershipChangedDetails"
+        },
+        {
+          "$ref": "#/$defs/MembershipRemovedDetails"
+        },
+        {
+          "$ref": "#/$defs/ModelCertifiedDetails"
+        },
+        {
+          "$ref": "#/$defs/PageViewDetails"
+        },
+        {
+          "$ref": "#/$defs/PolicyAttributeMissingDetails"
+        },
+        {
+          "$ref": "#/$defs/PolicyMappingMissingDetails"
+        },
+        {
+          "$ref": "#/$defs/QueryDetails"
+        },
+        {
+          "$ref": "#/$defs/UserAdministratorGrantedDetails"
+        },
+        {
+          "$ref": "#/$defs/UserAdministratorRemovedDetails"
+        },
+        {
+          "$ref": "#/$defs/UserCreatedDetails"
+        },
+        {
+          "$ref": "#/$defs/UserDeactivatedDetails"
+        },
+        {
+          "$ref": "#/$defs/UserReactivatedDetails"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "access.refused"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/AccessRefusedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "audit.key_rotated"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/AuditKeyRotatedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "audit.retention"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/AuditRetentionDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "auth.login"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/AuthLoginDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "auth.login_failed"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/AuthLoginFailedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "auth.logout"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/AuthLogoutDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "auth.session_expired"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/AuthSessionExpiredDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "export"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/ExportDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "group.created"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/GroupCreatedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "group.deleted"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/GroupDeletedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "group.member_added"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/GroupMemberAddedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "group.member_removed"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/GroupMemberRemovedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "mcp.call"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/McpCallDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "membership.added"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/MembershipAddedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "membership.changed"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/MembershipChangedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "membership.removed"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/MembershipRemovedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "model.certified"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/ModelCertifiedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "page.view"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/PageViewDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "policy.attribute_missing"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/PolicyAttributeMissingDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "policy.mapping_missing"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/PolicyMappingMissingDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "query"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/QueryDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "user.administrator_granted"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/UserAdministratorGrantedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "user.administrator_removed"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/UserAdministratorRemovedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "user.created"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/UserCreatedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "user.deactivated"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/UserDeactivatedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "user.reactivated"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/UserReactivatedDetails"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "Id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,128}$"
+    },
+    "Fingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "Code": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{1,63}$"
+    },
+    "Group": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "Seq": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "AccessRefusedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation",
+        "code"
+      ],
+      "properties": {
+        "operation": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        },
+        "code": {
+          "$ref": "#/$defs/Code"
+        },
+        "target": {
+          "$ref": "#/$defs/Id"
+        }
+      }
+    },
+    "AuditKeyRotatedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "previous_key"
+      ],
+      "properties": {
+        "previous_key": {
+          "$ref": "#/$defs/Fingerprint"
+        },
+        "key": {
+          "$ref": "#/$defs/Fingerprint"
+        }
+      }
+    },
+    "AuditRetentionDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpoint_seq",
+        "first_seq",
+        "last_seq"
+      ],
+      "properties": {
+        "first_seq": {
+          "$ref": "#/$defs/Seq"
+        },
+        "last_seq": {
+          "$ref": "#/$defs/Seq"
+        },
+        "checkpoint_seq": {
+          "$ref": "#/$defs/Seq"
+        }
+      }
+    },
+    "AuthLoginDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method"
+      ],
+      "properties": {
+        "method": {
+          "enum": [
+            "password",
+            "oidc",
+            "local"
+          ]
+        }
+      }
+    },
+    "AuthLoginFailedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "reason"
+      ],
+      "properties": {
+        "method": {
+          "enum": [
+            "password",
+            "oidc",
+            "local"
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/Code"
+        }
+      }
+    },
+    "AuthLogoutDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "AuthSessionExpiredDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "reason": {
+          "enum": [
+            "idle",
+            "absolute",
+            "revoked",
+            "permissions_changed"
+          ]
+        }
+      }
+    },
+    "ExportDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "receipt"
+      ],
+      "properties": {
+        "receipt": {
+          "$ref": "#/$defs/Fingerprint"
+        },
+        "format": {
+          "enum": [
+            "csv",
+            "xlsx",
+            "pdf"
+          ]
+        }
+      }
+    },
+    "GroupCreatedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group"
+      ],
+      "properties": {
+        "group": {
+          "$ref": "#/$defs/Group"
+        }
+      }
+    },
+    "GroupDeletedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group",
+        "members"
+      ],
+      "properties": {
+        "group": {
+          "$ref": "#/$defs/Group"
+        },
+        "members": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        }
+      }
+    },
+    "GroupMemberAddedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group",
+        "user"
+      ],
+      "properties": {
+        "group": {
+          "$ref": "#/$defs/Group"
+        },
+        "user": {
+          "$ref": "#/$defs/Id"
+        }
+      }
+    },
+    "GroupMemberRemovedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group",
+        "user"
+      ],
+      "properties": {
+        "group": {
+          "$ref": "#/$defs/Group"
+        },
+        "user": {
+          "$ref": "#/$defs/Id"
+        }
+      }
+    },
+    "McpCallDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool"
+      ],
+      "properties": {
+        "tool": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        },
+        "receipt": {
+          "$ref": "#/$defs/Fingerprint"
+        }
+      }
+    },
+    "MembershipAddedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "user"
+      ],
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/Id"
+        },
+        "role": {
+          "enum": [
+            "builder",
+            "author",
+            "viewer"
+          ]
+        }
+      }
+    },
+    "MembershipChangedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "previous_role",
+        "role",
+        "user"
+      ],
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/Id"
+        },
+        "role": {
+          "enum": [
+            "builder",
+            "author",
+            "viewer"
+          ]
+        },
+        "previous_role": {
+          "enum": [
+            "builder",
+            "author",
+            "viewer"
+          ]
+        }
+      }
+    },
+    "MembershipRemovedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "previous_role",
+        "user"
+      ],
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/Id"
+        },
+        "previous_role": {
+          "enum": [
+            "builder",
+            "author",
+            "viewer"
+          ]
+        }
+      }
+    },
+    "ModelCertifiedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "model"
+      ],
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/Id"
+        },
+        "model": {
+          "$ref": "#/$defs/Fingerprint"
+        }
+      }
+    },
+    "PageViewDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "page",
+        "page_version"
+      ],
+      "properties": {
+        "page": {
+          "$ref": "#/$defs/Id"
+        },
+        "page_version": {
+          "$ref": "#/$defs/Fingerprint"
+        }
+      }
+    },
+    "PolicyAttributeMissingDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset",
+        "policy",
+        "receipt"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/Id"
+        },
+        "policy": {
+          "$ref": "#/$defs/Id"
+        },
+        "receipt": {
+          "$ref": "#/$defs/Fingerprint"
+        }
+      }
+    },
+    "PolicyMappingMissingDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset",
+        "policy",
+        "receipt"
+      ],
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/Id"
+        },
+        "policy": {
+          "$ref": "#/$defs/Id"
+        },
+        "receipt": {
+          "$ref": "#/$defs/Fingerprint"
+        }
+      }
+    },
+    "QueryDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt"
+      ],
+      "properties": {
+        "receipt": {
+          "$ref": "#/$defs/Fingerprint"
+        }
+      }
+    },
+    "UserAdministratorGrantedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user"
+      ],
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/Id"
+        }
+      }
+    },
+    "UserAdministratorRemovedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user"
+      ],
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/Id"
+        }
+      }
+    },
+    "UserCreatedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user",
+        "via"
+      ],
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/Id"
+        },
+        "via": {
+          "enum": [
+            "administrator",
+            "admin_create",
+            "admin_recover",
+            "oidc_link"
+          ]
+        }
+      }
+    },
+    "UserDeactivatedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user"
+      ],
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/Id"
+        }
+      }
+    },
+    "UserReactivatedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user"
+      ],
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/Id"
+        }
+      }
+    }
+  }
+}

@@ -7,7 +7,8 @@
 - **Recover** (`--recover`) makes one even when administrators exist, but only with the recovery
   file whose digest the store holds, compared in constant time. A missing, wrong or unsafe file
   is refused like any other forbidden operation, saying nothing about which check failed.
-- Every use, done or refused, goes to the audit hook. The two run serialized: each locks the
+- Every use is audited (#437): a creation as `user.created` in its own transaction, with the
+  actor `system`; a refusal as `access.refused`. The two commands run serialized: each locks the
   store's metadata row first.
 """
 
@@ -18,15 +19,15 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from orvex.access.audit.log import SYSTEM, AuditLog
 from orvex.access.directory import locks, recovery_file
 from orvex.access.directory import statements as sql
-from orvex.access.directory.events import AuditHook, DirectoryEvent
-from orvex.access.directory.migrations import migrate
 from orvex.access.directory.names import checked_display_name, checked_user_name
 from orvex.access.directory.records import User
 from orvex.access.directory.service import instant, new_user_id
-from orvex.access.directory.store import Store, UniqueViolation
 from orvex.access.errors import ACCESS_FORBIDDEN, USER_NAME_TAKEN, AccessError
+from orvex.access.storage.migrations import migrate
+from orvex.access.storage.store import Store, UniqueViolation
 
 
 class Bootstrap:
@@ -34,7 +35,7 @@ class Bootstrap:
         self,
         store: Store,
         recovery: Path,
-        audit: AuditHook,
+        audit: AuditLog,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         new_id: Callable[[], str] = new_user_id,
     ) -> None:
@@ -67,10 +68,10 @@ class Bootstrap:
         """Create an active administrator; `recover` with the recovery file at `recovery` (the
         instance's own by default)."""
         operation = "admin_recover" if recover else "admin_create"
+        self.initialize()
         try:
             name = checked_user_name(user_name)
             display = checked_display_name(display_name)
-            self.initialize()
             with self._store.transaction() as transaction:
                 locks.lock_meta(transaction)
                 if recover:
@@ -89,11 +90,17 @@ class Bootstrap:
                     )
                 except UniqueViolation as error:
                     raise AccessError(USER_NAME_TAKEN, "That user name is taken.") from error
+                self._audit.record(
+                    transaction, "user.created", SYSTEM, {"user": created, "via": operation}
+                )
                 found = sql.user(transaction, created)
         except AccessError as error:
-            self._audit(DirectoryEvent(operation, "refused", None, code=error.code))
+            if error.code.startswith("AUDIT_"):
+                self._audit.unavailable()  # the log itself failed: no second attempt through it
+            else:
+                self._audit.refusal(operation, SYSTEM, error.code)
             raise
         if found is None:
             raise AccessError(ACCESS_FORBIDDEN, "The operation is not allowed.")
-        self._audit(DirectoryEvent(operation, "done", None, target=found.id))
+        self._audit.committed()
         return found

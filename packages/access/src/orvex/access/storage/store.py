@@ -27,6 +27,10 @@ class UniqueViolation(Exception):
     """A row would break a uniqueness constraint (another writer may have won the race)."""
 
 
+class UnreadableValue(Exception):
+    """A stored value cannot be decoded as text (planted bytes the database itself let in)."""
+
+
 class TransientConflict(Exception):
     """The database gave up on the transaction (a deadlock, a busy database): run it again."""
 
@@ -49,6 +53,10 @@ class Store(Protocol):
 
     def stored_version(self, transaction: Transaction) -> int:
         """The version the store is at; 0 for an empty store."""
+        ...
+
+    def remove_audit_through(self, transaction: Transaction, seq: int) -> None:
+        """Remove the audit events up to `seq`: the one removal the log's tables allow."""
         ...
 
     def migration_transaction(self) -> AbstractContextManager[Transaction]:
