@@ -309,3 +309,35 @@ def test_a_forged_kind_column_is_a_broken_chain_never_a_crash(log: AuditLog, raw
     with pytest.raises(AccessError) as caught:
         log.retain(30)  # retention verifies first, with the same answer
     assert caught.value.code == AUDIT_CHAIN_BROKEN
+
+
+@pytest.mark.parametrize("planted", ["[]", '"x"', "not json", "{}"])
+def test_a_planted_document_of_any_shape_names_its_event(
+    log: AuditLog, raw: Raw, planted: str
+) -> None:
+    """R3 for every planted value: `verify` and `retain` name the event, never crash."""
+    ((event,),) = raw.rows("SELECT id FROM audit_events WHERE seq = 3")
+    raw.run("UPDATE audit_events SET document = :d WHERE seq = 3", d=planted)
+    for attempt in (log.verify, lambda: log.retain(30)):
+        with pytest.raises(AccessError) as caught:
+            attempt()
+        assert caught.value.code == AUDIT_CHAIN_BROKEN
+        assert caught.value.details["event"] == event
+
+
+@pytest.mark.parametrize("planted", ["zz", "", "0"])
+def test_a_planted_signature_that_is_not_hex_is_an_invalid_checkpoint(
+    log: AuditLog, planted: str
+) -> None:
+    """The stores' CHECK constraints refuse such a value; one who drops them still gets a
+    named invalid checkpoint from `verify`, never a crash (checked on the rows directly)."""
+    checkpoint = log.checkpoints()[0]
+    forged = chain.CheckpointRow(
+        checkpoint.seq, checkpoint.hash, checkpoint.at, checkpoint.key, planted
+    )
+    head = chain.HeadRow(checkpoint.seq, checkpoint.hash, checkpoint.key, planted)
+    trusted = {checkpoint.key: log.signing_key.public}
+    with pytest.raises(AccessError) as caught:
+        chain.verify([], [forged], head, trusted)
+    assert caught.value.code == AUDIT_CHECKPOINT_INVALID
+    assert caught.value.details == {"seq": str(checkpoint.seq), "reason": "signature"}

@@ -24,7 +24,16 @@ ZERO = "0" * 64
 
 
 def link(previous: str, document: bytes) -> str:
-    return hashlib.sha256(bytes.fromhex(previous) + document).hexdigest()
+    return hashlib.sha256(_bytes(previous) + document).hexdigest()
+
+
+def _bytes(text: str | None) -> bytes:
+    """Hex as stored; anything that is not hex (a planted value) gives bytes no signature or
+    hash can match, so it is reported as a broken value, never as a crash."""
+    try:
+        return bytes.fromhex(text or "")
+    except ValueError:
+        return b"\xff"  # an odd length no SHA-256 or Ed25519 value has
 
 
 def head_payload(seq: int, hash: str) -> bytes:
@@ -112,9 +121,9 @@ def trusted_keys(current: bytes, keys: Sequence[KeyRow]) -> dict[str, bytes]:
         earlier = by_name.get(row.previous)
         if earlier is None or row.signs_previous is None:
             break
-        earlier_public = bytes.fromhex(earlier.public_key)
+        earlier_public = _bytes(earlier.public_key)
         if fingerprint(earlier_public) != earlier.key or not verifies(
-            public, bytes.fromhex(row.signs_previous), previous_key_payload(earlier_public)
+            public, _bytes(row.signs_previous), previous_key_payload(earlier_public)
         ):
             break
         trusted[earlier.key] = earlier_public
@@ -134,7 +143,7 @@ def verify(
     for checkpoint in checkpoints:
         public = trusted.get(checkpoint.key)
         payload = checkpoint_payload(checkpoint.seq, checkpoint.hash, checkpoint.at, checkpoint.key)
-        if public is None or not verifies(public, bytes.fromhex(checkpoint.signature), payload):
+        if public is None or not verifies(public, _bytes(checkpoint.signature), payload):
             raise _invalid(checkpoint.seq, "signature")
         by_seq[checkpoint.seq] = checkpoint
     for line in anchors:
@@ -161,17 +170,22 @@ def verify(
         for event in events:
             if event.seq != expected_seq:
                 raise _broken(event.id, event.seq, "gap")
-            document = json.loads(event.document)
-            if (document.get("id"), document.get("at"), document.get("kind")) != (
-                event.id,
-                event.at,
-                event.kind,
-            ):
-                raise _broken(event.id, event.seq, "columns")
+            # The hash first: a document is read only once the chain vouches for its bytes.
             if link(previous, event.document.encode("utf-8")) != event.hash:
                 raise _broken(event.id, event.seq, "hash")
+            try:
+                document = json.loads(event.document)
+            except ValueError as error:
+                raise _broken(event.id, event.seq, "columns") from error
+            if not isinstance(document, dict) or (
+                document.get("id"),
+                document.get("at"),
+                document.get("kind"),
+            ) != (event.id, event.at, event.kind):
+                raise _broken(event.id, event.seq, "columns")
             if event.kind == "audit.retention":
-                last = document.get("details", {}).get("last_seq")
+                details = document.get("details")
+                last = details.get("last_seq") if isinstance(details, dict) else None
                 if not isinstance(last, int) or isinstance(last, bool):
                     raise _broken(event.id, event.seq, "columns")
                 reached.append(last)
@@ -196,7 +210,7 @@ def verify(
         raise _invalid(head.seq, "head")
     if head.seq:
         public = trusted.get(head.key or "")
-        signature = bytes.fromhex(head.signature or "")
+        signature = _bytes(head.signature)
         if public is None or not verifies(public, signature, head_payload(head.seq, head.hash)):
             raise _invalid(head.seq, "head_signature")
     return len(events)
