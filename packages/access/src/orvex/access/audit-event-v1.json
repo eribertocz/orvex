@@ -904,8 +904,7 @@
       "required": [
         "user",
         "name",
-        "type",
-        "value_sha256"
+        "type"
       ],
       "properties": {
         "user": {
@@ -922,10 +921,6 @@
             "boolean",
             "list"
           ]
-        },
-        "value_sha256": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
         }
       }
     },

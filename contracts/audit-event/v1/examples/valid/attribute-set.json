@@ -10,7 +10,6 @@
   "details": {
     "user": "u-ana",
     "name": "region",
-    "type": "text",
-    "value_sha256": "37171d544cfb48318189f58f6135aa8e8e97dc00f8f25954c33e0c7c17595954"
+    "type": "text"
   }
 }

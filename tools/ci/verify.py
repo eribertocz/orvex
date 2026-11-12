@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -89,7 +90,7 @@ def _parted(
     found = []
     for index in range(total):
         report = junit.with_name(f"{junit.stem}-part-{index}.xml")
-        text = command[-1].replace(f"--junitxml={junit}", f"--junitxml={report}")
+        text = command[-1].replace(str(junit), str(report))  # every reader of the report
         found.append(
             Step(
                 f"{name}-part-{index}",
@@ -132,11 +133,15 @@ def plan(
     return steps, skipped
 
 
+_REPORT = re.compile(r"(?<![\w/.-])junit\.xml\b")
+
+
 def _with_report(script: str, junit: str) -> str:
-    """The test step's own script, writing its report where this run reads it."""
+    """The test step's own script, writing its report where this run reads it, and every later
+    command of the step (`durations emit`, `critical`) reading that same report."""
     if script.count("--junitxml=junit.xml") != 1:
         raise RuntimeError("the test step no longer writes --junitxml=junit.xml once")
-    return script.replace("--junitxml=junit.xml", f"--junitxml={junit}")
+    return _REPORT.sub(lambda _: junit, script)
 
 
 def changed_tests(root: Path, files: Iterable[str]) -> list[str]:

@@ -9,14 +9,13 @@ project's Builder's operations. Reading them is `attribute_sources`.
   (`ON DELETE CASCADE`), so a re-admission starts with none.
 - **Audit.** Every set and removal is recorded with its event in one transaction. Every
   refusal, an invalid name or value included, is checked inside the audited operation and
-  audited apart. The details name the user, the attribute, its type and the SHA-256 of its
-  canonical value, never the value in clear (Owner, #475): the log shows that a value was set
-  or changed. A value from a small set (a boolean, a short code) can be guessed from its hash.
+  audited apart. The details name the user, the attribute and its type, never the value, in
+  clear or hashed (Owner, #475): a hash of a value from a small set gives the value away, and
+  the audit chain already protects the log's integrity.
 """
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -34,9 +33,7 @@ from orvex.access.storage.store import Store, Transaction
 def _details(user: str, name: str, attribute: Mapping[str, Any] | None) -> dict[str, Any]:
     details: dict[str, Any] = {"user": user, "name": name}
     if attribute is not None:
-        kind, text = attribute_values.stored(dict(attribute))
-        details["type"] = kind
-        details["value_sha256"] = hashlib.sha256(text.encode()).hexdigest()
+        details["type"] = attribute_values.stored(dict(attribute))[0]
     return details
 
 

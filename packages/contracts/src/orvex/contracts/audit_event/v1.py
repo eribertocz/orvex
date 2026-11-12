@@ -49,7 +49,6 @@ class AttributeSetDetails(BaseModel):
     user: Id
     name: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     type: Literal["text", "integer", "boolean", "list"]
-    value_sha256: Annotated[str, Field(pattern="^[0-9a-f]{64}$")]
 
 
 class AuditKeyRotatedDetails(BaseModel):

@@ -50,9 +50,9 @@ def test_a_builder_sets_and_removes_a_members_attributes(
         "user": ana,
         "name": "region",
         "type": "text",
-        "value_sha256": hashlib.sha256(b'"north"').hexdigest(),
-    }  # never the value in clear
-    assert all("north" not in json.dumps(event) for event in world.events())
+    }  # never the value, in clear or hashed
+    held = (json.dumps("north"), hashlib.sha256(b'"north"').hexdigest(), "north")
+    assert all(text not in json.dumps(event) for event in world.events() for text in held)
 
 
 def test_who_may_not_change_attributes(setup: tuple[World, Attributes, str, str]) -> None:
