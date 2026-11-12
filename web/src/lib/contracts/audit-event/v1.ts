@@ -142,7 +142,6 @@ export interface AttributeSetDetails {
 	name: string;
 	type: 'text' | 'integer' | 'boolean' | 'list';
 	value_sha256: string;
-	value?: string;
 }
 /**
  * This interface was referenced by `AuditEvent`'s JSON-Schema

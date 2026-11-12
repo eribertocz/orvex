@@ -3,7 +3,9 @@ on one snapshot, with row and column policies, within the budgets that can be en
 
 from __future__ import annotations
 
+import base64
 import json
+import secrets
 from collections.abc import Mapping
 from dataclasses import replace
 from decimal import Decimal
@@ -242,11 +244,20 @@ def test_a_cursor_whose_snapshot_is_no_longer_kept_is_expired() -> None:
         assert refused(pager, query(), cursor) == {"reason": "expired"}
 
 
-def test_a_cursor_never_shows_what_it_holds() -> None:
+def test_a_cursor_never_shows_what_it_holds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sealed: the position is never visible. The nonces are fixed, so the cursor is the same
+    text on every run and the check never passes or fails by chance."""
+    monkeypatch.setattr(secrets, "token_bytes", lambda size: bytes(size))  # what cursors.py uses
     with rp.lake_of() as lake:
         cursor = Pager(lake).page(query()).result.envelope()["page"]["next"]
-    assert "100" not in cursor  # sealed: the position is never visible
-    assert "BO" not in cursor
+        again = Pager(lake).page(query()).result.envelope()["page"]["next"]
+    assert cursor == again  # deterministic under fixed nonces
+    raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+    for held in ("100", "BO"):  # the position the cursor holds
+        assert held not in cursor
+        assert held.encode() not in raw
+    assert SealedForm(b"x" * 32).data_version(cursor) is None  # another secret reads nothing
+    assert FORM.data_version(cursor) is not None  # genuine: it does hold its snapshot
 
 
 # --- grain, joins and policies -----------------------------------------------------------------

@@ -9,9 +9,9 @@ project's Builder's operations. Reading them is `attribute_sources`.
   (`ON DELETE CASCADE`), so a re-admission starts with none.
 - **Audit.** Every set and removal is recorded with its event in one transaction. Every
   refusal, an invalid name or value included, is checked inside the audited operation and
-  audited apart. The details name the user, the attribute and its type, the SHA-256 of the
-  value, and the value itself when it is at most 1,024 characters long. The value is the grant
-  itself, so the log keeps it whenever it fits.
+  audited apart. The details name the user, the attribute, its type and the SHA-256 of its
+  canonical value, never the value in clear (Owner, #475): the log shows that a value was set
+  or changed. A value from a small set (a boolean, a short code) can be guessed from its hash.
 """
 
 from __future__ import annotations
@@ -30,8 +30,6 @@ from orvex.access.directory.rules import refused
 from orvex.access.storage.instants import instant
 from orvex.access.storage.store import Store, Transaction
 
-_SHOWN = 1024
-
 
 def _details(user: str, name: str, attribute: Mapping[str, Any] | None) -> dict[str, Any]:
     details: dict[str, Any] = {"user": user, "name": name}
@@ -39,8 +37,6 @@ def _details(user: str, name: str, attribute: Mapping[str, Any] | None) -> dict[
         kind, text = attribute_values.stored(dict(attribute))
         details["type"] = kind
         details["value_sha256"] = hashlib.sha256(text.encode()).hexdigest()
-        if len(text) <= _SHOWN:
-            details["value"] = text
     return details
 
 

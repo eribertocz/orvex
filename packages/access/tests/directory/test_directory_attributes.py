@@ -3,6 +3,8 @@ stored value that fails the checks building no context."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable
 
 import pytest
@@ -44,7 +46,13 @@ def test_a_builder_sets_and_removes_a_members_attributes(
     assert kinds.count("attribute.set") == 4
     assert kinds[-1] == "attribute.removed"
     first = next(e for e in world.events() if e["kind"] == "attribute.set")
-    assert first["details"]["value"] == '"north"'
+    assert first["details"] == {
+        "user": ana,
+        "name": "region",
+        "type": "text",
+        "value_sha256": hashlib.sha256(b'"north"').hexdigest(),
+    }  # never the value in clear
+    assert all("north" not in json.dumps(event) for event in world.events())
 
 
 def test_who_may_not_change_attributes(setup: tuple[World, Attributes, str, str]) -> None:

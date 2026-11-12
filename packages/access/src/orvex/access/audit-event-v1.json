@@ -926,11 +926,6 @@
         "value_sha256": {
           "type": "string",
           "pattern": "^[0-9a-f]{64}$"
-        },
-        "value": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 1024
         }
       }
     },
