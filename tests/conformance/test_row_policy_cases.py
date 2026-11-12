@@ -65,7 +65,8 @@ POSTGRES_PASSWORD = "STORE_TEST_POSTGRES_PASSWORD"
 
 
 def _runnable() -> list[tuple[str, str, str]]:
-    """(case, engine, catalog) for every case this module runs."""
+    """(case, engine, catalog) for every case this module runs, its pending engines included:
+    there the case must be refused before any read (`test_a_pending_engine_refuses_...`)."""
     found = []
     for name, case in sorted(cases().items()):
         if case["area"] not in AREAS or case["request"]["kind"] != "semantic-query":
@@ -82,6 +83,7 @@ def _runnable() -> list[tuple[str, str, str]]:
 
 
 RUNNABLE = _runnable()
+HOLDING = [(n, e, c) for n, e, c in RUNNABLE if e not in cases()[n].get("pending_engines", {})]
 
 
 # --- engines ---------------------------------------------------------------------------------
@@ -95,6 +97,7 @@ class Served:
     lake: Lake
     routing: Routing | None = None
     adapters: Mapping[str, Any] | None = None
+    reads: list[object] | None = None  # every read the other engine made
 
     def engine(self) -> Any:  # noqa: ANN401 - `execution.Engine`
         more: dict[str, Any] = {}
@@ -264,6 +267,14 @@ def served(found: sf.Fixture, engine: str, catalog: str) -> Iterator[Served]:
                 existing = ExistingLake(attachment, memory_limit="512MB", threads=1)
                 try:
                     reads = LakeReads(existing, timeout_ms=60_000)
+                    made: list[object] = []
+                    reading = reads.read
+
+                    def counted(request: Any, committed_at: Any) -> Any:  # noqa: ANN401
+                        made.append(request)
+                        return reading(request, committed_at)
+
+                    reads.read = counted  # type: ignore[method-assign]
                     schedule = SnapshotSchedule(
                         PROJECT,
                         "warehouse",
@@ -276,7 +287,10 @@ def served(found: sf.Fixture, engine: str, catalog: str) -> Iterator[Served]:
                     assert schedule.check(NOW).color == "green"
                     adapter = ExistingLakeAdapter(reads, schedule, "test")
                     yield Served(
-                        lake, Routing(dict.fromkeys(names, entry)), {entry.connection: adapter}
+                        lake,
+                        Routing(dict.fromkeys(names, entry)),
+                        {entry.connection: adapter},
+                        made,
                     )
                 finally:
                     existing.close()
@@ -388,8 +402,8 @@ def check(received: Received, expect: Mapping[str, Any], label: str) -> None:
 
 @pytest.mark.parametrize(
     ("name", "engine", "catalog"),
-    RUNNABLE,
-    ids=[f"{n}-{e}{'-' + c if c else ''}" for n, e, c in RUNNABLE],
+    HOLDING,
+    ids=[f"{n}-{e}{'-' + c if c else ''}" for n, e, c in HOLDING],
 )
 def test_a_row_policy_case_holds_on_its_engine(name: str, engine: str, catalog: str) -> None:
     case = cases()[name]
@@ -406,10 +420,35 @@ def test_a_row_policy_case_holds_on_its_engine(name: str, engine: str, catalog: 
 
 def test_the_cases_this_module_runs_are_the_issues_cases() -> None:
     """#441 AC2: the 15 cases it took out of pending, and nothing else silently dropped."""
-    taken = {n for n, _, _ in RUNNABLE}
+    taken = {n for n, e, _ in RUNNABLE if e not in cases()[n].get("pending_engines", {})}
     expected = {f"SEC-ROWS-00{i}" for i in range(1, 9)} | {"SEC-LEAK-001", "SEC-LEAK-002"}
     expected |= {f"SEC-DQ-00{i}" for i in range(1, 6)}
     assert expected <= taken
     for name, case in cases().items():
         if case["area"] in AREAS and case["request"]["kind"] == "semantic-query":
             assert name in taken or "pending" in case, name
+
+
+PENDING = [(n, e, c) for n, e, c in RUNNABLE if e in cases()[n].get("pending_engines", {})]
+
+
+@pytest.mark.parametrize(
+    ("name", "engine", "catalog"), PENDING, ids=[f"{n}-{e}-{c}" for n, e, c in PENDING]
+)
+def test_a_pending_engine_refuses_before_any_read(name: str, engine: str, catalog: str) -> None:
+    """A case pending on one engine is never counted as passing there: its request, for its
+    caller and its control, is refused before that engine reads anything."""
+    case = cases()[name]
+    found = sf.fixture(case["fixture"], ce.VENDORS[0])
+    with served(found, engine, catalog) as place:
+        for caller in (case["caller"], case["control"]["caller"]):
+            received = ask(found, place, case["request"], caller)
+            assert received.code == "UNSUPPORTED_OPERATION", received
+            assert received.rows is None
+        assert place.reads == []
+
+
+def test_the_pending_engines_are_the_existing_lakes_detail_pages() -> None:
+    """#441 (Owner, option A): only the existing DuckLake waits, for its detail pages (P5-14)."""
+    waiting = {(n, e): cases()[n]["pending_engines"][e] for n, e, _ in PENDING}
+    assert waiting == {(f"SEC-DQ-00{i}", "existing-ducklake"): "P5-14" for i in range(1, 6)}

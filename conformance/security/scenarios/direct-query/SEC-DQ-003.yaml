@@ -60,3 +60,5 @@ engines:
 - existing-ducklake
 - clickhouse
 adr_0027: registered-nothing-blocked
+pending_engines:
+  existing-ducklake: P5-14

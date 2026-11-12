@@ -57,3 +57,5 @@ engines:
 - existing-ducklake
 - clickhouse
 adr_0027: mapping-above-cap
+pending_engines:
+  existing-ducklake: P5-14

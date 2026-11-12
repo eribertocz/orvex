@@ -60,3 +60,5 @@ engines:
 - existing-ducklake
 - clickhouse
 adr_0027: no-mapping-deny-list
+pending_engines:
+  existing-ducklake: P5-14

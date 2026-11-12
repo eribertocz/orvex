@@ -59,3 +59,5 @@ engines:
 - existing-ducklake
 - clickhouse
 adr_0027: null-in-deny-list
+pending_engines:
+  existing-ducklake: P5-14
