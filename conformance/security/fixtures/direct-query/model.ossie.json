@@ -4,7 +4,7 @@
   "datasets": [
     {
       "name": "outages",
-      "source": "lake.outages",
+      "source": "outages",
       "primary_key": [
         "outage_id"
       ],

@@ -54,5 +54,4 @@ engines:
 - managed
 - existing-ducklake
 - clickhouse
-pending: 441
 adr_0027: no-mapping-allow-list

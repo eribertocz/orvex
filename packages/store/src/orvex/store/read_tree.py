@@ -77,15 +77,41 @@ def _walk(node: object) -> Iterator[dict[str, object]]:
             yield from _walk(item)
 
 
-def _cte_names(tree: JsonTree) -> set[str]:
-    names: set[str] = set()
-    for node in _walk(tree):
-        cte_map = node.get("cte_map")
-        if isinstance(cte_map, dict):
-            for entry in cte_map.get("map", []):
-                if isinstance(entry, dict) and isinstance(entry.get("key"), str):
-                    names.add(entry["key"].lower())
-    return names
+def _scoped(
+    node: object, scope: frozenset[str] = frozenset()
+) -> Iterator[tuple[dict[str, Any], frozenset[str]]]:
+    """Every node of `node`, with the CTE names in scope at it (#441, #417).
+
+    A query node's CTEs are in scope in its body; each CTE's own query sees the CTEs listed
+    before it, and itself only when it is recursive. A name outside that scope is not the CTE,
+    whatever DuckDB would make of it: the guards read it as a lake table, or refuse it.
+    """
+    if isinstance(node, list):
+        for item in node:
+            yield from _scoped(item, scope)
+        return
+    if not isinstance(node, dict):
+        return
+    yield node, scope
+    cte_map = node.get("cte_map")
+    entries = cte_map.get("map", []) if isinstance(cte_map, dict) else []
+    named = [
+        str(e["key"]).lower()
+        for e in entries
+        if isinstance(e, dict) and isinstance(e.get("key"), str)
+    ]
+    for position, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+        definition = entry.get("value")
+        query = definition.get("query_node") if isinstance(definition, dict) else None
+        recursive = isinstance(query, dict) and query.get("type") == "RECURSIVE_CTE_NODE"
+        seen = set(named[:position]) | ({named[position]} if recursive else set())
+        yield from _scoped(definition, scope | seen)
+    body = scope | set(named)
+    for key, value in node.items():
+        if key != "cte_map":
+            yield from _scoped(value, body)
 
 
 def _is_lake_table(
@@ -116,14 +142,13 @@ def pin_tables(tree: dict[str, Any], snapshot: int, tables: set[tuple[str, str]]
     unchanged). A name that is not a lake table (or the read's own CTE) is refused.
     """
     schemas = {schema for schema, _ in tables}
-    ctes = _cte_names(tree)
-    for node in _walk(tree):
+    for node, ctes in _scoped(tree):
         if node.get("type") != "BASE_TABLE":
             continue
         qualified = node.get("qualified_name")
         raw = qualified.get("path") if isinstance(qualified, dict) else None
         path = [str(part) for part in raw] if isinstance(raw, list) else [str(node["table_name"])]
-        if not _is_lake_table(path, tables, schemas, ctes):
+        if not _is_lake_table(path, tables, schemas, set(ctes)):
             raise StoreError(
                 "STORE_STATEMENT_INVALID",
                 "A read may reference only tables of the lake (and its own CTEs).",

@@ -207,6 +207,7 @@
 | P5-10 | Refresh of pre-aggregation definitions by `transform` (`transformation.md` §8) | transform |
 | P5-11 | Pre-aggregation matching with equivalence proof and policy-column check | semantic |
 | P5-12 | Pre-aggregation suggestions from query statistics | semantic |
+| P5-13 | S10 (ADR-0029): Top N and Others, typed parameters, calculated dimensions and segments, with their row-policy cases (`SEC-LEAK-005`) | semantic |
 
 **Exit criteria:** all S1–S6 capabilities implemented with cases; pre-aggregations never change results.
 

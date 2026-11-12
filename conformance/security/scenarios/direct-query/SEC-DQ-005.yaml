@@ -58,5 +58,4 @@ engines:
 - managed
 - existing-ducklake
 - clickhouse
-pending: 441
 adr_0027: null-in-deny-list

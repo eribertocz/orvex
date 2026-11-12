@@ -220,6 +220,14 @@ class Lake:
                     readable += setup.attach_file_source(source)
             self._table_functions = self._names_of_table_functions()
             setup.sandbox(location, readable)
+            # Every cursor inherits these; then no setting may change on this connection again,
+            # whatever reaches it past the SQL guard (#417 audit F4, #441).
+            # TIMESTAMPTZ values reach Arrow as instants in UTC whatever the machine's zone;
+            # presenting them in a local zone is a later, explicit step.
+            self._connection.sql("SET GLOBAL TimeZone = 'UTC'")
+            # A name in FROM must never resolve to a Python object in scope.
+            self._connection.sql("SET GLOBAL python_enable_replacements = false")
+            self._connection.sql("SET lock_configuration = true")
         except BaseException:
             self._connection.close()
             for folder in (self._spill, self._workers, self._copies):
@@ -238,12 +246,7 @@ class Lake:
 
     def _cursor(self) -> duckdb.DuckDBPyConnection:
         cursor = self._connection.cursor()
-        cursor.sql(f"USE {LAKE}")
-        # TIMESTAMPTZ values reach Arrow as instants in UTC whatever the machine's zone;
-        # presenting them in a local zone is a later, explicit step.
-        cursor.sql("SET TimeZone = 'UTC'")
-        # A name in FROM must never resolve to a Python object in scope.
-        cursor.sql("SET python_enable_replacements = false")
+        cursor.sql(f"USE {LAKE}")  # its search path; the settings are the connection's (locked)
         return cursor
 
     def _one(
