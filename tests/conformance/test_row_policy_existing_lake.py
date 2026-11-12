@@ -91,7 +91,8 @@ def test_the_existing_lake_answers_every_supported_question_as_the_policy_allows
         for user, groups in CALLERS:
             for name, body in QUESTIONS.items():
                 request = {
-                    "body": {"kind": "semantic_query", "version": 1, "mode": "aggregate", **body}
+                    "kind": "semantic-query",
+                    "body": {"kind": "semantic_query", "version": 1, "mode": "aggregate", **body},
                 }
                 on_managed = ask(FOUND, managed, request, caller(user, groups))
                 on_other = ask(FOUND, other, request, caller(user, groups))

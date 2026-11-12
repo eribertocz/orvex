@@ -1,5 +1,6 @@
-"""The normative row-policy cases, run (#441): every `semantic-query` case of the `rows`,
-`indirect-leakage` and `direct-query` areas that is not pending, on every engine it lists (each
+"""The normative policy cases, run (#441, #442): every `semantic-query`, `catalog` and `explain`
+case of the `rows`, `columns`, `indirect-leakage` and `direct-query` areas that is not pending,
+on every engine it lists (each
 catalog of `lake.toml` for the existing DuckLake), with its caller and its control, against the
 fixture it is written for. The engines are served by `tests/support/security_engines.py`. On an
 engine the case names in `pending_engines`, the request must be refused before any read there.
@@ -24,7 +25,8 @@ from conformance.runners import security_fixtures as sf
 from tests.conformance.test_security_scenarios import SEPARATOR, cases
 from tests.support.security_engines import Received, ask, served
 
-AREAS = frozenset({"rows", "indirect-leakage", "direct-query"})
+AREAS = frozenset({"rows", "columns", "indirect-leakage", "direct-query"})
+KINDS = frozenset({"semantic-query", "catalog", "explain"})
 
 
 def _runnable() -> list[tuple[str, str, str]]:
@@ -32,7 +34,7 @@ def _runnable() -> list[tuple[str, str, str]]:
     there the case must be refused before any read (`test_a_pending_engine_refuses_...`)."""
     found = []
     for name, case in sorted(cases().items()):
-        if case["area"] not in AREAS or case["request"]["kind"] != "semantic-query":
+        if case["area"] not in AREAS or case["request"]["kind"] not in KINDS:
             continue
         if "pending" in case:
             continue
@@ -68,14 +70,17 @@ def check(received: Received, expect: Mapping[str, Any], label: str) -> None:
         assert received.rows == [], (label, received.rows)
     tokens = {token for text in received.texts for token in SEPARATOR.split(text)}
     if outcome == "contains":
-        assert not {"members", "pages"} & set(expect), (label, "not a semantic-query outcome")
-        missing = sorted(set(expect["text"]) - tokens)
+        assert "pages" not in expect, (label, "not an outcome of these requests")
+        missing = sorted(set(expect.get("text", ())) - tokens)
+        missing += sorted(set(expect.get("members", ())) - received.members)
         assert not missing, (label, missing)
-    assert outcome in {"rows", "zero-rows", "error", "contains"}, (label, outcome)
+    if outcome == "absent":  # a catalog that omits these members entirely
+        assert not set(expect["members"]) & received.members, (label, received.members)
+    assert outcome in {"rows", "zero-rows", "error", "contains", "absent"}, (label, outcome)
     # Exact: the notice the case names (or lists among the texts it must contain), or none.
     named = [expect["notice"]] if "notice" in expect else []
     if outcome == "contains":
-        named = [t for t in expect["text"] if t in received.notices]
+        named = [t for t in expect.get("text", ()) if t in received.notices]
     assert received.notices == named, (
         label,
         received.notices,
@@ -103,13 +108,16 @@ def test_a_row_policy_case_holds_on_its_engine(name: str, engine: str, catalog: 
 
 
 def test_the_cases_this_module_runs_are_the_issues_cases() -> None:
-    """#441 AC2: the 15 cases it took out of pending, and nothing else silently dropped."""
+    """#441 AC2 and #442 AC1: the cases they took out of pending, and nothing else silently
+    dropped."""
     taken = {n for n, e, _ in RUNNABLE if e not in cases()[n].get("pending_engines", {})}
     expected = {f"SEC-ROWS-00{i}" for i in range(1, 9)} | {"SEC-LEAK-001", "SEC-LEAK-002"}
     expected |= {f"SEC-DQ-00{i}" for i in range(1, 6)}
+    expected |= {f"SEC-COLUMNS-00{i}" for i in range(1, 9)}  # #442
+    expected |= {"SEC-LEAK-003", "SEC-LEAK-004"} | {f"SEC-LEAK-00{i}" for i in range(6, 10)}
     assert expected <= taken
     for name, case in cases().items():
-        if case["area"] in AREAS and case["request"]["kind"] == "semantic-query":
+        if case["area"] in AREAS and case["request"]["kind"] in KINDS:
             assert name in taken or "pending" in case, name
 
 

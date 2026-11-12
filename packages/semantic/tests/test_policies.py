@@ -410,7 +410,7 @@ def test_a_hierarchy_policy_marks_its_dataset_and_what_it_reaches_unusable() -> 
     found.check_usable(["ZONES"])
 
 
-def test_a_cell_policy_and_a_threshold_fail_closed() -> None:
+def test_a_cell_policy_is_masked_with_its_condition_and_a_threshold_fails_closed() -> None:
     cell = {
         "member": "customers.segment",
         "default": "visible",
@@ -420,10 +420,11 @@ def test_a_cell_policy_and_a_threshold_fail_closed() -> None:
     threshold = {"dataset": "payments", "entity": "payments.customer_id", "min_group_size": 5}
     found = model(policies(column_policies=[cell], aggregate_thresholds=[threshold]))
     assert found.protection(M("CUSTOMERS", "SEGMENT"), GROUPS) == "masked"  # never listed visible
-    for dataset, operation in (("CUSTOMERS", "cell_policy"), ("PAYMENTS", "min_group_size")):
-        with pytest.raises(SemanticError) as caught:
-            found.check_usable([dataset])
-        assert caught.value.details == {"operation": operation}
+    assert found.condition_of(M("CUSTOMERS", "SEGMENT"), GROUPS) is not None  # executed (#442)
+    found.check_usable(["CUSTOMERS"])
+    with pytest.raises(SemanticError) as caught:
+        found.check_usable(["PAYMENTS"])
+    assert caught.value.details == {"operation": "min_group_size"}
 
 
 # --- no implicit exemption ----------------------------------------------------------------------

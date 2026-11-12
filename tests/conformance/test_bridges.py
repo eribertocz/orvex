@@ -359,7 +359,9 @@ def test_a_non_additive_metric_through_a_bridge_is_refused() -> None:
 @pytest.mark.parametrize("level", ["hidden", "masked"])
 def test_a_protected_bridge_field_is_never_read(member: str, level: str) -> None:
     """The weight and the bridge's keys are read by the allocation, not by the metric's own
-    expression: one the caller may not see in full refuses, before any read, naming nothing."""
+    expression: one the caller may not see in full refuses, before any read, naming nothing.
+    A protected key also removes its relationship for the caller (#442, #449 Q3): the question
+    then has no path, as on a model without that relationship."""
     entry: Document = {"member": member, "default": level} | (
         {"mask": "0" if member.endswith("weight") else "*"} if level == "masked" else {}
     )
@@ -370,7 +372,11 @@ def test_a_protected_bridge_field_is_never_read(member: str, level: str) -> None
         managed_tables={},
     )
     found = refused(query(), policy=policy)
-    assert found == ("UNSUPPORTED_OPERATION", {"operation": "bridge_allocation"})
+    if member.endswith("weight"):
+        assert found == ("UNSUPPORTED_OPERATION", {"operation": "bridge_allocation"})
+    else:
+        assert found[0] == "ILLEGAL_GRAIN_TRANSITION"
+        assert "campaign_id" not in json.dumps(found)
 
 
 def test_two_bridges_on_one_path_are_refused() -> None:

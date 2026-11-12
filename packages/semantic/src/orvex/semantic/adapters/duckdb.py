@@ -23,6 +23,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from orvex.semantic.adapters import cells
 from orvex.semantic.adapters.dialect import DuckDBDialect, _unsupported, quote
 from orvex.semantic.catalog.building import _logical
 from orvex.semantic.compiler.catalog import LogicalType
@@ -621,10 +622,9 @@ class _Writer(DuckDBDialect):
             spec = self.column(row.member, row.name, "field", None)
             if row.source != fact:  # a related row may be missing
                 spec = replace(spec, nullable=True)
-            if row.name in masks:
-                spec = replace(spec, encoding="VARCHAR", nullable=False, mask=masks[row.name])
-                mask = self.cast_to(self.bind("VARCHAR", masks[row.name]), "VARCHAR")
-                select.append(f"{mask} AS {quote(row.name)}")
+            if row.name in masks:  # its mask, or (`visible_when`) its value where it holds
+                spec, text = cells.masked(self, row, spec, masks[row.name])
+                select.append(f"{text} AS {quote(row.name)}")
             else:
                 select.append(f"{self.field(row.member, row.source)} AS {quote(row.name)}")
             columns.append(spec)

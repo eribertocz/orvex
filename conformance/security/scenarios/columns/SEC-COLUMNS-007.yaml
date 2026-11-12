@@ -28,7 +28,9 @@ request:
       direction: asc
 expect:
   outcome: error
-  code: NO_RELATIONSHIP_PATH
+  # As on a model that never declared the relationship (#449 Q3): an aggregate with no path
+  # is ILLEGAL_GRAIN_TRANSITION (a detail query would be NO_RELATIONSHIP_PATH).
+  code: ILLEGAL_GRAIN_TRANSITION
   forbidden:
   - Alpha
   - Beta
@@ -55,4 +57,3 @@ control:
     '
 engines:
 - managed
-pending: 442

@@ -470,18 +470,15 @@ def visible_when() -> list[Document]:
     ]
 
 
-def test_a_cell_policy_dataset_is_listed_by_name_only() -> None:
-    # A cell policy needs a visible or masked default, so its member is always seen and the
-    # dataset is listed by name only; the absent case is covered with a hierarchy policy above.
-    hidden_all = [
-        {"member": f"customers.{n}", "default": "hidden"}
-        for n in ("customer_id", "zone_id", "national_id", "phone", "phone_tail")
-    ]
-    for policies in (visible_when(), [*visible_when(), *hidden_all]):
-        found = catalog(column_policies=policies)
-        entry = next(d for d in found["datasets"] if d["name"] == "customers")
-        assert entry == {"name": "customers", "available": False, "reason": "not_available_yet"}
-        assert "zone_id = $z" not in json.dumps(found)
+def test_a_cell_policy_member_is_listed_masked_and_its_condition_never() -> None:
+    """#442: a `visible_when` member is executed now, so its dataset is available; the member
+    is listed as masked (as text, with its mask), and the condition appears nowhere."""
+    found = catalog(column_policies=visible_when())
+    entry = next(d for d in found["datasets"] if d["name"] == "customers")
+    assert entry["available"] is True
+    (segment,) = [f for f in entry["fields"] if f["name"] == "segment"]
+    assert segment.get("masked") is True
+    assert "zone_id = $z" not in json.dumps(found)
 
 
 def test_an_author_and_a_viewer_with_the_same_groups_see_the_same_catalog() -> None:

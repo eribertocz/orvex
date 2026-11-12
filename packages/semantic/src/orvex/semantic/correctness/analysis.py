@@ -78,7 +78,7 @@ from orvex.semantic.correctness.materialization import Candidate, candidates
 from orvex.semantic.correctness.report import CorrectnessReport, Obligation, make_report
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
-from orvex.semantic.policies import PolicyModel, read_caller
+from orvex.semantic.policies import PolicyModel, read_caller, unseen
 from orvex.semantic.policies.caller import Caller
 from orvex.semantic.policies.placement import Placement, place
 from orvex.semantic.query.binding import BoundQuery
@@ -316,7 +316,7 @@ class _Analysis:
         self.policies = policies
         self.caller = caller
         self.groups = tuple(caller.groups)
-        self.graph = Graph(compiled)
+        self.graph = Graph(compiled, unseen(compiled, policies, self.groups))  # as their catalog
         self.payloads = {
             e.pointer.rsplit("/custom_extensions/", 1)[0]: e.payload
             for e in compiled.ossie.product_extensions

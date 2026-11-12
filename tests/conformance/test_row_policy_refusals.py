@@ -8,9 +8,10 @@ Two kinds of shapes are pending:
   question that reaches it, whoever asks, before planning. `test_correctness` proves those.
 
 Every pending shape is in exactly one of the two, so a shape added later cannot go untested.
-The policies that are representable but not executable (a hierarchy, a cell condition, a minimum
-group size) refuse their dataset the same way (`POLICY_SHAPES`). The two normative cases that
-wait for a later phase (SEC-ROWS-009, P4-02; SEC-LEAK-005, P5-13) are among those refused.
+The policies that are representable but not executable (a hierarchy, a minimum group size; a
+cell condition is executed since #442) refuse their dataset the same way (`POLICY_SHAPES`).
+The two normative cases that wait for a later phase (SEC-ROWS-009, P4-02; SEC-LEAK-005, P5-13)
+are among those refused.
 """
 
 from __future__ import annotations
@@ -150,16 +151,6 @@ POLICY_SHAPES: dict[str, Document] = {
             }
         ]
     },
-    "cell_policy": {
-        "column_policies": [
-            {
-                "member": "readings.kwh",
-                "default": "visible",
-                "mask": "***",
-                "visible_when": "zone_id = $zone_id",
-            }
-        ]
-    },
     "min_group_size": {
         "aggregate_thresholds": [
             {"dataset": "readings", "entity": "readings.consumer_id", "min_group_size": 5}
@@ -176,12 +167,4 @@ def test_a_representable_policy_not_executed_refuses_its_dataset_before_any_read
     for key, entries in POLICY_SHAPES[shape].items():
         document[key] = [*document.get(key, []), *entries]
     managed = {**sf.fixture("utility", ce.VENDORS[0]).managed, **CLOSURE}
-    asked = (
-        {
-            **query(metrics=[{"metric": "consumer_count"}]),
-            "group_by": [{"member": "consumers.zone_id"}],
-        }
-        if shape == "cell_policy"
-        else query()
-    )
-    assert refused(asked, yaml.safe_dump(document), managed) == shape
+    assert refused(query(), yaml.safe_dump(document), managed) == shape

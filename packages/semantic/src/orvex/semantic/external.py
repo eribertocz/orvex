@@ -33,6 +33,7 @@ from orvex.semantic.engines import (
     EngineEntry,
     ExternalAdapter,
     Routing,
+    dataset_label,
     refuse_mixed,
     refuse_unable,
 )
@@ -174,6 +175,22 @@ def external_of(
     if adapter is None:
         raise SemanticError("UNSUPPORTED_OPERATION", {"operation": "route"})
     refuse_unable(entry, logical)
+    refuse_cells(logical, compiled)
     queries = tuple(mapping_queries(logical))
     caps = {k: int(str(v)) for k, v in policies.limits.items()}
     return External(entry, adapter, {}, queries, caps, timeout_ms)
+
+
+def refuse_cells(logical: Any, compiled: CompiledModel) -> None:  # noqa: ANN401 - a plan
+    """A detail page showing a `visible_when` member by its condition runs on the managed lake
+    only (#442): another engine refuses it before any read (`POLICY_NOT_SUPPORTED_ON_ENGINE`,
+    `engine_unsupported`), never shows the value without its condition, and never a value's text
+    in another engine's form. The member is named; the caller already sees it as masked."""
+    placement, masks = logical.placement, dict(logical.masks)
+    cells = placement.cells if placement is not None else {}
+    for row in logical.rows:
+        cell = cells.get(row.member) if row.name in masks else None
+        if cell is not None and cell.condition is not None:
+            label = dataset_label(compiled, cell.dataset)
+            details = {"dataset": label, "policy": row.name, "reason": "engine_unsupported"}
+            raise SemanticError("POLICY_NOT_SUPPORTED_ON_ENGINE", details)

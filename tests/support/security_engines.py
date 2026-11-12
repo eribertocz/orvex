@@ -5,8 +5,9 @@
   lake (ADR-0027 §6);
 - `clickhouse`: its datasets in a database of their own on the configured server (required in CI).
 
-`ask` returns what the caller receives: rows, columns, notices, the error code, and every text
-(result, the caller's view of the receipt, the error's code and details) for the forbidden check.
+`ask` returns what the caller receives for a query, a catalog or an `explain`: rows, columns,
+notices, the error code, a catalog's members, and every text (the result, the caller's view of
+the receipt, the document, the error's code and details) for the forbidden check.
 """
 
 from __future__ import annotations
@@ -31,9 +32,11 @@ from orvex.contracts.store.v1 import (
     PostgresLakeLocation,
     SqliteLakeLocation,
 )
+from orvex.semantic.catalog.building import catalog_for_context
 from orvex.semantic.engines import EngineEntry, Routing
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import Answer, answer
+from orvex.semantic.explanation import explain
 from orvex.semantic.receipt.viewer import CallerViewer
 from orvex.server.engine_catalog import EXISTING_DUCKLAKE_CAPABILITIES
 from orvex.server.existing_lake_adapter import ExistingLakeAdapter
@@ -313,10 +316,30 @@ class Received:
     notices: list[str]
     code: str | None
     texts: list[str]  # everything the caller receives, as text
+    members: frozenset[str] = frozenset()  # a catalog's fields and metrics, `dataset.field`
 
 
 def ask(found: sf.Fixture, place: Served, request: Mapping[str, Any], caller: Any) -> Received:  # noqa: ANN401
+    """The caller's answer to a case request: a `semantic-query`, the caller's `catalog`, or
+    the caller's `explain` of a query."""
     policies = found.policies(caller["groups"])
+    if request["kind"] == "catalog":
+        document = catalog_for_context(found.compiled, policies, dict(caller))
+        members = {
+            f"{d['name']}.{f['name']}".lower() for d in document["datasets"] for f in d["fields"]
+        } | {str(m["name"]).lower() for d in document["datasets"] for m in d["metrics"]}
+        members |= {str(m["name"]).lower() for m in document.get("metrics", [])}
+        return Received(None, [], [], None, [json.dumps(document)], frozenset(members))
+    if request["kind"] == "explain":
+        try:
+            document = explain(
+                json.dumps(request["body"]), found.compiled, policies, dict(caller),
+                place.engine(), CallerViewer(found.compiled, policies, caller),
+            )  # fmt: skip
+        except SemanticError as error:
+            text = json.dumps({"code": error.code, "details": dict(error.details)})
+            return Received(None, [], [], error.code, [text])
+        return Received(None, [], [], None, [json.dumps(document, default=str)])
     try:
         got: Answer = answer(
             json.dumps(request["body"]), found.compiled, policies, dict(caller), place.engine()
