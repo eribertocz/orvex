@@ -28,6 +28,13 @@
       "items": {"enum": ["managed", "existing-ducklake", "clickhouse"]}
     },
     "pending": {"$ref": "#/$defs/Pending"},
+    "pending_engines": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"enum": ["managed", "existing-ducklake", "clickhouse"]},
+      "additionalProperties": {"$ref": "#/$defs/Pending"},
+      "description": "Engines of `engines` on which the case's request is not served yet: it must be refused there before any read, and it passes on the others. Each names where that engine's support is built. A pending engine is never counted as passing."
+    },
     "adr_0027": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]*$",

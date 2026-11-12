@@ -4,7 +4,7 @@
   "datasets": [
     {
       "name": "outages",
-      "source": "lake.outages",
+      "source": "outages",
       "primary_key": [
         "outage_id"
       ],
@@ -36,6 +36,24 @@
       "expression": {
         "sql": "SUM(outages.minutes)"
       }
+    },
+    {
+      "name": "outage_count",
+      "expression": {
+        "sql": "COUNT(outages.outage_id)"
+      }
+    },
+    {
+      "name": "zone_count",
+      "expression": {
+        "sql": "COUNT(DISTINCT outages.zone_id)"
+      },
+      "custom_extensions": [
+        {
+          "vendor_name": "{{vendor}}",
+          "data": "{\"additivity\": \"non_additive\", \"aggregate_class\": \"holistic\", \"element\": \"metric\", \"version\": 1}"
+        }
+      ]
     }
   ],
   "custom_extensions": [

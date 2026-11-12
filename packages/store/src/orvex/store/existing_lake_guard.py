@@ -29,7 +29,7 @@ from orvex.contracts.store.v1 import Parameter
 from orvex.store.errors import StoreError
 from orvex.store.lake_names import LAKE
 from orvex.store.parameters import _bound, _typed
-from orvex.store.read_tree import _cte_names, _is_lake_table, _read_tree, _walk
+from orvex.store.read_tree import _is_lake_table, _read_tree, _scoped
 from orvex.store.sql_guard import SHARED_HARMLESS_FUNCTIONS, TABLE_FUNCTIONS_SQL, _single_statement
 from orvex.store.sql_parser import _plain
 
@@ -57,8 +57,7 @@ def guarded(
     tree = _read_tree(_typed(text, list(parameters)))
     found = set(tables)
     schemas = {schema for schema, _ in found}
-    ctes = _cte_names(tree)
-    for node in _walk(tree):
+    for node, ctes in _scoped(tree):  # the CTE names in scope at each node (#441)
         if node.get("class") == "FUNCTION" and (node.get("catalog") or node.get("schema")):
             raise StoreError(
                 "STORE_STATEMENT_INVALID",

@@ -39,7 +39,7 @@ request:
       body: *id002
     change:
       op: delete_row
-      table: lake.outages
+      table: outages
       row:
         outage_id: 3
 expect:
