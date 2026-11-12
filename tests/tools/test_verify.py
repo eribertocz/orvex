@@ -250,3 +250,16 @@ def test_every_reader_of_the_report_reads_the_planned_one(tmp_path: Path) -> Non
     assert verify._with_report("a --junitxml=junit.xml\nb junit.xml\nc junit-x.xml", "/r.xml") == (
         "a --junitxml=/r.xml\nb /r.xml\nc junit-x.xml"
     )
+
+
+def test_a_failed_test_run_is_never_hidden_by_the_commands_after_it(tmp_path: Path) -> None:
+    """The test step runs as GitHub runs it, stopping at the first failing command: pytest
+    failing then `critical` passing is a failed step (#440)."""
+    for steps in (
+        verify.plan(REPOSITORY_ROOT, ("3.14",), tmp_path)[0],
+        verify.plan(REPOSITORY_ROOT, ("3.14",), tmp_path, total=3)[0],
+    ):
+        for step in [s for s in steps if s.junit]:
+            assert step.command[:3] == ("bash", "-eo", "pipefail")
+    script = "false\ntrue"
+    assert subprocess.run([*verify._SHELL, script], check=False).returncode != 0

@@ -118,7 +118,7 @@ def plan(
             for python in check.pythons:
                 junit = junit_dir / f"junit-{python}.xml"
                 command = _with_report(checks.script(root, check), str(junit))
-                steps += _parted(f"{TESTS}-{python}", python, ("bash", "-c", command), junit, total)
+                steps += _parted(f"{TESTS}-{python}", python, (*_SHELL, command), junit, total)
         else:
             steps.append(
                 Step(
@@ -133,6 +133,9 @@ def plan(
     return steps, skipped
 
 
+# GitHub's own `bash -e {0}` for a `run:` step, with `pipefail`: a failing command stops the
+# step, so a failed pytest is never hidden by the commands after it.
+_SHELL = ("bash", "-eo", "pipefail", "-c")
 _REPORT = re.compile(r"(?<![\w/.-])junit\.xml\b")
 
 
@@ -416,7 +419,7 @@ def pr(
             f"{sys.executable} -m pytest -q -p tools.ci.shard -p tools.ci.timing "
             f"--junitxml={junit} " + " ".join(tests)
         )
-        steps += _parted(TESTS, "", ("bash", "-c", text), junit, max(1, workers))
+        steps += _parted(TESTS, "", (*_SHELL, text), junit, max(1, workers))
         with ThreadPoolExecutor(max_workers=workers + 2) as pool:
             results = list(pool.map(lambda s: run(s, root, variables), steps))
     text, status = summary(results)
