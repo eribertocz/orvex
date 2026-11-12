@@ -11,8 +11,11 @@ Before any route:
    `OIDC_REFRESH_REQUIRED`, naming the provider, for a silent re-authentication (#439).
    The OIDC routes check their own session or binding.
 
-No route may accept both a method that changes state and one that does not: the application is
-refused at construction if one does. The composition of server mode (`--server`) comes later.
+The semantic routes (`query`, `explain`, `catalog`) of the served project, when given, run for
+the session's user with a context built at each request (#440), and write every error for that
+user's audience. No route may accept both a method that changes state and one that does not:
+the application is refused at construction if one does. The composition of server mode
+(`--server`) comes later.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 
 from fastapi import FastAPI, Request, Response
 from fastapi.routing import APIRoute
@@ -33,12 +37,15 @@ from orvex.access.errors import (
     AccessError,
 )
 from orvex.access.oidc.service import OidcSignIn
+from orvex.access.server_context import Audience, ServerRequest, audience_of
+from orvex.access.storage.store import Store
 from orvex.contracts.http_api import v1
-from orvex.server import oidc_http, sign_in_http
+from orvex.server import oidc_http, semantic_http, sign_in_http
 from orvex.server.app import (
     REQUEST_ID_HEADER,
     error_response,
     install_error_handlers,
+    mount_semantic,
     mount_status,
 )
 from orvex.server.sign_in_errors import access_error_response
@@ -58,6 +65,7 @@ def create_server_app(
     settings: Settings,
     slug: str,
     oidc: OidcSignIn | None = None,
+    served: ServedProject | None = None,
 ) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     cookie = sign_in_http.cookie_name(slug)
@@ -138,8 +146,31 @@ def create_server_app(
     mount_status(app, versions)
     sign_in_http.mount_sign_in(app, sign_in, settings, cookie)
     oidc_http.mount_oidc(app, oidc, settings, cookie, slug)
+    if served is not None:
+        project = served.project
+
+        def caller_of(request: Request) -> object:
+            return ServerRequest(request.state.session.user.id, project)
+
+        def audience(caller: object) -> Audience:
+            if not isinstance(caller, ServerRequest):
+                return "other"
+            return audience_of(served.store, caller)
+
+        mount_semantic(app, served.semantic, caller_of, audience)
     checked_route_table(app)
     return app
+
+
+@dataclass(frozen=True)
+class ServedProject:
+    """The project whose semantic routes this application serves (#440): its id, the semantic
+    composition (whose context source is `semantic_http.server_context`) and the access store
+    the caller's audience is read from."""
+
+    project: str
+    semantic: semantic_http.Semantic
+    store: Store
 
 
 def checked_route_table(app: FastAPI) -> None:

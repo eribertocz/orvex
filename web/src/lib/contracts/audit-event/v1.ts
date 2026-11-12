@@ -43,6 +43,8 @@ export interface AuditEvent {
 	 */
 	kind:
 		| 'access.refused'
+		| 'attribute.removed'
+		| 'attribute.set'
 		| 'audit.key_rotated'
 		| 'audit.retention'
 		| 'auth.login'
@@ -80,6 +82,8 @@ export interface AuditEvent {
 	 */
 	details:
 		| AccessRefusedDetails
+		| AttributeRemovedDetails
+		| AttributeSetDetails
 		| AuditKeyRotatedDetails
 		| AuditRetentionDetails
 		| AuthLoginDetails
@@ -120,6 +124,23 @@ export interface AccessRefusedDetails {
 	operation: string;
 	code: Code;
 	target?: Id;
+}
+/**
+ * This interface was referenced by `AuditEvent`'s JSON-Schema
+ * via the `definition` "AttributeRemovedDetails".
+ */
+export interface AttributeRemovedDetails {
+	user: Id;
+	name: string;
+}
+/**
+ * This interface was referenced by `AuditEvent`'s JSON-Schema
+ * via the `definition` "AttributeSetDetails".
+ */
+export interface AttributeSetDetails {
+	user: Id;
+	name: string;
+	type: 'text' | 'integer' | 'boolean' | 'list';
 }
 /**
  * This interface was referenced by `AuditEvent`'s JSON-Schema

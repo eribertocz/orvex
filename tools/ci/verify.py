@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -89,7 +90,7 @@ def _parted(
     found = []
     for index in range(total):
         report = junit.with_name(f"{junit.stem}-part-{index}.xml")
-        text = command[-1].replace(f"--junitxml={junit}", f"--junitxml={report}")
+        text = command[-1].replace(str(junit), str(report))  # every reader of the report
         found.append(
             Step(
                 f"{name}-part-{index}",
@@ -117,7 +118,7 @@ def plan(
             for python in check.pythons:
                 junit = junit_dir / f"junit-{python}.xml"
                 command = _with_report(checks.script(root, check), str(junit))
-                steps += _parted(f"{TESTS}-{python}", python, ("bash", "-c", command), junit, total)
+                steps += _parted(f"{TESTS}-{python}", python, (*_SHELL, command), junit, total)
         else:
             steps.append(
                 Step(
@@ -132,11 +133,18 @@ def plan(
     return steps, skipped
 
 
+# GitHub's own `bash -e {0}` for a `run:` step, with `pipefail`: a failing command stops the
+# step, so a failed pytest is never hidden by the commands after it.
+_SHELL = ("bash", "-eo", "pipefail", "-c")
+_REPORT = re.compile(r"(?<![\w/.-])junit\.xml\b")
+
+
 def _with_report(script: str, junit: str) -> str:
-    """The test step's own script, writing its report where this run reads it."""
+    """The test step's own script, writing its report where this run reads it, and every later
+    command of the step (`durations emit`, `critical`) reading that same report."""
     if script.count("--junitxml=junit.xml") != 1:
         raise RuntimeError("the test step no longer writes --junitxml=junit.xml once")
-    return script.replace("--junitxml=junit.xml", f"--junitxml={junit}")
+    return _REPORT.sub(lambda _: junit, script)
 
 
 def changed_tests(root: Path, files: Iterable[str]) -> list[str]:
@@ -411,7 +419,7 @@ def pr(
             f"{sys.executable} -m pytest -q -p tools.ci.shard -p tools.ci.timing "
             f"--junitxml={junit} " + " ".join(tests)
         )
-        steps += _parted(TESTS, "", ("bash", "-c", text), junit, max(1, workers))
+        steps += _parted(TESTS, "", (*_SHELL, text), junit, max(1, workers))
         with ThreadPoolExecutor(max_workers=workers + 2) as pool:
             results = list(pool.map(lambda s: run(s, root, variables), steps))
     text, status = summary(results)

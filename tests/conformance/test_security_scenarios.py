@@ -4,7 +4,8 @@ cannot pass by refusing everything.
 A case is checked against its own schema and against the contracts it uses. Its fixture must be
 a valid project, committed: a model that compiles and policies that read. Each code it expects
 must be registered or reserved. Its control must show a value the caller must not get, and its
-expected result must show none. Its `pending` must name where the behavior is built. A case
+expected result must show none. Its `pending` must name where the behavior is built, or, for
+one whose behavior is built and proven elsewhere, the runner that will execute it (#447). A case
 already enforced at policy validation is proven here against the real reader. Running the cases
 on the engines is #447.
 """

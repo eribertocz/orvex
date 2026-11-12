@@ -34,6 +34,23 @@ class AccessRefusedDetails(BaseModel):
     target: Id | None = None
 
 
+class AttributeRemovedDetails(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    user: Id
+    name: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+
+
+class AttributeSetDetails(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    user: Id
+    name: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    type: Literal["text", "integer", "boolean", "list"]
+
+
 class AuditKeyRotatedDetails(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -299,6 +316,8 @@ class AuditEvent(BaseModel):
     project: Id | None = None
     kind: Literal[
         "access.refused",
+        "attribute.removed",
+        "attribute.set",
         "audit.key_rotated",
         "audit.retention",
         "auth.login",
@@ -337,6 +356,8 @@ class AuditEvent(BaseModel):
     outcome: Literal["allowed", "refused"]
     details: (
         AccessRefusedDetails
+        | AttributeRemovedDetails
+        | AttributeSetDetails
         | AuditKeyRotatedDetails
         | AuditRetentionDetails
         | AuthLoginDetails

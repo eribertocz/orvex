@@ -189,7 +189,7 @@ CASES: list[tuple[str, list[Document], dict[str, Any], dict[str, Any]]] = [
     ("NOT EXISTS", [NOT_EXISTS], {"user_id": "u-1"}, {}),
     ("NOT EXISTS, unregistered", [NOT_EXISTS], {"user_id": "u-1"}, {"security.registered": []}),
     ("mapping and attribute", [ZONE, rp.TENANT], {"user_id": "u-1", "tenant": "A"}, {}),
-    ("missing attribute", [ZONE], {}, {}),
+    ("missing attribute", [rp.TENANT], {}, {}),
 ]
 
 

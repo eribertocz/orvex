@@ -589,13 +589,13 @@ OWN_ZONE = {
     "name": "own_zone_only",
     "dataset": "customers",
     "kind": "predicate",
-    "predicate": "zone_id IN (SELECT zone_id FROM security.user_zone WHERE user_id = $user_id)",
+    "predicate": "zone_id IN (SELECT zone_id FROM security.user_zone WHERE user_id = $member)",
 }
 
 
 def test_a_row_policy_is_placed_on_every_dataset_it_reaches() -> None:
     """P2-21 (#341): the policy's own dataset, and each dataset it reaches through any role,
-    carry it as a restriction with its obligation. This caller lacks `$user_id`: no rows."""
+    carry it as a restriction with its obligation. This caller lacks `$member`: no rows."""
     policy = policies(row_policies=[OWN_ZONE])
     for document, datasets in (
         (query("phones"), ["customers"]),
@@ -605,7 +605,7 @@ def test_a_row_policy_is_placed_on_every_dataset_it_reaches() -> None:
         report = run(document, policy=policy)
         (placed,) = report.facts["policies"]
         assert placed["policy"] == "own_zone_only"
-        assert placed["applied"] == "no_rows"  # the context has no `user_id`
+        assert placed["applied"] == "no_rows"  # the context has no `member`
         assert set(datasets) <= set(placed["datasets"])
         assert {f"C9.policy:{d}" for d in placed["datasets"]} <= {o.id for o in report.obligations}
 

@@ -6,10 +6,10 @@ refuses the change, or `None`. A rule never reads anything itself.
 - Only an active administrator manages users and the administrator flag.
 - A project's memberships are its active Builder's to manage. The one exception is the project's
   first Builder, whom an administrator assigns while the project has no active Builder.
-- A project's groups are its active Builder's to manage.
-- No caller changes their own role, group memberships, state or administrator flag: every
-  change to what a user may do is someone else's decision. The service first tells the last
-  active administrator or Builder that they are the last (`keeps_an_administrator`,
+- A project's groups, and its members' attributes (#440), are its active Builder's to manage.
+- No caller changes their own role, group memberships, attributes, state or administrator
+  flag: every change to what a user may do is someone else's decision. The service first tells
+  the last active administrator or Builder that they are the last (`keeps_an_administrator`,
   `keeps_a_builder`), which is the more useful answer.
 - A deactivated caller may do nothing.
 """
@@ -62,6 +62,17 @@ def manage_membership(
 def manage_groups(caller: Caller, member: str | None = None) -> str | None:
     """Create or delete a group, or add or remove `member`."""
     if not caller.active or caller.role != "builder" or member == caller.user_id:
+        return ACCESS_FORBIDDEN
+    return None
+
+
+def manage_attributes(caller: Caller, member: str, member_active: bool) -> str | None:
+    """Set or remove an attribute of `member` (#440): the project's active Builder only, never
+    for themselves, so nobody widens their own access, and only for an active member of the
+    project (`member_active`). Every refusal is the same code, so none tells who is a member."""
+    if not caller.active or caller.role != "builder" or member == caller.user_id:
+        return ACCESS_FORBIDDEN
+    if not member_active:
         return ACCESS_FORBIDDEN
     return None
 

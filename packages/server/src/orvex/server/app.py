@@ -15,7 +15,9 @@ import pyarrow as pa
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from orvex.access.errors import ACCESS_FORBIDDEN, AccessError
 from orvex.access.local import LocalRequest
+from orvex.access.server_context import Audience
 from orvex.contracts.http_api import v1
 from orvex.semantic.errors import SemanticError
 from orvex.server import semantic_http
@@ -58,10 +60,12 @@ def _detail(value: object) -> str:
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
 
 
-def semantic_error_response(error: SemanticError, request_id: str) -> JSONResponse:
-    """An engine error: its builder message, its details, and its whole `semantic-error` v1
-    message under `semantic`."""
-    message = semantic_http.semantic_message(error)
+def semantic_error_response(
+    error: SemanticError, request_id: str, audience: Audience = "builder"
+) -> JSONResponse:
+    """An engine error: its message for `audience`, its details, and its whole
+    `semantic-error` v1 message under `semantic`."""
+    message = semantic_http.semantic_message(error, audience)
     details = [
         v1.ErrorDetail(name=str(name), value=_detail(value))
         for name, value in sorted(message["details"].items())
@@ -331,21 +335,31 @@ def create_app(
     mount_status(app, versions)
 
     if local is not None:
-        mount_semantic(app, local)
+        caller = LocalRequest(local.project, authenticated=True)
+        mount_semantic(app, local.semantic, lambda request: caller, lambda caller: "builder")
     return app
 
 
-def mount_semantic(app: FastAPI, local: LocalSemantic) -> None:
+def mount_semantic(
+    app: FastAPI,
+    semantic: semantic_http.Semantic,
+    caller_of: Callable[[Request], object],
+    audience_of: Callable[[object], Audience],
+) -> None:
     """`query`, `explain` and `catalog` (`contracts/http-api/v1`). The session gate has already
-    checked the request's site, body type and token: what remains is the caller's own
-    permissions, which `access` gives and the engine applies."""
-    caller = LocalRequest(local.project, authenticated=True)
+    checked the request's site, body type and session: what remains is the caller's own
+    permissions, which `access` gives and the engine applies. Every error is written for the
+    caller's audience (#440): a Builder's details reach nobody else."""
 
-    def refusal(error: Exception, request_id: str) -> Response:
+    def refusal(error: Exception, request_id: str, caller: object) -> Response:
+        audience = audience_of(caller)
         if isinstance(error, SemanticError):
-            return semantic_error_response(error, request_id)
+            return semantic_error_response(error, request_id, audience)
+        if isinstance(error, AccessError):
+            return error_response(403, ACCESS_FORBIDDEN, "The operation is not allowed", request_id)
         if isinstance(error, semantic_http.Refused):
-            details = [v1.ErrorDetail(name=n, value=v) for n, v in error.details]
+            shown = error.details if audience == "builder" else ()
+            details = [v1.ErrorDetail(name=n, value=v) for n, v in shown]
             return error_response(error.status, error.code, error.message, request_id, details)
         if isinstance(error, semantic_http.ProjectBusy):
             response = error_response(
@@ -359,13 +373,19 @@ def mount_semantic(app: FastAPI, local: LocalSemantic) -> None:
     async def query(request: Request) -> Response:
         body = await request.body()
         request_id = request_id_of(request)
+        caller = caller_of(request)
         try:
-            asked = await run_in_threadpool(semantic_http.ask, local.semantic, body, caller)
+            asked = await run_in_threadpool(semantic_http.ask, semantic, body, caller)
             if wants_arrow(request):
                 return arrow_response(asked.arrow_table())
             return JSONResponse(asked.json_document())
-        except (SemanticError, semantic_http.Refused, semantic_http.ProjectBusy) as error:
-            return refusal(error, request_id)
+        except (
+            SemanticError,
+            AccessError,
+            semantic_http.Refused,
+            semantic_http.ProjectBusy,
+        ) as error:
+            return refusal(error, request_id, caller)
         except StoreError as error:
             log.error("store error", extra={"request_id": request_id, "code": error.code})
             return error_response(500, "INTERNAL_ERROR", "Unexpected server error", request_id)
@@ -374,13 +394,17 @@ def mount_semantic(app: FastAPI, local: LocalSemantic) -> None:
     async def explain(request: Request) -> Response:
         body = await request.body()
         request_id = request_id_of(request)
+        caller = caller_of(request)
         try:
-            document = await run_in_threadpool(
-                semantic_http.explanation, local.semantic, body, caller
-            )
+            document = await run_in_threadpool(semantic_http.explanation, semantic, body, caller)
             return JSONResponse(document)
-        except (SemanticError, semantic_http.Refused, semantic_http.ProjectBusy) as error:
-            return refusal(error, request_id)
+        except (
+            SemanticError,
+            AccessError,
+            semantic_http.Refused,
+            semantic_http.ProjectBusy,
+        ) as error:
+            return refusal(error, request_id, caller)
         except StoreError as error:
             log.error("store error", extra={"request_id": request_id, "code": error.code})
             return error_response(500, "INTERNAL_ERROR", "Unexpected server error", request_id)
@@ -388,11 +412,17 @@ def mount_semantic(app: FastAPI, local: LocalSemantic) -> None:
     @app.get("/api/v1/semantic/catalog")
     async def catalog(request: Request) -> Response:
         request_id = request_id_of(request)
+        caller = caller_of(request)
         try:
-            document = await run_in_threadpool(semantic_http.catalog, local.semantic, caller)
+            document = await run_in_threadpool(semantic_http.catalog, semantic, caller)
             return JSONResponse(document)
-        except (SemanticError, semantic_http.Refused, semantic_http.ProjectBusy) as error:
-            return refusal(error, request_id)
+        except (
+            SemanticError,
+            AccessError,
+            semantic_http.Refused,
+            semantic_http.ProjectBusy,
+        ) as error:
+            return refusal(error, request_id, caller)
         except StoreError as error:
             log.error("store error", extra={"request_id": request_id, "code": error.code})
             return error_response(500, "INTERNAL_ERROR", "Unexpected server error", request_id)

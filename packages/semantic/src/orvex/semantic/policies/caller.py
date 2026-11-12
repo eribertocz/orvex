@@ -50,4 +50,9 @@ def read_caller(context: Mapping[str, Any]) -> Caller:
             attributes[str(name)] = (kind, str(value["value"]))
         else:  # a type this reader does not know: refused, never read as absent
             raise InvalidContext("an attribute of an unknown type")
+    # `$user_id` is the context's own user (security.md §3.3), never a value set beside it: an
+    # attribute of that name that names someone else is refused, never read as either user.
+    user = str(getattr(parsed.user, "root", parsed.user))
+    if attributes.setdefault("user_id", ("text", user)) != ("text", user):
+        raise InvalidContext("the context's user_id attribute is not its user")
     return Caller(tuple(groups), parsed.role == "builder", attributes)

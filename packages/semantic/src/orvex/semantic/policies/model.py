@@ -206,6 +206,7 @@ def _check_predicate(
     problems: _Problems,
     outside: list[tuple[str, str]],
     owner: tuple[str, str],
+    reads: set[str],
 ) -> grammar.Node | None:
     try:
         node = grammar.parse(text, dataset)
@@ -216,6 +217,7 @@ def _check_predicate(
         problems.add(pointer, "reference")
     for table, columns in grammar.tables(node):
         found = managed.get(table.lower())
+        reads.add(table.lower())
         if found is None:
             outside.append(owner)
         elif not columns <= {c.lower() for c in found}:
@@ -245,6 +247,7 @@ class PolicyModel:
         unusable: Mapping[str, str],
         limits: Mapping[str, int],
         policy_fingerprint: str,
+        managed_reads: frozenset[str],
     ) -> None:
         self.row_policies = rows
         self.column_policies = MappingProxyType(dict(columns))
@@ -253,6 +256,9 @@ class PolicyModel:
         self.unusable = MappingProxyType(dict(unusable))
         self.limits = MappingProxyType(dict(limits))
         self.fingerprint = policy_fingerprint
+        # Every managed-lake table (`schema.table`, lower case) a policy reads: the state the
+        # caller's permissions depend on beside the context itself (#440).
+        self.managed_reads = managed_reads
 
     def _own(self, member: MemberId, groups: Collection[str]) -> Protection:
         rule = self.column_policies.get(member)
@@ -462,6 +468,7 @@ def read_policies(
     managed = {table.lower(): columns for table, columns in managed_tables.items()}
     known_groups = set(groups)
     outside: list[tuple[str, str]] = []
+    reads: set[str] = set()  # every managed-lake table a policy reads
     rows: list[RowRule] = []
     seen_names: set[str] = set()
     relationship_names = {r["name"] for r in names.relationships}
@@ -493,6 +500,7 @@ def read_policies(
                 problems,
                 outside,
                 owner,
+                reads,
             )
             if node is not None:
                 attributes = grammar.attributes(node)
@@ -501,6 +509,7 @@ def read_policies(
                     problems.add(here, "registration")
         else:
             closure = policy["closure"]
+            reads.add(str(closure["table"]).lower())
             fits = _table_columns(
                 closure["table"], [closure["ancestor"], closure["descendant"]], managed
             )
@@ -513,6 +522,7 @@ def read_policies(
             attributes = {policy["node"]}
         registration = policy.get("registration")
         if registration is not None:
+            reads.add(str(registration["table"]).lower())
             fits = _table_columns(registration["table"], [registration["key"]], managed)
             if fits is None:
                 outside.append((str(policy["dataset"]), str(policy["name"])))
@@ -555,6 +565,7 @@ def read_policies(
                 problems,
                 outside,
                 owner,
+                reads,
             )
         if member in columns:
             duplicates.append(member)
@@ -641,6 +652,7 @@ def read_policies(
         unusable,
         limits,
         fingerprint("security_policies", 1, _ordered(document)),
+        frozenset(reads),
     )
 
 

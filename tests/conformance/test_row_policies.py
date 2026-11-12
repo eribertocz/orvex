@@ -178,7 +178,7 @@ def caller(groups: tuple[str, ...] = (), **attributes: Any) -> dict[str, Any]:  
         for name, v in attributes.items()
     }
     found = ce.viewer_context(groups, typed)
-    found["user"] = "u-1"
+    found["user"] = str(attributes.get("user_id", "u-1"))  # `$user_id` is the user (#440)
     return found
 
 

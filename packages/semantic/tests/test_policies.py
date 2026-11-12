@@ -551,3 +551,41 @@ def test_a_metric_whose_context_targets_a_protected_member_inherits_it() -> None
     )
     found = read_policies(text(policies()), compiled, groups=GROUPS, managed_tables=MANAGED_TABLES)
     assert found.protection(METRIC("SCOPED")) == "hidden"
+
+
+# --- what the caller's permissions depend on (#440) ---------------------------------------------
+
+
+def test_the_policies_name_every_managed_table_they_read() -> None:
+    deny = "zone_id NOT IN (SELECT zone_id FROM security.blocked_zone WHERE user_id = $user_id)"
+    hierarchy = {
+        "name": "org", "dataset": "customers", "kind": "hierarchy",
+        "closure": {
+            "table": "security.org_closure", "ancestor": "ancestor", "descendant": "descendant",
+        },
+        "node": "org_node", "field": "zone_id",
+    }  # fmt: skip
+    cell = {
+        "member": "customers.segment",
+        "default": "visible",
+        "mask": "***",
+        "visible_when": OWN_ZONE,
+    }
+    found = model(
+        policies(
+            row_policies=[
+                row(deny, registration={"table": "security.registered", "key": "user_id"})[
+                    "row_policies"
+                ][0],
+                hierarchy,
+            ],
+            column_policies=[cell],
+        )
+    )
+    assert found.managed_reads == {
+        "security.blocked_zone",
+        "security.registered",
+        "security.org_closure",
+        "security.user_zone",
+    }
+    assert model(policies(row_policies=[])).managed_reads == frozenset()

@@ -24,6 +24,8 @@ Every object is closed.
 - `{"type": "boolean", "value": true}`: so `true` is never `"true"`;
 - `{"type": "list", "values": […]}`: 1–1,000 texts, normalized.
 
+**`$user_id` is the context's own user** (#440). The engine binds it from `user`. An attribute named `user_id` is redundant; one whose value or type differs from `user` makes the document invalid, and it is refused, never read as either user. Producers never write one: `access` reserves the name.
+
 **A missing attribute is absent**, never `null` or empty, so it cannot match a policy by accident. A policy that needs it gives zero rows, with `POLICY_ATTRIBUTE_MISSING` (`security-policies` v1).
 
 **A context never holds:**

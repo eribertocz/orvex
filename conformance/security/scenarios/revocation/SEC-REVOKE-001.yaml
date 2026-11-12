@@ -59,4 +59,6 @@ control:
   without_changes: true
 engines:
 - managed
-pending: 440
+# Built in #440 and proven over HTTP there (test_a_revoked_mapping_refuses_the_next_page);
+# this case runs normatively once the security runner of #447 exists (Owner, #475).
+pending: 447

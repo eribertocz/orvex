@@ -40,6 +40,8 @@
       "description": "What happened: a closed list (README).",
       "enum": [
         "access.refused",
+        "attribute.removed",
+        "attribute.set",
         "audit.key_rotated",
         "audit.retention",
         "auth.login",
@@ -84,6 +86,12 @@
       "anyOf": [
         {
           "$ref": "#/$defs/AccessRefusedDetails"
+        },
+        {
+          "$ref": "#/$defs/AttributeRemovedDetails"
+        },
+        {
+          "$ref": "#/$defs/AttributeSetDetails"
         },
         {
           "$ref": "#/$defs/AuditKeyRotatedDetails"
@@ -197,6 +205,44 @@
         "properties": {
           "details": {
             "$ref": "#/$defs/AccessRefusedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "attribute.removed"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/AttributeRemovedDetails"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "attribute.set"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "$ref": "#/$defs/AttributeSetDetails"
           }
         }
       }
@@ -832,6 +878,49 @@
         },
         "target": {
           "$ref": "#/$defs/Id"
+        }
+      }
+    },
+    "AttributeRemovedDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user",
+        "name"
+      ],
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/Id"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,62}$"
+        }
+      }
+    },
+    "AttributeSetDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user",
+        "name",
+        "type"
+      ],
+      "properties": {
+        "user": {
+          "$ref": "#/$defs/Id"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,62}$"
+        },
+        "type": {
+          "enum": [
+            "text",
+            "integer",
+            "boolean",
+            "list"
+          ]
         }
       }
     },
