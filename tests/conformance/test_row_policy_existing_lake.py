@@ -14,7 +14,8 @@ import pytest
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
-from tests.conformance.test_row_policy_cases import ask, served
+from tests.conformance.test_security_scenarios import SEPARATOR
+from tests.support.security_engines import ask, served
 
 FOUND = sf.fixture("direct-query", ce.VENDORS[0])
 # id, zone, minutes: never null in this fixture
@@ -101,9 +102,13 @@ def test_the_existing_lake_answers_every_supported_question_as_the_policy_allows
                 if not groups and len(mapped) > CAP:
                     # SEC-DQ-004: more mapped values than the engine binds; refused, no size
                     assert on_other.code == "POLICY_NOT_SUPPORTED_ON_ENGINE", label
+                    assert not {"Z1", "Z2", "Z3", "3", "2"} & {  # no value, no size (SEC-DQ-004)
+                        t for text in on_other.texts for t in SEPARATOR.split(text)
+                    }, label
                     continue
                 assert on_other.code is None, (label, on_other)
                 assert on_other.rows == on_managed.rows, label
+                assert on_other.notices == on_managed.notices, label  # law 4
                 assert on_other.rows == expected(name, zones), label
         assert other.reads  # the existing lake did answer, read by read
 

@@ -104,9 +104,10 @@ def managed_lake(found: Fixture, tables: Iterable[str] | None = None) -> Iterato
             place = Path(folder) / (schema or "_")
             place.mkdir(exist_ok=True)
             path = place / f"{table}.csv"
-            lines = [",".join(found.catalog[name])]
-            lines += [",".join("" if v is None else v for v in row) for row in found.rows[name]]
-            path.write_text("\n".join(lines) + "\n", "utf-8")
+            with path.open("w", encoding="utf-8", newline="") as file:
+                written = csv.writer(file, lineterminator="\n")
+                written.writerow(found.catalog[name])
+                written.writerows(["" if v is None else v for v in row] for row in found.rows[name])
             by_schema.setdefault(schema or None, []).append(path)
         schemas = sorted(by_schema, key=lambda s: s or "")  # unqualified tables first
         with ce.case_lake(by_schema[schemas[0]], found.catalog, schemas[0]) as lake:

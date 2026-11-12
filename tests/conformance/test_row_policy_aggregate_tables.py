@@ -53,13 +53,26 @@ CALLERS = {
 }
 
 
+def notices(found: Any) -> list[str]:  # noqa: ANN401
+    return [str(n["code"]) for n in found.result.envelope().get("notices", [])]
+
+
+def same(used: Any, base: Any) -> None:  # noqa: ANN401
+    """The table never changes the answer: rows, order, exact values and notices; and the
+    plan reads the table only when its receipt says so."""
+    assert ce.rows_of(used) == ce.rows_of(base)
+    assert notices(used) == notices(base)
+    for found in (used, base):
+        assert ('"rollup"' in found.physical.sql) == ("rollup" in m.receipt_reads(found))
+    assert "rollup" not in m.receipt_reads(base)
+
+
 def both(document: Document, rules: tuple[Document, ...], caller: str) -> tuple[Any, Any]:
     """The answer with the table usable, and with it removed (no verified evidence)."""
     found = policy(*rules)
     used = m.run(document, m.SAMPLE, policy=found, context=CALLERS[caller])
     base = m.run(document, m.SAMPLE, policy=found, context=CALLERS[caller], verified=False)
-    assert "rollup" not in m.receipt_reads(base)
-    assert ce.rows_of(used) == ce.rows_of(base)  # the table never changes the answer
+    same(used, base)
     return used, base
 
 
@@ -92,8 +105,45 @@ def test_a_policy_off_the_grain_keeps_the_table_unused_for_every_caller(caller: 
     if caller == "restricted":  # the policy splits the table's groups: the base is read
         assert "rollup" not in m.receipt_reads(used)
         assert m.evidence(used)["C8.equivalent:rollup"] == "base:sales; not eligible: policy"
-    else:  # exempt, or no attribute (no row at all): the table may answer, the same rows
-        assert ce.rows_of(used) == ([] if caller == "no-attribute" else ce.rows_of(used))
+    elif caller == "no-attribute":  # no row at all, whichever is read
+        assert ce.rows_of(used) == []
+
+
+MAPPED = m.CATEGORY | {
+    "predicate": "category IN (SELECT category FROM security.allowed WHERE user_id = $user_id)",
+    "exempt_groups": ["auditors"],
+}
+MAPPING_CALLERS = {
+    "mapped": ce.viewer_context() | {"user": "u"},
+    "exempt": ce.viewer_context(("auditors",)) | {"user": "x"},
+    "unmapped": ce.viewer_context() | {"user": "nobody"},
+}
+MAPPED_ROWS = {"mapped": ["B"], "exempt": ["A", "B"], "unmapped": []}
+
+
+@pytest.mark.parametrize("caller", sorted(MAPPING_CALLERS))
+def test_a_mapping_table_policy_on_the_grain_gives_the_base_answer(caller: str) -> None:
+    """AC5 (b): a mapping-table policy deciding by a grain field, for a mapped, an exempt and
+    an unmapped caller: the table answers, with the base's rows and notices."""
+    found = read_policies(
+        yaml.safe_dump({"version": 1, "row_policies": [MAPPED]}),
+        m.COMPILED,
+        groups=frozenset({"auditors"}),
+        managed_tables={"security.allowed": ("user_id", "category")},
+    )
+    asked = {
+        "policy": found,
+        "context": MAPPING_CALLERS[caller],
+        "mappings": {"security.allowed": [("u", "B")]},
+    }
+    used = m.run(m.query("revenue"), m.SAMPLE, **asked)  # type: ignore[arg-type]
+    base = m.run(m.query("revenue"), m.SAMPLE, verified=False, **asked)  # type: ignore[arg-type]
+    same(used, base)
+    assert sorted({str(row[1]) for row in ce.rows_of(used)}) == MAPPED_ROWS[caller]
+    if caller == "unmapped":  # an allow-list without the caller: no row, no notice (only a
+        assert notices(used) == []  # deny-list's missing registration has one)
+    else:
+        assert m.receipt_reads(used) == ["rollup"]
 
 
 @pytest.mark.parametrize("caller", sorted(CALLERS))
@@ -113,7 +163,7 @@ def test_a_ratio_whose_component_is_not_stored_reads_the_base(caller: str) -> No
         m.query("price"), m.SAMPLE, revenue_only, verified=False, policy=found, context=context
     )
     assert m.receipt_reads(used) == ["sales"]
-    assert ce.rows_of(used) == ce.rows_of(base)
+    same(used, base)
 
 
 def test_a_dataset_on_another_engine_never_reads_a_managed_aggregate_table(

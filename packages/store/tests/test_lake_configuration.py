@@ -11,6 +11,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from orvex.contracts.store.v1 import LocalLakeLocation, ReadRequest, StatementRequest
+from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, open_lake
 
 LIMITS = Limits(
@@ -73,3 +74,27 @@ def test_the_lake_still_writes_and_reads(lake: Lake) -> None:
                     snapshot=snapshot, batch_size=10, timeout_ms=None)
     )  # fmt: skip
     assert read.read_all().to_pylist() == [{"v": "2026-11-12 14:00:00+00"}]
+
+
+@pytest.mark.parametrize(
+    "statement", ["SET TimeZone = 'America/La_Paz'", "SET python_enable_replacements = true",
+                  "SET memory_limit = '64GB'"],
+)  # fmt: skip
+def test_a_setting_the_sandbox_leaves_open_is_refused_by_the_lock(
+    lake: Lake, statement: str
+) -> None:
+    cursor = lake._cursor()
+    with pytest.raises(duckdb.Error, match=r"(?i)lock"):
+        cursor.sql(statement)
+    cursor.close()
+
+
+def test_a_setting_reaching_a_read_or_a_statement_is_refused(lake: Lake) -> None:
+    with pytest.raises(StoreError) as read:
+        lake.read(
+            ReadRequest(kind="read", sql="SET memory_limit = '64GB'", parameters=[],
+                        snapshot=lake.current_snapshot().id, batch_size=10, timeout_ms=None)
+        )  # fmt: skip
+    with pytest.raises(StoreError) as statement, lake.transaction() as transaction:
+        transaction.execute(StatementRequest(kind="statement", sql="RESET TimeZone", parameters=[]))
+    assert read.value.code == statement.value.code == "STORE_STATEMENT_INVALID"

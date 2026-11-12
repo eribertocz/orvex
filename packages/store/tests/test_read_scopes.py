@@ -91,3 +91,14 @@ def test_the_tree_is_still_json() -> None:
     tree = _read_tree("WITH r AS (SELECT * FROM readings) SELECT * FROM r")
     pin_tables(tree, 7, set(TABLES))
     json.dumps(tree)
+
+
+@pytest.mark.parametrize("guard", GUARDS, ids=["managed", "existing"])
+def test_a_recursive_ctes_anchor_reads_the_table_of_its_name_pinned(guard: Any) -> None:  # noqa: ANN401
+    """DuckDB binds the anchor term's `readings` to the table, the recursive term's to the CTE:
+    the anchor's read is pinned like any table's (Reviewer, #477)."""
+    sql = (
+        "WITH RECURSIVE readings AS (SELECT * FROM readings "
+        "UNION ALL SELECT * FROM readings WHERE false) SELECT * FROM readings"
+    )
+    assert ("readings", True) in guard(sql)

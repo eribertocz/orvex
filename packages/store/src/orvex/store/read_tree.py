@@ -83,8 +83,9 @@ def _scoped(
     """Every node of `node`, with the CTE names in scope at it (#441, #417).
 
     A query node's CTEs are in scope in its body; each CTE's own query sees the CTEs listed
-    before it, and itself only when it is recursive. A name outside that scope is not the CTE,
-    whatever DuckDB would make of it: the guards read it as a lake table, or refuse it.
+    before it, and a recursive CTE sees itself in its recursive term only: DuckDB binds the
+    name in the anchor term to the table of that name. A name outside that scope is not the
+    CTE, whatever DuckDB would make of it: the guards read it as a lake table, or refuse it.
     """
     if isinstance(node, list):
         for item in node:
@@ -105,9 +106,17 @@ def _scoped(
             continue
         definition = entry.get("value")
         query = definition.get("query_node") if isinstance(definition, dict) else None
-        recursive = isinstance(query, dict) and query.get("type") == "RECURSIVE_CTE_NODE"
-        seen = set(named[:position]) | ({named[position]} if recursive else set())
-        yield from _scoped(definition, scope | seen)
+        earlier = scope | set(named[:position])
+        if not (isinstance(query, dict) and query.get("type") == "RECURSIVE_CTE_NODE"):
+            yield from _scoped(definition, earlier)
+            continue
+        yield definition, earlier  # type: ignore[misc]
+        for key, value in definition.items():  # type: ignore[union-attr]
+            if key != "query_node":
+                yield from _scoped(value, earlier)
+        yield query, earlier
+        for key, value in query.items():  # the recursive term alone sees the CTE itself
+            yield from _scoped(value, earlier | {named[position]} if key == "right" else earlier)
     body = scope | set(named)
     for key, value in node.items():
         if key != "cte_map":
