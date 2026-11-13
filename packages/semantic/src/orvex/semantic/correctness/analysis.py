@@ -489,8 +489,7 @@ class _Analysis:
         return axis, behavior
 
     def entity_fields(self, axes: list[Mapping[str, Any]], home: str) -> set[str] | None:
-        """The fields of the entity the metric adds across: from the dataset's `entity_keys`,
-        or the columns of a many-to-one relationship to the dataset of that entity."""
+        """The added-across entity's fields: `entity_keys`, else a usable relationship's columns."""
         names = [str(a["entity"]) for a in axes if "entity" in a]
         if len(names) != 1:
             return None
@@ -502,7 +501,8 @@ class _Analysis:
         for relationship in relationships if isinstance(relationships, tuple) else ():
             target = sql.normalize(str(relationship["to"]))
             if (
-                sql.normalize(str(relationship["from"])) == home
+                sql.normalize(str(relationship["name"])) in self.graph.relationship_names
+                and sql.normalize(str(relationship["from"])) == home
                 and self.graph.payloads.get(target, {}).get("entity") == names[0]
             ):
                 return {sql.normalize(str(c)) for c in relationship["from_columns"]}
