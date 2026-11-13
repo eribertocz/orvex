@@ -53,7 +53,7 @@ from orvex.semantic.evidence import CONSISTENT, EvidenceRecord, Ledger, relied
 from orvex.semantic.external import External, external_of, resolve
 from orvex.semantic.ossie import sql
 from orvex.semantic.planning import SemanticPlan, plan
-from orvex.semantic.policies import PolicyModel, read_caller
+from orvex.semantic.policies import PolicyModel, read_caller, unseen
 from orvex.semantic.query.binding import SCOPES, BoundQuery, Limits, bind_query
 from orvex.semantic.receipt import (
     DataRead,
@@ -632,8 +632,9 @@ def prepare(
         return policies.protection(member, caller.groups) == "hidden"
 
     bound: BoundQuery = bind_query(
-        compiled, query, instant=engine.instant, limits=engine.limits, hidden=hidden
-    )
+        compiled, query, instant=engine.instant, limits=engine.limits, hidden=hidden,
+        unseen=unseen(compiled, policies, caller.groups),
+    )  # fmt: skip
     progress.stage, progress.bound = "bound", bound
     report = analyze(bound, compiled, policies, context)
     progress.stage, progress.report = "analyzed", report

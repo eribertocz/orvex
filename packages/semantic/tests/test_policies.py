@@ -300,7 +300,7 @@ def test_a_hidden_relationship_key_stays_hidden_through_the_related_dataset() ->
     found = model(
         policies(column_policies=[{"member": "customers.customer_id", "default": "hidden"}])
     )
-    assert found.protection(M("PAYMENTS", "CUSTOMER_ID")) == "hidden"
+    assert found.protection(M("CUSTOMERS", "CUSTOMER_ID")) == "hidden"
     assert found.protection(M("PROFILES", "CUSTOMER_ID")) == "hidden"
 
 
@@ -410,7 +410,7 @@ def test_a_hierarchy_policy_marks_its_dataset_and_what_it_reaches_unusable() -> 
     found.check_usable(["ZONES"])
 
 
-def test_a_cell_policy_and_a_threshold_fail_closed() -> None:
+def test_a_cell_policy_is_masked_with_its_condition_and_a_threshold_fails_closed() -> None:
     cell = {
         "member": "customers.segment",
         "default": "visible",
@@ -420,10 +420,30 @@ def test_a_cell_policy_and_a_threshold_fail_closed() -> None:
     threshold = {"dataset": "payments", "entity": "payments.customer_id", "min_group_size": 5}
     found = model(policies(column_policies=[cell], aggregate_thresholds=[threshold]))
     assert found.protection(M("CUSTOMERS", "SEGMENT"), GROUPS) == "masked"  # never listed visible
-    for dataset, operation in (("CUSTOMERS", "cell_policy"), ("PAYMENTS", "min_group_size")):
-        with pytest.raises(SemanticError) as caught:
-            found.check_usable([dataset])
-        assert caught.value.details == {"operation": operation}
+    assert found.condition_of(M("CUSTOMERS", "SEGMENT"), GROUPS) is not None  # executed (#442)
+    found.check_usable(["CUSTOMERS"])
+    with pytest.raises(SemanticError) as caught:
+        found.check_usable(["PAYMENTS"])
+    assert caught.value.details == {"operation": "min_group_size"}
+
+
+def test_a_cell_condition_is_the_only_masking_or_there_is_none() -> None:
+    """A row shows the value under its condition only when nothing else masks it: a key paired
+    with a masked key, or a caller who sees the member visible, gets no condition (#442)."""
+    cell = {
+        "member": "customers.customer_id",
+        "default": "visible",
+        "mask": "***",
+        "visible_when": "zone_id = $zone_id",
+        "visible_to_groups": ["collections"],
+    }
+    key = {"member": "payments.customer_id", "default": "masked", "mask": "#"}
+    alone = model(policies(column_policies=[cell]))
+    assert alone.condition_of(M("CUSTOMERS", "CUSTOMER_ID"), ()) is not None
+    assert alone.condition_of(M("CUSTOMERS", "CUSTOMER_ID"), ["collections"]) is None  # visible
+    paired = model(policies(column_policies=[cell, key]))
+    assert paired.protection(M("CUSTOMERS", "CUSTOMER_ID"), ()) == "masked"
+    assert paired.condition_of(M("CUSTOMERS", "CUSTOMER_ID"), ()) is None  # masked for good
 
 
 # --- no implicit exemption ----------------------------------------------------------------------

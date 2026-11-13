@@ -31,6 +31,7 @@ from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.ossie import sql
 from orvex.semantic.ossie.extensions import full_match_validator
 from orvex.semantic.policies import PolicyModel
+from orvex.semantic.policies import relationships as rules
 from orvex.semantic.policies.caller import InvalidContext, read_caller
 
 SCHEMA_FILE = "catalog-v1.json"
@@ -211,20 +212,14 @@ def catalog_for(
         )
     ]
     relationships = []
+    unseen = rules.unseen(compiled, policies, groups)  # the planner's own rule (#442)
     for at, relationship in enumerate(_items(document, "relationships")):
         left, right = (
             sql.normalize(str(relationship["from"])),
             sql.normalize(str(relationship["to"])),
         )
-        keys = [
-            MemberId("field", left, sql.normalize(str(c)))
-            for c in _items(relationship, "from_columns")
-        ]
-        keys += [
-            MemberId("field", right, sql.normalize(str(c)))
-            for c in _items(relationship, "to_columns")
-        ]
-        if left in listed and right in listed and all(level(k) == "visible" for k in keys):
+        name = sql.normalize(str(relationship["name"]))
+        if left in listed and right in listed and name not in unseen:
             cardinality = payloads.get(f"/relationships/{at}", {}).get("cardinality", "many_to_one")
             relationships.append(
                 {

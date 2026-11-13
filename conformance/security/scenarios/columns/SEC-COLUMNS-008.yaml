@@ -1,6 +1,6 @@
 id: SEC-COLUMNS-008
 area: columns
-title: Distinct counting a masked member is refused
+title: A metric that distinct-counts a masked member is hidden, as if it never existed
 intent: A distinct count would reveal how many different real values the mask hides.
 fixture: utility
 caller:
@@ -22,7 +22,8 @@ request:
     - metric: phone_count
 expect:
   outcome: error
-  code: MEMBER_MASKED
+  # A metric that reads a masked member is hidden (#442 Q1): as if it never existed.
+  code: MEMBER_NOT_FOUND
   forbidden:
   - '2'
 control:
@@ -44,4 +45,3 @@ control:
     '
 engines:
 - managed
-pending: 442

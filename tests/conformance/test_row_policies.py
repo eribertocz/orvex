@@ -514,29 +514,17 @@ HIERARCHY = {
     "node": "org_node",
     "field": "zone_id",
 }
-CELL = {
-    "member": "sales.region",
-    "default": "visible",
-    "mask": "*",
-    "visible_when": "zone_id = $zone_id",
-}
 
 
 @pytest.mark.parametrize(
-    ("policy", "operation"),
-    [((HIERARCHY,), "hierarchy_policy"), ((), "cell_policy"), ((), "min_group_size")],
+    ("policy", "operation"), [((HIERARCHY,), "hierarchy_policy"), ((), "min_group_size")]
 )
-def test_hierarchies_and_conditional_cells_stay_refused_before_any_read(
+def test_hierarchies_and_thresholds_stay_refused_before_any_read(
     policy: tuple[Document, ...], operation: str
 ) -> None:
+    """Cell conditions are executed since #442 (`test_cell_conditions`)."""
     threshold = {"dataset": "sales", "entity": "sales.sale_id", "min_group_size": 3}
-    more: dict[str, Any] = (
-        {}
-        if policy
-        else {"column_policies": [CELL]}
-        if operation == "cell_policy"
-        else {"aggregate_thresholds": [threshold]}
-    )
+    more: dict[str, Any] = {} if policy else {"aggregate_thresholds": [threshold]}
     spy = Spy()
     with lake_of() as lake, pytest.raises(SemanticError) as caught:
         ask(

@@ -708,9 +708,18 @@ def verify_physical(plan: Any, physical: Any) -> Evidence:  # noqa: ANN401
     if plan.mode == "detail":
         if plan.page is None or not physical.sql.rstrip().endswith(f"LIMIT {plan.page + 1}"):
             raise DischargeError("the detail statement is not one page and one more row")
-        for name, _ in plan.masks:  # written as its bound mask, never read
-            if not re.search(
-                rf"CAST\(\$p[0-9]+ AS VARCHAR\) AS {re.escape(_quote(name))}", physical.sql
+        for name, _ in plan.masks:  # its bound mask; read only under its own condition
+            column = re.escape(_quote(name))
+            mask = rf"CAST\(\$p[0-9]+ AS VARCHAR\)(?: END\))? AS {column}"
+            shown = (  # the value only where its condition holds, the mask everywhere else
+                r"\(CASE WHEN COALESCE\(\((?:(?!CASE WHEN).)+\), FALSE\) THEN CAST\((?:(?!CASE "
+                rf"WHEN).)+ AS VARCHAR\) ELSE CAST\(\$p[0-9]+ AS VARCHAR\) END\) AS {column}"
+            )
+            found = re.search(mask, physical.sql)
+            conditional = found is not None and "END" in found.group(0)
+            if found is None or (
+                conditional
+                and not (_conditional(plan, name) and re.search(shown, physical.sql, re.DOTALL))
             ):
                 raise DischargeError("a masked field is read in the statement")
         if (plan.start is not None) != (' AS "d" WHERE ' in physical.sql):
@@ -747,3 +756,14 @@ def verify_physical(plan: Any, physical: Any) -> Evidence:  # noqa: ANN401
             if not (is_restricted or chained):
                 raise DischargeError("a restricted dataset is read without its restrictions")
     return evidence
+
+
+def _conditional(plan: Any, name: str) -> bool:  # noqa: ANN401
+    """Whether the policy model, not the placement, lets the detail column `name` show its
+    value under a `visible_when` condition for this caller (#442)."""
+    policies = plan.report.policies
+    member = next((g.member for g in plan.rows if g.name == name), None)
+    groups = plan.report.caller_groups
+    if member is None or policies is None:
+        return False
+    return policies.condition_of(member, groups) is not None

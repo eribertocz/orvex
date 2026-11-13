@@ -9,7 +9,10 @@
   `POLICY_ATTRIBUTE_MISSING`; it is never an error, and never all rows. A value that does not
   fit is never written into the predicate, where a `NOT` could turn it into a match (`fits`);
 - a policy that reaches a dataset only through a bridge has no meaning yet: the dataset is not
-  read (`row_policy`), never read without it.
+  read (`row_policy`), never read without it;
+- a `visible_when` member the caller sees masked has its condition (`Cell`, #442): a detail row
+  shows its value where the condition holds, its mask elsewhere. A condition whose attribute is
+  absent, or does not fit, is never written (`fits` again): every row shows the mask.
 
 The attributes come only from the validated security context (`read_caller`): the query has no
 member for them, so a client can never supply or change one.
@@ -20,6 +23,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
@@ -42,12 +46,22 @@ class Restriction:
 
 
 @dataclass(frozen=True, slots=True)
+class Cell:
+    """One `visible_when` member, as one caller sees it: its condition on its own dataset, or
+    None when an attribute it needs is absent or does not fit, so no row shows the value."""
+
+    dataset: str
+    condition: grammar.Node | None
+
+
+@dataclass(frozen=True, slots=True)
 class Placement:
     """Every restriction of every dataset a question reads, and what the receipt records."""
 
     restrictions: Mapping[str, tuple[Restriction, ...]]  # dataset -> its restrictions
     applied: Mapping[str, str]  # policy -> restricted, exempt or no_rows
     attributes: Mapping[str, Attribute]
+    cells: Mapping[MemberId, Cell] = MappingProxyType({})  # the caller's conditional masks
 
     def of(self, dataset: str) -> tuple[Restriction, ...]:
         return self.restrictions.get(dataset, ())
@@ -63,16 +77,37 @@ def fits(rule: RowRule, attributes: Mapping[str, Attribute], compiled: CompiledM
     """Whether every attribute the policy uses is present and of a type that fits its use:
     a scalar of the field's type in a comparison, a list of values of the field's type in
     `IN $list`, and text or an integer against a mapping column or a registration key."""
+    registration = rule.registration
+    if registration is not None and not _scalar(
+        attributes, str(registration.get("attribute", "user_id")), ("text", "integer")
+    ):
+        return False
+    return rule.predicate is not None and fits_predicate(
+        rule.predicate, rule.dataset, attributes, compiled
+    )
+
+
+def _scalar(attributes: Mapping[str, Attribute], name: str, wanted: tuple[str, ...]) -> bool:
+    found = attributes.get(name)
+    return found is not None and found[0] in wanted
+
+
+def fits_predicate(
+    predicate: grammar.Node,
+    dataset: str,
+    attributes: Mapping[str, Attribute],
+    compiled: CompiledModel,
+) -> bool:
+    """`fits` for one predicate on `dataset`: every attribute present, of a fitting type."""
 
     def scalar(name: str, wanted: tuple[str, ...]) -> bool:
-        found = attributes.get(name)
-        return found is not None and found[0] in wanted
+        return _scalar(attributes, name, wanted)
 
     def operand(node: object, other: object) -> bool:
         if not isinstance(node, grammar.Attribute):
             return True
         if isinstance(other, grammar.Field):
-            kind = SCALAR.get(datatype(compiled, rule.dataset, other.name) or "")
+            kind = SCALAR.get(datatype(compiled, dataset, other.name) or "")
             return kind is not None and scalar(node.name, (kind,))
         if isinstance(other, grammar.Value):
             return scalar(node.name, ({"string": "text"}.get(other.kind, other.kind),))
@@ -86,7 +121,7 @@ def fits(rule: RowRule, attributes: Mapping[str, Attribute], compiled: CompiledM
             return operand(node.left, node.right) and operand(node.right, node.left)
         if isinstance(node, grammar.InAttribute):
             found = attributes.get(node.attribute.name)
-            element = ELEMENT.get(datatype(compiled, rule.dataset, node.field.name) or "")
+            element = ELEMENT.get(datatype(compiled, dataset, node.field.name) or "")
             return (
                 found is not None
                 and found[0] == "list"
@@ -106,12 +141,8 @@ def fits(rule: RowRule, attributes: Mapping[str, Attribute], compiled: CompiledM
             return all(walk(o) for o in node.operands)
         return isinstance(node, grammar.IsNull)
 
-    registration = rule.registration
-    if registration is not None and not scalar(
-        str(registration.get("attribute", "user_id")), ("text", "integer")
-    ):
-        return False
-    return rule.predicate is not None and walk(rule.predicate)
+    names = grammar.attributes(predicate)
+    return all(name in attributes for name in names) and walk(predicate)
 
 
 def place(
@@ -144,4 +175,16 @@ def place(
         applied[rule.name] = "no_rows" if no_rows else "restricted"
         for path, dataset in hits:
             found.setdefault(dataset, []).append(Restriction(rule, path, no_rows))
-    return Placement({d: tuple(r) for d, r in found.items()}, applied, dict(caller.attributes))
+    cells: dict[MemberId, Cell] = {}
+    for member in policies.column_policies:
+        condition = policies.condition_of(member, caller.groups)
+        if condition is None or member.dataset not in wanted:
+            continue
+        usable = fits_predicate(condition, member.dataset, caller.attributes, compiled)
+        cells[member] = Cell(member.dataset, condition if usable else None)
+    return Placement(
+        {d: tuple(r) for d, r in found.items()},
+        applied,
+        dict(caller.attributes),
+        MappingProxyType(cells),
+    )

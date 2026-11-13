@@ -93,7 +93,8 @@ class ColumnRule:
     default: Protection
     visible_to_groups: frozenset[str]
     mask: str | None
-    conditional: bool  # `visible_when`: masked where the row predicate is false
+    conditional: bool  # `visible_when`: masked where the row predicate is not true
+    condition: grammar.Node | None = None  # the `visible_when` predicate, on the member's dataset
 
 
 class _Problems:
@@ -264,10 +265,10 @@ class PolicyModel:
         rule = self.column_policies.get(member)
         if rule is None:
             return "visible"
-        if rule.conditional:
-            return "masked"  # listed as masked, never as visible, until P3 executes it
-        if rule.default != "visible" and rule.visible_to_groups & set(groups):
+        if rule.visible_to_groups & set(groups):  # the caller's own groups widen, never a role
             return "visible"
+        if rule.conditional:  # masked for every rule; a detail row shows it where it holds
+            return "masked"
         return rule.default
 
     def protection(self, member: MemberId, groups: Collection[str] = ()) -> Protection:
@@ -282,6 +283,17 @@ class PolicyModel:
             if _RANK[inherited] > _RANK[level]:
                 level = inherited
         return level
+
+    def condition_of(self, member: MemberId, groups: Collection[str] = ()) -> grammar.Node | None:
+        """The `visible_when` condition under which a detail row may show `member` to a caller
+        in `groups` (#442): only when that condition is the one thing masking it. A member that
+        also reads a protected member, or is not masked for the caller, has none."""
+        rule = self.column_policies.get(member)
+        if rule is None or rule.condition is None or self._own(member, groups) != "masked":
+            return None
+        if any(self._own(s, groups) != "visible" for s in self._sources.get(member, ())):
+            return None
+        return rule.condition
 
     def mask_of(self, member: MemberId, groups: Collection[str] = ()) -> str:
         """The text a masked field shows in place of every value (P2-24): its own mask when
@@ -554,9 +566,10 @@ def read_policies(
             problems.add(f"{here}/default", "masked_metric")
         if not set(policy.get("visible_to_groups", [])) <= known_groups:
             problems.add(f"{here}/visible_to_groups", "reference")
+        condition = None
         if "visible_when" in policy and member.dataset is not None:
             owner = (member.dataset.lower(), str(policy["member"]))
-            _check_predicate(
+            condition = _check_predicate(
                 policy["visible_when"],
                 member.dataset,
                 f"{here}/visible_when",
@@ -575,6 +588,7 @@ def read_policies(
             visible_to_groups=frozenset(policy.get("visible_to_groups", [])),
             mask=policy.get("mask"),
             conditional="visible_when" in policy,
+            condition=condition,
         )
     unusable: dict[str, str] = {}
     for at, threshold in enumerate(document.get("aggregate_thresholds", [])):
@@ -627,9 +641,6 @@ def read_policies(
         if rule.kind == "hierarchy":
             for dataset in {rule.dataset, *(r.dataset for r in found)}:
                 unusable.setdefault(dataset, "hierarchy_policy")
-    for member, column in columns.items():
-        if column.conditional and member.dataset is not None:
-            unusable.setdefault(member.dataset, "cell_policy")
     problems.raise_if_any(file)
     if duplicates:
         raise SemanticError("DUPLICATE_COLUMN_POLICY", {"member": _label(duplicates[0])})

@@ -2,6 +2,7 @@
 
 from orvex.semantic.policies.caller import Caller, InvalidContext, read_caller
 from orvex.semantic.policies.model import ColumnRule, PolicyModel, Reach, RowRule, read_policies
+from orvex.semantic.policies.relationships import unseen
 
 __all__ = [
     "Caller",
@@ -12,4 +13,5 @@ __all__ = [
     "RowRule",
     "read_caller",
     "read_policies",
+    "unseen",
 ]

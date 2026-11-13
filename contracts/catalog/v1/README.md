@@ -37,7 +37,7 @@ A **masked field** is only `{name, masked: true, encoding: "VARCHAR"}`.
 
   `model_fingerprint` identifies the model and is the same for every caller; it says nothing about which members are hidden.
 - **Masked shows nothing of itself.** No type, unit, semantic type, exactness, nullity or description.
-- **Unavailable datasets** (Owner decision of 2026-11-02). A dataset that a policy not yet executable (hierarchy, `visible_when`, a minimum group size) makes unusable is listed as `{name, available: false, reason: "not_available_yet"}`, with no members. It is listed only when its existence is authorized, that is, when the caller would see at least one of its members. Otherwise it is absent. A model metric that reads an unavailable dataset is absent.
+- **Unavailable datasets** (Owner decision of 2026-11-02). A dataset that a policy not yet executable (hierarchy, a minimum group size) makes unusable is listed as `{name, available: false, reason: "not_available_yet"}`, with no members. It is listed only when its existence is authorized, that is, when the caller would see at least one of its members. Otherwise it is absent. A model metric that reads an unavailable dataset is absent.
 - **Descriptions** (Owner decision of 2026-11-02). A description is the modeler's text.
   - The compiler flags it when it names a protected member, by its name alone or as `dataset.member`, as a whole word in any case.
   - A flagged description is omitted for every caller without builder permission.

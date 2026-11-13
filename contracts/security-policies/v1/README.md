@@ -67,8 +67,9 @@ Mapping, registration and closure tables live in the managed lake. A subquery on
 - `member`: a field, a dataset metric or a model metric.
 - `default`: `visible`, `masked` (with `mask`, 1–64 characters) or `hidden`.
 - `visible_to_groups`: the groups that see it visible.
-- `visible_when` (#238 rule 9): a row predicate. Where it is false the value is masked, so it requires `mask`, and its `default` is `visible` or `masked`: a hidden member stays hidden. It is representable now and executed in P3. Until then, its member is listed as masked and its dataset is unusable.
+- `visible_when` (#238 rule 9): a row predicate. Where it is false the value is masked, so it requires `mask`, and its `default` is `visible` or `masked`: a hidden member stays hidden. Executed since #442, on the managed lake only: the member is masked for every rule (it cannot be grouped, filtered, sorted or distinct-counted, and a metric derived from it is hidden), and a detail row shows its value as text where the predicate is true for that row and caller, the mask everywhere else. A predicate that is false or unknown, or an attribute that is absent or does not fit, gives the mask. The column is the same nullable text column whatever a row shows. On any other engine a query that would show it is refused before any read with `POLICY_NOT_SUPPORTED_ON_ENGINE` (`reason`: `engine_unsupported`).
 - A metric is `visible` or `hidden`, never masked (`security.md` §3.3; rule `masked_metric`).
+- A relationship with a hidden or masked key does not exist for the caller (#449 Q3, #442): it is absent from the catalog, the planner never uses it, and naming it as a role is `MEMBER_NOT_FOUND`, as for a relationship never declared. Row policies still propagate through it.
 - Exactly one column policy per member (`DUPLICATE_COLUMN_POLICY`).
 
 ## Combination rules (normative for P2-21 and P3; #238 rule 2)
@@ -105,10 +106,9 @@ Mapping, registration and closure tables live in the managed lake. A subquery on
   Declared and verified cardinality count alike. A policy on a fact reaches no dimension. Over 256 paths for one policy is refused (rule `propagation`).
 - **Non-executable policies fail closed.** These datasets are unusable until their execution lands:
   - one with a hierarchy policy, or reached by one;
-  - one with a `visible_when` member;
   - one covered by an aggregate threshold.
 
-  A query on them is refused with `UNSUPPORTED_OPERATION` (`operation`: `hierarchy_policy`, `cell_policy` or `min_group_size`). It is never served without the policy.
+  A query on them is refused with `UNSUPPORTED_OPERATION` (`operation`: `hierarchy_policy` or `min_group_size`). It is never served without the policy.
 - **The fingerprint** of the policy model (`security_policies`, RFC 8785) ignores the order of unordered collections and changes with any meaning. It is an input of the permission fingerprint (P2-09).
 
 ## Errors

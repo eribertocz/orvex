@@ -5,7 +5,7 @@ The fixtures live in `conformance/security/fixtures/<name>/`: `model.ossie.json`
 `tables.toml` (each table's columns and CSV file) and, for an engine other than the managed
 lake, `lake.toml`. A CSV is read as `bi_platform_adapter.read_csv` reads it, with one addition
 the fixtures use: the text `NULL` is a null. Values stay text, cast to their column types by the
-lake. The case runner (`tests/conformance/test_row_policy_cases.py`, and #447 after it) builds
+lake. The case runner (`tests/conformance/test_policy_cases.py`, and #447 after it) builds
 on this module; it never copies the reading.
 """
 

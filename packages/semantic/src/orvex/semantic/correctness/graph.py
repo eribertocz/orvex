@@ -47,7 +47,10 @@ def _items(node: object, key: str) -> list[Any]:
 
 
 class Graph:
-    def __init__(self, compiled: CompiledModel) -> None:
+    def __init__(self, compiled: CompiledModel, without: frozenset[str] = frozenset()) -> None:
+        """The graph of `compiled`, less the relationships named in `without` (normalized):
+        those a caller may not use (`policies.relationships.unseen`), which for that caller do
+        not exist. Row-policy propagation never reads this graph."""
         document = compiled.ossie.document
         payloads = {
             e.pointer.rsplit("/custom_extensions/", 1)[0]: e.payload
@@ -71,6 +74,8 @@ class Graph:
         self.links: dict[str, list[Step]] = {name: [] for name in self.names}
         for at, relationship in enumerate(_items(document, "relationships")):
             name = sql.normalize(str(relationship["name"]))
+            if name in without:
+                continue
             self.relationship_names[name] = str(relationship["name"])
             payload = payloads.get(f"/relationships/{at}", {})
             self.relationship_payloads[name] = payload

@@ -78,7 +78,7 @@ from orvex.semantic.correctness.materialization import Candidate, candidates
 from orvex.semantic.correctness.report import CorrectnessReport, Obligation, make_report
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
-from orvex.semantic.policies import PolicyModel, read_caller
+from orvex.semantic.policies import PolicyModel, read_caller, unseen
 from orvex.semantic.policies.caller import Caller
 from orvex.semantic.policies.placement import Placement, place
 from orvex.semantic.query.binding import BoundQuery
@@ -316,7 +316,7 @@ class _Analysis:
         self.policies = policies
         self.caller = caller
         self.groups = tuple(caller.groups)
-        self.graph = Graph(compiled)
+        self.graph = Graph(compiled, unseen(compiled, policies, self.groups))  # as their catalog
         self.payloads = {
             e.pointer.rsplit("/custom_extensions/", 1)[0]: e.payload
             for e in compiled.ossie.product_extensions
@@ -489,8 +489,7 @@ class _Analysis:
         return axis, behavior
 
     def entity_fields(self, axes: list[Mapping[str, Any]], home: str) -> set[str] | None:
-        """The fields of the entity the metric adds across: from the dataset's `entity_keys`,
-        or the columns of a many-to-one relationship to the dataset of that entity."""
+        """The added-across entity's fields: `entity_keys`, else a usable relationship's columns."""
         names = [str(a["entity"]) for a in axes if "entity" in a]
         if len(names) != 1:
             return None
@@ -502,7 +501,8 @@ class _Analysis:
         for relationship in relationships if isinstance(relationships, tuple) else ():
             target = sql.normalize(str(relationship["to"]))
             if (
-                sql.normalize(str(relationship["from"])) == home
+                sql.normalize(str(relationship["name"])) in self.graph.relationship_names
+                and sql.normalize(str(relationship["from"])) == home
                 and self.graph.payloads.get(target, {}).get("entity") == names[0]
             ):
                 return {sql.normalize(str(c)) for c in relationship["from_columns"]}
