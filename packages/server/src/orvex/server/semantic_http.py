@@ -11,6 +11,8 @@ server opened, composed from `store`, `semantic` and `access`.
 - **The caller** comes from a `ContextSource`: in local mode, `access`'s one local Builder,
   only for a request the HTTP layer authenticated; in server mode, the session's user as the
   directory knows them at that request (`server_context`, #440). No CLI grant is used here.
+- **Audit (server mode, #443).** An answer whose policies withheld every row records why
+  (`semantic_audit`) before it is returned; nothing of the events reaches the response.
 - **JSON and Arrow carry the same answer** (Owner precision 3): the Arrow form is the result's
   own Arrow table, whose schema metadata also holds the JSON envelope (`semantic.envelope`)
   and the receipt view (`semantic.receipt`), byte for byte as in the JSON answer.
@@ -51,6 +53,7 @@ from orvex.server import evidence_records, lake_place, semantic_model
 from orvex.server.identity import Identity
 from orvex.server.permission_state import permission_state
 from orvex.server.project import Project, ProjectLoadError, load_project
+from orvex.server.semantic_audit import record_withheld
 from orvex.server.semantic_model import ExternalTables
 from orvex.store.errors import StoreError
 from orvex.store.json_encoding import arrow_to_json
@@ -123,11 +126,13 @@ class Settings:
 
 @dataclass(frozen=True)
 class Semantic:
-    """The semantic routes' composition: the source, the caller and the settings."""
+    """The semantic routes' composition: the source, the caller and the settings; in server
+    mode, the audit log the answers' events go to (#443). Local mode has none."""
 
     source: LakeSource
     context: ContextSource
     settings: Settings
+    audit: AuditLog | None = None
 
 
 DETAIL_PAGE_CAP = 10_000  # rows of one detail page at most
@@ -358,6 +363,8 @@ def ask(semantic: Semantic, body: bytes, request: object) -> Asked:
         question = _question(semantic, lake, body, request, lake.read)
         compiled = question.model.compiled
         found = answer(body, compiled, question.policies, question.context, question.engine)
+        if semantic.audit is not None:  # before the answer leaves (#443)
+            record_withheld(semantic.audit, found, question.context)
         viewer = CallerViewer(compiled, question.policies, question.context)
         return Asked(found, found.receipt.view(viewer))
 

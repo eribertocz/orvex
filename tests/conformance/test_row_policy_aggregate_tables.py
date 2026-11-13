@@ -140,8 +140,8 @@ def test_a_mapping_table_policy_on_the_grain_gives_the_base_answer(caller: str) 
     base = m.run(m.query("revenue"), m.SAMPLE, verified=False, **asked)  # type: ignore[arg-type]
     same(used, base)
     assert sorted({str(row[1]) for row in ce.rows_of(used)}) == MAPPED_ROWS[caller]
-    if caller == "unmapped":  # an allow-list without the caller: no row, no notice (only a
-        assert notices(used) == []  # deny-list's missing registration has one)
+    if caller == "unmapped":  # an allow-list without the caller: no row, and the notice
+        assert notices(used) == ["POLICY_MAPPING_MISSING"]  # (#443, Q1 = A), as on the base
     else:
         assert m.receipt_reads(used) == ["rollup"]
 
