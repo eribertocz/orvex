@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 import shutil
+from collections.abc import Iterator
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ import yaml
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
 from tests.conformance.test_security_scenarios import SEPARATOR
+from tests.support.fixtures import frozen
 from tests.support.security_engines import ask, served
 
 BASE = sf.fixture("direct-query", ce.VENDORS[0])
@@ -38,19 +40,22 @@ ENGINES = [("managed", ""), ("existing-ducklake", "sqlite"), ("existing-ducklake
 
 
 @pytest.fixture(scope="module")
-def found(tmp_path_factory: pytest.TempPathFactory) -> sf.Fixture:
+def found(tmp_path_factory: pytest.TempPathFactory) -> Iterator[sf.Fixture]:
     folder = Path(tmp_path_factory.mktemp("masked")) / "direct-query"
     shutil.copytree(BASE.folder, folder)
     policies = yaml.safe_load((folder / "security.yaml").read_text("utf-8"))
     policies["column_policies"] = COLUMNS
     (folder / "security.yaml").write_text(yaml.safe_dump(policies), "utf-8")
-    return dataclasses.replace(BASE, folder=folder)
+    for shared in frozen(folder):  # read-only while the module's tests share it
+        yield dataclasses.replace(BASE, folder=shared)
 
 
-def caller(user: str, groups: tuple[str, ...] = ()) -> dict[str, Any]:
+def caller(
+    user: str, groups: tuple[str, ...] = (), attributes: dict[str, Any] | None = None
+) -> dict[str, Any]:
     return {
         "kind": "security_context", "version": 1, "user": user, "project": "direct-query",
-        "role": "author", "groups": sorted(groups), "attributes": {},
+        "role": "author", "groups": sorted(groups), "attributes": attributes or {},
         "permission_fingerprint": "sha256:" + "0" * 64,
     }  # fmt: skip
 
@@ -117,10 +122,12 @@ def test_a_cell_condition_is_refused_before_any_read_off_the_managed_lake(
         "fields": [{"member": "outages.outage_id"}, {"member": "outages.minutes"}],
         "order": [{"by": "outages.outage_id", "direction": "asc"}],
         "page": {"size": "10"}}}  # fmt: skip
-    with served(found, engine, catalog) as place:
-        received = ask(found, place, request, caller("u-zone1"))
-        assert received.code is not None, received
-        assert received.rows is None
-        assert not place.reads
-    if engine == "clickhouse":
-        assert received.code == "POLICY_NOT_SUPPORTED_ON_ENGINE"
+    fits = {"zone_id": {"type": "text", "value": "Z1"}}  # the condition can run, or not
+    for context in (caller("u-zone1"), caller("u-zone1", attributes=fits)):
+        with served(found, engine, catalog) as place:
+            received = ask(found, place, request, context)
+            assert received.code is not None, received
+            assert received.rows is None
+            assert not place.reads
+        if engine == "clickhouse":  # the existing DuckLake has no detail pages yet (P5-14)
+            assert received.code == "POLICY_NOT_SUPPORTED_ON_ENGINE"
