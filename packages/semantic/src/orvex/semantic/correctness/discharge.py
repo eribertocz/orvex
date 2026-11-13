@@ -709,9 +709,18 @@ def verify_physical(plan: Any, physical: Any) -> Evidence:  # noqa: ANN401
         if plan.page is None or not physical.sql.rstrip().endswith(f"LIMIT {plan.page + 1}"):
             raise DischargeError("the detail statement is not one page and one more row")
         for name, _ in plan.masks:  # its bound mask; read only under its own condition
-            mask = rf"CAST\(\$p[0-9]+ AS VARCHAR\)(?: END\))? AS {re.escape(_quote(name))}"
+            column = re.escape(_quote(name))
+            mask = rf"CAST\(\$p[0-9]+ AS VARCHAR\)(?: END\))? AS {column}"
+            shown = (  # the value only where its condition holds, the mask everywhere else
+                r"\(CASE WHEN COALESCE\(\((?:(?!CASE WHEN).)+\), FALSE\) THEN CAST\((?:(?!CASE "
+                rf"WHEN).)+ AS VARCHAR\) ELSE CAST\(\$p[0-9]+ AS VARCHAR\) END\) AS {column}"
+            )
             found = re.search(mask, physical.sql)
-            if found is None or (found.group(0).count("END") and not _conditional(plan, name)):
+            conditional = found is not None and "END" in found.group(0)
+            if found is None or (
+                conditional
+                and not (_conditional(plan, name) and re.search(shown, physical.sql, re.DOTALL))
+            ):
                 raise DischargeError("a masked field is read in the statement")
         if (plan.start is not None) != (' AS "d" WHERE ' in physical.sql):
             raise DischargeError("the page does not start where its cursor says")

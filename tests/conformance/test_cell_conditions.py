@@ -227,3 +227,15 @@ def test_a_statement_reading_a_masked_field_without_its_policy_condition_never_r
     report = replace(found.plan.report, policies=plain)
     with pytest.raises(DischargeError, match="a masked field is read"):
         verify_physical(replace(found.plan, report=report), found.physical)
+
+
+def test_a_conditional_read_not_in_its_guarded_form_never_runs() -> None:
+    context = caller("u-zone1", zone_id=zone("Z2"))
+    with sf.managed_lake(FOUND) as lake:
+        found = answer(json.dumps(detail("readings.reading_id", "readings.kwh")), FOUND.compiled,
+                       POLICIES, context, ce.engine_for(lake))  # fmt: skip
+    sql = found.physical.sql
+    assert "CASE WHEN COALESCE((" in sql
+    unguarded = sql.replace("CASE WHEN COALESCE((", "CASE WHEN TRUE OR ((", 1)
+    with pytest.raises(DischargeError, match="a masked field is read"):
+        verify_physical(found.plan, replace(found.physical, sql=unguarded))

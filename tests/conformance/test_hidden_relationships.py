@@ -19,8 +19,10 @@ from orvex.semantic.catalog.building import catalog_for_context
 from orvex.semantic.compiler.compiled import compile_model
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import answer
+from orvex.semantic.explanation import explain
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies import PolicyModel, read_policies
+from orvex.semantic.receipt.viewer import CallerViewer
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
@@ -165,3 +167,46 @@ def _decided(model: PolicyModel, copy: str, lake: Any) -> set[tuple[str, bool]]:
             assert (name in listed) == (code is None), (copy, groups, name)
             decided.add((name, code is None))
     return decided
+
+
+ROLE_QUESTIONS = {
+    "aggregate": {"kind": "semantic_query", "version": 1, "mode": "aggregate",
+                  "metrics": [{"metric": "total_kwh"}],
+                  "group_by": [{"member": "meters.model", "role": "meter"}]},
+    "detail": {"kind": "semantic_query", "version": 1, "mode": "detail",
+               "fields": [{"member": "readings.reading_id"},
+                          {"member": "meters.model", "role": "meter"}],
+               "order": [{"by": "readings.reading_id", "direction": "asc"}],
+               "page": {"size": "10"}},
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("how", ["question", "explain"])
+@pytest.mark.parametrize("shape", sorted(ROLE_QUESTIONS))
+def test_naming_an_unseen_relationship_as_a_role_is_as_naming_one_never_declared(
+    shape: str, how: str
+) -> None:
+    """A role is a relationship's name: one the caller cannot use is refused as an unknown
+    name, before any later check could tell it exists (Reviewer finding, #442)."""
+    other = without("meter")
+
+    def refused(model: PolicyModel, compiled: Any) -> tuple[str, dict[str, Any]]:  # noqa: ANN401
+        context = caller()
+        document = json.dumps(ROLE_QUESTIONS[shape])
+        viewer = CallerViewer(compiled, model, context)
+        with sf.managed_lake(FOUND) as lake:
+            engine = ce.engine_for(lake)
+            try:
+                if how == "explain":
+                    explain(document, compiled, model, context, engine, viewer)
+                else:
+                    answer(document, compiled, model, context, engine)
+            except SemanticError as error:
+                return error.code, dict(error.details)
+        raise AssertionError("not refused")
+
+    hidden = refused(policies(UTILITY), FOUND.compiled)
+    assert hidden == refused(policies(UTILITY, other), other)
+    assert hidden == ("MEMBER_NOT_FOUND", {"member": "meter"})
+    seen = outcome(ROLE_QUESTIONS[shape], policies(UTILITY), caller(("engineering", "management")))
+    assert seen[0] is None  # the role works for a caller who may use it

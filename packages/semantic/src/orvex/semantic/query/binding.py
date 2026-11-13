@@ -1,9 +1,9 @@
 """Binding: from a `semantic-query` v1 text to one canonical, typed `BoundQuery` (P2-05b, #283).
 
-`bind_query(model, query, *, instant, limits, hidden)` returns a `BoundQuery` or raises
+`bind_query(model, query, *, instant, limits, hidden, unseen)` returns a `BoundQuery` or raises
 `SemanticError`. `instant` is the timezone-aware query instant supplied by `server`; the host
-clock is never read. `limits` holds the project's caps. `hidden` tells which members the
-caller may not see (P2-11).
+clock is never read. `limits` holds the project's caps. `hidden` tells which members, `unseen`
+which relationships (roles), the caller may not see (P2-11, #442), as if never declared.
 
 **Steps, in order.** A failing step stops binding and reports all its problems, or the first in
 document order for codes that name one thing.
@@ -264,7 +264,7 @@ def _items(node: object, key: str) -> list[Json]:
 
 
 class _Model:
-    def __init__(self, compiled: CompiledModel) -> None:
+    def __init__(self, compiled: CompiledModel, unseen: frozenset[str] = frozenset()) -> None:
         self.compiled = compiled
         ossie = compiled.ossie
         payloads = {
@@ -277,7 +277,7 @@ class _Model:
         document = ossie.document
         self.relationships = {
             sql.normalize(str(r["name"])) for r in _items(document, "relationships")
-        }
+        } - unseen
         self.datasets: dict[str, Json] = {}
         self.dataset_names: dict[str, str] = {}
         self.keys: dict[str, list[str]] = {}
@@ -403,14 +403,14 @@ def bind_query(
     instant: datetime,
     limits: Limits,
     hidden: Callable[[MemberId], bool],
+    unseen: frozenset[str] = frozenset(),
 ) -> BoundQuery:
-    """`hidden` tells which members the caller may not see (P2-11, #310), and is required: each
-    is refused as `MEMBER_NOT_FOUND` with the caller's own text, exactly like a member that
-    does not exist, before any other check can say more about it."""
+    """`hidden` (required, P2-11, #310) and `unseen` (#442) are refused as `MEMBER_NOT_FOUND` with
+    the caller's own text, exactly like a name that does not exist, before any other check."""
     if instant.tzinfo is None or instant.utcoffset() is None:
         raise ValueError("the query instant must be timezone-aware")
     document = _decode(query)
-    names = _Model(model)
+    names = _Model(model, unseen)
     resolved = _resolve_names(document, names, hidden)
     _check_kinds(document, names, resolved)
     windows = _relative_windows(document, names, resolved, instant)
