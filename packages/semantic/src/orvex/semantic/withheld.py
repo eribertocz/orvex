@@ -4,7 +4,7 @@ no mapping (`POLICY_MAPPING_MISSING`), read at the question's own snapshot.
 
 The statement already gives such a policy's rows as none; this only says why, for the notice
 and for the audit event `server` records (`dataset`, `policy`). A caller has no mapping when:
-- a deny-list's `registration` does not list them (a count of its rows for the caller);
+- a policy's `registration` does not list them (a count of its rows for the caller);
 - or the policy's predicate is, or is a conjunction holding, a mapping subquery (`IN (SELECT
   ...)` or `EXISTS`, not negated) that has no row for the caller: its condition is then false
   for every row. A subquery that reads the restricted row cannot be evaluated apart: on a
@@ -65,9 +65,10 @@ def withheld(
         restriction = rules[name]
         if restriction.no_rows:
             continue
-        if restriction.rule.registration is not None:
-            empty = not _registered(plan, restriction, run)
-        elif not (nodes := _positive(restriction.rule.predicate)):
+        nodes = _positive(restriction.rule.predicate)
+        if restriction.rule.registration is not None and not _registered(plan, restriction, run):
+            empty = True
+        elif not nodes:
             empty = False
         elif values is not None:
             empty = any(n in values and not values[n].values for n in nodes)

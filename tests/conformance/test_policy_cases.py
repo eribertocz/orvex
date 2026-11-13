@@ -57,6 +57,12 @@ def expected_rows(text: str) -> tuple[list[str], list[list[str | None]]]:
     return lines[0], [[None if v == "NULL" else v for v in row] for row in lines[1:]]
 
 
+# Cases whose caller two policies withhold rows from, each with its own notice (#443): SEC-DQ-001
+# (an allow-list without a row, a deny-list without a registration) and SEC-MISSING-003 (the
+# `readings` and `consumers` allow-lists). Their control callers get none.
+REPEATED = {"SEC-DQ-001": 2, "SEC-MISSING-003": 2}
+
+
 def check(received: Received, expect: Mapping[str, Any], label: str) -> None:
     outcome = expect["outcome"]
     if outcome == "error":
@@ -78,13 +84,12 @@ def check(received: Received, expect: Mapping[str, Any], label: str) -> None:
     if outcome == "absent":  # a catalog that omits these members entirely
         assert not set(expect["members"]) & received.members, (label, received.members)
     assert outcome in {"rows", "zero-rows", "error", "contains", "absent"}, (label, outcome)
-    # Exact on codes: the notice the case names (or lists among the texts it must contain), or
-    # none. One per policy that withholds rows, so a code may repeat (#443: an allow-list and a
-    # deny-list that both leave the caller without a mapping).
-    named = {expect["notice"]} if "notice" in expect else set()
+    # Exact: the notice the case names (or lists among the texts it must contain), or none;
+    # once per policy that withholds rows, so a few cases name it more than once (`REPEATED`).
+    named = [expect["notice"]] * REPEATED.get(label, 1) if "notice" in expect else []
     if outcome == "contains":
-        named = {t for t in expect.get("text", ()) if t in received.notices}
-    assert set(received.notices) == named, (label, received.notices)
+        named = [t for t in expect.get("text", ()) if t in received.notices]
+    assert received.notices == named, (label, received.notices)
     leaked = sorted(set(expect.get("forbidden", ())) & tokens)
     assert not leaked, (label, leaked)
 

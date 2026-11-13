@@ -26,6 +26,7 @@ from orvex.contracts.store.v1 import StatementRequest
 from orvex.semantic.compiler.compiled import compile_model
 from orvex.semantic.execution import answer
 from orvex.semantic.ossie.reader import read
+from orvex.semantic.policies import read_policies
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
@@ -124,10 +125,9 @@ def test_every_engine_withholds_every_row_with_the_same_notices(
             assert grouped.rows == [], label  # no group: no row
             assert grouped.notices == notices, label
             totals = ask(found, place, TOTALS, context)
-            assert totals.code is None or engine == "clickhouse", (label, totals)
-            if totals.code is None:  # the grand total of no group: one row of empty values
-                assert totals.rows == [[None, *EMPTY]], label
-                assert totals.notices == notices, label
+            assert totals.code is None, (label, totals)
+            assert totals.rows == [[None, *EMPTY]], label  # the grand total of no group
+            assert totals.notices == notices, label
 
 
 @pytest.mark.parametrize("label", sorted(CALLERS))
@@ -198,3 +198,26 @@ def test_never_all_rows_whatever_the_attribute(found: sf.Fixture, user: str, zon
         received = ask(found, place, UNGROUPED, context)
     assert received.code is None, received
     assert received.rows == [EMPTY]
+
+
+def test_a_registered_policy_still_names_its_empty_allow_list(found: sf.Fixture) -> None:
+    """A policy with a `registration` and a positive mapping conjunct: a registered caller with
+    no mapping row is withheld by the conjunct, and named for it."""
+    both = {"version": 1, "row_policies": [{
+        "name": "zones", "dataset": "outages", "kind": "predicate",
+        "predicate": "zone_id IN (SELECT zone_id FROM security.user_zone WHERE user_id = $user_id)"
+                     " AND zone_id NOT IN (SELECT zone_id FROM security.blocked_zone"
+                     " WHERE user_id = $user_id)",
+        "registration": {"table": "security.registered", "key": "user_id"}}]}  # fmt: skip
+    policies = read_policies(yaml.safe_dump(both), found.compiled, groups=sf.GROUPS,
+                             managed_tables=found.managed)  # fmt: skip
+    with served(found, "managed", "") as place:
+
+        def held(user: str) -> tuple[list[list[Any]], list[str]]:
+            answered = answer(json.dumps(UNGROUPED["body"]), found.compiled, policies,
+                              caller(user), place.engine())  # fmt: skip
+            return ce.rows_of(answered), [w.policy for w in answered.withheld]
+
+        assert held("u-open") == ([EMPTY], ["zones"])  # registered, no mapping row
+        assert held("u-zone1") == ([["1", "1", "15.00", "15.00"]], [])  # registered and mapped
+        assert held("u-none") == ([EMPTY], ["zones"])  # not registered
