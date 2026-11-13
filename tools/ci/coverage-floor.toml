@@ -53,6 +53,7 @@
 "packages/access/src/orvex/access/storage/sqlite.py" = 86
 "packages/access/src/orvex/access/storage/store.py" = 100
 "packages/semantic/src/orvex/semantic/adapters/__init__.py" = 100
+"packages/semantic/src/orvex/semantic/adapters/cells.py" = 100
 "packages/semantic/src/orvex/semantic/adapters/clickhouse/__init__.py" = 100
 "packages/semantic/src/orvex/semantic/adapters/clickhouse/allowlist.py" = 95
 "packages/semantic/src/orvex/semantic/adapters/clickhouse/cost.py" = 100
@@ -80,6 +81,7 @@
 "packages/semantic/src/orvex/semantic/policies/caller.py" = 90
 "packages/semantic/src/orvex/semantic/policies/model.py" = 90
 "packages/semantic/src/orvex/semantic/policies/placement.py" = 88
+"packages/semantic/src/orvex/semantic/policies/relationships.py" = 100
 "packages/semantic/src/orvex/semantic/policies/predicate.py" = 92
 "packages/semantic/src/orvex/semantic/policies/strict_yaml.py" = 83
 "packages/store/src/orvex/store/arrow_exact.py" = 100
