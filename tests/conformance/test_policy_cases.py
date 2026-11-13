@@ -1,5 +1,6 @@
-"""The normative policy cases, run (#441, #442): every `semantic-query`, `catalog` and `explain`
-case of the `rows`, `columns`, `indirect-leakage` and `direct-query` areas that is not pending,
+"""The normative policy cases, run (#441, #442, #443): every `semantic-query`, `catalog` and
+`explain` case of the `rows`, `columns`, `indirect-leakage`, `direct-query` and
+`missing-attributes` areas that is not pending,
 on every engine it lists (each
 catalog of `lake.toml` for the existing DuckLake), with its caller and its control, against the
 fixture it is written for. The engines are served by `tests/support/security_engines.py`. On an
@@ -25,7 +26,7 @@ from conformance.runners import security_fixtures as sf
 from tests.conformance.test_security_scenarios import SEPARATOR, cases
 from tests.support.security_engines import Received, ask, served
 
-AREAS = frozenset({"rows", "columns", "indirect-leakage", "direct-query"})
+AREAS = frozenset({"rows", "columns", "indirect-leakage", "direct-query", "missing-attributes"})
 KINDS = frozenset({"semantic-query", "catalog", "explain"})
 
 
@@ -77,14 +78,13 @@ def check(received: Received, expect: Mapping[str, Any], label: str) -> None:
     if outcome == "absent":  # a catalog that omits these members entirely
         assert not set(expect["members"]) & received.members, (label, received.members)
     assert outcome in {"rows", "zero-rows", "error", "contains", "absent"}, (label, outcome)
-    # Exact: the notice the case names (or lists among the texts it must contain), or none.
-    named = [expect["notice"]] if "notice" in expect else []
+    # Exact on codes: the notice the case names (or lists among the texts it must contain), or
+    # none. One per policy that withholds rows, so a code may repeat (#443: an allow-list and a
+    # deny-list that both leave the caller without a mapping).
+    named = {expect["notice"]} if "notice" in expect else set()
     if outcome == "contains":
-        named = [t for t in expect.get("text", ()) if t in received.notices]
-    assert received.notices == named, (
-        label,
-        received.notices,
-    )
+        named = {t for t in expect.get("text", ()) if t in received.notices}
+    assert set(received.notices) == named, (label, received.notices)
     leaked = sorted(set(expect.get("forbidden", ())) & tokens)
     assert not leaked, (label, leaked)
 
@@ -108,13 +108,14 @@ def test_a_row_policy_case_holds_on_its_engine(name: str, engine: str, catalog: 
 
 
 def test_the_cases_this_module_runs_are_the_issues_cases() -> None:
-    """#441 AC2 and #442 AC1: the cases they took out of pending, and nothing else silently
-    dropped."""
+    """#441 AC2, #442 AC1 and #443 AC1: the cases they took out of pending, and nothing else
+    silently dropped."""
     taken = {n for n, e, _ in RUNNABLE if e not in cases()[n].get("pending_engines", {})}
     expected = {f"SEC-ROWS-00{i}" for i in range(1, 9)} | {"SEC-LEAK-001", "SEC-LEAK-002"}
     expected |= {f"SEC-DQ-00{i}" for i in range(1, 6)}
     expected |= {f"SEC-COLUMNS-00{i}" for i in range(1, 9)}  # #442
     expected |= {"SEC-LEAK-003", "SEC-LEAK-004"} | {f"SEC-LEAK-00{i}" for i in range(6, 10)}
+    expected |= {f"SEC-MISSING-00{i}" for i in range(1, 5)}  # #443
     assert expected <= taken
     for name, case in cases().items():
         if case["area"] in AREAS and case["request"]["kind"] in KINDS:

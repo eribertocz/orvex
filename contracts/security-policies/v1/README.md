@@ -38,6 +38,8 @@ A quoted scalar is text. A plain `true` or `false` is a boolean, a plain decimal
 - **Deny-lists** (`NOT IN`, `NOT EXISTS`, or either under `NOT`) over a mapping table must declare `registration: {table, key, attribute?}`. It names the managed-lake table that lists the registered callers: `key` holds the caller's `attribute`, `user_id` by default.
   - The registration adds no value to the policy's value set.
   - A caller absent from it sees zero rows, with the notice `POLICY_MAPPING_MISSING` (ADR-0027 §6; Owner decision of 2026-11-02, #123).
+- **Allow-lists** (`IN (SELECT …)` or `EXISTS`, not negated) whose subquery has no row for the caller, as the whole predicate or one conjunct of a top-level `AND`, give zero rows **with** the notice `POLICY_MAPPING_MISSING` too (#443, Q1 = A). The subquery is read on the managed lake at the question's own snapshot. A subquery that reads the restricted row cannot be read apart: its rows are still none where they should be, with no notice. A mapping row whose value is `NULL` is a row: no notice.
+- **Audit (server mode, #443).** Each answer with one of these notices, or `POLICY_ATTRIBUTE_MISSING`, records `policy.mapping_missing` or `policy.attribute_missing` (`audit-event` v1: dataset, policy, receipt; never a value) before it is returned. If the event cannot be recorded, the empty answer is still returned and the failure is counted and logged, naming nothing protected.
 
 ### The predicate grammar
 A closed subset of SQL, refused outside it (`POLICY_INVALID`, rule `predicate`). It may read:

@@ -156,7 +156,7 @@
 | P3-08 | Column policies: visible, masked, hidden, with the masking rules of `security.md` §3.3 | semantic |
 | P3-09 | Fail-closed on missing attributes: zero rows, `POLICY_ATTRIBUTE_MISSING` notice, audit event | semantic |
 | P3-10 | Result cache keyed by permission fingerprint; invalidation by run records across workers (PostgreSQL `LISTEN`/`NOTIFY` in server mode); per-dataset settings; for datasets outside the managed lake, the key of ADR-0027 §7 with mapping- and registration-table snapshots checked on every lookup | semantic |
-| P3-11 | Role enforcement on every HTTP route; per-role query limits and asynchronous queries | server |
+| P3-11 | Role enforcement on every HTTP route; per-role query limits and asynchronous queries; the `query` audit event for every semantic query (`security.md` §4), through the recording path of P3-09 (#443, Q2) | server |
 | P3-12 | Administration API and CLI: users (instance administrator), memberships and groups (project Builder) | server |
 | P3-13 | Security conformance runner over the scenarios, as a required check, on the managed lake and on every enabled Direct Query engine (ADR-0027 §6) | conformance |
 | P3-14 | Property-based non-broadening tests | semantic |

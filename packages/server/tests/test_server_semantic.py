@@ -86,8 +86,12 @@ class Server:
             self.contexts.append((policy_fingerprint, mapping_snapshot))
             return built(request, policy_fingerprint, mapping_snapshot)
 
+        self.audit = audit
         semantic = semantic_http.Semantic(
-            served_project(tmp_path, IDENTITY), context, semantic_http.session_settings()
+            served_project(tmp_path, IDENTITY),
+            context,
+            semantic_http.session_settings(),
+            audit,  # server mode records the answers' events (#443)
         )
         self.app = create_server_app(
             VERSIONS,

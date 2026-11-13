@@ -30,7 +30,6 @@ import pyarrow as pa
 import pyarrow.compute as pc
 from orvex.contracts.store.v1 import StatisticsRequest, StatisticsResult
 from orvex.semantic import zonedata
-from orvex.semantic.adapters.dialect import quote
 from orvex.semantic.adapters.duckdb import (
     MappingQuery,
     PhysicalQuery,
@@ -76,6 +75,7 @@ from orvex.semantic.result.cursors import (
     verify_cursor,
 )
 from orvex.semantic.result.descriptors import arrow_type
+from orvex.semantic.withheld import Withheld, withheld
 
 BATCH_SIZE = 65_536
 
@@ -123,6 +123,8 @@ class Answer:
     report: CorrectnessReport
     plan: SemanticPlan
     physical: PhysicalQuery
+    # The policies that withheld every row, for `server`'s audit events only (#443).
+    withheld: tuple[Withheld, ...] = ()
 
 
 def _plain(value: object) -> Any:  # noqa: ANN401 - a JSON document
@@ -411,6 +413,7 @@ def _execute(
     clock = engine.clock()
     run: Run | None = None
     resolved: list[MappingQuery] = []
+    values: dict[int, PolicyValues] | None = None
     if external is not None:
         # The policies' values first, on the managed lake: a refusal asks nothing of the other
         # engine. Then its version, fixed once for every read of the question.
@@ -424,14 +427,10 @@ def _execute(
         _check_zones(physical, _managed(engine), getattr(engine.read, "__self__", engine.read))
     placement = plan_.placement
     applied = dict(placement.applied) if placement is not None else {}
-    notices = [
-        SemanticError("POLICY_ATTRIBUTE_MISSING", {"policy": name})
-        for name, how in sorted(applied.items())
-        if how == "no_rows"
-    ]
-    for name in _unregistered(placement, engine):  # a deny-list caller absent: zero rows
-        applied[name] = "no_rows"
-        notices.append(SemanticError("POLICY_MAPPING_MISSING", {"policy": name}))
+    # Why a policy gives no row, its mappings read at this snapshot (#443).
+    held = withheld(plan_, lambda s, p: _managed(engine)(s, p), values)
+    applied.update((w.policy, "no_rows") for w in held)
+    notices = [SemanticError(w.code, {"policy": w.policy}) for w in held]
     snapshot = engine.snapshot.get("id")
     estimated = (  # an upper bound, recorded only: it never refuses (#352)
         estimate(plan_, physical, report.compiled, engine.statistics, snapshot)
@@ -538,43 +537,7 @@ def _execute(
         plan_fingerprint=plan_.fingerprint,
     )
     referenced = result.with_receipt(record.receipt_id, record.reproducibility["class"])
-    return Answer(referenced, record, report, plan_, physical)
-
-
-def _unregistered(placement: Any, engine: Engine) -> list[str]:  # noqa: ANN401
-    """The deny-list policies whose registration does not list the caller, by a count on the
-    question's own snapshot: the statement already gives their rows as none, this only says
-    why, with the notice `POLICY_MAPPING_MISSING`."""
-    if placement is None:
-        return []
-    from orvex.contracts.store.v1 import Parameter, ReadRequest
-
-    found: list[str] = []
-    rules = {r.rule.name: r for rs in placement.restrictions.values() for r in rs}
-    for name, restriction in sorted(rules.items()):
-        registration = restriction.rule.registration
-        if registration is None or restriction.no_rows:
-            continue
-        key = str(registration.get("attribute", "user_id"))
-        attribute = placement.attributes[key]  # present and of a fitting type, or no_rows
-        table = ".".join(quote(part) for part in str(registration["table"]).split("."))
-        column = quote(str(registration["key"]))
-        value = {"name": "p0", "type": "VARCHAR", "value": str(attribute[1])}
-        request = ReadRequest(
-            kind="read",
-            sql=(
-                f'SELECT count(*) AS "#registered" FROM {table}'
-                f" WHERE CAST({column} AS VARCHAR) = $p0"
-            ),
-            parameters=[Parameter.model_validate(value)],
-            snapshot=int(str(engine.snapshot["id"])),
-            batch_size=BATCH_SIZE,
-            timeout_ms=engine.timeout_ms,
-        )
-        counted = engine.read(request).read_all()
-        if not pc.max(counted.column("#registered")).as_py():  # one scalar: a count
-            found.append(name)
-    return found
+    return Answer(referenced, record, report, plan_, physical, tuple(held))
 
 
 def _written(compiled: CompiledModel, dataset: str) -> str:
