@@ -14,7 +14,9 @@ is answered without reading again.
   (`cache: hit`, sealed anew) exactly as a miss does: no token is ever handed out twice.
 - **Off** for a question reading a dataset with `cache.enabled: false`, or any data without a
   retained version (a live engine): `bypass`. A dataset's `cache.ttl` expires an entry; a
-  `ttl` in years or months has no fixed length, so its datasets are not cached.
+  `ttl` in years or months has no fixed length, and one of zero keeps nothing, so their
+  datasets are not cached. Resource settings (the memory limit, the timeout) are not in the
+  key: they bound the process, not the answer.
 - **Bounds.** One cache per process, least recently used first out, bounded in bytes; an
   entry over a sixteenth of the bound is not kept. Validity never depends on a message: an
   entry from an earlier snapshot is simply never matched again.
@@ -140,7 +142,7 @@ def use_of(
             return Use(None, None)
         if "ttl" in found:
             seconds = _seconds(str(found["ttl"]))
-            if seconds is None:
+            if not seconds:  # no fixed length, or zero: never kept
                 return Use(None, None)
             ttls.append(seconds)
     key = fingerprint(

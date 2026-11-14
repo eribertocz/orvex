@@ -376,9 +376,15 @@ class Received:
     members: frozenset[str] = frozenset()  # a catalog's fields and metrics, `dataset.field`
 
 
-def ask(found: sf.Fixture, place: Served, request: Mapping[str, Any], caller: Any) -> Received:  # noqa: ANN401
+def ask(
+    found: sf.Fixture,
+    place: Served,
+    request: Mapping[str, Any],
+    caller: Any,  # noqa: ANN401
+    whole: bool = False,
+) -> Any:  # noqa: ANN401 - a `Received`, or with `whole` also the `Answer`
     """The caller's answer to a case request: a `semantic-query`, the caller's `catalog`, or
-    the caller's `explain` of a query."""
+    the caller's `explain` of a query; with `whole`, a query's answer too (its receipt)."""
     policies = found.policies(caller["groups"])
     if request["kind"] == "catalog":
         document = catalog_for_context(found.compiled, policies, dict(caller))
@@ -406,13 +412,14 @@ def ask(found: sf.Fixture, place: Served, request: Mapping[str, Any], caller: An
         return Received(None, [], [], error.code, [text])
     envelope = got.result.envelope()
     view = got.receipt.view(CallerViewer(found.compiled, policies, caller))
-    return Received(
+    received = Received(
         ce.rows_of(got),
         [_column(c) for c in envelope["columns"]],
         [str(n["code"]) for n in envelope.get("notices", [])],
         None,
         [got.result.wire(arrow_to_json), json.dumps(view, default=str)],
     )
+    return (received, got) if whole else received
 
 
 def _column(column: Mapping[str, Any]) -> str:

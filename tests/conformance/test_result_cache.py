@@ -189,7 +189,9 @@ FEWER_ROWS = {**UTILITY, "row_policies": UTILITY["row_policies"][:1]}
 CHANGES: dict[str, Any] = {
     "another caller": lambda o, m: {"context": caller(o, m, "u-multi", ("management",))},
     "a lost group": lambda o, m: {"context": caller(o, m, "u-exempt")},
-    "an attribute": lambda o, m: {"context": caller(o, m, region="north")},
+    "an attribute": lambda o, m: {
+        "context": caller(o, m, "u-exempt", ("management",), region="north")
+    },
     "a mapping row": lambda o, m: commit(o, MAPPED),
     "a removed mapping row": lambda o, m: commit(o, UNMAPPED),
     "a policy": lambda o, m: {"model": policies(FEWER_ROWS)},
@@ -232,15 +234,16 @@ def test_every_change_misses_and_answers_as_without_the_cache(change: str) -> No
 
 # --- AC4: differential property ---------------------------------------------------------------
 
-STEPS = st.lists(
-    st.tuples(
-        st.sampled_from(["u-zone1", "u-exempt", "u-multi"]),
-        st.sampled_from([(), ("management",)]),
-        st.sampled_from([BY_ZONE, DETAIL]),
-        st.sampled_from([None, "mapping", "unmapping", "data", "unrelated"]),
-    ),
-    min_size=2,
-    max_size=6,
+STEP = st.tuples(
+    st.sampled_from(["u-zone1", "u-exempt", "u-multi"]),
+    st.sampled_from([(), ("management",)]),
+    st.sampled_from([BY_ZONE, DETAIL]),
+    st.sampled_from([None, None, None, "mapping", "unmapping", "data", "unrelated", "policy",
+                     "attribute", "engine"]),
+)  # fmt: skip
+# Each step is asked twice in a row, so every sequence holds questions a cache may answer.
+STEPS = st.lists(STEP, min_size=2, max_size=5).map(
+    lambda s: [x for step in s for x in (step, (*step[:3], None))]
 )
 COMMITS = {
     "mapping": "INSERT INTO security.user_zone VALUES ('u-zone1', 'Z3')",
@@ -255,22 +258,33 @@ COMMITS = {
 @given(steps=STEPS)
 def test_with_or_without_the_cache_every_answer_is_the_same(steps: list[Any]) -> None:
     model, cache = policies(), ResultCache()
+    attributes: dict[str, str] = {}
+    more: dict[str, Any] = {}
+    hits = 0
     with lake() as opened:
         for user, groups, document, change in steps:
-            if change is not None:
+            if change == "policy":
+                model = policies(FEWER_ROWS)
+            elif change == "attribute":
+                attributes = {"region": "north"}
+            elif change == "engine":
+                more = {"engine_version": "0.0.0-other"}
+            elif change is not None:
                 commit(opened, COMMITS[change])
-            context = caller(opened, model, user, groups)
+            context = caller(opened, model, user, groups, **attributes)
             try:
-                cached = ask(opened, cache, document, context, model)
+                cached = ask(opened, cache, document, context, model, **more)
             except SemanticError as error:
                 code = error.code
                 with pytest.raises(SemanticError) as without:
                     ask(opened, None, document, context, model)
                 assert code == without.value.code
                 continue
-            same(cached, ask(opened, None, document, context, model))
+            hits += origin(cached) == "hit"
+            same(cached, ask(opened, None, document, context, model, **more))
             viewer = CallerViewer(FOUND.compiled, model, context)
             assert verify_receipt(cached.receipt.view(viewer), cached.receipt, ce.SEAL_KEY, viewer)
+    assert hits >= 1  # every sequence repeats a question with nothing changed
 
 
 # --- AC5, AC6: bypass, expiry, refusals ----------------------------------------------------------
@@ -337,15 +351,35 @@ def test_the_cache_holds_no_more_than_its_bound_and_skips_an_oversize_answer() -
     model = policies()
     with lake() as opened:
         context = caller(opened, model, "u-exempt", ("management",))
-        sized = ask(opened, None, DETAIL, context, model)
-        cache = ResultCache(max_bytes=64 * 2**10)
-        for size in range(1, 6):
-            ask(opened, cache, {**DETAIL, "page": {"size": str(size)}}, context, model)
+        cache = ResultCache(max_bytes=16 * 1300)  # room for a few one-page answers only
+        pages = [{**DETAIL, "page": {"size": str(size)}} for size in range(1, 21)]
+        sizes = []
+        for page in pages * 2:  # more distinct answers than fit: the oldest are evicted
+            ask(opened, cache, page, context, model)
+            sizes.append(cache.size_bytes)
             assert cache.size_bytes <= cache.max_bytes
+        assert len(cache) < len(pages)  # some were evicted
+        recent = origin(ask(opened, cache, pages[-1], context, model))
+        oldest = origin(ask(opened, cache, pages[0], context, model))
+        assert (recent, oldest) == ("hit", "miss")  # the least recently used went first
         tiny = ResultCache(max_bytes=16 * 1024)  # a sixteenth: 1 KiB, less than any entry
         ask(opened, tiny, BY_ZONE, context, model)
         assert len(tiny) == 0
-        assert sized is not None
+        assert max(sizes) <= cache.max_bytes
+
+
+def test_a_read_that_fails_is_never_stored() -> None:
+    model, cache = policies(), ResultCache()
+
+    def failing(request: Any) -> Any:  # noqa: ANN401
+        raise StoreError("STORE_QUERY_FAILED", "simulated", {})
+
+    with lake() as opened:
+        context = caller(opened, model, "u-exempt", ("management",))
+        with pytest.raises(StoreError):
+            ask(opened, cache, BY_ZONE, context, model, read=failing)
+        assert len(cache) == 0
+        assert origin(ask(opened, cache, BY_ZONE, context, model)) == "miss"
 
 
 def test_parallel_identical_questions_give_equal_answers() -> None:

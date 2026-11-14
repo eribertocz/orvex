@@ -38,7 +38,7 @@ def run(
         change = step.get("change") if changes else None
         if change is not None:
             found = _change(found, place, change, removed)
-        caller = _context(found, place, step["caller"], removed)
+        caller = context_for(found, place, step["caller"], removed)
         answers.append(ask(found, place, step["request"], caller))
     return answers
 
@@ -73,7 +73,7 @@ def compile_with(found: sf.Fixture, edit: Callable[[dict[str, Any]], object]) ->
     return compile_model(loaded, found.catalog, ce.VENDORS)
 
 
-def _context(
+def context_for(
     found: sf.Fixture, place: Served, caller: Mapping[str, Any], removed: dict[str, set[str]]
 ) -> dict[str, Any]:
     """The caller's context for this step: from the case's caller, its removed groups gone, its

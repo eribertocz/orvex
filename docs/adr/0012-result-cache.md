@@ -20,4 +20,5 @@ The receipt reports cache usage; security tests verify no cross-permission reuse
 ## Amended by #444 (Owner decision of 2026-11-13, Q1 = A)
 - **Validity comes only from the key.** Each request pins the snapshot it reads, and the key holds exactly that snapshot (with the permission fingerprint built for the request), so an entry from an earlier snapshot is never matched. Run records are not broadcast: there is no `LISTEN`/`NOTIFY`, and no message whose loss could serve a stale result.
 - **Placement.** The cache sits after planning: every refusal and policy is decided anew per request, and only the read is skipped. A hit issues its own cursor and a freshly sealed receipt (`cache: hit`).
+- **Resource settings** (the engine's memory limit, the query timeout) are not in the key: they bound the process, not the answer. A hit may therefore answer a question that a read would now refuse for its budget.
 - **Consequence:** any commit, even to a table a question does not read, makes it miss once. Finer validity across commits would change the execution identity and is left for later, with its own proof.
