@@ -122,3 +122,12 @@ def audience_of(store: Store, request: ServerRequest) -> Audience:
         found = sql.user(transaction, request.user)
         role = sql.role(transaction, request.project, request.user)
     return "builder" if found is not None and found.active and role == "builder" else "other"
+
+
+def role_of(store: Store, request: ServerRequest) -> str | None:
+    """The caller's role in the project now, or None for an inactive user or one with no role
+    there: what authorization reads at each request (#445)."""
+    with store.transaction(read_only=True) as transaction:
+        found = sql.user(transaction, request.user)
+        role = sql.role(transaction, request.project, request.user)
+    return str(role) if found is not None and found.active and role is not None else None

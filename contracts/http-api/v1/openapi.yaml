@@ -38,16 +38,25 @@ paths:
   /api/v1/semantic/query:
     post:
       operationId: postSemanticQuery
-      summary: Answer a semantic question for the caller (local mode, P2-27a).
+      summary: Answer a semantic question for the caller (local mode, P2-27a; server mode, #445).
       description: >-
         The body is a `semantic-query` v1 document. The caller is authenticated by the serve
-        session (a session cookie or `Authorization: Bearer`; see `README.md`). A next detail
+        session (a session cookie or `Authorization: Bearer`) in local mode, by the server
+        session in server mode, where only a Builder or an Author asks (see `README.md`). With
+        `Prefer: respond-async` (RFC 7240) the question runs as a job: `202`, its `Location`
+        is `/api/v1/semantic/jobs/{job}`. A next detail
         page is answered on the snapshot its cursor pins, never on the current one. With
         `Accept: application/vnd.apache.arrow.stream` the answer is the result's Arrow form
         (`semantic-result` v1), whose schema metadata also holds `semantic.envelope` (the JSON
         form's envelope) and `semantic.receipt` (the receipt view), both as RFC 8785 bytes
         equal to the JSON answer's.
-      security: [{ session: [] }, { bearer: [] }]
+      security: [{ session: [] }, { bearer: [] }, { serverSession: [] }]
+      parameters:
+        - name: Prefer
+          in: header
+          required: false
+          description: "`respond-async`: run the question as a job (#445)."
+          schema: { type: string }
       requestBody:
         required: true
         content:
@@ -63,6 +72,62 @@ paths:
               schema: { $ref: "#/components/schemas/SemanticAnswer" }
             application/vnd.apache.arrow.stream:
               schema: { type: string, format: binary }
+        "202":
+          description: The job started for the caller; nothing of its answer yet.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+            Location:
+              description: The job's status resource.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SemanticJob" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/semantic/jobs/{job}:
+    parameters:
+      - name: job
+        in: path
+        required: true
+        description: The job's id, 32 hexadecimal digits.
+        schema: { type: string }
+    get:
+      operationId: getSemanticJob
+      summary: An asynchronous question's status, or its answer once done (#445).
+      description: >-
+        Only the job's owner (its user, in its project) finds it; anyone else, an unknown id
+        and a job past its 10 minutes get `404 SEMANTIC_JOB_NOT_FOUND` alike. A done job's
+        answer is delivered under the caller's permissions now: permissions changed since it
+        ran give `409 QUERY_RESULT_WITHDRAWN`, and nothing of the answer is sent. A failed job
+        gives the error the synchronous question would.
+      security: [{ session: [] }, { bearer: [] }, { serverSession: [] }]
+      responses:
+        "200":
+          description: >-
+            `running` or `cancelled` with no answer, or `done` with it; with `Accept:
+            application/vnd.apache.arrow.stream`, a done job's answer is its Arrow form.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SemanticJob" }
+            application/vnd.apache.arrow.stream:
+              schema: { type: string, format: binary }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteSemanticJob
+      summary: Cancel an asynchronous question (#445).
+      description: >-
+        The job ends `cancelled` at once and its slot is free; its running read is interrupted
+        and its answer is never delivered. A cancel of an ended job changes nothing.
+      security: [{ session: [] }, { bearer: [] }, { serverSession: [] }]
+      responses:
+        "200":
+          description: The job's status after the cancel.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SemanticJob" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/semantic/explain:
     post:
@@ -73,7 +138,7 @@ paths:
         `query` or `security` (an invalid query, an unknown or hidden member, a masked member,
         a cursor) are sent as errors, as `query` sends them; the plan's own refusals (category
         `correctness`, `budget` or `engine`) answer 200 with `outcome: refused`.
-      security: [{ session: [] }, { bearer: [] }]
+      security: [{ session: [] }, { bearer: [] }, { serverSession: [] }]
       requestBody:
         required: true
         content:
@@ -91,8 +156,8 @@ paths:
   /api/v1/semantic/catalog:
     get:
       operationId: getSemanticCatalog
-      summary: The members the caller may see (local mode, P2-27a).
-      security: [{ session: [] }, { bearer: [] }]
+      summary: The members the caller may see (local mode, P2-27a; server mode, #445).
+      security: [{ session: [] }, { bearer: [] }, { serverSession: [] }]
       responses:
         "200":
           description: The caller's `catalog` v1 document; hidden members are never listed.
@@ -266,6 +331,9 @@ components:
       A semantic route was asked without a live session cookie or the session's bearer token,
       or a bootstrap code that is spent, expired or wrong was presented.
     UNSUPPORTED_MEDIA_TYPE: A semantic `POST` whose body is not `application/json`.
+    SEMANTIC_JOB_NOT_FOUND: >-
+      No asynchronous job with this id for this caller: unknown, expired (kept 10 minutes),
+      lost in a restart, or another caller's (#445).
     PROJECT_BUSY: >-
       A run holds the project's lake; the `Retry-After` header says when to try again.
     PROJECT_INVALID: The project's settings (`project.yaml`) have problems.
@@ -427,6 +495,14 @@ components:
       properties:
         result: { x-contract: semantic-result/v1, description: "The result's JSON form." }
         receipt: { x-contract: receipt/v1, description: "The caller's view of its receipt." }
+    SemanticJob:
+      type: object
+      additionalProperties: false
+      required: [job, status]
+      properties:
+        job: { type: string, pattern: "^[0-9a-f]{32}$" }
+        status: { type: string, enum: [running, done, cancelled] }
+        answer: { $ref: "#/components/schemas/SemanticAnswer" }
     ErrorEnvelope:
       type: object
       additionalProperties: false

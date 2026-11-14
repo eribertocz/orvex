@@ -82,6 +82,7 @@ Each detail field is `public` or `builder` (`codes.json`).
 | `POLICY_MAPPING_MISSING` | notice | security | `policy` (builder) |
 | `POLICY_NOT_SUPPORTED_ON_ENGINE` | error | security | `dataset`, `policy` (builder), `reason` (builder) |
 | `QUERY_BUDGET_EXCEEDED` | error | budget | `budget`, `limit`, `estimate` (builder, optional) |
+| `QUERY_RESULT_WITHDRAWN` | error | security | `reason` (`permissions_changed`): the caller's permissions changed between computing the answer and delivering it, so nothing of it is sent (#445) |
 | `QUERY_INVALID` | error | query | `problems` (builder), `problems_omitted` (builder) |
 | `REAGGREGATION_NOT_ALLOWED` | error | correctness | `metric`, `class` |
 | `TEMPORAL_MATCH_NOT_UNIQUE` | error | correctness | `relationship` (builder), `violations` (builder) |

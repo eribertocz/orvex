@@ -115,6 +115,15 @@ export interface SemanticAnswer {
 }
 /**
  * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "SemanticJob".
+ */
+export interface SemanticJob {
+	job: string;
+	status: 'running' | 'done' | 'cancelled';
+	answer?: SemanticAnswer;
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
  * via the `definition` "ErrorEnvelope".
  */
 export interface ErrorEnvelope {

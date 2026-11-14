@@ -69,6 +69,8 @@ The **instance administrator** is an instance-level flag, not a project role: it
 | Export data | ✅ | ✅ | Configurable per dashboard (`export.viewers: true`, default `false`, in `dashboard.yaml`) |
 | Use MCP | ✅ | ✅ | Configurable per project (`mcp.viewers: true`, default `false`, in `project.yaml`) |
 
+Every HTTP route declares the permission it needs, and the server refuses to build with a route that declares none; a request is checked in the order authentication, origin, authorization, body (#445). Until P5-05, "certified metrics" for the explorer means every metric the caller's column policies let them see (#445, Q5). Each role also has a number of questions running at once and a run time, never a limit on rows (#445).
+
 ### 3.2 Page access
 
 ```yaml
@@ -119,7 +121,7 @@ column_policies:
 
 ## 4. Audit log
 
-- Records authentication events, page views, every semantic query (with its receipt, not raw values), exports, MCP calls, permission changes and model certifications.
+- Records authentication events, page views, every semantic query (with its receipt, not raw values), exports, MCP calls, permission changes and model certifications. A semantic answer is recorded before it is sent, and not sent when it cannot be, except one a row policy withheld whole (#443, #445). Server mode does not start without its audit log, verified against its anchors (#445).
 - Append-only, with a hash chain so tampering is detectable.
 - Retention configured by the user (default 2 years).
 

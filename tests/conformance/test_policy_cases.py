@@ -33,14 +33,18 @@ AREAS = frozenset(
     {"rows", "columns", "indirect-leakage", "direct-query", "missing-attributes", "cache"}
 )
 KINDS = frozenset({"semantic-query", "catalog", "explain", "sequence"})
+REVOKED = frozenset({"revocation", "direct-query"})  # sequences of questions with a revocation
 
 
 def _ours(case: Mapping[str, Any]) -> bool:
-    """A case this module runs: a single request of its areas, or a `cache` sequence (#444);
-    other areas' sequences (revocation, pages, exports) are #447's."""
+    """A case this module runs: a single request of its areas, a `cache` sequence (#444), or
+    a sequence of questions only with a revocation (SEC-REVOKE-003, SEC-DQ-020); other
+    sequences (pages, exports, asynchronous queries over HTTP) are #447's."""
     kind = case["request"]["kind"]
-    if kind == "sequence":
-        return bool(case["area"] == "cache")
+    if kind == "sequence":  # the cache's, and a revocation's made only of questions (#445)
+        steps = case["request"]["steps"]
+        questions = all(step["request"]["kind"] == "semantic-query" for step in steps)
+        return case["area"] == "cache" or (case["area"] in REVOKED and questions)
     return case["area"] in AREAS and kind in KINDS
 
 
@@ -152,7 +156,10 @@ def test_the_cases_this_module_runs_are_the_issues_cases() -> None:
     expected |= {f"SEC-COLUMNS-00{i}" for i in range(1, 9)}  # #442
     expected |= {"SEC-LEAK-003", "SEC-LEAK-004"} | {f"SEC-LEAK-00{i}" for i in range(6, 10)}
     expected |= {f"SEC-MISSING-00{i}" for i in range(1, 5)}  # #443
-    expected |= {f"SEC-CACHE-00{i}" for i in range(1, 5)}  # #444
+    expected |= {f"SEC-CACHE-00{i}" for i in range(1, 5)} | {
+        "SEC-REVOKE-003",
+        "SEC-DQ-020",
+    }  # #444, #445
     assert expected <= taken
     for name, case in cases().items():
         if _ours(case):
@@ -183,9 +190,11 @@ def test_a_pending_engine_refuses_before_any_read(name: str, engine: str, catalo
 
 def test_the_pending_engines_are_the_existing_lakes_detail_pages() -> None:
     """#441 (Owner, option A): only the existing DuckLake waits, for its detail pages (P5-14);
-    SEC-CACHE-004 asks a detail page too, so it waits there with them (#444)."""
+    SEC-CACHE-004 and SEC-DQ-020 ask a detail page too, so they wait there with them (#444,
+    #445)."""
     waiting = {(n, e): cases()[n]["pending_engines"][e] for n, e, _ in PENDING}
     assert waiting == {
         **{(f"SEC-DQ-00{i}", "existing-ducklake"): "P5-14" for i in range(1, 6)},
         ("SEC-CACHE-004", "existing-ducklake"): "P5-14",  # a detail page there (#444)
+        ("SEC-DQ-020", "existing-ducklake"): "P5-14",  # a detail page there (#445)
     }

@@ -122,6 +122,15 @@ class SemanticAnswer(BaseModel):
     """
 
 
+class SemanticJob(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    job: Annotated[str, Field(pattern="^[0-9a-f]{32}$")]
+    status: Literal["running", "done", "cancelled"]
+    answer: SemanticAnswer | None = None
+
+
 class ErrorEnvelope(BaseModel):
     model_config = ConfigDict(
         extra="forbid",

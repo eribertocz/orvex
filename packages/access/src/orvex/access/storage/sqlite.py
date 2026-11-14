@@ -257,6 +257,16 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
                 ON DELETE CASCADE
         ) STRICT""",
     ),
+    # 6: per-role query limits (#445): questions at once per user and project, and run time.
+    (
+        """CREATE TABLE query_limits (
+            role TEXT PRIMARY KEY NOT NULL CHECK (role IN ('builder', 'author', 'viewer')),
+            max_concurrent INTEGER NOT NULL CHECK (max_concurrent BETWEEN 1 AND 64),
+            max_run_ms INTEGER NOT NULL CHECK (max_run_ms BETWEEN 1000 AND 3600000)
+        ) STRICT""",
+        "INSERT INTO query_limits VALUES ('builder', 4, 120000), ('author', 2, 60000), "
+        "('viewer', 2, 30000)",
+    ),
 )
 
 

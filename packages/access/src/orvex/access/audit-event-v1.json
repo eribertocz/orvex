@@ -1130,7 +1130,10 @@
               "absolute_lifetime",
               "idle_lifetime",
               "public_origin",
-              "trusted_proxies"
+              "trusted_proxies",
+              "query_limits.builder",
+              "query_limits.author",
+              "query_limits.viewer"
             ]
           }
         }
@@ -1301,6 +1304,30 @@
       "properties": {
         "receipt": {
           "$ref": "#/$defs/Fingerprint"
+        },
+        "cache": {
+          "enum": [
+            "hit",
+            "miss",
+            "bypass"
+          ]
+        },
+        "mode": {
+          "enum": [
+            "aggregate",
+            "detail"
+          ]
+        },
+        "stage": {
+          "enum": [
+            "synchronous",
+            "executed",
+            "delivered"
+          ]
+        },
+        "job": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
         }
       }
     },

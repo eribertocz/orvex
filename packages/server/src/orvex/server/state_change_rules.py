@@ -9,7 +9,9 @@ forgery before any route runs.
 - The body must be `application/json`: no form or other simple request a page on another site
   could send.
 
-Each refusal is `ORIGIN_REFUSED`, naming the header that failed.
+Each refusal is `ORIGIN_REFUSED`, naming the header that failed. The origin rules run before
+authorization and the body type after it (#445: authentication, origin/CSRF, authorization,
+validation of the content, execution).
 """
 
 from __future__ import annotations
@@ -28,7 +30,15 @@ def changes_state(method: str) -> bool:
 def refusal(
     method: str, headers: Mapping[str, str], public_origin: str | None
 ) -> tuple[str, str] | None:
-    """The header that refuses a state change, and its value as shown; None when it may go on."""
+    """The header that refuses a state change, and its value as shown; None when it may go on:
+    its origin, then its body type."""
+    return origin_refusal(method, headers, public_origin) or content_refusal(method, headers)
+
+
+def origin_refusal(
+    method: str, headers: Mapping[str, str], public_origin: str | None
+) -> tuple[str, str] | None:
+    """The origin and CSRF step (#445 precision 1): `Origin` and `Sec-Fetch-Site`."""
     if not changes_state(method):
         return None
     origin = headers.get("origin")
@@ -37,6 +47,14 @@ def refusal(
     site = headers.get("sec-fetch-site")
     if site is not None and site.strip().lower() != "same-origin":
         return "sec-fetch-site", site[:_SHOWN]
+    return None
+
+
+def content_refusal(method: str, headers: Mapping[str, str]) -> tuple[str, str] | None:
+    """The validation of the content (#445 precision 1), after authorization: the body type.
+    A `DELETE` carries no body: no form or simple cross-site request can send one."""
+    if not changes_state(method) or method.upper() == "DELETE":
+        return None
     media = headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if media != JSON:
         return "content-type", media[:_SHOWN]

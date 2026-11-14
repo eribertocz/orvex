@@ -241,8 +241,24 @@ export interface InstanceSettingsChangedDetails {
 	 * @minItems 1
 	 */
 	settings: [
-		'absolute_lifetime' | 'idle_lifetime' | 'public_origin' | 'trusted_proxies',
-		...('absolute_lifetime' | 'idle_lifetime' | 'public_origin' | 'trusted_proxies')[]
+		(
+			| 'absolute_lifetime'
+			| 'idle_lifetime'
+			| 'public_origin'
+			| 'trusted_proxies'
+			| 'query_limits.builder'
+			| 'query_limits.author'
+			| 'query_limits.viewer'
+		),
+		...(
+			| 'absolute_lifetime'
+			| 'idle_lifetime'
+			| 'public_origin'
+			| 'trusted_proxies'
+			| 'query_limits.builder'
+			| 'query_limits.author'
+			| 'query_limits.viewer'
+		)[]
 	];
 }
 /**
@@ -318,6 +334,10 @@ export interface PolicyMappingMissingDetails {
  */
 export interface QueryDetails {
 	receipt: Fingerprint;
+	cache?: 'hit' | 'miss' | 'bypass';
+	mode?: 'aggregate' | 'detail';
+	stage?: 'synchronous' | 'executed' | 'delivered';
+	job?: string;
 }
 /**
  * This interface was referenced by `AuditEvent`'s JSON-Schema

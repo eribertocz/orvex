@@ -319,6 +319,14 @@
     },
     "optional": []
   },
+  "QUERY_RESULT_WITHDRAWN": {
+    "severity": "error",
+    "category": "security",
+    "details": {
+      "reason": "public"
+    },
+    "optional": []
+  },
   "REAGGREGATION_NOT_ALLOWED": {
     "severity": "error",
     "category": "correctness",

@@ -57,7 +57,7 @@ def server(tmp_path: Path) -> Server:
 def test_a_missing_attribute_records_one_event_and_the_caller_sees_none_of_it(
     server: Server, accept: str
 ) -> None:
-    ben = server.viewer("ben", "finance", tariff=None)
+    ben = server.author("ben", "finance", tariff=None)
     answer = ask_as(server.client("ben"), detail(10), accept)
     assert answer.status_code == 200, answer.text
     found = events(server, *KINDS)
@@ -87,7 +87,7 @@ def receipt_of(answer: Any) -> str:  # noqa: ANN401
 
 
 def test_each_page_and_question_records_its_own_event(server: Server) -> None:
-    server.viewer("ben", "finance", tariff=None)
+    server.author("ben", "finance", tariff=None)
     http = server.client("ben")
     first, second = ask(http, detail(1)), ask(http, aggregate())
     assert first.status_code == second.status_code == 200
@@ -98,9 +98,9 @@ def test_each_page_and_question_records_its_own_event(server: Server) -> None:
 def test_no_event_for_a_caller_with_the_attribute_an_explanation_or_an_exemption(
     server: Server,
 ) -> None:
-    server.viewer("ana", "finance")
-    server.viewer("ben", tariff=None)
-    server.viewer("cid", "auditors", tariff=None)  # exempt: the policy does not apply
+    server.author("ana", "finance")
+    server.author("ben", tariff=None)
+    server.author("cid", "auditors", tariff=None)  # exempt: the policy does not apply
     assert ask(server.client("ana"), detail(10)).status_code == 200
     explained = server.client("ben").post("/api/v1/semantic/explain", json=detail(10), headers=SAME)
     assert explained.status_code == 200, explained.text
@@ -120,7 +120,7 @@ def test_a_builder_sees_the_policy_in_the_notice_and_nothing_of_the_event(server
 
 def test_a_missing_mapping_records_its_event(tmp_path: Path) -> None:
     server = Server(tmp_path, MAPPED)
-    dee = server.viewer("dee", tariff=None)
+    dee = server.author("dee", tariff=None)
     answer = ask(server.client("dee"), aggregate())
     assert answer.status_code == 200, answer.text
     assert answer.json()["result"]["rows"] == []
@@ -133,7 +133,7 @@ def test_a_missing_mapping_records_its_event(tmp_path: Path) -> None:
 def test_an_unrecordable_event_still_returns_the_empty_answer_and_is_counted(
     server: Server, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    server.viewer("ben", "finance", tariff=None)
+    server.author("ben", "finance", tariff=None)
     http = server.client("ben")
     working = ask(http, detail(10)).json()
 
@@ -150,10 +150,13 @@ def test_an_unrecordable_event_still_returns_the_empty_answer_and_is_counted(
         document["result"].pop("receipt")
         document.pop("receipt")
     assert body == working
-    assert server.audit.unrecorded == before + 1
+    # Withheld (#443, the only exception, #445 precision 5): its `query` event and its policy
+    # event, each counted and logged once.
+    assert server.audit.unrecorded == before + 2
     lines = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
     assert lines == [
-        "audit: a policy.attribute_missing event of project project-1 could not be recorded"
+        "audit: a query event of project project-1 could not be recorded",
+        "audit: a policy.attribute_missing event of project project-1 could not be recorded",
     ]
     assert not {"ben", "readings", "by_tariff", "$tariff"} & {
         t for line in lines for t in SEPARATOR.split(line)

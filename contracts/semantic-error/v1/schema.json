@@ -176,6 +176,9 @@
       "$ref": "#/$defs/QueryBudgetExceededPublicError"
     },
     {
+      "$ref": "#/$defs/QueryResultWithdrawnError"
+    },
+    {
       "$ref": "#/$defs/QueryInvalidError"
     },
     {
@@ -333,6 +336,7 @@
         "POLICY_NOT_SUPPORTED_ON_ENGINE",
         "QUERY_BUDGET_EXCEEDED",
         "QUERY_INVALID",
+        "QUERY_RESULT_WITHDRAWN",
         "REAGGREGATION_NOT_ALLOWED",
         "TEMPORAL_MATCH_NOT_UNIQUE",
         "UNSUPPORTED_OPERATION",
@@ -3035,7 +3039,8 @@
             "result_rows",
             "matrix_cells",
             "time_ms",
-            "memory_bytes"
+            "memory_bytes",
+            "concurrent_queries"
           ]
         },
         "limit": {
@@ -3061,11 +3066,70 @@
             "result_rows",
             "matrix_cells",
             "time_ms",
-            "memory_bytes"
+            "memory_bytes",
+            "concurrent_queries"
           ]
         },
         "limit": {
           "$ref": "#/$defs/Count"
+        }
+      }
+    },
+    "QueryResultWithdrawnError": {
+      "description": "QUERY_RESULT_WITHDRAWN: every detail is public, so both audiences see them all.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "code",
+        "severity",
+        "category",
+        "audience",
+        "message",
+        "locale",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "const": "semantic_error"
+        },
+        "code": {
+          "const": "QUERY_RESULT_WITHDRAWN"
+        },
+        "severity": {
+          "const": "error"
+        },
+        "category": {
+          "const": "security"
+        },
+        "audience": {
+          "$ref": "#/$defs/Audience"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "locale": {
+          "$ref": "#/$defs/Locale"
+        },
+        "details": {
+          "$ref": "#/$defs/QueryResultWithdrawnDetails"
+        }
+      }
+    },
+    "QueryResultWithdrawnDetails": {
+      "description": "Details of QUERY_RESULT_WITHDRAWN: the caller's permissions changed between computing an answer and delivering it (#445), so nothing of it is sent; the reason says nothing about which permission changed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "reason": {
+          "enum": [
+            "permissions_changed"
+          ]
         }
       }
     },
