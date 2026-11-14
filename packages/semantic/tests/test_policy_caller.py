@@ -1,5 +1,6 @@
-"""#440: `$user_id` is the context's own user. It is bound from `user`, and an attribute of that
-name that names anyone else refuses the context, never read as either user."""
+"""The caller read from a `security-context` v1 document. #440: `$user_id` is the context's own
+user. It is bound from `user`, and an attribute of that name that names anyone else refuses the
+context, never read as either user. #448: a list attribute that repeats a value refuses it."""
 
 from __future__ import annotations
 
@@ -37,3 +38,13 @@ def test_user_id_is_the_contexts_own_user() -> None:
 def test_a_user_id_naming_anyone_else_is_refused(value: dict[str, Any]) -> None:
     with pytest.raises(InvalidContext):
         read_caller(context(user_id=value))
+
+
+def test_a_list_attribute_that_repeats_a_value_is_refused() -> None:
+    # #448 (P4c): `security-context` v1 says `uniqueItems`, which the generated types do not
+    # check; the reader does, so such a context is never read.
+    with pytest.raises(InvalidContext):
+        read_caller(context(zones={"type": "list", "values": ["Z1", "Z1"]}))
+    assert read_caller(context(zones={"type": "list", "values": ["Z1", "Z2"]})).attributes[
+        "zones"
+    ] == ("list", ("Z1", "Z2"))

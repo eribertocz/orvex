@@ -77,6 +77,8 @@ regressions = [
   "tests/properties/test_engine_oracle.py",
   "tests/properties/test_exact_properties.py",
   "tests/properties/test_multifact_materialization.py",
+  "tests/properties/test_parser_fuzzing.py",
+  "tests/properties/test_policy_broadening.py",
   "tests/properties/test_policy_properties.py",
 ]
 
