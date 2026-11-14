@@ -170,10 +170,13 @@ class Jobs:
                 record_unfinished(audit, user, project, job_id, status)
         except AccessError as refused:  # the event of an answer could not be recorded
             status, asked, error = "failed", None, refused
-        with job.lock:
-            job.status, job.asked, job.error = status, asked, error
-            job.ended, job.size = self._clock(), size
-        job.slot.release()
+        except Exception as unexpected:  # noqa: BLE001 - the job still ends, failed
+            status, asked, error, size = "failed", None, unexpected, 0
+        finally:
+            with job.lock:
+                job.status, job.asked, job.error = status, asked, error
+                job.ended, job.size = self._clock(), size
+            job.slot.release()  # whatever happened above: never a job left running
         return True
 
     def _collect(self) -> None:

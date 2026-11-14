@@ -313,3 +313,20 @@ def test_a_job_ended_with_no_answer_records_one_executed_event_with_its_end(
         }
     ]
     assert stub.slots.running(*OWNER) == 0
+
+
+def test_an_unexpected_failure_at_the_end_still_ends_the_job_and_frees_its_slot(
+    stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Broken(Asked):
+        @property
+        def found(self) -> Any:  # noqa: ANN401
+            raise RuntimeError("the answer cannot be measured")
+
+    answered_with(monkeypatch, Broken)
+    jobs = jobs_of(stub, clock, now)
+    job = jobs.start(b"{}", object(), OWNER)
+    found = jobs.status(job, OWNER)
+    assert found.status == "failed"
+    assert isinstance(found.error, RuntimeError)
+    assert stub.slots.running(*OWNER) == 0
