@@ -14,8 +14,8 @@ import pytest
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
-from tests.conformance.test_security_scenarios import SEPARATOR
-from tests.support.security_engines import ask, served
+from conformance.runners.security_cases import SEPARATOR
+from conformance.runners.security_engines import ask, served
 
 FOUND = sf.fixture("direct-query", ce.VENDORS[0])
 # id, zone, minutes: never null in this fixture

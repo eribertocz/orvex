@@ -15,6 +15,9 @@ of the attached instance afterwards. Every call takes the instance's one connect
   against them, and its views, which no dataset may read.
 - `latest` and `verify`: `ExistingLake`'s, taken in turn with the reads.
 
+A read the sandbox refuses (a file the lake names outside its location, such as a link swapped
+in after verification) is `STORE_SOURCE_INVALID` (`reason: file_refused`), never a failed query.
+
 The result of a read is held in memory before it is returned: the semantic engine reads every
 batch before it answers anyway (never a partial result).
 """
@@ -40,6 +43,7 @@ from orvex.store.nested_types import refuse_nested_uhugeint
 from orvex.store.sql_text import literal as _quote
 
 SNAPSHOT_CHANGED = "snapshot_changed"
+FILE_REFUSED = "file_refused"  # the sandbox refused a file the lake named
 
 
 class LakeReads:
@@ -170,6 +174,16 @@ class LakeReads:
                 if guard.reason is not None:
                     raise guard.error()
                 return result
+            except duckdb.PermissionException as error:
+                if guard.reason is not None:
+                    raise guard.error(error) from error
+                # The sandbox refused a file the lake named: one outside its location, reached
+                # through a link swapped in after verification for one (ADR-0027 §3).
+                raise StoreError(
+                    "STORE_SOURCE_INVALID",
+                    f"Connection {self._lake.name}: the lake named a file outside its location.",
+                    {"connection": self._lake.name, "reason": FILE_REFUSED},
+                ) from None
             except duckdb.Error as error:
                 raise guard.error(error) from error
             finally:

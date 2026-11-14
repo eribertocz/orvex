@@ -126,6 +126,7 @@ class SemanticErrorCode(
             "QUERY_INVALID",
             "QUERY_RESULT_WITHDRAWN",
             "REAGGREGATION_NOT_ALLOWED",
+            "STORE_SOURCE_INVALID",
             "TEMPORAL_MATCH_NOT_UNIQUE",
             "UNSUPPORTED_OPERATION",
             "UNSUPPORTED_OSSIE_VERSION",
@@ -172,6 +173,7 @@ class SemanticErrorCode(
         "QUERY_INVALID",
         "QUERY_RESULT_WITHDRAWN",
         "REAGGREGATION_NOT_ALLOWED",
+        "STORE_SOURCE_INVALID",
         "TEMPORAL_MATCH_NOT_UNIQUE",
         "UNSUPPORTED_OPERATION",
         "UNSUPPORTED_OSSIE_VERSION",
@@ -1683,6 +1685,65 @@ class ReaggregationNotAllowedError(BaseModel):
     details: ReaggregationNotAllowedDetails
 
 
+class StoreSourceInvalidDetails(BaseModel):
+    """
+    Details of STORE_SOURCE_INVALID, as a builder sees them.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    connection: Name
+    reason: Name
+
+
+class StoreSourceInvalidPublicDetails(BaseModel):
+    """
+    Details of STORE_SOURCE_INVALID for any other audience: its builder fields are left out.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    connection: Name
+
+
+class StoreSourceInvalidError(BaseModel):
+    """
+    STORE_SOURCE_INVALID as a builder sees it.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["STORE_SOURCE_INVALID"]
+    severity: Literal["error"]
+    category: Literal["engine"]
+    audience: Literal["builder"]
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: StoreSourceInvalidDetails
+
+
+class StoreSourceInvalidPublicError(BaseModel):
+    """
+    STORE_SOURCE_INVALID as any other audience sees it: the generic message and public details only.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["STORE_SOURCE_INVALID"]
+    severity: Literal["error"]
+    category: Literal["engine"]
+    audience: Literal["other"]
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: StoreSourceInvalidPublicDetails
+
+
 class TemporalMatchNotUniqueDetails(BaseModel):
     """
     Details of TEMPORAL_MATCH_NOT_UNIQUE, as a builder sees them.
@@ -2280,6 +2341,8 @@ class SemanticError(
         | QueryInvalidError
         | QueryInvalidPublicError
         | ReaggregationNotAllowedError
+        | StoreSourceInvalidError
+        | StoreSourceInvalidPublicError
         | TemporalMatchNotUniqueError
         | TemporalMatchNotUniquePublicError
         | UnsupportedOperationError
@@ -2349,6 +2412,8 @@ class SemanticError(
         | QueryInvalidError
         | QueryInvalidPublicError
         | ReaggregationNotAllowedError
+        | StoreSourceInvalidError
+        | StoreSourceInvalidPublicError
         | TemporalMatchNotUniqueError
         | TemporalMatchNotUniquePublicError
         | UnsupportedOperationError

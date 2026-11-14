@@ -46,9 +46,10 @@ class Fixture:
     rows: dict[str, Rows]  # every table's rows, in file order, `None` for `NULL`
     managed: dict[str, list[str]]  # the `security.*` tables the policies may read
     compiled: CompiledModel
+    policies_text: str | None = None  # `security.yaml` as a case's change left it
 
     def policies(self, groups: Iterable[str] = ()) -> PolicyModel:
-        text = (self.folder / "security.yaml").read_text("utf-8")
+        text = self.policies_text or (self.folder / "security.yaml").read_text("utf-8")
         return read_policies(
             text, self.compiled, groups=GROUPS | set(groups), managed_tables=self.managed
         )

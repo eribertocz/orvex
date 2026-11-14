@@ -64,3 +64,4 @@ control:
 engines:
 - existing-ducklake
 adr_0027: symbolic-link-swapped
+pending: P5-14

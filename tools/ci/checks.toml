@@ -655,6 +655,44 @@ permissions = { contents = "write", id-token = "write", attestations = "write" }
 setup = []
 
 [[job]]
+workflow = "security-scenarios.yml"
+job = "changes"
+kind = "check"
+digest = "228bc2b83b23ea5c"
+required = false
+contexts = ["security-scenarios-changes"]
+setup = []
+[[job.check]]
+name = "changes-security-scenarios"
+run = "python3 .github/workflows/scripts/changes.py"
+local = false
+reason = "reads the pull request's base and head commits in CI; its rules are tested by governance-scripts"
+
+[[job]]
+workflow = "security-scenarios.yml"
+job = "scenarios"
+kind = "scoped"
+digest = "d9fb769073c7c9a6"
+reason = "needs PostgreSQL, ClickHouse 26.10 and 26.8 LTS servers, the job's service and archive; the local tests run the same executions (tests/conformance/test_policy_cases.py)"
+paths = [".github/workflows/security-scenarios.yml", "packages/**", "contracts/**", "conformance/**", "docs/roadmap.md", "tools/**", "pylock.toml", "pyproject.toml"]
+setup = ["python -m pip install --quiet pip==26.3", "version=26.8.30.8"]
+
+[[job]]
+workflow = "security-scenarios.yml"
+job = "security-scenarios"
+kind = "check"
+digest = "decc6f9b8b05df00"
+# Required from P3-13 (#447, engineering.md §8): the P3 exit's security evidence.
+required = true
+contexts = ["security-scenarios"]
+setup = []
+[[job.check]]
+name = "security-scenarios"
+run = "python3 .github/workflows/scripts/aggregate.py"
+local = false
+reason = "reports the result of this run's CI jobs; its rules are tested by governance-scripts"
+
+[[job]]
 workflow = "semantic-corpus.yml"
 job = "semantic-corpus"
 kind = "check"

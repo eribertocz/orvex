@@ -15,8 +15,8 @@ from orvex.semantic.execution import answer
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
+from conformance.runners.security_cases import cases
 from tests.conformance.test_detail_rows import FORM
-from tests.conformance.test_security_scenarios import cases
 
 Document = dict[str, Any]
 FOUND = sf.fixture("utility", ce.VENDORS[0])

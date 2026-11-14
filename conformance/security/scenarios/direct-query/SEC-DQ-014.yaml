@@ -64,3 +64,4 @@ control:
 engines:
 - existing-ducklake
 adr_0027: location-registered-later
+pending: P5-14

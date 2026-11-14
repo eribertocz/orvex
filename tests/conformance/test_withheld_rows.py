@@ -30,8 +30,8 @@ from orvex.semantic.policies import read_policies
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
+from conformance.runners.security_engines import ask, served
 from tests.support.fixtures import frozen
-from tests.support.security_engines import ask, served
 
 BASE = sf.fixture("direct-query", ce.VENDORS[0])
 OWN_ZONE = {"name": "own_zone", "dataset": "outages", "kind": "predicate",

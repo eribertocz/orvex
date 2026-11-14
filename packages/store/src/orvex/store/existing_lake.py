@@ -36,7 +36,9 @@ Before the attach, and again each time a snapshot is verified, the lake must be 
 instance's protected set: no overlapping location, and no shared file system for a local data
 location or a SQLite catalog (`separation`). `verify` shows whether a snapshot may be served:
 every file it references lies under the data location, reached without a link, and is none of
-the protected files. The PostgreSQL role check also covers large objects and, while `dblink` or
+the protected files; a PostgreSQL catalog's role is checked minimal again (a privilege granted
+after the attach is refused too); a catalog that can no longer be read is `STORE_SOURCE_INVALID`
+(`latest_snapshot`). The PostgreSQL role check also covers large objects and, while `dblink` or
 `postgres_fdw` is installed, the cluster's other databases, and refuses `CREATE` on the database
 and the monitoring roles. On object storage the lake's credential must be its own
 (`separation.check_credentials`): there DuckDB's allow-list does not hold at read.
@@ -116,9 +118,9 @@ def privileges_sql(schema: str) -> str:
     """PostgreSQL SQL naming each kind of thing the session's login role can use beyond reading
     the catalog schema: superuser, a privileged built-in role, any privilege on a schema, table,
     view, sequence, function or foreign server elsewhere, any large object (or
-    `lo_compat_privileges`, which opens them all), `CONNECT` to another database of the cluster
-    while an extension that opens connections (`dblink`, `postgres_fdw`) is installed, or any
-    write in the catalog schema or database.
+    `lo_compat_privileges`, which opens them all, now or set for the sessions to come),
+    `CONNECT` to another database of the cluster while an extension that opens connections
+    (`dblink`, `postgres_fdw`) is installed, or any write in the catalog schema or database.
     Every role the login role (`session_user`) is a member of counts: code running with it can
     `SET ROLE` to any of them, or reset the role. `PUBLIC` counts too (`has_*_privilege`
     includes it). System catalogs (`pg_catalog`, `information_schema`, TOAST and temporary
@@ -174,6 +176,19 @@ def privileges_sql(schema: str) -> str:
         f"WHERE a.grantee {_EQ} m.oid OR a.grantee {_EQ} 0::pg_catalog.oid) "
         "UNION ALL SELECT 'large object' "
         f"WHERE pg_catalog.current_setting('lo_compat_privileges') {_EQ} 'on'::pg_catalog.text "
+        # Set for the database or a member role, it opens every large object to the sessions
+        # opened after it, which an attached lake's pool can open at any time (#447).
+        "UNION ALL SELECT 'large object' FROM pg_catalog.pg_db_role_setting AS s "
+        f"WHERE (s.setdatabase {_EQ} 0::pg_catalog.oid OR s.setdatabase {_EQ} (SELECT d.oid "
+        f"FROM pg_catalog.pg_database AS d WHERE d.datname {_EQ} pg_catalog.current_database())) "
+        f"AND (s.setrole {_EQ} 0::pg_catalog.oid OR s.setrole {_EQ} ANY (SELECT oid FROM member)) "
+        # PostgreSQL itself reads the value (`boolin` parses as the setting does: `t`, `y`,
+        # `on`, `1` and every unique prefix); a value that is not a boolean counts as on.
+        "AND EXISTS (SELECT FROM pg_catalog.unnest(s.setconfig) AS c(x) "
+        "WHERE pg_catalog.lower(pg_catalog.split_part(c.x, '=', 1)) "
+        f"{_EQ} 'lo_compat_privileges'::pg_catalog.text "
+        "AND (pg_catalog.lower(pg_catalog.split_part(c.x, '=', 2)) OPERATOR(pg_catalog.!~) "
+        "'^ *(of|off|f|fa|fal|fals|false|n|no|0) *$'::pg_catalog.text)) "
         "UNION ALL SELECT 'write in the catalog schema' FROM inside AS i, member AS m "
         "WHERE pg_catalog.has_schema_privilege(m.oid, i.oid, 'CREATE') "
         "UNION ALL SELECT 'write in the catalog schema' "
@@ -336,14 +351,7 @@ class ExistingLake:
                 {"connection": self.name, "duckdb": str(error)},
             ) from None
         self._require_session(CHECK)
-        found = self._postgres_rows(privileges_sql(self._schema))
-        if found:
-            raise StoreError(
-                "STORE_SOURCE_INVALID",
-                f"Connection {self.name}: the catalog's role can use more than the catalog schema "
-                f"({', '.join(found)}). Use a role that can read only that schema.",
-                {"connection": self.name, "kind": found[0]},
-            )
+        self._require_minimal_role(CHECK)
         version = self._postgres_rows(
             f'SELECT value AS v FROM "{self._schema}".ducklake_metadata '
             f"WHERE key {_EQ} 'version'::pg_catalog.text"
@@ -386,11 +394,24 @@ class ExistingLake:
                     {"connection": self.name, "kind": kind},
                 )
 
-    def _postgres_rows(self, sql: str) -> list[str]:
+    def _require_minimal_role(self, database: str) -> None:
+        """The catalog's role, through `database`, can use nothing beyond the catalog schema:
+        checked before the attach and again at each verification (a privilege can be granted
+        to it at any time)."""
+        found = self._postgres_rows(privileges_sql(self._schema), database)
+        if found:
+            raise StoreError(
+                "STORE_SOURCE_INVALID",
+                f"Connection {self.name}: the catalog's role can use more than the catalog schema "
+                f"({', '.join(found)}). Use a role that can read only that schema.",
+                {"connection": self.name, "kind": found[0]},
+            )
+
+    def _postgres_rows(self, sql: str, database: str = CHECK) -> list[str]:
         try:
             row = self._connection.execute(
                 "SELECT list(v ORDER BY v) FROM postgres_query($database, $sql)",
-                {"database": CHECK, "sql": sql},
+                {"database": database, "sql": sql},
             ).fetchone()
         except duckdb.Error as error:
             raise StoreError(
@@ -562,6 +583,8 @@ class ExistingLake:
         self._check_apart()
         if self._catalog is not None:
             self._check_sqlite_files(after_attach=True, keep=False)
+        else:  # the role as it stands now: a privilege granted since the attach is refused too
+            self._require_minimal_role(METADATA)
         protected = _protected_identities(self.name, self._protected_files)
         since_epoch = (snapshot.committed_at - _EPOCH) // dt.timedelta(microseconds=1)
         try:
@@ -691,10 +714,17 @@ class ExistingLake:
     def latest_snapshot(self) -> Snapshot:
         """The lake's latest snapshot, as its catalog lists it now; `verify` shows whether it may
         be served."""
-        row = self._connection.execute(
-            f"SELECT snapshot_id, epoch_us(snapshot_time) FROM ducklake_snapshots({_quote(LAKE)}) "
-            "ORDER BY snapshot_id DESC LIMIT 1"
-        ).fetchone()
+        try:
+            row = self._connection.execute(
+                f"SELECT snapshot_id, epoch_us(snapshot_time) "
+                f"FROM ducklake_snapshots({_quote(LAKE)}) ORDER BY snapshot_id DESC LIMIT 1"
+            ).fetchone()
+        except duckdb.Error as error:  # a catalog replaced or moved out of reach, for one
+            raise StoreError(
+                "STORE_SOURCE_INVALID",
+                f"Connection {self.name}: the lake's catalog could not be read.",
+                {"connection": self.name, "reason": "catalog_unreadable", "duckdb": str(error)},
+            ) from None
         if row is None:
             raise StoreError(
                 "STORE_SOURCE_INVALID", f"Connection {self.name}: the lake has no snapshot.", {}

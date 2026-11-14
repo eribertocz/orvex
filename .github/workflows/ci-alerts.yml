@@ -18,6 +18,7 @@ on:
       - contracts
       - python
       - semantic-corpus
+      - security-scenarios
       - web
       - labels
       - release

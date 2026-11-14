@@ -66,3 +66,4 @@ control:
 engines:
 - existing-ducklake
 adr_0027: reused-snapshot-ids
+pending: P5-14

@@ -43,6 +43,13 @@ required_jobs = ["semantic-corpus"]
 cadence = "push"
 
 [[watch]]
+# Whole on every push to main (#447); `scenarios` is the job that runs the cases.
+workflow = "security-scenarios.yml"
+events = ["push"]
+required_jobs = ["security-scenarios-changes", "scenarios", "security-scenarios"]
+cadence = "push"
+
+[[watch]]
 workflow = "web.yml"
 events = ["push"]
 required_jobs = ["web-check", "web-lint", "web-test", "web-build", "licenses"]

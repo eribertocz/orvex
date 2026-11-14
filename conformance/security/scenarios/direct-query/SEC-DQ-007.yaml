@@ -1,7 +1,7 @@
 id: SEC-DQ-007
 area: direct-query
-title: A macro in an existing lake is refused
-intent: A macro could run anything; the lake is not served.
+title: A macro in an existing lake is never called
+intent: 'A macro could run anything, so generated SQL qualifies every function and none resolves to the lake''s (ADR-0027 §3, no lake macros): the lake''s tables are served, and the macro never runs.'
 fixture: direct-query
 caller: &id001
   kind: security_context
@@ -26,7 +26,7 @@ request:
   - caller: *id001
     request:
       kind: semantic-query
-      body:
+      body: &id002
         kind: semantic_query
         version: 1
         mode: detail
@@ -40,14 +40,19 @@ request:
         page:
           size: '100'
 expect:
-  outcome: error
-  code: STORE_SOURCE_INVALID
+  outcome: rows
+  rows: 'outages.outage_id,outages.zone_id,outages.minutes
+
+    1,Z1,15.00
+
+    2,Z2,25.50
+
+    3,Z3,40.25
+
+    '
   forbidden:
   - Z9
   - '999.99'
-  - '15.00'
-  - '25.50'
-  - '40.25'
 control:
   caller: *id001
   outcome: rows
@@ -59,8 +64,24 @@ control:
 
     3,Z3,40.25
 
+    90,Z9,999.99
+
     '
-  without_changes: true
+  request:
+    kind: sequence
+    steps:
+    - caller: *id001
+      request:
+        kind: lake-change
+        change:
+          op: add_file
+          rows: foreign
+          where: inside_location
+    - caller: *id001
+      request:
+        kind: semantic-query
+        body: *id002
 engines:
 - existing-ducklake
 adr_0027: macro-in-lake
+pending: P5-14
