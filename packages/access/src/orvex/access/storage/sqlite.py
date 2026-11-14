@@ -267,6 +267,30 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         "INSERT INTO query_limits VALUES ('builder', 4, 120000), ('author', 2, 60000), "
         "('viewer', 2, 30000)",
     ),
+    # 7: the administration surfaces (#446): an opaque id for each OIDC link, so no subject is
+    # ever in a route, and each caller's budget of user lookups by name.
+    (
+        f"""CREATE TABLE oidc_identities_v7 (
+            issuer TEXT NOT NULL CHECK (length(issuer) BETWEEN 9 AND 512 AND issuer GLOB 'https://*'),
+            subject TEXT NOT NULL CHECK (length(subject) BETWEEN 1 AND 255),
+            provider TEXT NOT NULL CHECK (length(provider) BETWEEN 1 AND 32),
+            user_id TEXT NOT NULL REFERENCES users (id),
+            linked_at TEXT NOT NULL CHECK ({_EXACT_INSTANT.format(c="linked_at")}),
+            link_id TEXT NOT NULL UNIQUE
+                CHECK (length(link_id) = 32 AND link_id NOT GLOB '*[^0-9a-f]*'),
+            PRIMARY KEY (issuer, subject)
+        ) STRICT""",
+        "INSERT INTO oidc_identities_v7 SELECT issuer, subject, provider, user_id, linked_at, "
+        "lower(hex(randomblob(16))) FROM oidc_identities",
+        "DROP TABLE oidc_identities",
+        "ALTER TABLE oidc_identities_v7 RENAME TO oidc_identities",
+        "CREATE INDEX oidc_identities_user ON oidc_identities (user_id)",
+        f"""CREATE TABLE lookup_budgets (
+            user_id TEXT PRIMARY KEY NOT NULL REFERENCES users (id),
+            window_start TEXT NOT NULL CHECK ({_EXACT_INSTANT.format(c="window_start")}),
+            used INTEGER NOT NULL CHECK (used >= 1)
+        ) STRICT""",
+    ),
 )
 
 

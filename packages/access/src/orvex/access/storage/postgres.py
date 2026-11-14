@@ -269,6 +269,22 @@ def migrations_for(schema: str) -> tuple[tuple[str, ...], ...]:
             "INSERT INTO query_limits VALUES ('builder', 4, 120000), ('author', 2, 60000), "
             "('viewer', 2, 30000)",
         ),
+        # 7: an opaque id for each OIDC link, and each caller's budget of lookups (#446).
+        (
+            "ALTER TABLE oidc_identities ADD COLUMN link_id text",
+            "UPDATE oidc_identities "
+            "SET link_id = replace(CAST(gen_random_uuid() AS text), '-', '')",
+            "ALTER TABLE oidc_identities ALTER COLUMN link_id SET NOT NULL",
+            "ALTER TABLE oidc_identities ADD CONSTRAINT oidc_identities_link_id "
+            "CHECK (link_id ~ '^[0-9a-f]{32}$')",
+            "ALTER TABLE oidc_identities ADD CONSTRAINT oidc_identities_link_unique "
+            "UNIQUE (link_id)",
+            f"""CREATE TABLE lookup_budgets (
+                user_id text PRIMARY KEY REFERENCES users (id),
+                window_start text NOT NULL CHECK ({_INSTANT.format(c="window_start")}),
+                used bigint NOT NULL CHECK (used >= 1)
+            )""",
+        ),
     )
 
 

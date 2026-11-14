@@ -15,8 +15,10 @@ from orvex.access.authentication.service import SignIn
 from orvex.access.authentication.settings import Settings
 from orvex.access.directory import Bootstrap, Directory
 from orvex.access.directory.attributes import Attributes
+from orvex.access.directory.reads import DirectoryReads
 from orvex.access.storage import SqliteStore
 from orvex.server import semantic_http
+from orvex.server.admin_http import Administration
 from orvex.server.cli import served_project
 from orvex.server.server_app import ServedProject, create_server_app
 from orvex.server.sign_in_http import cookie_name
@@ -61,7 +63,9 @@ row_policies:
 
 
 class Server:
-    def __init__(self, tmp_path: Path, policies: str = POLICIES) -> None:
+    def __init__(
+        self, tmp_path: Path, policies: str = POLICIES, *, administration: bool = False
+    ) -> None:
         self.folder = tmp_path
         project(tmp_path, policies)
         self.mapping({})
@@ -69,10 +73,13 @@ class Server:
         store = SqliteStore(tmp_path / "access.sqlite")
         self.store = store
         audit = open_audit_log(store, tmp_path / "audit.key", tmp_path / "anchors.log")
-        self.admin = (
-            Bootstrap(store, tmp_path / "recovery.key", audit)
-            .create_administrator("root", "Root")
-            .id
+        first = Bootstrap(store, tmp_path / "recovery.key", audit).create_administrator(
+            "root", "Root"
+        )
+        self.admin = first.id
+        signed = SignIn(store, audit).login("root", first.temporary_password, "192.0.2.9")
+        SignIn(store, audit).change_password(
+            signed.session_id, first.temporary_password, PASSWORD, "192.0.2.9"
         )
         self.directory = Directory(store, audit)
         self.attributes = Attributes(store, audit)
@@ -103,6 +110,19 @@ class Server:
             settings,
             IDENTITY.slug,
             served=ServedProject("project-1", semantic, store),
+            administration=(
+                Administration(
+                    self.directory,
+                    DirectoryReads(store, audit),
+                    self.sign_in,
+                    self.attributes,
+                    None,
+                    frozenset({"project-1", "project-2"}),
+                    audit,
+                )
+                if administration
+                else None
+            ),
         )
         self.builder = self.person("builder")
         self.directory.add_membership(self.admin, "project-1", self.builder, "builder")

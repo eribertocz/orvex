@@ -36,6 +36,11 @@ def linked(oidc: Oidc, name: str = "ana", subject: str = "sub-ana") -> str:
     return user
 
 
+def link_of(oidc: Oidc, user: str) -> str:
+    (found,) = oidc.identities.links(oidc.world.admin, user)
+    return found.id
+
+
 def reason_of(oidc: Oidc) -> str:
     failed = [e for e in oidc.world.events() if e["kind"] == "auth.login_failed"]
     return str(failed[-1]["details"]["reason"])
@@ -244,7 +249,7 @@ def test_a_deactivated_linked_user_is_refused(oidc: Oidc) -> None:
 def test_a_link_or_unlink_ends_the_users_sessions(oidc: Oidc) -> None:
     ana = linked(oidc)
     session_id = oidc.sign_in_as("sub-ana").session_id
-    oidc.identities.unlink(oidc.world.admin, ana, "corp", "sub-ana")
+    oidc.identities.unlink(oidc.world.admin, ana, link_of(oidc, ana))
     with pytest.raises(AccessError):
         oidc.sign_in.session(session_id)
     assert refused(oidc, lambda: oidc.sign_in_as("sub-ana")) == "UNLINKED"
@@ -480,7 +485,7 @@ def test_an_unlink_between_the_checks_and_the_session_refuses_it(
 
     def then_unlinked(identity: object) -> object:
         user = read(identity)  # type: ignore[arg-type]
-        oidc.identities.unlink(oidc.world.admin, ana, "corp", "sub-ana")
+        oidc.identities.unlink(oidc.world.admin, ana, link_of(oidc, ana))
         return user
 
     monkeypatch.setattr(oidc.service, "_linked_user", then_unlinked)

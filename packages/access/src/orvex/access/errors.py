@@ -21,6 +21,18 @@ LAST_ADMINISTRATOR = "LAST_ADMINISTRATOR"
 USER_NAME_TAKEN = "USER_NAME_TAKEN"
 # A name, id or role outside the shapes the directory accepts.
 VALIDATION_FAILED = "VALIDATION_FAILED"
+# The administration surfaces (#446): a user, group or OIDC link that does not exist for this
+# caller. A user who is not a member of the caller's project is "not found" too, so nothing
+# tells another project's members apart from users who do not exist.
+USER_NOT_FOUND = "USER_NOT_FOUND"
+GROUP_NOT_FOUND = "GROUP_NOT_FOUND"
+IDENTITY_NOT_FOUND = "IDENTITY_NOT_FOUND"
+# A provider identity already linked to a user (#439 Q5: linked explicitly, once).
+IDENTITY_TAKEN = "IDENTITY_TAKEN"
+# A project the instance does not serve.
+PROJECT_NOT_SERVED = "PROJECT_NOT_SERVED"
+# A caller past their budget of user lookups by name (#446 precision 2).
+LOOKUP_LIMITED = "LOOKUP_LIMITED"
 # Sign-in (#438). A wrong password and an unknown user get the same refusal, in time as well.
 LOGIN_FAILED = "LOGIN_FAILED"
 # A sign-in during the delay that earlier failures set; the same for every account.
@@ -64,3 +76,18 @@ class AccessError(Exception):
         self.code = code
         self.message = message
         self.details: Mapping[str, str] = MappingProxyType(dict(details or {}))
+
+
+_NOT_FOUND = MappingProxyType(
+    {
+        USER_NOT_FOUND: "No such user.",
+        GROUP_NOT_FOUND: "No such group.",
+        IDENTITY_NOT_FOUND: "No such identity link.",
+        PROJECT_NOT_SERVED: "No such project.",
+    }
+)
+
+
+def not_found(code: str) -> AccessError:
+    """The one refusal for something that does not exist for this caller, with no details."""
+    return AccessError(code, _NOT_FOUND[code])

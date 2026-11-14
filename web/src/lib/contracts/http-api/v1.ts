@@ -124,6 +124,164 @@ export interface SemanticJob {
 }
 /**
  * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "AdminUser".
+ */
+export interface AdminUser {
+	id: string;
+	user_name: string;
+	display_name: string;
+	state: 'active' | 'deactivated';
+	administrator: boolean;
+	created_at: string;
+	changed_at: string;
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "UserPage".
+ */
+export interface UserPage {
+	users: AdminUser[];
+	/**
+	 * The next page's `after`; null at the end.
+	 */
+	after: string | null;
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "NewUserRequest".
+ */
+export interface NewUserRequest {
+	user_name: string;
+	display_name: string;
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "CreatedUser".
+ */
+export interface CreatedUser {
+	user: AdminUser;
+	/**
+	 * Shown once; expires at 24 h.
+	 */
+	temporary_password: string;
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "TemporaryPassword".
+ */
+export interface TemporaryPassword {
+	/**
+	 * Shown once; expires at 24 h.
+	 */
+	temporary_password: string;
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "AdministratorFlag".
+ */
+export interface AdministratorFlag {
+	value: boolean;
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "FoundUser".
+ */
+export interface FoundUser {
+	id: string;
+	display_name: string;
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "MemberList".
+ */
+export interface MemberList {
+	members: {
+		id: string;
+		user_name: string;
+		display_name: string;
+		state: 'active' | 'deactivated';
+		role: 'builder' | 'author' | 'viewer';
+	}[];
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "RoleAssignment".
+ */
+export interface RoleAssignment {
+	role: 'builder' | 'author' | 'viewer';
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "GroupRequest".
+ */
+export interface GroupRequest {
+	name: string;
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "GroupList".
+ */
+export interface GroupList {
+	groups: {
+		name: string;
+		members: string[];
+	}[];
+}
+/**
+ * A `security-context` v1 attribute: `value` for text, integer and boolean, `values` for a list.
+ *
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "AttributeValue".
+ */
+export interface AttributeValue {
+	type: 'text' | 'integer' | 'boolean' | 'list';
+	value?: string | boolean;
+	values?: string[];
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "AttributeList".
+ */
+export interface AttributeList {
+	/**
+	 * By name.
+	 */
+	attributes: {
+		name: string;
+		type: 'text' | 'integer' | 'boolean' | 'list';
+		value?: string | boolean;
+		values?: string[];
+	}[];
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "IdentityLinkRequest".
+ */
+export interface IdentityLinkRequest {
+	provider: string;
+	subject: string;
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "IdentityLinkCreated".
+ */
+export interface IdentityLinkCreated {
+	id: string;
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
+ * via the `definition` "IdentityLinks".
+ */
+export interface IdentityLinks {
+	identities: {
+		id: string;
+		provider: string;
+		subject: string;
+		linked_at: string;
+	}[];
+}
+/**
+ * This interface was referenced by `HttpApiV1`'s JSON-Schema
  * via the `definition` "ErrorEnvelope".
  */
 export interface ErrorEnvelope {

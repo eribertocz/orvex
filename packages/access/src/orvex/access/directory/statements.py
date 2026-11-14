@@ -43,6 +43,34 @@ def user_by_name(transaction: Transaction, user_name: str) -> User | None:
     return _user(found[0]) if found else None
 
 
+def users_after(transaction: Transaction, after: str, limit: int) -> list[User]:
+    """Up to `limit` users whose lower-case user name sorts after `after`, in that order."""
+    rows = transaction.rows(
+        f"{_USER} WHERE lower(user_name) > :after ORDER BY lower(user_name) LIMIT :limit",
+        after=after,
+        limit=limit,
+    )
+    return [_user(row) for row in rows]
+
+
+def members(transaction: Transaction, project: str) -> list[tuple[User, Role]]:
+    """The project's members and their roles, by user name."""
+    rows = transaction.rows(
+        "SELECT u.id, u.user_name, u.display_name, u.state, u.administrator, u.authz_version, "
+        "u.created_at, u.changed_at, m.role FROM memberships m JOIN users u ON u.id = m.user_id "
+        "WHERE m.project = :project ORDER BY lower(u.user_name)",
+        project=project,
+    )
+    return [(_user(row[:8]), checked_role(str(row[8]))) for row in rows]
+
+
+def group_names(transaction: Transaction, project: str) -> list[str]:
+    rows = transaction.rows(
+        "SELECT name FROM project_groups WHERE project = :project ORDER BY name", project=project
+    )
+    return [str(row[0]) for row in rows]
+
+
 def role(transaction: Transaction, project: str, user_id: str) -> Role | None:
     found = transaction.rows(
         "SELECT role FROM memberships WHERE project = :project AND user_id = :user",

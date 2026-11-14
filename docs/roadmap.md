@@ -160,7 +160,7 @@
 | P3-12 | Administration API and CLI: users (instance administrator), memberships and groups (project Builder) | server |
 | P3-13 | Security conformance runner over the scenarios, as a required check, on the managed lake and on every enabled Direct Query engine (ADR-0027 §6) | conformance |
 | P3-14 | Property-based non-broadening tests | semantic |
-| P3-15 | Transformation worker started and supervised by the server in server mode (restart after a crash, stop with the server, status through the API), on the P1-21 scheduler (decision #133) | server |
+| P3-15 | Server-mode start (store, audit log, instance configuration, authoritative served projects, no unsafe fallback; #446 Q2) and the transformation worker started and supervised by the server in server mode (restart after a crash, stop with the server, status through the API), on the P1-21 scheduler (decision #133) | server |
 
 **Exit criteria:** every security scenario passes, or is `expected-fail` linked to the later issue that implements it (pages P6, exports P6–P7, MCP P9); OIDC verified against a real identity provider in CI; threat models recorded; the cache never crosses permission fingerprints.
 

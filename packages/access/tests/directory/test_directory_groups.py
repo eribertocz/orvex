@@ -7,7 +7,7 @@ import unicodedata
 from functools import partial
 
 import pytest
-from orvex.access.errors import ACCESS_FORBIDDEN, VALIDATION_FAILED, AccessError
+from orvex.access.errors import ACCESS_FORBIDDEN, USER_NOT_FOUND, VALIDATION_FAILED, AccessError
 
 from tests.support.access_directory import World
 
@@ -64,7 +64,7 @@ def test_a_group_member_must_be_a_project_member(world: World, project: tuple[st
     outsider = world.user("outsider")
     with pytest.raises(AccessError) as refused:
         world.directory.add_group_member(builder, "p1", "collections", outsider)
-    assert refused.value.code == VALIDATION_FAILED
+    assert refused.value.code == USER_NOT_FOUND  # not a member: as if no such user
 
 
 def test_removing_a_membership_removes_its_group_memberships(

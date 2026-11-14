@@ -6,7 +6,13 @@ from __future__ import annotations
 from functools import partial
 
 import pytest
-from orvex.access.errors import ACCESS_FORBIDDEN, LAST_BUILDER, VALIDATION_FAILED, AccessError
+from orvex.access.errors import (
+    ACCESS_FORBIDDEN,
+    LAST_BUILDER,
+    USER_NOT_FOUND,
+    VALIDATION_FAILED,
+    AccessError,
+)
 
 from tests.support.access_directory import World
 
@@ -122,7 +128,7 @@ def test_a_deactivated_user_cannot_be_given_a_membership(world: World) -> None:
     world.directory.deactivate_user(world.admin, ana)
     with pytest.raises(AccessError) as refused:
         world.directory.add_membership(world.admin, "p1", ana, "builder")
-    assert refused.value.code == VALIDATION_FAILED
+    assert refused.value.code == USER_NOT_FOUND  # as an unknown id: the state is not told (#446)
     world.project_with_builder("p1", builder)
 
 

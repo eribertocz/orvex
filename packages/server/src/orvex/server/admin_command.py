@@ -1,5 +1,6 @@
 """The `<slug> admin` commands, on the server machine: create, or recover, a server instance's
-first administrator (#436), and the audit log's commands (#437).
+first administrator (#436), and the audit log's commands (#437). The administration commands
+that run over HTTP, from any machine, are `admin_cli`'s (#446).
 
 It runs only with direct access to the instance: no HTTP route does this. Its store is server
 mode's PostgreSQL (`access_store.py`), so it is refused when that is not configured. The first
@@ -21,6 +22,7 @@ from orvex.access.audit import open_audit_log
 from orvex.access.directory import Bootstrap
 from orvex.access.errors import AccessError
 from orvex.server.access_store import access_store
+from orvex.server.admin_cli import REMOTE, add_remote_parsers, remote
 from orvex.server.audit_command import add_audit_parser, audit
 from orvex.server.audit_settings import audit_settings
 from orvex.server.identity import Identity
@@ -30,7 +32,7 @@ RECOVERY_FILE = "access-recovery.key"
 
 
 def add_admin_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    admin = commands.add_parser("admin", help="administer a server instance (on its machine)")
+    admin = commands.add_parser("admin", help="administer a server instance")
     actions = admin.add_subparsers(dest="action", required=True)
     create = actions.add_parser("create", help="create the first administrator")
     create.add_argument("--user-name", required=True, help="the administrator's user name")
@@ -47,9 +49,12 @@ def add_admin_parser(commands: argparse._SubParsersAction[argparse.ArgumentParse
         help="the recovery file, when it is not in the instance directory",
     )
     add_audit_parser(actions)
+    add_remote_parsers(actions)
 
 
 def admin(command: argparse.Namespace, identity: Identity, out: TextIO, err: TextIO) -> int:
+    if command.action in REMOTE:  # over HTTP, as the signed-in person (#446)
+        return remote(command, identity, out, err)
     instance = instance_directory(identity)
     recovery = instance / RECOVERY_FILE
     try:
