@@ -47,7 +47,7 @@ request:
     change:
       op: edit_metric
       metric: total_kwh
-      sql: SUM(readings.kwh) * 2
+      sql: SUM(readings.kwh * 2)
 expect:
   outcome: rows
   rows: 'readings.zone_id,total_kwh
@@ -68,4 +68,3 @@ control:
   without_changes: true
 engines:
 - managed
-pending: 444

@@ -13,6 +13,7 @@ the receipt, the document, the error's code and details) for the forbidden check
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import io
 import json
 import os
@@ -20,9 +21,9 @@ import shutil
 import sqlite3
 import tempfile
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ from orvex.contracts.store.v1 import (
     ExistingLakeAttachment,
     PostgresLakeLocation,
     SqliteLakeLocation,
+    StatementRequest,
 )
 from orvex.semantic.catalog.building import catalog_for_context
 from orvex.semantic.engines import EngineEntry, Routing
@@ -38,6 +40,7 @@ from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import Answer, answer
 from orvex.semantic.explanation import explain
 from orvex.semantic.receipt.viewer import CallerViewer
+from orvex.semantic.result_cache import ResultCache
 from orvex.server.engine_catalog import EXISTING_DUCKLAKE_CAPABILITIES
 from orvex.server.existing_lake_adapter import ExistingLakeAdapter
 from orvex.server.existing_lake_snapshots import SnapshotSchedule
@@ -67,12 +70,16 @@ class Served:
     routing: Routing | None = None
     adapters: Mapping[str, Any] | None = None
     reads: list[object] | None = None  # every read the other engine made
+    # Deletes the rows of a dataset's table matching the given values, as that engine's owner
+    # would, and makes the result the engine's served version (#444, `delete_row`).
+    delete: Callable[[str, Mapping[str, object]], None] | None = None
+    cache: ResultCache | None = None  # the result cache every question of this place shares
 
     def engine(self) -> Any:  # noqa: ANN401 - `execution.Engine`
         more: dict[str, Any] = {}
         if self.routing is not None:
             more = {"routing": self.routing, "adapters": dict(self.adapters or {})}
-        return ce.engine_for(self.lake, **more)
+        return replace(ce.engine_for(self.lake, **more), cache=self.cache)
 
 
 def _datasets(found: sf.Fixture) -> list[str]:
@@ -122,8 +129,17 @@ def _execute(writer: duckdb.DuckDBPyConnection, database: str, sql: str) -> None
     writer.execute(f"CALL postgres_execute('{database}', '{quoted}', use_transaction := false)")
 
 
+@dataclass
+class _Owned:
+    """An existing DuckLake as its owner holds it: the attachment a reader is given, and the
+    owner's own way back in to change it."""
+
+    attachment: ExistingLakeAttachment
+    owner: Callable[[str], None]  # one statement, run by the owner in its own transaction
+
+
 @contextmanager
-def _existing_lake(found: sf.Fixture, catalog: str) -> Iterator[ExistingLakeAttachment]:
+def _existing_lake(found: sf.Fixture, catalog: str) -> Iterator[_Owned]:
     """An existing DuckLake that another system owns and writes, on `catalog`, holding the
     fixture's datasets; its data on a file system of its own (ADR-0027 §3)."""
     shared = Path("/dev/shm")
@@ -140,10 +156,11 @@ def _existing_lake(found: sf.Fixture, catalog: str) -> Iterator[ExistingLakeAtta
             writer.load_extension(extension)
         if catalog == "sqlite":
             path = root / "catalog.sqlite"
-            writer.execute(
+            attach = (
                 f"ATTACH 'ducklake:sqlite:{path}' AS l "
                 f"(DATA_PATH '{data.as_posix()}/', DATA_INLINING_ROW_LIMIT 0)"
             )
+            writer.execute(attach)
             location: Any = SqliteLakeLocation(
                 kind="lake_location", catalog="sqlite", path=str(path), data_path=f"{data}/"
             )
@@ -169,11 +186,12 @@ def _existing_lake(found: sf.Fixture, catalog: str) -> Iterator[ExistingLakeAtta
             as_owner = " ".join(
                 f"{k}={v}" for k, v in {**settings, "dbname": database, "user": owner}.items()
             )
-            writer.execute(
+            attach = (
                 f"ATTACH 'ducklake:postgres:{as_owner}' AS l "
                 f"(DATA_PATH '{data.as_posix()}/', METADATA_SCHEMA 'cat', "
                 "DATA_INLINING_ROW_LIMIT 0)"
             )
+            writer.execute(attach)
             location = PostgresLakeLocation(
                 kind="lake_location",
                 catalog="postgres",
@@ -197,13 +215,24 @@ def _existing_lake(found: sf.Fixture, catalog: str) -> Iterator[ExistingLakeAtta
             connection = sqlite3.connect(root / "catalog.sqlite")
             connection.execute("PRAGMA journal_mode = WAL")
             connection.close()
-        yield ExistingLakeAttachment(
-            kind="existing_lake_attachment",
-            name="warehouse",
-            location=location,
-            roles_in_use=[],
-            protected_files=[],
-            protected_locations=[],
+
+        def changed(statement: str) -> None:
+            writer.execute(attach)
+            try:
+                writer.execute(statement)
+            finally:
+                writer.execute("DETACH l")
+
+        yield _Owned(
+            ExistingLakeAttachment(
+                kind="existing_lake_attachment",
+                name="warehouse",
+                location=location,
+                roles_in_use=[],
+                protected_files=[],
+                protected_locations=[],
+            ),
+            changed,
         )
     finally:
         if cleanup:
@@ -219,7 +248,15 @@ def _existing_lake(found: sf.Fixture, catalog: str) -> Iterator[ExistingLakeAtta
 def served(found: sf.Fixture, engine: str, catalog: str) -> Iterator[Served]:
     if engine == "managed":
         with sf.managed_lake(found) as lake:
-            yield Served(lake)
+
+            def deleted(table: str, row: Mapping[str, object]) -> None:
+                where = " AND ".join(f'"{k}" = {_sql_value(str(v))}' for k, v in row.items())
+                with lake.transaction() as transaction:
+                    transaction.execute(StatementRequest(
+                        kind="statement", parameters=[],
+                        sql=f'DELETE FROM "{table}" WHERE {where}'))  # fmt: skip
+
+            yield Served(lake, delete=deleted)
         return
     datasets: Any = found.compiled.ossie.document.get("datasets", ())
     names = [str(d["name"]) for d in datasets]
@@ -232,7 +269,8 @@ def served(found: sf.Fixture, engine: str, catalog: str) -> Iterator[Served]:
                 "warehouse",  # the schedule's connection name
                 EXISTING_DUCKLAKE_CAPABILITIES,
             )
-            with _existing_lake(found, catalog) as attachment:
+            with _existing_lake(found, catalog) as owned:
+                attachment = owned.attachment
                 existing = ExistingLake(attachment, memory_limit="512MB", threads=1)
                 try:
                     reads = LakeReads(existing, timeout_ms=60_000)
@@ -255,19 +293,38 @@ def served(found: sf.Fixture, engine: str, catalog: str) -> Iterator[Served]:
                     )
                     assert schedule.check(NOW).color == "green"
                     adapter = ExistingLakeAdapter(reads, schedule, "test")
+                    checks = [NOW]
+
+                    def deleted(table: str, row: Mapping[str, object]) -> None:
+                        where = " AND ".join(
+                            f'"{k}" = {_sql_value(str(v))}' for k, v in row.items()
+                        )
+                        owned.owner(f'DELETE FROM l."{table}" WHERE {where}')
+                        checks.append(checks[-1] + dt.timedelta(minutes=10))  # its schedule
+                        assert schedule.check(checks[-1]).color == "green"
+
                     yield Served(
                         lake,
                         Routing(dict.fromkeys(names, entry)),
                         {entry.connection: adapter},
                         made,
+                        deleted,
                     )
                 finally:
                     existing.close()
             return
-        with _clickhouse(found) as (_, client):
+        with _clickhouse(found) as (server, client):
             _, evidence, wiring = che.wired(client, found.compiled)
             evidence.check(NOW)
-            yield Served(lake, wiring["routing"], wiring["adapters"])
+
+            def deleted(table: str, row: Mapping[str, object]) -> None:
+                where = " AND ".join(f"`{k}` = {_sql_value(str(v))}" for k, v in row.items())
+                server.run(
+                    f"ALTER TABLE {server.database}.`{table}` DELETE WHERE {where} "
+                    "SETTINGS mutations_sync = 2"
+                )
+
+            yield Served(lake, wiring["routing"], wiring["adapters"], delete=deleted)
 
 
 @contextmanager
@@ -319,9 +376,15 @@ class Received:
     members: frozenset[str] = frozenset()  # a catalog's fields and metrics, `dataset.field`
 
 
-def ask(found: sf.Fixture, place: Served, request: Mapping[str, Any], caller: Any) -> Received:  # noqa: ANN401
+def ask(
+    found: sf.Fixture,
+    place: Served,
+    request: Mapping[str, Any],
+    caller: Any,  # noqa: ANN401
+    whole: bool = False,
+) -> Any:  # noqa: ANN401 - a `Received`, or with `whole` also the `Answer`
     """The caller's answer to a case request: a `semantic-query`, the caller's `catalog`, or
-    the caller's `explain` of a query."""
+    the caller's `explain` of a query; with `whole`, a query's answer too (its receipt)."""
     policies = found.policies(caller["groups"])
     if request["kind"] == "catalog":
         document = catalog_for_context(found.compiled, policies, dict(caller))
@@ -349,13 +412,14 @@ def ask(found: sf.Fixture, place: Served, request: Mapping[str, Any], caller: An
         return Received(None, [], [], error.code, [text])
     envelope = got.result.envelope()
     view = got.receipt.view(CallerViewer(found.compiled, policies, caller))
-    return Received(
+    received = Received(
         ce.rows_of(got),
         [_column(c) for c in envelope["columns"]],
         [str(n["code"]) for n in envelope.get("notices", [])],
         None,
         [got.result.wire(arrow_to_json), json.dumps(view, default=str)],
     )
+    return (received, got) if whole else received
 
 
 def _column(column: Mapping[str, Any]) -> str:

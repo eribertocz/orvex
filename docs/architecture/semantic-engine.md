@@ -224,10 +224,12 @@ The matrix (see `frontend.md`) sends a `MatrixQuery` (rows, columns, measures, t
 
 ## 10. Caching
 
-- Level 1: result cache in memory (and optionally on disk in server mode).
-- Key: query fingerprint + model fingerprint + data snapshot + **permission fingerprint**.
-- In server mode each worker keeps its own cache; a run record is broadcast to every worker through PostgreSQL `LISTEN/NOTIFY`, so no worker serves a result older than the latest committed run.
-- Invalidation: when `transform` commits a run affecting a dataset, every cached result depending on it is invalidated; additionally the per-dataset `cache.ttl` extension applies; `cache.enabled: false` disables caching for a dataset.
+- Level 1: result cache in memory, one per process (#444).
+- **Where:** after planning, before the read. Every question is bound, checked and planned with the caller's current context; only the read is skipped. Refusals and errors are never stored.
+- **Key:** the execution identity (ADR-0030 §6) of the request: compiled model, query, the **permission fingerprint** built for the request, every data version read (the snapshot the request's engine is pinned to, never a global latest one), engine and adapter versions, plus the bound statement and its parameters.
+- **Validity (#444, Q1):** an entry is matched only by a request reading the same snapshot. Any commit (a run, a Builder change, maintenance) gives later requests a new snapshot, so each worker reads the current snapshot from the shared catalog per request and never serves an answer older than the latest commit, with no messages between workers. Stale entries leave by least-recently-used eviction under a byte bound.
+- **A hit is rebuilt for its request:** a new page cursor bound to the request's fingerprint, and a newly sealed receipt (`cache: hit`, the same execution identity).
+- Per dataset: `cache.enabled: false` bypasses the cache for any question reading it; `cache.ttl` expires its entries. A read with no retained version (a live engine) is `bypass`.
 - Datasets outside the managed lake (ADR-0027 §7): the key is query fingerprint + model fingerprint + permission fingerprint + engine data version (the verified snapshot of an existing DuckLake, identified by connection, id and commit time; the read instant on a live engine, matched while within `cache.ttl`) + the last-change snapshot of every managed-lake table read by their policies or by their registration check. Those snapshots are checked on every lookup, so a mapping or registration changed by a run or by the Builder is never served from cache. Live datasets (after v1.0.0) are cached only when they declare `cache.ttl`; an entry is served while its age is below the `ttl`, and the receipt shows its original read instant.
 - The receipt states whether a result came from cache.
 

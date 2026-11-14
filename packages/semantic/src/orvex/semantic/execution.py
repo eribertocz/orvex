@@ -14,7 +14,9 @@ encoder and the snapshot it fixed when the question arrived.
 - **Two identities.** `execution_fingerprint` and the result's canonical bytes are the
   deterministic identity: same model, query, permissions, snapshot, engine and adapter, same
   values. `receipt_id` also covers timings and metadata, and may differ between two runs.
-- No result is reused across callers: there is no cache (one would need `may_reuse`, P2-09).
+- **The result cache** (#444, `result_cache`) is looked up after planning, under this
+  request's execution identity: only the read is skipped, and the page, its cursor and the
+  receipt (`cache: hit`) are built for this request as on a miss.
 """
 
 from __future__ import annotations
@@ -63,6 +65,7 @@ from orvex.semantic.receipt import (
     PolicyUse,
     ReceiptRecord,
     build_receipt,
+    execution_fingerprint,
 )
 from orvex.semantic.result import SemanticResult, ValueEncoder, build_result
 from orvex.semantic.result.building import CellState
@@ -75,6 +78,7 @@ from orvex.semantic.result.cursors import (
     verify_cursor,
 )
 from orvex.semantic.result.descriptors import arrow_type
+from orvex.semantic.result_cache import ResultCache, Stored, use_of
 from orvex.semantic.withheld import Withheld, withheld
 
 BATCH_SIZE = 65_536
@@ -114,6 +118,8 @@ class Engine:
     # each enabled connection, by name; only with its development switch on (`engines`).
     routing: Routing = ALL_MANAGED
     adapters: Mapping[str, ExternalAdapter] = field(default_factory=dict)
+    # The process's result cache (#444), composed by `server`; none: every question reads.
+    cache: ResultCache | None = None
 
 
 @dataclass(frozen=True)
@@ -423,24 +429,40 @@ def _execute(
         evidence = verify_physical(plan_, physical)  # the bound statement, checked again (C9)
         run = external.runner(BATCH_SIZE)
         _check_zones(physical, run, external.adapter)
+    compiled: CompiledModel = report.compiled
+    _managed(engine)  # no snapshot fixed: nothing is read, nothing looked up
+    data = _data_reads(compiled, plan_, engine, external, resolved)
+    execution = _execution_use(engine, external, physical, plan_)
+    # The result cache (#444): keyed by this request's execution identity, after planning.
+    use = use_of(
+        compiled,
+        [s.dataset for s in plan_.sources],
+        execution_fingerprint(
+            compiled.model_fingerprint,
+            report.query_fingerprint,
+            str(context["permission_fingerprint"]),
+            data,
+            execution,
+        ),
+        physical.sql,
+        physical.parameters,
+        data,
+    )
+    stored = engine.cache.get(use) if engine.cache is not None else None
+    if stored is None:
+        stored = _read_once(physical, engine, plan_, report, external, values, run)
+        if engine.cache is not None:
+            engine.cache.put(use, stored)
+        origin = "miss" if engine.cache is not None and use.key is not None else "bypass"
     else:
-        _check_zones(physical, _managed(engine), getattr(engine.read, "__self__", engine.read))
+        origin = "hit"
+    if engine.cache is None:
+        origin = "miss"  # no cache was composed: looked up nowhere, as before #444
+    held, estimated, table = stored.withheld, stored.estimated, stored.table
     placement = plan_.placement
     applied = dict(placement.applied) if placement is not None else {}
-    # Why a policy gives no row, its mappings read at this snapshot (#443).
-    held = withheld(plan_, lambda s, p: _managed(engine)(s, p), values)
     applied.update((w.policy, "no_rows") for w in held)
     notices = [SemanticError(w.code, {"policy": w.policy}) for w in held]
-    snapshot = engine.snapshot.get("id")
-    estimated = (  # an upper bound, recorded only: it never refuses (#352)
-        estimate(plan_, physical, report.compiled, engine.statistics, snapshot)
-        if isinstance(snapshot, int) and not isinstance(snapshot, bool) and external is None
-        # Another engine's own estimate, recorded only (law 7).
-        else external.estimate(physical)
-        if external is not None
-        else None
-    )
-    table = _read(physical, engine, budgeted=plan_.mode == "detail", run=run)
     duration = max(0, round((engine.clock() - clock) * 1000))
     page: dict[str, object]
     if plan_.mode == "detail":
@@ -466,41 +488,6 @@ def _execute(
         cell_states=states,
         row_roles=row_roles,
     )
-    compiled: CompiledModel = report.compiled
-    snapshot = engine.snapshot
-    data = [
-        DataRead(  # the aggregate table, when it is read in place of its base (C8)
-            name=_written(
-                compiled,
-                plan_.rollup.dataset
-                if plan_.rollup is not None and source.dataset == plan_.rollup.base
-                else source.dataset,
-            ),
-            route=source.route,
-            retained=True,
-            snapshot_id=int(str(snapshot["id"])),
-            committed_at=_instant(datetime.fromisoformat(str(snapshot["committed_at"]))),
-        )
-        for source in plan_.sources
-        if external is None
-    ]
-    if external is not None:
-        data = [
-            external.read(_written(compiled, s.dataset), engine.routing.of(s.dataset))
-            for s in plan_.sources
-        ]
-        data += [  # every policy whose mapping values were read, at the managed snapshot
-            DataRead(
-                name=name,
-                route="managed",
-                retained=True,
-                for_policy=True,
-                snapshot_id=int(str(snapshot["id"])),
-                committed_at=_instant(datetime.fromisoformat(str(snapshot["committed_at"]))),
-                table=table_name,
-            )
-            for name, table_name in sorted({(q.policy, q.table) for q in resolved})
-        ]
     record = build_receipt(
         query_canonical=_plain(report.bound.canonical),
         question_document=receipt_question(report),
@@ -510,14 +497,8 @@ def _execute(
         # One read per dataset; per policy, one per managed table it read (a mapping, and its
         # registration), which the record keeps and a view names by the policy alone.
         data=list({(d.for_policy, d.name, d.table): d for d in data}.values()),
-        execution=ExecutionUse(
-            engine=external.adapter.engine if external is not None else "duckdb",
-            engine_version=external.adapter.engine_version
-            if external is not None
-            else engine.engine_version,
-            adapter=physical.adapter,
-            adapter_version=physical.adapter_version,
-            preaggregation=plan_.rollup.name if plan_.rollup is not None else None,
+        execution=replace(
+            execution,
             started_at=_instant(started),
             duration_ms=duration,
             # Rows the read may scan, an upper bound from the snapshot's statistics (#352),
@@ -527,6 +508,7 @@ def _execute(
             actual={"cells": table.num_rows * len(physical.columns)}
             if plan_.mode == "detail"
             else None,
+            cache=origin,
         ),
         result_canonical=result.canonical(engine.encoder),
         result_key=engine.result_key,
@@ -538,6 +520,97 @@ def _execute(
     )
     referenced = result.with_receipt(record.receipt_id, record.reproducibility["class"])
     return Answer(referenced, record, report, plan_, physical, tuple(held))
+
+
+def _read_once(
+    physical: PhysicalQuery,
+    engine: Engine,
+    plan_: SemanticPlan,
+    report: CorrectnessReport,
+    external: External | None,
+    values: dict[int, PolicyValues] | None,
+    run: Run | None,
+) -> Stored:
+    """The question's one read, with what is decided at its snapshot: the zone data checked,
+    why each policy withholds every row (#443), the read-cost estimate (#352)."""
+    managed = _managed(engine)
+    if external is None:
+        _check_zones(physical, managed, getattr(engine.read, "__self__", engine.read))
+    held = withheld(plan_, managed, values)
+    snapshot = engine.snapshot.get("id")
+    estimated = (  # an upper bound, recorded only: it never refuses (#352)
+        estimate(plan_, physical, report.compiled, engine.statistics, snapshot)
+        if isinstance(snapshot, int) and not isinstance(snapshot, bool) and external is None
+        # Another engine's own estimate, recorded only (law 7).
+        else external.estimate(physical)
+        if external is not None
+        else None
+    )
+    table = _read(physical, engine, budgeted=plan_.mode == "detail", run=run)
+    clock = engine.cache.clock() if engine.cache is not None else 0.0
+    return Stored(table, tuple(held), estimated, clock)
+
+
+def _data_reads(
+    compiled: CompiledModel,
+    plan_: SemanticPlan,
+    engine: Engine,
+    external: External | None,
+    resolved: Sequence[MappingQuery],
+) -> list[DataRead]:
+    """Every data version the question reads: one per dataset, and on another engine one per
+    policy and managed table its mapping values were read from, at the managed snapshot."""
+    snapshot = engine.snapshot
+    if external is None:
+        return [
+            DataRead(  # the aggregate table, when it is read in place of its base (C8)
+                name=_written(
+                    compiled,
+                    plan_.rollup.dataset
+                    if plan_.rollup is not None and source.dataset == plan_.rollup.base
+                    else source.dataset,
+                ),
+                route=source.route,
+                retained=True,
+                snapshot_id=int(str(snapshot["id"])),
+                committed_at=_instant(datetime.fromisoformat(str(snapshot["committed_at"]))),
+            )
+            for source in plan_.sources
+        ]
+    data = [
+        external.read(_written(compiled, s.dataset), engine.routing.of(s.dataset))
+        for s in plan_.sources
+    ]
+    return data + [
+        DataRead(
+            name=name,
+            route="managed",
+            retained=True,
+            for_policy=True,
+            snapshot_id=int(str(snapshot["id"])),
+            committed_at=_instant(datetime.fromisoformat(str(snapshot["committed_at"]))),
+            table=table_name,
+        )
+        for name, table_name in sorted({(q.policy, q.table) for q in resolved})
+    ]
+
+
+def _execution_use(
+    engine: Engine, external: External | None, physical: PhysicalQuery, plan_: SemanticPlan
+) -> ExecutionUse:
+    """The engine and adapter of the read: the execution identity's part (ADR-0030 §6); the
+    timings and the cache origin are set once the answer is known."""
+    return ExecutionUse(
+        engine=external.adapter.engine if external is not None else "duckdb",
+        engine_version=external.adapter.engine_version
+        if external is not None
+        else engine.engine_version,
+        adapter=physical.adapter,
+        adapter_version=physical.adapter_version,
+        preaggregation=plan_.rollup.name if plan_.rollup is not None else None,
+        started_at=_instant(engine.now()),
+        duration_ms=0,
+    )
 
 
 def _written(compiled: CompiledModel, dataset: str) -> str:
