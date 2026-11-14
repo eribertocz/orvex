@@ -182,9 +182,13 @@ def privileges_sql(schema: str) -> str:
         f"WHERE (s.setdatabase {_EQ} 0::pg_catalog.oid OR s.setdatabase {_EQ} (SELECT d.oid "
         f"FROM pg_catalog.pg_database AS d WHERE d.datname {_EQ} pg_catalog.current_database())) "
         f"AND (s.setrole {_EQ} 0::pg_catalog.oid OR s.setrole {_EQ} ANY (SELECT oid FROM member)) "
+        # PostgreSQL itself reads the value (`boolin` parses as the setting does: `t`, `y`,
+        # `on`, `1` and every unique prefix); a value that is not a boolean counts as on.
         "AND EXISTS (SELECT FROM pg_catalog.unnest(s.setconfig) AS c(x) "
-        "WHERE pg_catalog.lower(c.x) OPERATOR(pg_catalog.~) "
-        "'^lo_compat_privileges=(on|true|yes|1)$'::pg_catalog.text) "
+        "WHERE pg_catalog.lower(pg_catalog.split_part(c.x, '=', 1)) "
+        f"{_EQ} 'lo_compat_privileges'::pg_catalog.text "
+        "AND (pg_catalog.lower(pg_catalog.split_part(c.x, '=', 2)) OPERATOR(pg_catalog.!~) "
+        "'^ *(of|off|f|fa|fal|fals|false|n|no|0) *$'::pg_catalog.text)) "
         "UNION ALL SELECT 'write in the catalog schema' FROM inside AS i, member AS m "
         "WHERE pg_catalog.has_schema_privilege(m.oid, i.oid, 'CREATE') "
         "UNION ALL SELECT 'write in the catalog schema' "

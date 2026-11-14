@@ -36,12 +36,18 @@ A required version (`--require-clickhouse`) that did not run makes the record
   control, was refused there before any read.
 - `not-applicable`: the case's change cannot exist on this instance's catalog (a SQLite catalog
   file on PostgreSQL, a PostgreSQL role on SQLite; `security_existing_lake.NotApplicable`).
+- `not-reproduced`: a variant of the case's change this runner does not make, with why and the
+  tests that show it (`security_existing_lake.NotReproduced`): never a pass, and listed.
+
+A case's `variants` each run as an execution of their own, named after the instance
+(`existing-ducklake/sqlite[by=hard_link]`).
 
 **Protection** (the Owner's condition on #447), for each execution: `proven` when the case
 passes, or, for a run refused for its limitation (`expected-fail` on detail pages,
 `engine-pending`), when its aggregate counterpart passes (`security_counterparts`): the same
-attack, end to end, on a query the engine supports; `not-demonstrated` otherwise, with why;
-`not-applicable` with that status. A forbidden value in a counterpart is a `fail` like any.
+attack, end to end, on a query the engine supports, and its attack is reached by a query
+(`security_counterparts.unreached`); `not-demonstrated` otherwise, with why; `not-applicable`
+with that status. A forbidden value or a broken run in a counterpart is a `fail` like any.
 
 The exit status is 0 only when every logical record has every required execution and none is
 `fail`, `STALE_PENDING`, `STALE_NOT_RUNNABLE` or `EXECUTION_MISSING`.
@@ -50,6 +56,7 @@ The exit status is 0 only when every logical record has every required execution
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import io
 import json
@@ -66,7 +73,7 @@ from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
 from conformance.runners import security_http, security_sequences
 from conformance.runners.security_cases import SEPARATOR, cases, later_row, requests
-from conformance.runners.security_counterparts import counterpart
+from conformance.runners.security_counterparts import counterpart, unreached
 from conformance.runners.security_engines import (
     ClickHouseServer,
     Received,
@@ -74,14 +81,14 @@ from conformance.runners.security_engines import (
     default_clickhouse,
     served,
 )
-from conformance.runners.security_existing_lake import NotApplicable
+from conformance.runners.security_existing_lake import NotApplicable, NotReproduced
 from tools.repository import REPOSITORY_ROOT
 
 ENGINES = ("managed", "existing-ducklake", "clickhouse")
 LIMITATION = "UNSUPPORTED_OPERATION"
 FAILING = frozenset({"fail", "STALE_PENDING", "STALE_NOT_RUNNABLE", "EXECUTION_MISSING"})
 WORST = ("EXECUTION_MISSING", "fail", "STALE_NOT_RUNNABLE", "STALE_PENDING", "expected-fail",
-         "not-runnable", "engine-pending", "not-applicable", "pass")  # fmt: skip
+         "not-runnable", "engine-pending", "not-reproduced", "not-applicable", "pass")  # fmt: skip
 # The surfaces not built yet, each by the request kinds that need it (precision 2).
 SURFACES = {
     "/api/v1/pages": ("page", "page-query", "navigation", "draft-preview"),
@@ -122,6 +129,7 @@ class Instance:
     name: str  # as the report names it
     catalog: str = ""
     clickhouse: ClickHouseServer | None = None
+    variant: tuple[tuple[str, str], ...] = ()  # one of the case's `variants`, run on its own
 
 
 # --- what the caller receives, checked -------------------------------------------------------
@@ -249,6 +257,8 @@ def execute(name: str, case: Mapping[str, Any], instance: Instance, present: set
         if later_row(pending) is None:
             return Execution(instance.name, "fail", f"pending {pending!r} is not a later row")
         return Execution(instance.name, "not-runnable", f"needs {needed} ({pending})")
+    if instance.variant:
+        case = with_variant(case, dict(instance.variant))
     try:
         found = sf.fixture(case["fixture"], ce.VENDORS[0])
     except Exception as error:  # noqa: BLE001 - a broken run is a failure, never a skip
@@ -283,11 +293,13 @@ def _shown(
     if made is None:
         return replace(limited, protection="not-demonstrated", shown="no aggregate counterpart")
     shown = _checked(name, made, found, instance)
+    if shown.status == "pass" and (why := unreached(case)) is not None:
+        return replace(limited, protection="not-demonstrated", shown=f"unreached: {why}")
     if shown.status == "pass":
         return replace(limited, protection="proven", shown="aggregate counterpart passes")
-    if shown.status == "not-applicable":
-        return replace(limited, protection="not-applicable", shown=shown.reason)
-    if shown.reason.startswith("leaked"):  # a leak is a failure wherever it is shown
+    if shown.status in {"not-applicable", "not-reproduced"}:
+        return replace(limited, protection=shown.protection, shown=shown.reason)
+    if shown.reason.startswith(("leaked", "infrastructure")):  # a failure wherever it shows
         return Execution(instance.name, "fail", f"aggregate counterpart: {shown.reason}")
     return replace(limited, protection="not-demonstrated", shown=f"aggregate: {shown.reason}")
 
@@ -306,6 +318,8 @@ def _checked(
         last, checked = asked(case, found, instance)
     except NotApplicable as error:  # the attack does not exist on this catalog
         return Execution(instance.name, "not-applicable", str(error), "not-applicable")
+    except NotReproduced as error:  # a variant this runner does not make: never a pass
+        return Execution(instance.name, "not-reproduced", str(error), "not-demonstrated")
     except Exception as error:  # noqa: BLE001 - a broken run is a failure, never a skip
         return Execution(instance.name, "fail", _broken(error))
     leaked = leaks(last, case["expect"].get("forbidden", ()))  # the control may show them
@@ -340,11 +354,36 @@ def instances(
     engine: str, case: Mapping[str, Any], servers: Sequence[tuple[str, ClickHouseServer]]
 ) -> list[Instance]:
     if engine == "managed":
-        return [Instance("managed", "managed")]
-    if engine == "existing-ducklake":
+        found = [Instance("managed", "managed")]
+    elif engine == "existing-ducklake":
         settings = sf.fixture(case["fixture"], ce.VENDORS[0]).lake_settings()
-        return [Instance(engine, f"existing-ducklake/{c}", catalog=c) for c in settings["catalogs"]]
-    return [Instance(engine, f"clickhouse/{version}", clickhouse=s) for version, s in servers]
+        found = [
+            Instance(engine, f"existing-ducklake/{c}", catalog=c) for c in settings["catalogs"]
+        ]
+    else:
+        found = [Instance(engine, f"clickhouse/{v}", clickhouse=s) for v, s in servers]
+    variants = [tuple(sorted((str(k), str(v)) for k, v in item.items()))
+                for item in case.get("variants", ())]  # fmt: skip
+    if not variants:
+        return found
+    return [
+        replace(one, name=f"{one.name}[{','.join(f'{k}={v}' for k, v in variant)}]",
+                variant=variant)
+        for one in found for variant in variants
+    ]  # fmt: skip
+
+
+def with_variant(case: Mapping[str, Any], variant: Mapping[str, str]) -> dict[str, Any]:
+    """The case with one variant's fields in each of its lake changes (`variants`)."""
+    made: dict[str, Any] = copy.deepcopy(dict(case))
+    for request in (made["request"], made["control"].get("request")):
+        if request is None or request["kind"] != "sequence":
+            continue
+        for step in request["steps"]:
+            if step["request"]["kind"] == "lake-change":
+                step["request"]["change"] = {**step["request"]["change"], **variant}
+    made.pop("variants", None)
+    return made
 
 
 def run(

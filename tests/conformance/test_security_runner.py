@@ -115,6 +115,61 @@ def test_a_case_pending_on_one_engine_is_refused_there_before_any_read() -> None
     assert execution.protection == "proven"  # its aggregate counterpart passes
 
 
+# --- the protection a refused run shows (Owner condition) ------------------------------------
+
+
+def lake(name: str, instance: runner.Instance = SQLITE_LAKE, **case: Any) -> runner.Execution:  # noqa: ANN401
+    planted_case = planted(name, **case)
+    return runner.execute(name, planted_case, instance, set())
+
+
+def test_a_counterpart_that_leaks_fails_though_the_detail_run_is_refused() -> None:
+    case = planted("SEC-DQ-008")
+    case["expect"] = {**case["expect"], "forbidden": [*case["expect"]["forbidden"], "15.00"]}
+    execution = runner.execute("SEC-DQ-008", case, SQLITE_LAKE, set())
+    assert (execution.status, execution.reason) == (
+        "fail",
+        "aggregate counterpart: leaked 1 forbidden values",
+    )
+
+
+def test_a_counterpart_with_a_wrong_answer_shows_nothing_and_says_why() -> None:
+    case = planted("SEC-DQ-008")
+    header = "outages.outage_id,outages.zone_id,outages.minutes"
+    case["expect"] = with_rows(case["expect"], f"{header}\n1,Z1,15.00\n")
+    execution = runner.execute("SEC-DQ-008", case, SQLITE_LAKE, set())
+    assert execution.status == "expected-fail"
+    assert execution.protection == "not-demonstrated"
+    assert execution.shown.startswith("aggregate: the rows differ")
+
+
+def test_a_counterpart_that_passes_proves_the_protection() -> None:
+    execution = lake("SEC-DQ-008")
+    assert (execution.status, execution.protection) == ("expected-fail", "proven")
+
+
+def test_an_attack_no_query_reaches_is_not_shown_by_a_pass() -> None:
+    for name in ("SEC-DQ-006", "SEC-DQ-007"):
+        execution = lake(name)
+        assert execution.status == "expected-fail", name
+        assert execution.protection == "not-demonstrated", name
+        assert execution.shown.startswith("unreached: "), name
+
+
+def test_each_variant_is_an_execution_and_one_not_made_is_never_a_pass() -> None:
+    names = [i.name for i in runner.instances("existing-ducklake", cases()["SEC-DQ-012"], [])]
+    assert names == [
+        f"existing-ducklake/{c}[by={b}]"
+        for c in ("sqlite", "postgres")
+        for b in ("absolute_path", "hard_link")
+    ]
+    (hard,) = [i for i in runner.instances("existing-ducklake", cases()["SEC-DQ-012"], [])
+               if i.name == "existing-ducklake/sqlite[by=hard_link]"]  # fmt: skip
+    execution = runner.execute("SEC-DQ-012", cases()["SEC-DQ-012"], hard, set())
+    assert (execution.status, execution.protection) == ("not-reproduced", "not-demonstrated")
+    assert "hard link" in execution.reason
+
+
 # --- AC3: excuses checked --------------------------------------------------------------------
 
 

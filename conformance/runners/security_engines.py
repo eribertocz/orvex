@@ -207,6 +207,8 @@ def _declared(
         raise RuntimeError("the lake was declared with a location overlapping a protected one")
     finally:
         ExistingLake._attach = real  # type: ignore[method-assign]
+    if "overlaps" not in str(refusal.details.get("reason", "")):  # refused, but for the overlap
+        raise RuntimeError(f"the declaration was refused for another reason: {refusal.code}")
     if attached or len(made) != reads_before:
         raise RuntimeError("the lake was attached or read before its declaration was refused")
     return _Undeclared(reads, schedule, refusal)

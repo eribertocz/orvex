@@ -10,52 +10,59 @@ a broken run, a stale `pending` marker or a missing execution. ClickHouse runs o
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 import pytest
 
-from conformance.runners import corpus_execution as ce
-from conformance.runners import security_fixtures as sf
 from conformance.runners import security_scenarios as runner
 from conformance.runners.security_cases import cases
 from conformance.runners.security_engines import default_clickhouse
 
 
-def _all() -> list[tuple[str, str, str]]:
-    """(case, engine, catalog): every case on every engine it lists, every catalog of its lake."""
-    found = []
+def _all() -> list[tuple[str, str, runner.Instance | None]]:
+    """(case, engine, instance): every case on every engine it lists, every catalog of its lake,
+    every variant; the ClickHouse instance is made by the test (None), on the server it finds."""
+    found: list[tuple[str, str, runner.Instance | None]] = []
     for name, case in sorted(cases().items()):
         for engine in case["engines"]:
-            if engine == "existing-ducklake":
-                settings = sf.fixture(case["fixture"], ce.VENDORS[0]).lake_settings()
-                found += [(name, engine, c) for c in settings["catalogs"]]
+            if engine == "clickhouse":
+                found += [(name, engine, None)]
             else:
-                found.append((name, engine, ""))
+                found += [(name, engine, one) for one in runner.instances(engine, case, [])]
     return found
 
 
 ALL = _all()
 
 
-def _instance(engine: str, catalog: str) -> runner.Instance:
-    if engine == "managed":
-        return runner.Instance("managed", "managed")
-    if engine == "existing-ducklake":
-        return runner.Instance(engine, f"existing-ducklake/{catalog}", catalog=catalog)
+def _clickhouse(case: Mapping[str, Any]) -> list[runner.Instance]:
     server = default_clickhouse()
-    return runner.Instance(engine, f"clickhouse/{server.version()}", clickhouse=server)
+    return runner.instances("clickhouse", case, [(server.version(), server)])
 
 
 @pytest.mark.parametrize(
-    ("name", "engine", "catalog"), ALL, ids=[f"{n}-{e}{'-' + c if c else ''}" for n, e, c in ALL]
+    ("name", "engine", "instance"),
+    ALL,
+    ids=[f"{n}-{i.name if i else e}" for n, e, i in ALL],
 )
-def test_a_case_holds_on_its_engine(name: str, engine: str, catalog: str) -> None:
-    execution = runner.execute(name, cases()[name], _instance(engine, catalog), set())
-    assert execution.status not in runner.FAILING, (execution.status, execution.reason)
+def test_a_case_holds_on_its_engine(
+    name: str, engine: str, instance: runner.Instance | None
+) -> None:
+    case = cases()[name]
+    for one in [instance] if instance is not None else _clickhouse(case):
+        execution = runner.execute(name, case, one, set())
+        assert execution.status not in runner.FAILING, (
+            one.name,
+            execution.status,
+            execution.reason,
+        )
 
 
 def test_every_logical_record_is_run() -> None:
     """The 92 logical records (case, listed engine), none dropped (Owner precision 3)."""
-    assert len({(n, e) for n, e, _ in ALL}) == sum(len(c["engines"]) for c in cases().values())
-    assert len({(n, e) for n, e, _ in ALL}) == 92
+    records = {(n, e) for n, e, _ in ALL}
+    assert len(records) == sum(len(c["engines"]) for c in cases().values()) == 92
 
 
 def test_what_waits_for_detail_pages_on_an_existing_lake_is_p5_14() -> None:

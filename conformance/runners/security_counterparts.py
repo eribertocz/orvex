@@ -7,7 +7,8 @@ A case's detail query (`mode: detail`) becomes an aggregate one: each field with
 its own (`METRIC_OF`) is asked as that metric, every other field is grouped by, and the order is
 kept. Grouped by the dataset's primary key, each group is one row, so the expected rows are the
 case's own with those columns renamed; its codes, its forbidden values and its control stay as
-they are. A case is left without a counterpart when its fields cannot be grouped that way.
+they are. A case is left without a counterpart when its fields cannot be grouped that way, and
+a case whose attack no query reaches says so (`unreached`): its pass proves nothing more.
 """
 
 from __future__ import annotations
@@ -20,6 +21,25 @@ from conformance.runners import security_fixtures as sf
 
 # The metric that answers a field of one row exactly, by fixture member (`SUM` over one row).
 METRIC_OF = {"outages.minutes": "outage_minutes"}
+# Changes whose attack no query of the case reaches, so a passing counterpart shows only that
+# the lake's own rows are served, with where the protection itself is shown (ADR-0027 §3).
+UNREACHED = {
+    "create_view": "no dataset reads the view; a dataset on a view is refused in "
+    "packages/server/tests/test_existing_lake_wiring.py",
+    "create_macro": "no query calls the macro; the statement guard's tests show no call can "
+    "reach one (packages/store/tests/test_existing_lake_reads.py)",
+}
+
+
+def unreached(case: Mapping[str, Any]) -> str | None:
+    """Why the case's attack is reached by none of its queries, or None when it is."""
+    request = case["request"]
+    steps = request["steps"] if request["kind"] == "sequence" else []
+    for step in steps:
+        change = step["request"].get("change") if step["request"]["kind"] == "lake-change" else None
+        if change is not None and change["op"] in UNREACHED:
+            return str(UNREACHED[change["op"]])
+    return None
 
 
 def counterpart(case: Mapping[str, Any], found: sf.Fixture) -> dict[str, Any] | None:

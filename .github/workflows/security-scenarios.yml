@@ -24,12 +24,15 @@ permissions:
 
 env:
   # The paths that make this check apply (#267), read by changes.py and aggregate.py: the code
-  # the cases run on, their contracts, the cases and the runner, and the dependencies.
+  # the cases run on, their contracts, the cases and the runner, the roadmap their `pending`
+  # markers name, the tools the runner imports, and the dependencies.
   RELEVANT_PATHS: |
     .github/workflows/security-scenarios.yml
     packages/**
     contracts/**
     conformance/**
+    docs/roadmap.md
+    tools/**
     pylock.toml
     pyproject.toml
 

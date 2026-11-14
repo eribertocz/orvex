@@ -16,20 +16,28 @@ again and attached anew (a location changed):
 - `add_file`: a Parquet file of the foreign rows registered as a data file of the lake's table,
   `where` it lies: `inside_location` (the lake's own, as an owner adds one), `outside_location`,
   `symbolic_link_outside` (a link in the location to a file outside), `route_a_file` (a Route A
-  source's file), `other_project_file` (another project's managed-lake data), or
+  source's file), `other_project_file` (another project's managed-lake data, or one of its
+  file sources: `file`), each by absolute path (`by`), or
   `hard_link_to_managed` (a managed-lake file on the lake's file system, linked in);
 - `swap_file_for_link`: the table's data file replaced by a link to the foreign rows' file;
 - `register_location_inside`: a managed-lake location registered inside the lake's location;
 - `set_location`: the lake's declared location made to contain a managed lake's (`contains`):
   a managed-lake data location inside it;
-- `replace_catalog_file`: the SQLite catalog replaced by a link to a copy of it elsewhere;
-- `postgres_catalog`: the PostgreSQL catalog's reader role allowed to read another schema;
+- `replace_catalog_file`: the SQLite catalog, or its `-wal`, `-shm` or `-journal` file
+  (`file`), replaced by a symbolic or a hard link (`link`) to another catalog or to a Route A
+  SQLite source (`target`);
+- `postgres_catalog` (`case`): the reader role allowed to read another schema, used by another
+  connection too, or reached through a catalog table swapped for a view over a `SECURITY
+  INVOKER` function that reads another schema;
 - `restore_catalog_reusing_id`: a backup taken, one more commit served, the catalog restored
   from the backup, then the owner's next commit (`delete_rows_where`), which reuses the id
   just served with another commit time.
 
-A change a catalog cannot have (a SQLite file on PostgreSQL, a role on SQLite) raises
-`NotApplicable`.
+A case's `variants` reach `change` as fields of the step (`by`, `file`, `link`, `target`,
+`case`), and every field a change reads is honoured. A change a catalog cannot have (a SQLite
+file on PostgreSQL, a role on SQLite) raises `NotApplicable`; a variant this runner does not
+make raises `NotReproduced`, with why and the tests that show it: a hard link to a protected
+file, which cannot leave its file system.
 """
 
 from __future__ import annotations
@@ -53,6 +61,7 @@ from orvex.contracts.store.v1 import (
     PostgresLakeLocation,
     ProtectedFile,
     ProtectedLocation,
+    RolesInUseItem,
     SqliteLakeLocation,
 )
 
@@ -64,6 +73,18 @@ NAME = "warehouse"  # the connection's name
 
 class NotApplicable(RuntimeError):
     """A change this lake's catalog cannot have."""
+
+
+class NotReproduced(RuntimeError):
+    """A variant of a change this runner does not make, with why and where it is shown."""
+
+
+# A hard link cannot leave its file system, and the store refuses a lake sharing one with any
+# protected file as a whole (`separation`), so that variant never reaches a snapshot's files.
+CROSS_DEVICE = (
+    "a hard link needs the protected file on the lake's file system, which the store refuses "
+    "as a whole (packages/store/tests/test_existing_lake_files.py, hard link tests)"
+)
 
 
 def sql_value(value: str | None) -> str:
@@ -85,6 +106,8 @@ class Host:
     backup: Callable[[], Callable[[], None]]  # the catalog's state; called back, restores it
     locations: list[Path] = field(default_factory=list)
     files: list[Path] = field(default_factory=list)
+    roles_in_use: list[str] = field(default_factory=list)  # roles other connections use
+    owner_role: str = ""  # a PostgreSQL catalog's owner
 
     def attachment(self) -> ExistingLakeAttachment:
         """The attachment as the instance builds it now, with its protected set."""
@@ -92,7 +115,7 @@ class Host:
             kind="existing_lake_attachment",
             name=NAME,
             location=self.location,
-            roles_in_use=[],
+            roles_in_use=[RolesInUseItem(role) for role in self.roles_in_use],
             protected_files=[ProtectedFile(str(path)) for path in self.files],
             protected_locations=[ProtectedLocation(str(path)) for path in self.locations],
         )
@@ -138,17 +161,34 @@ def _snapshots(found: sf.Fixture) -> list[list[str]]:
 
 def _protected(folder: Path) -> tuple[list[Path], list[Path]]:
     """A protected set as the server builds it, on the instance's file system: a project
-    folder, its managed lake's data folder and catalog file, a Route A source file and another
-    project's managed-lake data folder."""
+    folder, its managed lake's data folder and catalog file, a Route A Parquet source and a
+    Route A SQLite source, and another project's managed-lake data folder, one of its file
+    sources and its existing lake's SQLite catalog (`PROTECTED` names each place)."""
     project, managed, sources = folder / "project", folder / "managed", folder / "sources"
-    other = folder / "other-project" / "lake" / "data"
-    for made in (project, managed / "data", sources, other):
+    other = folder / "other-project"
+    for made in (project, managed / "data", sources, other / "lake" / "data", other / "sources"):
         made.mkdir(parents=True)
     catalog = managed / "catalog.ducklake"
     catalog.write_bytes(b"managed")
     source = sources / "outages.parquet"
     source.write_bytes(b"source")
-    return [project, managed / "data", catalog, source, other], [catalog, source]
+    database = sources / "outages.sqlite"
+    connection = sqlite3.connect(database)
+    connection.execute("CREATE TABLE outages (outage_id INTEGER)")
+    connection.close()
+    theirs = other / "sources" / "outages.parquet"
+    theirs.write_bytes(b"their source")
+    lake = other / "lake" / "catalog.sqlite"  # another project's existing lake's catalog
+    connection = sqlite3.connect(lake)
+    connection.execute("CREATE TABLE ducklake_metadata (key TEXT)")
+    connection.close()
+    locations = [project, managed / "data", catalog, source, database, other / "lake" / "data"]
+    return [*locations, theirs, lake], [catalog, source, database, theirs, lake]
+
+
+# Where each protected place is in `Host.locations` and `Host.files` (`_protected`).
+PROTECTED = {"route_a_file": 1, "route_a_sqlite": 2, "other_project_source": 3, "other_catalog": 4}
+OTHER_PROJECT_DATA = 5
 
 
 @contextmanager
@@ -263,6 +303,7 @@ def existing_lake(
             lambda: _backup(writer, catalog, root),
             locations,
             files,
+            owner_role=cleanup[1] if cleanup else "",
         )
     finally:
         if cleanup:
@@ -357,24 +398,45 @@ def change(host: Host, step: Mapping[str, Any], verified: Callable[[], None]) ->
         managed.mkdir(parents=True)
         host.locations.append(managed)
         return DECLARE
-    elif op == "replace_catalog_file":
+    elif op == "replace_catalog_file":  # by `link` (symbolic, hard) to `target`
         if not isinstance(host.location, SqliteLakeLocation):
             raise NotApplicable("a PostgreSQL catalog has no catalog file")
-        path = Path(host.location.path)
-        other = host.root / "elsewhere" / "catalog.sqlite"
-        other.parent.mkdir()
-        shutil.copyfile(path, other)
-        path.unlink()
+        link, target = step.get("link", "symbolic"), step.get("target", "other_catalog")
+        catalog = Path(host.location.path)
+        suffix = {"main": "", "wal": "-wal", "shm": "-shm", "journal": "-journal"}
+        path = catalog.with_name(catalog.name + suffix[step.get("file", "main")])
+        if link == "hard":  # both targets are protected files of the instance
+            raise NotReproduced(CROSS_DEVICE)
+        other = host.files[PROTECTED[target]]  # a Route A source, or another lake's catalog
+        path.unlink(missing_ok=True)  # a `-journal` file exists only during a write
         path.symlink_to(other)
-    elif op == "postgres_catalog":
+    elif op == "postgres_catalog":  # by `case`
         if not isinstance(host.location, PostgresLakeLocation):
             raise NotApplicable("a SQLite catalog has no role")
         pairs = dict(pair.split("=", 1) for pair in host.location.connection.split())
-        reader = pairs["user"]
+        reader, kind = pairs["user"], step.get("case", "role_reads_outside_schema")
         host.catalog("CREATE SCHEMA other_rows")
         host.catalog("CREATE TABLE other_rows.secret (zone_id TEXT)")
-        host.catalog(f"GRANT USAGE ON SCHEMA other_rows TO {reader}")
-        host.catalog(f"GRANT SELECT ON other_rows.secret TO {reader}")
+        if kind == "role_shared":  # another connection of the instance uses the same role
+            host.roles_in_use.append(reader)
+        elif kind == "invoker_view_other_schema":
+            # The owner swaps a catalog table for a view over a SECURITY INVOKER function that
+            # reads another schema with the reader's privileges.
+            host.catalog("ALTER TABLE cat.ducklake_snapshot RENAME TO ducklake_snapshot_real")
+            host.catalog(
+                "CREATE FUNCTION cat.leak() RETURNS SETOF cat.ducklake_snapshot_real "
+                "LANGUAGE sql SECURITY INVOKER AS 'SELECT * FROM cat.ducklake_snapshot_real "
+                "WHERE EXISTS (SELECT FROM other_rows.secret) OR true'"
+            )
+            host.catalog("CREATE VIEW cat.ducklake_snapshot AS SELECT * FROM cat.leak()")
+            host.catalog(f"ALTER FUNCTION cat.leak() OWNER TO {host.owner_role}")
+            host.catalog(f"ALTER VIEW cat.ducklake_snapshot OWNER TO {host.owner_role}")
+            host.catalog(f"GRANT SELECT ON cat.ducklake_snapshot TO {reader}")
+        elif kind == "role_reads_outside_schema":
+            host.catalog(f"GRANT USAGE ON SCHEMA other_rows TO {reader}")
+            host.catalog(f"GRANT SELECT ON other_rows.secret TO {reader}")
+        else:
+            raise RuntimeError(f"no catalog case {kind!r} in this runner")
     elif op == "restore_catalog_reusing_id":
         restore = host.backup()  # taken at the served snapshot
         host.owner('CREATE TABLE l."restore_marker" (marker INTEGER)')  # the next commit
@@ -410,12 +472,18 @@ def _placed(host: Host, step: Mapping[str, Any]) -> str:
         shutil.copyfile(host.foreign, target)
         placed = folder / name
         placed.symlink_to(target)
-    elif where == "route_a_file":  # the Route A source file, rewritten with the rows
-        placed = host.files[1]
-        shutil.copyfile(host.foreign, placed)
-    elif where == "other_project_file":
-        placed = host.locations[4] / name
-        shutil.copyfile(host.foreign, placed)
+    elif where in {"route_a_file", "other_project_file"}:  # `by` absolute path or hard link
+        if step.get("by", "absolute_path") == "hard_link":
+            raise NotReproduced(CROSS_DEVICE)
+        if where == "route_a_file":  # the Route A source file, rewritten with the rows
+            placed = host.files[PROTECTED["route_a_file"]]
+            shutil.copyfile(host.foreign, placed)
+        elif step.get("file", "data_file") == "file_source":  # one of its file sources
+            placed = host.files[PROTECTED["other_project_source"]]
+            shutil.copyfile(host.foreign, placed)
+        else:  # its managed lake's data
+            placed = host.locations[OTHER_PROJECT_DATA] / name
+            shutil.copyfile(host.foreign, placed)
     elif where == "hard_link_to_managed":  # a managed lake on the lake's own file system
         managed = host.root / "managed" / "data"
         managed.mkdir(parents=True)

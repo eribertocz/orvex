@@ -674,7 +674,7 @@ job = "scenarios"
 kind = "scoped"
 digest = "d9fb769073c7c9a6"
 reason = "needs PostgreSQL, ClickHouse 26.10 and 26.8 LTS servers, the job's service and archive; the local tests run the same executions (tests/conformance/test_policy_cases.py)"
-paths = [".github/workflows/security-scenarios.yml", "packages/**", "contracts/**", "conformance/**", "pylock.toml", "pyproject.toml"]
+paths = [".github/workflows/security-scenarios.yml", "packages/**", "contracts/**", "conformance/**", "docs/roadmap.md", "tools/**", "pylock.toml", "pyproject.toml"]
 setup = ["python -m pip install --quiet pip==26.3", "version=26.8.30.8"]
 
 [[job]]

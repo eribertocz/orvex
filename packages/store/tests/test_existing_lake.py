@@ -542,6 +542,10 @@ BEYOND_THE_SCHEMA = [
         "large object",
     ),
     (["ALTER DATABASE {database} SET lo_compat_privileges = on"], "large object"),
+    # Any spelling PostgreSQL reads as on (Reviewer pass on #447, finding 1).
+    (["ALTER DATABASE {database} SET lo_compat_privileges = 't'"], "large object"),
+    (["ALTER ROLE {reader} SET lo_compat_privileges = 'y'"], "large object"),
+    (["ALTER ROLE {reader} SET lo_compat_privileges = 'TR'"], "large object"),
     (["CREATE EXTENSION dblink SCHEMA cat"], "database"),
     (["CREATE EXTENSION postgres_fdw SCHEMA cat"], "database"),
     (["GRANT CREATE ON DATABASE {database} TO {reader}"], "write in the catalog database"),
