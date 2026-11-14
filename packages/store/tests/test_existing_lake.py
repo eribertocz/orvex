@@ -498,59 +498,60 @@ def test_a_role_in_use_elsewhere_is_refused(catalog: Catalog) -> None:
     assert error.details["kind"] == "role in use"
 
 
-@pytest.mark.parametrize(
-    ("grants", "kind"),
-    [
-        (
-            [
-                "GRANT USAGE ON SCHEMA other TO {reader}",
-                "GRANT SELECT ON other.secrets TO {reader}",
-            ],
-            "schema",
-        ),
-        (["GRANT SELECT ON other.secrets TO {reader}"], "table"),
-        (["GRANT SELECT (value) ON other.secrets TO {reader}"], "table"),
-        (["GRANT SELECT ON other.secrets TO PUBLIC"], "table"),
-        (["GRANT USAGE ON SCHEMA other TO PUBLIC"], "schema"),
-        (["CREATE VIEW other.v AS SELECT 1 AS x", "GRANT SELECT ON other.v TO PUBLIC"], "view"),
-        (["CREATE SEQUENCE other.s", "GRANT USAGE ON SEQUENCE other.s TO {reader}"], "sequence"),
-        (["CREATE FUNCTION other.f() RETURNS int LANGUAGE sql AS 'SELECT 1'"], "function"),
-        (["GRANT pg_read_all_data TO {reader}"], "role pg_read_all_data"),
-        (["GRANT INSERT ON cat.ducklake_snapshot TO {reader}"], "write in the catalog schema"),
-        (
-            ["GRANT UPDATE (snapshot_id) ON cat.ducklake_snapshot TO {reader}"],
-            "write in the catalog schema",
-        ),
-        (["GRANT TRUNCATE ON cat.ducklake_metadata TO {reader}"], "write in the catalog schema"),
-        (["GRANT CREATE ON SCHEMA cat TO {reader}"], "write in the catalog schema"),
-        (["GRANT pg_read_server_files TO {reader}"], "role pg_read_server_files"),
-        (
-            [
-                "CREATE ROLE {reader}_grp NOINHERIT",
-                "GRANT SELECT ON other.secrets TO {reader}_grp",
-                "GRANT {reader}_grp TO {reader}",
-            ],
-            "table",
-        ),
-        # PR 2 (Reviewer pass 1 on #405, finding 5): large objects, and the cluster's other
-        # databases while an extension can open a connection to them.
-        (
-            ["SELECT lo_create(424242)", "ALTER LARGE OBJECT 424242 OWNER TO {reader}"],
-            "large object",
-        ),
-        (
-            ["SELECT lo_create(424243)", "GRANT SELECT ON LARGE OBJECT 424243 TO PUBLIC"],
-            "large object",
-        ),
-        (["ALTER DATABASE {database} SET lo_compat_privileges = on"], "large object"),
-        (["CREATE EXTENSION dblink SCHEMA cat"], "database"),
-        (["CREATE EXTENSION postgres_fdw SCHEMA cat"], "database"),
-        (["GRANT CREATE ON DATABASE {database} TO {reader}"], "write in the catalog database"),
-        (["GRANT pg_monitor TO {reader}"], "role pg_monitor"),
-        (["GRANT pg_read_all_stats TO {reader}"], "role pg_read_all_stats"),
-        (["GRANT pg_read_all_settings TO {reader}"], "role pg_read_all_settings"),
-    ],
-)
+# Every way a catalog role can use more than its schema (`privileges_sql`).
+BEYOND_THE_SCHEMA = [
+    (
+        [
+            "GRANT USAGE ON SCHEMA other TO {reader}",
+            "GRANT SELECT ON other.secrets TO {reader}",
+        ],
+        "schema",
+    ),
+    (["GRANT SELECT ON other.secrets TO {reader}"], "table"),
+    (["GRANT SELECT (value) ON other.secrets TO {reader}"], "table"),
+    (["GRANT SELECT ON other.secrets TO PUBLIC"], "table"),
+    (["GRANT USAGE ON SCHEMA other TO PUBLIC"], "schema"),
+    (["CREATE VIEW other.v AS SELECT 1 AS x", "GRANT SELECT ON other.v TO PUBLIC"], "view"),
+    (["CREATE SEQUENCE other.s", "GRANT USAGE ON SEQUENCE other.s TO {reader}"], "sequence"),
+    (["CREATE FUNCTION other.f() RETURNS int LANGUAGE sql AS 'SELECT 1'"], "function"),
+    (["GRANT pg_read_all_data TO {reader}"], "role pg_read_all_data"),
+    (["GRANT INSERT ON cat.ducklake_snapshot TO {reader}"], "write in the catalog schema"),
+    (
+        ["GRANT UPDATE (snapshot_id) ON cat.ducklake_snapshot TO {reader}"],
+        "write in the catalog schema",
+    ),
+    (["GRANT TRUNCATE ON cat.ducklake_metadata TO {reader}"], "write in the catalog schema"),
+    (["GRANT CREATE ON SCHEMA cat TO {reader}"], "write in the catalog schema"),
+    (["GRANT pg_read_server_files TO {reader}"], "role pg_read_server_files"),
+    (
+        [
+            "CREATE ROLE {reader}_grp NOINHERIT",
+            "GRANT SELECT ON other.secrets TO {reader}_grp",
+            "GRANT {reader}_grp TO {reader}",
+        ],
+        "table",
+    ),
+    # PR 2 (Reviewer pass 1 on #405, finding 5): large objects, and the cluster's other
+    # databases while an extension can open a connection to them.
+    (
+        ["SELECT lo_create(424242)", "ALTER LARGE OBJECT 424242 OWNER TO {reader}"],
+        "large object",
+    ),
+    (
+        ["SELECT lo_create(424243)", "GRANT SELECT ON LARGE OBJECT 424243 TO PUBLIC"],
+        "large object",
+    ),
+    (["ALTER DATABASE {database} SET lo_compat_privileges = on"], "large object"),
+    (["CREATE EXTENSION dblink SCHEMA cat"], "database"),
+    (["CREATE EXTENSION postgres_fdw SCHEMA cat"], "database"),
+    (["GRANT CREATE ON DATABASE {database} TO {reader}"], "write in the catalog database"),
+    (["GRANT pg_monitor TO {reader}"], "role pg_monitor"),
+    (["GRANT pg_read_all_stats TO {reader}"], "role pg_read_all_stats"),
+    (["GRANT pg_read_all_settings TO {reader}"], "role pg_read_all_settings"),
+]
+
+
+@pytest.mark.parametrize(("grants", "kind"), BEYOND_THE_SCHEMA)
 def test_a_role_that_can_use_anything_beyond_the_catalog_schema_is_refused(
     catalog: Catalog, grants: list[str], kind: str
 ) -> None:
@@ -569,6 +570,30 @@ def test_a_role_that_can_use_anything_beyond_the_catalog_schema_is_refused(
     # The object kind is named, never an object of another schema.
     assert "other" not in error.message
     assert "secrets" not in error.message
+
+
+@pytest.mark.parametrize(("grants", "kind"), BEYOND_THE_SCHEMA)
+def test_a_privilege_granted_after_the_attach_is_refused_at_the_next_verification(
+    catalog: Catalog, grants: list[str], kind: str
+) -> None:
+    # #447 (SEC-DQ-016): the role is checked minimal again at each verification, so a lake
+    # whose role gains a privilege once attached stops being served.
+    with ExistingLake(catalog.attachment(), memory_limit=MEMORY, threads=1) as lake:
+        snapshot = lake.latest_snapshot()
+        lake.verify(snapshot, catalog.attachment())
+        catalog.execute(
+            *(grant.format(reader=catalog.reader, database=catalog.database) for grant in grants)
+        )
+        try:
+            with pytest.raises(StoreError) as caught:
+                lake.verify(snapshot, catalog.attachment())
+        finally:
+            if "{reader}_grp" in " ".join(grants):
+                catalog.execute(f"REVOKE {catalog.reader}_grp FROM {catalog.reader}")
+                catalog.execute(f"REVOKE ALL ON other.secrets FROM {catalog.reader}_grp")
+                catalog.execute_on("admin", f"DROP ROLE {catalog.reader}_grp")
+    assert caught.value.code == "STORE_SOURCE_INVALID"
+    assert caught.value.details["kind"] == kind
 
 
 def test_an_operator_or_function_of_the_owner_cannot_stand_in_for_postgresqls(

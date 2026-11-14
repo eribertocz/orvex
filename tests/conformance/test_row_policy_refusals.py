@@ -28,8 +28,8 @@ from orvex.semantic.policies import read_policies
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
+from conformance.runners.security_cases import cases
 from tests.conformance.test_execution import Spy
-from tests.conformance.test_security_scenarios import cases
 
 Document = dict[str, Any]
 

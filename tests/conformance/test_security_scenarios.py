@@ -7,7 +7,8 @@ must be registered or reserved. Its control must show a value the caller must no
 expected result must show none. Its `pending` must name where the behavior is built, or, for
 one whose behavior is built and proven elsewhere, the runner that will execute it (#447). A case
 already enforced at policy validation is proven here against the real reader. Running the cases
-on the engines is #447.
+on the engines is the runner's (`conformance/runners/security_scenarios.py`, #447), which reads
+the cases through `security_cases`, as this module does.
 """
 
 from __future__ import annotations
@@ -15,7 +16,6 @@ from __future__ import annotations
 import csv
 import io
 import json
-import re
 import subprocess
 import tomllib
 from collections.abc import Iterator, Mapping
@@ -33,17 +33,24 @@ from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies.model import read_policies
 from orvex.server.identity import load_identity
 
+from conformance.runners.security_cases import (
+    SECURITY,
+    SEPARATOR,
+    cases,
+    current_phase,
+    files,
+    pending_issues,
+    requests,
+    roadmap_ids,
+)
 from tools.checks import error_codes
 from tools.repository import REPOSITORY_ROOT
 
-SECURITY = REPOSITORY_ROOT / "conformance/security"
 CONTRACTS = REPOSITORY_ROOT / "contracts"
 IDENTITY = load_identity()
 VENDORS = (IDENTITY.ossie_vendor_name, *IDENTITY.previous_vendor_names)
 # A request carries a semantic-query body under one of these keys.
 BODIES = ("body", "alternate")
-# How a forbidden value is matched: whole, against tokens split on every other character.
-SEPARATOR = re.compile(r"[^A-Za-z0-9_./*-]+")
 
 
 def schema(path: Path) -> jsonschema.Draft202012Validator:
@@ -57,22 +64,6 @@ def validators() -> dict[str, jsonschema.Draft202012Validator]:
         "caller": schema(CONTRACTS / "security-context/v1/schema.json"),
         "query": schema(CONTRACTS / "semantic-query/v1/schema.json"),
     }
-
-
-def files() -> list[Path]:
-    return sorted((SECURITY / "scenarios").rglob("*.yaml"))
-
-
-@cache
-def cases() -> dict[str, dict[str, Any]]:
-    return {path.stem: yaml.safe_load(path.read_text("utf-8")) for path in files()}
-
-
-def requests(request: Mapping[str, Any]) -> Iterator[Mapping[str, Any]]:
-    """`request` and every request nested in it (the steps of a sequence)."""
-    yield request
-    for step in request.get("steps", []):
-        yield from requests(step["request"])
 
 
 def callers(case: Mapping[str, Any]) -> Iterator[Mapping[str, Any]]:
@@ -123,21 +114,6 @@ def expected_shows(case: Mapping[str, Any]) -> set[str]:
     if expect["outcome"] == "absent":
         return set()
     return tokens(expect, ("rows", "members", "pages", "text"))
-
-
-@cache
-def pending_issues() -> dict[int, str]:
-    loaded = tomllib.loads((SECURITY / "pending-issues.toml").read_text("utf-8"))
-    return {int(number): row for number, row in loaded["issues"].items()}
-
-
-def current_phase() -> int:
-    return error_codes.current_phase(REPOSITORY_ROOT)
-
-
-def roadmap_ids() -> set[str]:
-    text = (REPOSITORY_ROOT / "docs/roadmap.md").read_text("utf-8")
-    return set(re.findall(r"^\| (P[0-9]+-[0-9]{2}[a-z]?) \|", text, re.MULTILINE))
 
 
 def where(error: jsonschema.ValidationError) -> str:

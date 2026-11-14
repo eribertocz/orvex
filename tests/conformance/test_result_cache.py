@@ -34,8 +34,8 @@ from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
+from conformance.runners.security_sequences import compile_with
 from tests.conformance.test_detail_rows import FORM
-from tests.support.security_sequences import compile_with
 
 FOUND = sf.fixture("utility", ce.VENDORS[0])
 UTILITY = yaml.safe_load((FOUND.folder / "security.yaml").read_text("utf-8"))

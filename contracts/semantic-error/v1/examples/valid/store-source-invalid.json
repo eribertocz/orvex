@@ -1,0 +1,13 @@
+{
+  "kind": "semantic_error",
+  "code": "STORE_SOURCE_INVALID",
+  "severity": "error",
+  "category": "engine",
+  "audience": "builder",
+  "message": "The data of connection warehouse cannot be served now: it does not pass its checks (no_verified_snapshot).",
+  "locale": "en",
+  "details": {
+    "connection": "warehouse",
+    "reason": "no_verified_snapshot"
+  }
+}

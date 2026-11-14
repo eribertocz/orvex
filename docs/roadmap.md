@@ -162,7 +162,7 @@
 | P3-14 | Property-based non-broadening tests | semantic |
 | P3-15 | Server-mode start (store, audit log, instance configuration, authoritative served projects, no unsafe fallback; #446 Q2) and the transformation worker started and supervised by the server in server mode (restart after a crash, stop with the server, status through the API), on the P1-21 scheduler (decision #133) | server |
 
-**Exit criteria:** every security scenario passes, or is `expected-fail` linked to the later issue that implements it (pages P6, exports P6–P7, MCP P9); OIDC verified against a real identity provider in CI; threat models recorded; the cache never crosses permission fingerprints.
+**Exit criteria:** every security scenario passes, or is `expected-fail` linked to the later issue that implements it (pages P6, exports P6–P7, MCP P9), as the `security-scenarios` report of the release commit shows; OIDC verified against a real identity provider in CI; threat models recorded; the cache never crosses permission fingerprints.
 
 ---
 
@@ -208,7 +208,7 @@
 | P5-11 | Pre-aggregation matching with equivalence proof and policy-column check | semantic |
 | P5-12 | Pre-aggregation suggestions from query statistics | semantic |
 | P5-13 | S10 (ADR-0029): Top N and Others, typed parameters, calculated dimensions and segments, with their row-policy cases (`SEC-LEAK-005`) | semantic |
-| P5-14 | Detail pages on an existing DuckLake (Direct Query): pinned cursors on the owner's snapshots, budgets and receipts; its row-policy cases (`SEC-DQ-001` to `-005` there) | semantic, server |
+| P5-14 | Detail pages on an existing DuckLake (Direct Query): pinned cursors on the owner's snapshots, budgets and receipts; its row-policy cases (`SEC-DQ-001` to `-005` there) and the existing-lake cases that ask a detail page (`SEC-DQ-006` to `-020`, `SEC-CACHE-004` there), whose protections the security runner already shows on aggregate queries (#447) | semantic, server |
 
 **Exit criteria:** all S1–S6 capabilities implemented with cases; pre-aggregations never change results.
 

@@ -23,9 +23,9 @@ import yaml
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
-from tests.conformance.test_security_scenarios import SEPARATOR
+from conformance.runners.security_cases import SEPARATOR
+from conformance.runners.security_engines import ask, served
 from tests.support.fixtures import frozen
-from tests.support.security_engines import ask, served
 
 BASE = sf.fixture("direct-query", ce.VENDORS[0])
 OUTAGES: list[list[str]] = [[str(v) for v in r] for r in BASE.rows["outages"]]

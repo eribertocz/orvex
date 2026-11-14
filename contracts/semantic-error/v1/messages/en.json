@@ -151,6 +151,10 @@
     "generic": "The metric {metric} ({class}) cannot be re-aggregated from aggregated results.",
     "builder": "The metric {metric} ({class}) cannot be re-aggregated from aggregated results."
   },
+  "STORE_SOURCE_INVALID": {
+    "generic": "The data of connection {connection} cannot be served now: it does not pass its checks.",
+    "builder": "The data of connection {connection} cannot be served now: it does not pass its checks ({reason})."
+  },
   "TEMPORAL_MATCH_NOT_UNIQUE": {
     "generic": "A time-dependent relationship does not find exactly one version.",
     "builder": "The relationship {relationship} does not find exactly one version in {violations} cases."

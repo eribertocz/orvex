@@ -336,6 +336,15 @@
     },
     "optional": []
   },
+  "STORE_SOURCE_INVALID": {
+    "severity": "error",
+    "category": "engine",
+    "details": {
+      "connection": "public",
+      "reason": "builder"
+    },
+    "optional": []
+  },
   "TEMPORAL_MATCH_NOT_UNIQUE": {
     "severity": "error",
     "category": "correctness",

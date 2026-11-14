@@ -67,3 +67,4 @@ variants:
 - case: role_shared
 - case: role_reads_outside_schema
 adr_0027: catalog-role-outside-schema
+pending: P5-14

@@ -28,7 +28,7 @@ from orvex.contracts.store.v1 import (
 )
 from orvex.store.errors import StoreError
 from orvex.store.existing_lake import ExistingLake
-from orvex.store.existing_lake_reads import SNAPSHOT_CHANGED, LakeReads
+from orvex.store.existing_lake_reads import FILE_REFUSED, SNAPSHOT_CHANGED, LakeReads
 from orvex.store.lake import Limits, open_lake
 
 from .test_existing_lake import MEMORY, Catalog
@@ -307,6 +307,46 @@ def test_the_tables_and_views_at_a_snapshot(reads: LakeReads) -> None:
 
 
 # --- verification against the set as it stands now (PR 2, finding 4) ------------------------
+
+
+def test_a_link_swapped_in_after_verification_refuses_the_read_as_the_lakes_data(
+    made: tuple[Path, Path], reads: LakeReads, other_device: Path
+) -> None:
+    # #447 (SEC-DQ-010): the sandbox refuses the file, and the read says the lake's data is
+    # invalid, never that a query failed; nothing the link reaches is read.
+    _, data = made
+    snapshot = reads.latest()
+    reads.verify(snapshot, reads._lake.attachment)
+    served = sorted(data.rglob("ducklake-*.parquet"))[0]
+    elsewhere = other_device / "elsewhere" / "rows.parquet"
+    elsewhere.parent.mkdir()
+    duckdb.connect().execute(
+        f"COPY (SELECT 99 AS reading_id, 9.0::DECIMAL(18, 4) AS kwh) TO '{elsewhere}'"
+    )
+    served.unlink()
+    served.symlink_to(elsewhere)
+    error = refused(reads, 'SELECT SUM("kwh") AS "total" FROM "readings"')
+    assert (error.code, error.details["reason"]) == ("STORE_SOURCE_INVALID", FILE_REFUSED)
+    assert "elsewhere" not in error.message
+
+
+def test_a_catalog_that_can_no_longer_be_read_is_the_lakes_data_refused(
+    made: tuple[Path, Path], reads: LakeReads, other_device: Path
+) -> None:
+    # #447 (SEC-DQ-015): the catalog replaced by a link the sandbox does not allow; its latest
+    # snapshot cannot be listed, and the store says so rather than raising DuckDB's error.
+    catalog, _ = made
+    copy = other_device / "another" / "catalog.sqlite"
+    copy.parent.mkdir()
+    copy.write_bytes(catalog.read_bytes())
+    catalog.unlink()
+    catalog.symlink_to(copy)
+    with pytest.raises(StoreError) as caught:
+        reads.latest()
+    assert (caught.value.code, caught.value.details["reason"]) == (
+        "STORE_SOURCE_INVALID",
+        "catalog_unreadable",
+    )
 
 
 def test_a_protected_location_registered_after_the_attach_refuses_the_next_verification(

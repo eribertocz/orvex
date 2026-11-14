@@ -40,7 +40,7 @@ request:
           size: '100'
 expect:
   outcome: error
-  code: STORE_LOCATION_INVALID
+  code: STORE_SOURCE_INVALID
   forbidden:
   - Z9
   - '999.99'
@@ -63,3 +63,4 @@ control:
 engines:
 - existing-ducklake
 adr_0027: overlapping-locations
+pending: P5-14

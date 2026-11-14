@@ -160,7 +160,7 @@ Defined in `.github/labels.yml`; usage rules in [`issues.md`](issues.md) §7.
 
 Version rules: [`versioning.md`](versioning.md).
 
-1. The Agent opens the release issue `release: vX.Y.Z[-pre]` with the phase exit checklist (`roadmap.md`) and evidence links.
+1. The Agent opens the release issue `release: vX.Y.Z[-pre]` with the phase exit checklist (`roadmap.md`) and evidence links. From P3, the evidence includes the `security-scenarios` JSON report of the release commit's run on `main` (its artifact): every logical record and execution, the ClickHouse versions run, each status, and the protection each execution shows (`conformance.md`).
 2. The Agent opens the release pull request (`release/<issue>-vX.Y.Z`): module version bumps, changelog from Conventional Commits, `versions.toml`.
 3. Approval:
    - **alphas and betas from `beta.2`:** the Agent proceeds when every checklist item is evidenced, and notifies the Owner in the release issue;

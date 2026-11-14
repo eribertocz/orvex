@@ -20,7 +20,7 @@ from orvex.access.local import LocalRequest
 from orvex.access.server_context import Audience
 from orvex.contracts.http_api import v1
 from orvex.semantic.errors import SemanticError
-from orvex.server import semantic_delivery, semantic_http, semantic_jobs
+from orvex.server import lake_refusals, semantic_delivery, semantic_http, semantic_jobs
 from orvex.server.local_access import CODE_PARAMETER, LocalAccess
 from orvex.server.route_permissions import checked_permissions
 from orvex.server.versions import Versions
@@ -384,16 +384,28 @@ def mount_semantic(
     audience_of: Callable[[object], Audience],
     owner_of: Callable[[Request], tuple[str, str]],
     recheck: Callable[[Request], None] | None = None,
+    run_jobs: Callable[[Callable[[], None]], None] | None = None,
 ) -> None:
     """`query`, `explain`, `catalog` and the asynchronous jobs (`contracts/http-api/v1`). The
     request rules have already authenticated the caller, checked the origin, the role and the
     body type: what remains is the caller's own data permissions, which `access` gives and the
     engine applies. Every answer leaves through `semantic_delivery` (#445). Every error is
-    written for the caller's audience (#440): a Builder's details reach nobody else."""
-    jobs = semantic_jobs.Jobs(semantic)
+    written for the caller's audience (#440): a Builder's details reach nobody else. `run_jobs`
+    runs an asynchronous job's work: a background thread by default; a conformance runner runs
+    it at once, so its sequences are deterministic (#447)."""
+    jobs = semantic_jobs.Jobs(semantic, run=run_jobs)  # by default, each job on its thread
 
     def again(request: Request) -> Callable[[], None] | None:
         return None if recheck is None else lambda: recheck(request)
+
+    def store_refusal(error: StoreError, request_id: str, caller: object) -> Response:
+        """A lake's data refused by the store, with its code (`lake_refusals`); any other
+        store error is internal."""
+        refused = lake_refusals.as_semantic(error)
+        if refused is not None:
+            return semantic_error_response(refused, request_id, audience_of(caller))
+        log.error("store error", extra={"request_id": request_id, "code": error.code})
+        return error_response(500, "INTERNAL_ERROR", "Unexpected server error", request_id)
 
     def refusal(error: Exception, request_id: str, caller: object) -> Response:
         audience = audience_of(caller)
@@ -450,8 +462,7 @@ def mount_semantic(
         except FAILURES as error:
             return refusal(error, request_id, caller)
         except StoreError as error:
-            log.error("store error", extra={"request_id": request_id, "code": error.code})
-            return error_response(500, "INTERNAL_ERROR", "Unexpected server error", request_id)
+            return store_refusal(error, request_id, caller)
 
     @app.get("/api/v1/semantic/jobs/{job}")
     async def job_status(request: Request, job: str) -> Response:
@@ -477,8 +488,7 @@ def mount_semantic(
         except FAILURES as error:
             return refusal(error, request_id, caller)
         except StoreError as error:
-            log.error("store error", extra={"request_id": request_id, "code": error.code})
-            return error_response(500, "INTERNAL_ERROR", "Unexpected server error", request_id)
+            return store_refusal(error, request_id, caller)
 
     @app.delete("/api/v1/semantic/jobs/{job}")
     async def job_cancel(request: Request, job: str) -> Response:
@@ -501,8 +511,7 @@ def mount_semantic(
         except FAILURES as error:
             return refusal(error, request_id, caller)
         except StoreError as error:
-            log.error("store error", extra={"request_id": request_id, "code": error.code})
-            return error_response(500, "INTERNAL_ERROR", "Unexpected server error", request_id)
+            return store_refusal(error, request_id, caller)
 
     @app.get("/api/v1/semantic/catalog")
     async def catalog(request: Request) -> Response:
@@ -514,5 +523,4 @@ def mount_semantic(
         except FAILURES as error:
             return refusal(error, request_id, caller)
         except StoreError as error:
-            log.error("store error", extra={"request_id": request_id, "code": error.code})
-            return error_response(500, "INTERNAL_ERROR", "Unexpected server error", request_id)
+            return store_refusal(error, request_id, caller)

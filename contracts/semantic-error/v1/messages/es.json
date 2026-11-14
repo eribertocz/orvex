@@ -151,6 +151,10 @@
     "generic": "La métrica {metric} ({class}) no se puede volver a agregar desde resultados ya agregados.",
     "builder": "La métrica {metric} ({class}) no se puede volver a agregar desde resultados ya agregados."
   },
+  "STORE_SOURCE_INVALID": {
+    "generic": "Los datos de la conexión {connection} no se pueden servir ahora: no pasan sus comprobaciones.",
+    "builder": "Los datos de la conexión {connection} no se pueden servir ahora: no pasan sus comprobaciones ({reason})."
+  },
   "TEMPORAL_MATCH_NOT_UNIQUE": {
     "generic": "Una relación en el tiempo no encuentra exactamente una versión.",
     "builder": "La relación {relationship} no encuentra exactamente una versión en {violations} casos."

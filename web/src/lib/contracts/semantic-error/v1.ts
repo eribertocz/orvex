@@ -64,6 +64,8 @@ export type SemanticError =
 	| QueryInvalidError
 	| QueryInvalidPublicError
 	| ReaggregationNotAllowedError
+	| StoreSourceInvalidError
+	| StoreSourceInvalidPublicError
 	| TemporalMatchNotUniqueError
 	| TemporalMatchNotUniquePublicError
 	| UnsupportedOperationError
@@ -1364,6 +1366,45 @@ export interface ReaggregationNotAllowedError {
 export interface ReaggregationNotAllowedDetails {
 	metric: Name;
 	class: 'distributive' | 'algebraic' | 'holistic' | 'sketch';
+}
+/**
+ * STORE_SOURCE_INVALID as a builder sees it.
+ */
+export interface StoreSourceInvalidError {
+	kind: 'semantic_error';
+	code: 'STORE_SOURCE_INVALID';
+	severity: 'error';
+	category: 'engine';
+	audience: 'builder';
+	message: string;
+	locale: Locale;
+	details: StoreSourceInvalidDetails;
+}
+/**
+ * Details of STORE_SOURCE_INVALID, as a builder sees them.
+ */
+export interface StoreSourceInvalidDetails {
+	connection: Name;
+	reason: Name;
+}
+/**
+ * STORE_SOURCE_INVALID as any other audience sees it: the generic message and public details only.
+ */
+export interface StoreSourceInvalidPublicError {
+	kind: 'semantic_error';
+	code: 'STORE_SOURCE_INVALID';
+	severity: 'error';
+	category: 'engine';
+	audience: 'other';
+	message: string;
+	locale: Locale;
+	details: StoreSourceInvalidPublicDetails;
+}
+/**
+ * Details of STORE_SOURCE_INVALID for any other audience: its builder fields are left out.
+ */
+export interface StoreSourceInvalidPublicDetails {
+	connection: Name;
 }
 /**
  * TEMPORAL_MATCH_NOT_UNIQUE as a builder sees it.

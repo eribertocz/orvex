@@ -606,6 +606,45 @@ def test_a_store_failure_is_a_500_with_a_request_id_only() -> None:
         assert error["request_id"] == response.headers["x-request-id"]
 
 
+def test_a_lakes_data_refused_by_the_store_is_a_503_with_its_code_and_nothing_else() -> None:
+    """#447 (SEC-DQ-010, -011, -014, -015): an existing lake whose data does not pass its checks
+    reaches the caller as `STORE_SOURCE_INVALID` with the connection, never as an internal
+    error, and nothing of the store's message or details (files, DuckDB) comes with it."""
+    from orvex.store.errors import StoreError
+
+    class Refused:
+        def session(self) -> Any:  # noqa: ANN401
+            raise StoreError(
+                "STORE_SOURCE_INVALID",
+                "Connection warehouse: /secret/path is outside its location.",
+                {"connection": "warehouse", "reason": "file_refused", "duckdb": "/secret/path"},
+            )
+
+        def model(self, lake: Any, snapshot: int) -> Any:  # noqa: ANN401
+            raise AssertionError
+
+    semantic = LocalSemantic(
+        "project-1",
+        new_access(SLUG, PORT),
+        semantic_http.Semantic(
+            Refused(), semantic_http.local_context, semantic_http.session_settings()
+        ),
+    )
+    http = client(semantic)
+    for response in (
+        ask(http, semantic, aggregate()),
+        http.get("/api/v1/semantic/catalog", headers=bearer(semantic)),
+    ):
+        assert response.status_code == 503
+        error = response.json()["error"]
+        assert error["code"] == "STORE_SOURCE_INVALID"
+        assert {d["name"]: d["value"] for d in error["details"]} == {
+            "connection": "warehouse",
+            "reason": "file_refused",
+        }
+        assert "secret" not in response.text
+
+
 def test_cell_states_and_the_others_row_are_the_same_in_arrow_and_json() -> None:
     """Owner precision 3 on a result with an "Others" row, a state in a column that also holds
     a real `NULL`, and a state elsewhere."""

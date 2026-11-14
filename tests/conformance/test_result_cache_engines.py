@@ -16,8 +16,8 @@ from orvex.semantic.result_cache import ResultCache, use_of
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
-from tests.support.security_engines import ask, served
-from tests.support.security_sequences import context_for
+from conformance.runners.security_engines import ask, served
+from conformance.runners.security_sequences import context_for
 
 FOUND = sf.fixture("direct-query", ce.VENDORS[0])
 CALLER = {"kind": "security_context", "version": 1, "user": "u-open", "project": "direct-query",

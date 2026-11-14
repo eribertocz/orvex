@@ -37,3 +37,4 @@ Records 0001–0026 were approved by the Owner during the design session of 2026
 | [0029](0029-semantic-engine-scope-s1-s14.md) | Semantic engine scope for v1.0.0: S1–S14 (amends 0010) | Proposed |
 | [0030](0030-ossie-version-evolution.md) | Evolving with Apache Ossie: version registry, staged reading, three identities and the Ossie-first policy (amends 0009 and 0012) | Accepted |
 | [0031](0031-source-isolation-boundary.md) | Source isolation boundary: every external database read in a worker without the lake (makes 0025 precise) | Accepted |
+| [0032](0032-security-cases-follow-adr-0027.md) | Security cases follow ADR-0027 §3 for views, macros and overlapping locations (ratifies 0027) | Proposed |

@@ -213,6 +213,7 @@ _BY_CODE = {
     "MATRIX_TOO_WIDE": 413,
     "QUERY_RESULT_WITHDRAWN": 409,
     "ENGINE_VERSION_UNTESTED": 503,
+    "STORE_SOURCE_INVALID": 503,  # the lake's data does not pass its checks now
 }
 _BY_CATEGORY = {
     "query": 400,

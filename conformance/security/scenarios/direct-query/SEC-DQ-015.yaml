@@ -112,3 +112,4 @@ variants:
   link: hard
   target: route_a_sqlite
 adr_0027: catalog-file-replaced
+pending: P5-14

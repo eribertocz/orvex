@@ -91,6 +91,7 @@ def create_server_app(
     oidc: OidcSignIn | None = None,
     served: ServedProject | None = None,
     administration: Administration | None = None,
+    run_jobs: Callable[[Callable[[], None]], None] | None = None,
 ) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     if administration is not None:
@@ -252,6 +253,7 @@ def create_server_app(
             audience,
             lambda request: (request.state.session.user.id, project),
             recheck,
+            run_jobs,
         )
     checked_route_table(app)
     checked_permissions(app)
