@@ -3040,7 +3040,8 @@
             "matrix_cells",
             "time_ms",
             "memory_bytes",
-            "concurrent_queries"
+            "concurrent_queries",
+            "retained_bytes"
           ]
         },
         "limit": {
@@ -3067,7 +3068,8 @@
             "matrix_cells",
             "time_ms",
             "memory_bytes",
-            "concurrent_queries"
+            "concurrent_queries",
+            "retained_bytes"
           ]
         },
         "limit": {

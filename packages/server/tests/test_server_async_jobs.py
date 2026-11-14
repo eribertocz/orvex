@@ -16,7 +16,8 @@ import pytest
 from orvex.access.authentication.query_limits import QueryLimits, RoleLimit
 from orvex.access.errors import AUDIT_UNAVAILABLE, AccessError
 from orvex.semantic.execution import answer
-from orvex.server import semantic_delivery, semantic_http
+from orvex.server import semantic_delivery, semantic_http, semantic_jobs
+from orvex.server.query_cancel import Cancel
 from orvex.server.semantic_audit import record_query
 
 from tests.support.access_directory import audit_events
@@ -274,27 +275,36 @@ def test_a_role_lowered_or_a_membership_removed_before_the_fetch_is_forbidden(
 # --- AC3b: the slot of a job ---------------------------------------------------------------------
 
 
+class Gate:
+    """Holds every question's execution, once its engine is known, until opened."""
+
+    def __init__(self) -> None:
+        self.opened = threading.Event()
+        self.entered = threading.Event()  # an execution is held
+
+
 @pytest.fixture
-def gate(monkeypatch: pytest.MonkeyPatch) -> threading.Event:
-    """Holds every question's execution until set."""
-    opened = threading.Event()
+def gate(monkeypatch: pytest.MonkeyPatch) -> Gate:
+    held = Gate()
     original = answer
 
-    def held(*args: Any) -> Any:  # noqa: ANN401
-        assert opened.wait(30)
+    def holding(*args: Any) -> Any:  # noqa: ANN401
+        held.entered.set()
+        assert held.opened.wait(30)
         return original(*args)
 
-    monkeypatch.setattr(semantic_http, "answer", held)
-    return opened
+    monkeypatch.setattr(semantic_http, "answer", holding)
+    return held
 
 
 def test_a_running_job_holds_its_slot_and_a_cancel_frees_it_at_once(
-    server: Server, gate: threading.Event
+    server: Server, gate: Gate
 ) -> None:
     ana = server.author("ana", "finance")
     QueryLimits(server.store, server.audit).change(server.admin, {"author": RoleLimit(1, 60_000)})
     http = server.client("ana")
     job = start(http, detail(10))
+    assert gate.entered.wait(30)  # running, its engine known: the managed lake
     assert http.get(JOBS + job).json()["status"] == "running"
     refused = http.post("/api/v1/semantic/query", json=detail(10), headers=ASYNC)
     assert code(refused) == (429, "QUERY_BUDGET_EXCEEDED")  # and no job exists for it
@@ -303,7 +313,7 @@ def test_a_running_job_holds_its_slot_and_a_cancel_frees_it_at_once(
     assert cancelled.json()["status"] == "cancelled"
     assert server.semantic.slots.running(ana, "project-1") == 0  # free before any fetch
     second = start(http, detail(10))  # at the limit again, at once
-    gate.set()
+    gate.opened.set()
     assert fetched(http, second).status_code == 200
     assert http.get(JOBS + job).json()["status"] == "cancelled"  # never delivered
     assert ("delivered", job) not in stages(server)
@@ -346,3 +356,49 @@ def test_a_revocation_after_a_fetch_applies_to_the_next_fetch(
     monkeypatch.setattr(semantic_delivery, "record_query", recorded_then_revoked)
     assert fetched(http, job).status_code == 200  # decided before the revocation
     assert code(fetched(http, job)) == (409, "QUERY_RESULT_WITHDRAWN")
+
+
+def test_cancelling_an_uninterruptible_job_and_starting_again_never_exceeds_the_limit(
+    server: Server, gate: Gate, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """As an existing lake's or ClickHouse's question: the result is withdrawn at the cancel,
+    the slot held until the execution really ends; repeated cancels and starts find no room."""
+    learnt = Cancel.known
+
+    def uninterruptible(self: Cancel, interruptible: bool) -> None:
+        learnt(self, False)
+
+    monkeypatch.setattr(Cancel, "known", uninterruptible)
+    ana = server.author("ana", "finance")
+    QueryLimits(server.store, server.audit).change(server.admin, {"author": RoleLimit(1, 60_000)})
+    http = server.client("ana")
+    job = start(http, detail(10))
+    assert gate.entered.wait(30)
+    assert http.delete(JOBS + job, headers=SAME).json()["status"] == "cancelled"
+    for _ in range(3):
+        again = http.post("/api/v1/semantic/query", json=detail(10), headers=ASYNC)
+        assert code(again) == (429, "QUERY_BUDGET_EXCEEDED")
+        assert code(ask(http, detail(1))) == (429, "QUERY_BUDGET_EXCEEDED")
+        assert http.delete(JOBS + job, headers=SAME).json()["status"] == "cancelled"
+        assert server.semantic.slots.running(ana, "project-1") == 1
+    assert http.get(JOBS + job).json() == {"job": job, "status": "cancelled"}  # withdrawn
+    gate.opened.set()
+    until(lambda: server.semantic.slots.running(ana, "project-1") == 0)
+    assert ended(server) == [(job, "cancelled")]
+    assert fetched(http, start(http, detail(10))).status_code == 200  # room again
+
+
+def test_an_answer_beyond_the_retention_is_an_explicit_failure_not_a_404(
+    server: Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(semantic_jobs, "MAX_BYTES", 1)
+    server.author("ana", "finance")
+    http = server.client("ana")
+    job = start(http, detail(10))
+    failed = fetched(http, job)
+    assert code(failed) == (413, "QUERY_BUDGET_EXCEEDED")
+    assert failed.json()["error"]["semantic"]["details"]["budget"] == "retained_bytes"
+    assert "rows" not in failed.text
+    assert ended(server) == [(job, "failed")]
+    assert code(http.get(JOBS + job)) == (413, "QUERY_BUDGET_EXCEEDED")  # kept, verifiable
+    assert ask(http, detail(10)).status_code == 200  # whole, synchronously

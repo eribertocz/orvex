@@ -3,7 +3,9 @@ started are interrupted, and a read it would start next is refused (`STORE_CANCE
 
 The cancel is thread-safe and takes effect once: a read registered after it is cancelled at
 once. Reads of other engines (an existing lake, ClickHouse) are not interrupted: their own
-time limit (the role's `max_run_ms`) ends them, and their answer is discarded.
+time limit (the role's `max_run_ms`) ends them, and their answer is discarded. So the question
+says, once its engine is known, whether a cancel interrupts it (`known`): only then may its
+slot be freed at the cancel; otherwise the slot is held until the execution really ends.
 """
 
 from __future__ import annotations
@@ -23,6 +25,22 @@ class Cancel:
         self._lock = threading.Lock()
         self._cancelled = False
         self._reads: list[ReadHandle] = []
+        self._interruptible: bool | None = None  # unknown until the question's engine is
+
+    @property
+    def interruptible(self) -> bool:
+        """Whether a cancel now stops the execution: its engine reads only the managed lake."""
+        with self._lock:
+            return self._interruptible is True
+
+    def known(self, interruptible: bool) -> None:
+        """The question's engine is known; raise `STORE_CANCELLED` when already cancelled, so
+        an execution cancelled while it waited or planned stops before it reads."""
+        with self._lock:
+            self._interruptible = interruptible
+            cancelled = self._cancelled
+        if cancelled:
+            raise StoreError("STORE_CANCELLED", "The question was cancelled.", {})
 
     @property
     def cancelled(self) -> bool:

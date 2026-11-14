@@ -5,10 +5,15 @@ background under the caller's role limits, and delivered only through the one de
   `429` and no job. The job id is 128 random bits, owned by the caller's user and project; any
   other caller gets `404` for it, as for an id that never existed.
 - **One end.** A job ends once, at the first of: finishing, failing or being cancelled. That
-  end releases the slot exactly once (Owner precision 2), never the fetch, which takes no slot,
-  and records the job's one `executed` event (precision 3), fetched or not: with the receipt
-  when it finished, with its `end` (failed, cancelled) and no receipt otherwise. A cancel also
-  stops the execution (`query_cancel`); an answer that still comes is never delivered.
+  end records the job's one `executed` event (precision 3), fetched or not: with the receipt
+  when it finished, with its `end` (failed, cancelled) and no receipt otherwise. A cancel
+  withdraws the result at once: an answer that still comes is never delivered.
+- **The slot** is released exactly once, never at the fetch (which takes none), and never
+  before the execution can no longer run (Owner, #482): at the end, or at a cancel that stops
+  the execution (`query_cancel`: its engine reads only the managed lake). A cancel of an
+  execution that cannot be interrupted (an existing lake, ClickHouse) holds the slot until that
+  execution really ends, bounded by the role's `max_run_ms`: cancelling and starting again
+  never runs more questions at once than the role allows.
 - **Audit at execution.** When a finished job's `executed` event cannot be recorded, the job
   fails with `AUDIT_UNAVAILABLE` and its result is discarded, unless the answer is withheld
   (#443).
@@ -19,12 +24,16 @@ background under the caller's role limits, and delivered only through the one de
 - **Keeping.** A finished job is kept for 10 minutes, then it is gone (`404`). The kept answers
   are bounded, like the result cache, in number (`MAX_JOBS`) and in bytes (`MAX_BYTES`): beyond
   either, the oldest finished job of the owner keeping the most bytes goes first, so a caller
-  filling the bound mostly evicts their own. A restart loses every job (fail closed). The answer
-  is never truncated: it is the whole answer, or its error.
+  filling the bound mostly evicts their own. An answer larger than `MAX_BYTES` alone is never
+  kept: its job fails with `QUERY_BUDGET_EXCEEDED` (`budget: retained_bytes`, `413`), its
+  `executed` event records `end: failed`, and the question can be asked synchronously, or
+  narrowed. A restart loses every job (fail closed). The answer is never truncated: it is the
+  whole answer, or its error.
 """
 
 from __future__ import annotations
 
+import logging
 import secrets
 import threading
 import time
@@ -33,6 +42,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from orvex.access.errors import AccessError
+from orvex.semantic.errors import SemanticError
 from orvex.server import semantic_http
 from orvex.server.query_cancel import Cancel
 from orvex.server.query_slots import Slot
@@ -41,6 +51,7 @@ from orvex.server.semantic_delivery import deliver
 
 KEPT_SECONDS = 600
 MAX_JOBS = 256
+LOG = logging.getLogger(__name__)
 MAX_BYTES = 256 * 2**20  # the kept answers' tables at most, as the result cache's bound
 
 
@@ -92,6 +103,8 @@ class Jobs:
             except Exception as error:  # noqa: BLE001 - kept as the job's outcome
                 self._end(job, job_id, "failed", error=error)
                 return
+            finally:
+                slot.release()  # the execution has ended: no-op when its end released it
             self._end(job, job_id, "done", asked=asked)
 
         self._collect()
@@ -116,8 +129,8 @@ class Jobs:
 
     def cancel(self, job_id: str, owner: tuple[str, str]) -> Job:
         job = self.status(job_id, owner)
-        if self._end(job, job_id, "cancelled"):
-            job.stop.cancel()
+        job.stop.cancel()  # first: a read in flight is interrupted before the slot is freed
+        self._end(job, job_id, "cancelled")
         return job
 
     def fetch[R](
@@ -162,10 +175,18 @@ class Jobs:
         size = 0
         try:
             if status == "done" and asked is not None:
+                size = asked.found.result.arrow().nbytes
+                if size > MAX_BYTES:  # never kept, never truncated: an explicit failure
+                    details = {"budget": "retained_bytes", "limit": str(MAX_BYTES)}
+                    error = SemanticError(
+                        "QUERY_BUDGET_EXCEEDED", {**details, "estimate": str(size)}
+                    )
+                    status, asked, size = "failed", None, 0
+                    LOG.warning("job %s: its answer is larger than the jobs' retention", job_id)
+            if status == "done" and asked is not None:
                 if audit is not None:
                     record_query(audit, asked.found, asked.context, "executed", job_id)
                     record_withheld(audit, asked.found, asked.context)
-                size = asked.found.result.arrow().nbytes
             elif audit is not None:
                 record_unfinished(audit, user, project, job_id, status)
         except AccessError as refused:  # the event of an answer could not be recorded
@@ -176,7 +197,8 @@ class Jobs:
             with job.lock:
                 job.status, job.asked, job.error = status, asked, error
                 job.ended, job.size = self._clock(), size
-            job.slot.release()  # whatever happened above: never a job left running
+            if status != "cancelled" or job.stop.interruptible:
+                job.slot.release()  # held otherwise until the execution really ends
         return True
 
     def _collect(self) -> None:

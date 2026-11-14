@@ -1541,6 +1541,7 @@ class QueryBudgetExceededDetails(BaseModel):
         "time_ms",
         "memory_bytes",
         "concurrent_queries",
+        "retained_bytes",
     ]
     limit: Count
     estimate: Count | None = None
@@ -1561,6 +1562,7 @@ class QueryBudgetExceededPublicDetails(BaseModel):
         "time_ms",
         "memory_bytes",
         "concurrent_queries",
+        "retained_bytes",
     ]
     limit: Count
 

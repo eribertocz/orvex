@@ -83,8 +83,13 @@ class Asked:
         return Found()
 
 
-def answered_with(monkeypatch: pytest.MonkeyPatch, outcome: Callable[[], Any]) -> None:
+def answered_with(
+    monkeypatch: pytest.MonkeyPatch, outcome: Callable[[], Any], interruptible: bool = True
+) -> None:
+    """`ask` as the engine would: it learns its engine (`known`), then answers."""
+
     def ask(semantic: Any, body: bytes, request: object, cancel: Cancel) -> Any:  # noqa: ANN401
+        cancel.known(interruptible)
         return outcome()
 
     monkeypatch.setattr(semantic_http, "ask", ask)
@@ -152,27 +157,145 @@ def test_a_job_that_cannot_be_run_frees_its_slot(stub: Stub, clock: Clock) -> No
     assert jobs._jobs == {}
 
 
-def test_a_cancel_frees_the_slot_at_once_stops_the_execution_and_is_never_overwritten(
-    stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    stops: list[Cancel] = []
+def running_job(
+    stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch, interruptible: bool
+) -> tuple[Jobs, str, threading.Event, threading.Thread]:
+    """A job whose execution has learnt its engine and is still running, until the event."""
+    release, reading = threading.Event(), threading.Event()
 
-    def ask(semantic: Any, body: bytes, request: object, cancel: Cancel) -> Any:  # noqa: ANN401
-        stops.append(cancel)
+    def answer() -> Any:  # noqa: ANN401
+        reading.set()
+        assert release.wait(10)
         return Asked()
 
-    monkeypatch.setattr(semantic_http, "ask", ask)
-    held: list[Callable[[], None]] = []
-    jobs = jobs_of(stub, clock, held.append)
+    answered_with(monkeypatch, answer, interruptible)
+    threads: list[threading.Thread] = []
+    jobs = jobs_of(stub, clock, lambda work: threads.append(threading.Thread(target=work)))
     job = jobs.start(b"{}", object(), OWNER)
+    threads[0].start()
+    assert reading.wait(10)
+    return jobs, job, release, threads[0]
+
+
+def test_a_cancel_of_an_interruptible_execution_frees_the_slot_at_once(
+    stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs, job, release, thread = running_job(stub, clock, monkeypatch, interruptible=True)
     assert jobs.cancel(job, OWNER).status == "cancelled"
-    assert stub.slots.running(*OWNER) == 0  # free before the execution even ran
-    assert jobs.status(job, OWNER).stop.cancelled
-    held[0]()  # the execution comes, under its stopped cancel, and finishes anyway
-    assert stops == [jobs.status(job, OWNER).stop]
+    assert jobs.status(job, OWNER).stop.cancelled  # its managed reads interrupted
+    assert stub.slots.running(*OWNER) == 0
+    release.set()
+    thread.join(10)
     assert stub.slots.running(*OWNER) == 0  # never released twice
     assert jobs.status(job, OWNER).status == "cancelled"
     assert jobs.fetch(job, OWNER, object(), lambda asked: asked) is None  # never delivered
+
+
+def test_a_cancel_of_an_execution_that_cannot_be_interrupted_holds_the_slot_until_it_ends(
+    stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing lake's or ClickHouse's read runs on after the cancel: the result is
+    withdrawn at once, the slot only when the execution really ends."""
+    jobs, job, release, thread = running_job(stub, clock, monkeypatch, interruptible=False)
+    assert jobs.cancel(job, OWNER).status == "cancelled"
+    assert jobs.fetch(job, OWNER, object(), lambda asked: asked) is None  # withdrawn now
+    assert stub.slots.running(*OWNER) == 1  # still running: still counted
+    release.set()
+    thread.join(10)
+    assert stub.slots.running(*OWNER) == 0
+    assert jobs.status(job, OWNER).status == "cancelled"
+    assert jobs.fetch(job, OWNER, object(), lambda asked: asked) is None
+
+
+def test_a_job_cancelled_before_it_knows_its_engine_holds_its_slot_and_stops_before_reading(
+    stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    read: list[bool] = []
+
+    def reading() -> Any:  # noqa: ANN401
+        read.append(True)
+        return Asked()
+
+    answered_with(monkeypatch, reading)
+    held: list[Callable[[], None]] = []
+    jobs = jobs_of(stub, clock, held.append)
+    job = jobs.start(b"{}", object(), OWNER)  # waiting for its turn, or planning
+    jobs.cancel(job, OWNER)
+    assert stub.slots.running(*OWNER) == 1  # not known to be interruptible: held
+    held[0]()  # its engine becomes known: it stops there
+    assert read == []
+    assert stub.slots.running(*OWNER) == 0
+    assert jobs.status(job, OWNER).status == "cancelled"
+
+
+def test_cancelling_and_starting_again_never_exceeds_the_limit(
+    stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Executions that cannot be interrupted: however many cancels and starts, at most
+    `max_concurrent` run, and each slot comes back once its execution ends."""
+    stub.limit = 2
+    release = threading.Event()
+    running = threading.Semaphore(0)
+
+    def answer() -> Any:  # noqa: ANN401
+        running.release()
+        assert release.wait(10)
+        return Asked()
+
+    answered_with(monkeypatch, answer, interruptible=False)
+    threads: list[threading.Thread] = []
+
+    def run(work: Callable[[], None]) -> None:
+        thread = threading.Thread(target=work)
+        threads.append(thread)
+        thread.start()
+
+    jobs = jobs_of(stub, clock, run)
+    for _ in range(2):
+        job = jobs.start(b"{}", object(), OWNER)
+        assert running.acquire(timeout=10)
+        jobs.cancel(job, OWNER)
+    for _ in range(5):  # cancelled, but still running: no room
+        with pytest.raises(SemanticError) as caught:
+            jobs.start(b"{}", object(), OWNER)
+        assert caught.value.details["budget"] == "concurrent_queries"
+        assert stub.slots.running(*OWNER) == 2
+    release.set()
+    for thread in threads:
+        thread.join(10)
+    assert stub.slots.running(*OWNER) == 0
+    again = jobs.start(b"{}", object(), OWNER)  # room again
+    threads[-1].join(10)
+    assert jobs.status(again, OWNER).status == "done"
+    assert stub.slots.running(*OWNER) == 0
+
+
+def test_an_answer_larger_than_the_retention_fails_explicitly_and_is_never_kept(
+    stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answered_with(monkeypatch, lambda: Asked(semantic_jobs.MAX_BYTES + 1))
+    log = Recorded()
+    stub.audit = log  # type: ignore[assignment]
+    jobs = jobs_of(stub, clock, now)
+    job = jobs.start(b"{}", object(), OWNER)
+    found = jobs.status(job, OWNER)
+    assert (found.status, found.asked, found.size) == ("failed", None, 0)
+    assert isinstance(found.error, SemanticError)
+    assert found.error.code == "QUERY_BUDGET_EXCEEDED"
+    assert found.error.details == {
+        "budget": "retained_bytes",
+        "limit": str(semantic_jobs.MAX_BYTES),
+        "estimate": str(semantic_jobs.MAX_BYTES + 1),
+    }
+    with pytest.raises(SemanticError):
+        jobs.fetch(job, OWNER, object(), lambda asked: asked)
+    assert [e["details"] for e in log.events] == [
+        {"stage": "executed", "job": job, "end": "failed"}
+    ]
+    assert stub.slots.running(*OWNER) == 0
+    stub.audit = None
+    answered_with(monkeypatch, lambda: Asked(semantic_jobs.MAX_BYTES))  # at the bound: kept
+    assert jobs.status(jobs.start(b"{}", object(), OWNER), OWNER).status == "done"
 
 
 def test_racing_ends_release_the_slot_exactly_once(

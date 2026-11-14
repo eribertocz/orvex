@@ -1250,7 +1250,8 @@ export interface QueryBudgetExceededDetails {
 		| 'matrix_cells'
 		| 'time_ms'
 		| 'memory_bytes'
-		| 'concurrent_queries';
+		| 'concurrent_queries'
+		| 'retained_bytes';
 	limit: Count;
 	estimate?: Count;
 }
@@ -1277,7 +1278,8 @@ export interface QueryBudgetExceededPublicDetails {
 		| 'matrix_cells'
 		| 'time_ms'
 		| 'memory_bytes'
-		| 'concurrent_queries';
+		| 'concurrent_queries'
+		| 'retained_bytes';
 	limit: Count;
 }
 /**

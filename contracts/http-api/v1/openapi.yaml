@@ -92,7 +92,8 @@ paths:
         and a job past its 10 minutes get `404 SEMANTIC_JOB_NOT_FOUND` alike. A done job's
         answer is delivered under the caller's permissions now: permissions changed since it
         ran give `409 QUERY_RESULT_WITHDRAWN`, and nothing of the answer is sent. A failed job
-        gives the error the synchronous question would.
+        gives the error the synchronous question would; an answer larger than the jobs'
+        retention (256 MiB) gives `413 QUERY_BUDGET_EXCEEDED` (`budget: retained_bytes`).
       parameters:
         - name: job
           in: path
@@ -117,8 +118,10 @@ paths:
       operationId: deleteSemanticJob
       summary: Cancel an asynchronous question (#445).
       description: >-
-        The job ends `cancelled` at once and its slot is free; its running read is interrupted
-        and its answer is never delivered. A cancel of an ended job changes nothing.
+        The job ends `cancelled` at once and its answer is never delivered. Its slot is free at
+        once when its execution is stopped (the managed lake's read is interrupted); an existing
+        lake's or ClickHouse's execution holds the slot until it really ends. A cancel of an
+        ended job changes nothing.
       parameters:
         - name: job
           in: path

@@ -80,3 +80,21 @@ def test_a_read_registering_while_cancelled_is_cancelled_once() -> None:
     once, whichever came first."""
     for _ in range(50):
         assert all(h.cancels == 1 for h in race().started)
+
+
+def test_a_question_learns_whether_a_cancel_interrupts_it() -> None:
+    cancel = Cancel()
+    assert not cancel.interruptible  # unknown: not interruptible
+    cancel.known(False)
+    assert not cancel.interruptible
+    managed = Cancel()
+    managed.known(True)
+    assert managed.interruptible
+
+
+def test_a_question_cancelled_before_its_engine_is_known_stops_there() -> None:
+    cancel = Cancel()
+    cancel.cancel()
+    with pytest.raises(StoreError) as caught:
+        cancel.known(True)
+    assert caught.value.code == "STORE_CANCELLED"

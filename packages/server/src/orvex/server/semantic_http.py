@@ -429,6 +429,8 @@ def ask(semantic: Semantic, body: bytes, request: object, cancel: Cancel | None 
     with semantic.source.session() as lake:
         read = lake.read if cancel is None else cancel.reading(lake)
         question = _question(semantic, lake, body, request, read)
+        if cancel is not None:  # only the managed lake's reads are interruptible
+            cancel.known(not question.engine.adapters)
         compiled = question.model.compiled
         limit = semantic.limits(str(question.context["role"])).max_run_ms
         engine = question.engine
