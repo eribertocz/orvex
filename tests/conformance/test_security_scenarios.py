@@ -436,5 +436,5 @@ def test_r5_a_pending_without_a_reference_or_on_a_started_phase_fails() -> None:
     assert codes_of(problems(*every)) == ["SCENARIO_PENDING_ENGINE_ALL"]
     nowhere = planted("SEC-DQ-001", pending_engines={"existing-ducklake": "P8-99"})
     assert codes_of(problems(*nowhere)) == ["SCENARIO_PENDING_UNKNOWN"]
-    owner = planted("SEC-REVOKE-002", pending=444)
+    owner = planted("SEC-REVOKE-004", pending=444)  # its code is P6-18's
     assert codes_of(problems(*owner)) == ["SCENARIO_CODE_OWNER_MISMATCH"]

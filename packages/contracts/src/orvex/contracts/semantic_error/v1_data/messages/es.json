@@ -143,6 +143,10 @@
     "generic": "La consulta no es válida.",
     "builder": "La consulta no es válida: {problems} problemas, {problems_omitted} más sin mostrar."
   },
+  "QUERY_RESULT_WITHDRAWN": {
+    "generic": "Esta respuesta se retiró porque cambiaron tus permisos; vuelve a preguntar.",
+    "builder": "Esta respuesta se retiró porque cambiaron tus permisos ({reason}); vuelve a preguntar."
+  },
   "REAGGREGATION_NOT_ALLOWED": {
     "generic": "La métrica {metric} ({class}) no se puede volver a agregar desde resultados ya agregados.",
     "builder": "La métrica {metric} ({class}) no se puede volver a agregar desde resultados ya agregados."

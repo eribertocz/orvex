@@ -27,9 +27,9 @@ The registry is `components.x-error-codes` in `openapi.yaml`; a test checks that
 - `Health.status` is the constant `ok`. Reporting degraded states later is a breaking change, so it would come as a new field or in v2.
 - `modules`, `contracts` and `details` are arrays of name/value objects, not maps, because every object in a contract is closed (`additionalProperties: false`).
 
-## Semantic routes (P2-27a)
+## Semantic routes (P2-27a; server mode, #445)
 
-`POST /api/v1/semantic/query`, `POST /api/v1/semantic/explain` (P2-27b, #364) and `GET /api/v1/semantic/catalog` exist only in local mode. `explain` answers a `semantic-explain` v1 document and reads no data; its errors follow the same table, except that the plan's own refusals (categories `correctness`, `budget`, `engine`) are explained with `outcome: refused` instead.
+`POST /api/v1/semantic/query`, `POST /api/v1/semantic/explain` (P2-27b, #364) and `GET /api/v1/semantic/catalog` exist in local mode and, with the job routes, in server mode. `explain` answers a `semantic-explain` v1 document and reads no data; its errors follow the same table, except that the plan's own refusals (categories `correctness`, `budget`, `engine`) are explained with `outcome: refused` instead.
 
 - **Credentials.** Each serve session has three, all revoked when the server stops:
   - a one-time bootstrap code, valid for a few minutes, exchanged at `/?code=…` for a session cookie and a redirect without the code;
@@ -40,6 +40,10 @@ The registry is `components.x-error-codes` in `openapi.yaml`; a test checks that
   - its `Origin` is not the server's own (`null` included), or its `Sec-Fetch-Site` is not `same-origin` or `none`;
   - a `POST` body is not `application/json`;
   - it carries no live credential.
+- **Server mode (#445).** Every request passes, in this order: authentication (`401 SESSION_EXPIRED`), origin and CSRF (`403 ORIGIN_REFUSED`), authorization (`403 ACCESS_FORBIDDEN`, audited), then the body type (`403 ORIGIN_REFUSED`, `content-type`). A request refused at one step is told nothing of the later ones. Each route declares its permission, and an application with an undeclared route does not build. The semantic routes need the explorer permission: a Builder or an Author. A Viewer reaches data only through pages (P4).
+- **Limits (#445).** Each role has a number of questions running at once per user and project, and a run time, set by the instance administrator (defaults: Builder 4 and 120 s, Author 2 and 60 s, Viewer 2 and 30 s). A question beyond it is refused before any work, `429 QUERY_BUDGET_EXCEEDED` with `budget: concurrent_queries` and `Retry-After`, never queued. No limit is on rows: an answer is whole or an error.
+- **Asynchronous questions (#445).** `POST /api/v1/semantic/query` with `Prefer: respond-async` answers `202` with the job's id and `Location: /api/v1/semantic/jobs/{job}`. `GET` on it gives `running`, `cancelled`, or `done` with the answer (JSON, or Arrow with `Accept`); `DELETE` cancels it: its result is withdrawn at once and never delivered. The slot is freed at once when the cancel stops the execution (a question on the managed lake, whose read is interrupted); a question on an existing lake or ClickHouse cannot be interrupted, so its slot is held until its execution really ends, within the role's run time: cancelling and starting again never exceeds the role's limit. A job is its owner's alone, kept 10 minutes after it ends, and lost at a restart (`404 SEMANTIC_JOB_NOT_FOUND`). **Retention limit:** the kept answers are bounded at 256 MiB (their Arrow size). An answer larger than that alone is never kept and never truncated: its job fails with `413 QUERY_BUDGET_EXCEEDED` (`budget: retained_bytes`), and its execution's audit event records `end: failed`. Ask such a question synchronously, or narrow it.
+- **Delivery (#445).** Every answer, synchronous or a job's, read, from the result cache or not, is checked against the caller's permissions at the moment it is sent: a change since it was computed is `409 QUERY_RESULT_WITHDRAWN`, and nothing of it is sent. Each delivered answer is recorded in the audit log first (`query`); when that cannot be recorded, `503 AUDIT_UNAVAILABLE` and nothing is sent, except an answer a row policy withheld whole (#443).
 - **Engine errors.** Every `semantic-error` v1 code is also an error code of this API. `error.code` is the engine's code; `error.semantic` is its whole message, with the builder audience in local mode; `details` repeats its details as name/value text.
 - **Status codes:**
 
@@ -48,9 +52,9 @@ The registry is `components.x-error-codes` in `openapi.yaml`; a test checks that
   | 400 | category `query` |
   | 403 | category `security` |
   | 404 | `MEMBER_NOT_FOUND` |
-  | 409 | `EVIDENCE_VIOLATED` |
-  | 413 | `MATRIX_TOO_WIDE`, and a size budget |
+  | 409 | `EVIDENCE_VIOLATED`, `QUERY_RESULT_WITHDRAWN` |
+  | 413 | `MATRIX_TOO_WIDE`, and a size budget (`retained_bytes`, an asynchronous answer beyond the jobs' retention, included) |
   | 422 | categories `model`, `correctness` and `engine` |
-  | 429 | the time budget (`budget: time_ms`) |
-  | 503 | `ENGINE_VERSION_UNTESTED` |
+  | 429 | the time budget (`budget: time_ms`), and the concurrency limit (`budget: concurrent_queries`, with `Retry-After`) |
+  | 503 | `ENGINE_VERSION_UNTESTED`, and `AUDIT_UNAVAILABLE` |
 - **Arrow.** The Arrow answer is the result's Arrow form. Its schema metadata also holds `semantic.envelope` and `semantic.receipt`, the RFC 8785 bytes of the JSON answer's envelope and receipt view.

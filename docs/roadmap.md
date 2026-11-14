@@ -199,7 +199,7 @@
 | P5-02 | Named analysis contexts and comparison | semantic |
 | P5-03 | Possible-values API over authorized rows only | semantic |
 | P5-04 | Normative cases for S4 and S5 *(Owner merges)* | conformance |
-| P5-05 | Metric lifecycle and validation API: draft, certified, deprecated | semantic |
+| P5-05 | Metric lifecycle and validation API: draft, certified, deprecated; with it, Authors explore certified metrics only (`security.md` §3.1; until then every metric their column policies show, #445 Q5) | semantic |
 | P5-06 | Metric preview with the author's permissions and impact on other metrics (dashboard impact arrives in P6-08) | semantic |
 | P5-07 | Project writer (ADR-0024): atomic text saves, text-span form edits with diff preview and re-parse verification, conflict detection, commits with the user's identity in server mode, audited | server |
 | P5-08 | Author proposals, Builder certification, publishing to the Ossie file through the project writer (ADR-0024) | semantic |

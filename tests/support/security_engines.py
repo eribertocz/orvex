@@ -70,8 +70,8 @@ class Served:
     routing: Routing | None = None
     adapters: Mapping[str, Any] | None = None
     reads: list[object] | None = None  # every read the other engine made
-    # Deletes the rows of a dataset's table matching the given values, as that engine's owner
-    # would, and makes the result the engine's served version (#444, `delete_row`).
+    # Deletes the rows of a table matching the given values, as that engine's owner would (a
+    # mapping in the managed lake), and makes the result the served version (`delete_row`).
     delete: Callable[[str, Mapping[str, object]], None] | None = None
     cache: ResultCache | None = None  # the result cache every question of this place shares
 
@@ -244,19 +244,20 @@ def _existing_lake(found: sf.Fixture, catalog: str) -> Iterator[_Owned]:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _managed_delete(lake: Any, table: str, row: Mapping[str, object]) -> None:  # noqa: ANN401
+    """Delete the matching rows of a managed-lake table (a dataset's, or a mapping's)."""
+    where = " AND ".join(f'"{k}" = {_sql_value(str(v))}' for k, v in row.items())
+    named = ".".join(f'"{part}"' for part in table.split("."))
+    with lake.transaction() as transaction:
+        transaction.execute(StatementRequest(
+            kind="statement", parameters=[], sql=f"DELETE FROM {named} WHERE {where}"))  # fmt: skip
+
+
 @contextmanager
 def served(found: sf.Fixture, engine: str, catalog: str) -> Iterator[Served]:
     if engine == "managed":
         with sf.managed_lake(found) as lake:
-
-            def deleted(table: str, row: Mapping[str, object]) -> None:
-                where = " AND ".join(f'"{k}" = {_sql_value(str(v))}' for k, v in row.items())
-                with lake.transaction() as transaction:
-                    transaction.execute(StatementRequest(
-                        kind="statement", parameters=[],
-                        sql=f'DELETE FROM "{table}" WHERE {where}'))  # fmt: skip
-
-            yield Served(lake, delete=deleted)
+            yield Served(lake, delete=lambda table, row: _managed_delete(lake, table, row))
         return
     datasets: Any = found.compiled.ossie.document.get("datasets", ())
     names = [str(d["name"]) for d in datasets]
@@ -296,6 +297,9 @@ def served(found: sf.Fixture, engine: str, catalog: str) -> Iterator[Served]:
                     checks = [NOW]
 
                     def deleted(table: str, row: Mapping[str, object]) -> None:
+                        if table in found.managed:  # a mapping: in the managed lake
+                            _managed_delete(lake, table, row)
+                            return
                         where = " AND ".join(
                             f'"{k}" = {_sql_value(str(v))}' for k, v in row.items()
                         )
@@ -318,6 +322,9 @@ def served(found: sf.Fixture, engine: str, catalog: str) -> Iterator[Served]:
             evidence.check(NOW)
 
             def deleted(table: str, row: Mapping[str, object]) -> None:
+                if table in found.managed:  # a mapping: in the managed lake
+                    _managed_delete(lake, table, row)
+                    return
                 where = " AND ".join(f"`{k}` = {_sql_value(str(v))}" for k, v in row.items())
                 server.run(
                     f"ALTER TABLE {server.database}.`{table}` DELETE WHERE {where} "

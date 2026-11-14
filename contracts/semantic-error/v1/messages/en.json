@@ -143,6 +143,10 @@
     "generic": "The query is not valid.",
     "builder": "The query is not valid: {problems} problems, {problems_omitted} more not shown."
   },
+  "QUERY_RESULT_WITHDRAWN": {
+    "generic": "This answer was withdrawn because your permissions changed; ask again.",
+    "builder": "This answer was withdrawn because your permissions changed ({reason}); ask again."
+  },
   "REAGGREGATION_NOT_ALLOWED": {
     "generic": "The metric {metric} ({class}) cannot be re-aggregated from aggregated results.",
     "builder": "The metric {metric} ({class}) cannot be re-aggregated from aggregated results."

@@ -27,7 +27,7 @@ import secrets
 import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, ExitStack, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -35,9 +35,17 @@ from typing import Any, Protocol
 
 import pyarrow as pa
 from orvex.access.audit.log import AuditLog
+from orvex.access.authentication import query_limits
+from orvex.access.authentication.query_limits import DEFAULT_LIMITS, RoleLimit
 from orvex.access.context import InvalidContext
+from orvex.access.errors import ACCESS_FORBIDDEN, AccessError
 from orvex.access.local import LocalContextProvider, LocalRequest
-from orvex.access.server_context import Audience, ServerContextProvider
+from orvex.access.server_context import (
+    Audience,
+    ServerContextProvider,
+    ServerRequest,
+    role_of,
+)
 from orvex.access.storage.store import Store
 from orvex.semantic.catalog.building import catalog_for_context
 from orvex.semantic.errors import SemanticError
@@ -54,7 +62,8 @@ from orvex.server import evidence_records, lake_place, semantic_model
 from orvex.server.identity import Identity
 from orvex.server.permission_state import permission_state
 from orvex.server.project import Project, ProjectLoadError, load_project
-from orvex.server.semantic_audit import record_withheld
+from orvex.server.query_cancel import Cancel
+from orvex.server.query_slots import QuerySlots, Slot
 from orvex.server.semantic_model import ExternalTables
 from orvex.store.errors import StoreError
 from orvex.store.json_encoding import arrow_to_json
@@ -127,6 +136,18 @@ class Settings:
     cache: ResultCache | None = field(default=None, repr=False)
 
 
+def local_limits(role: str) -> RoleLimit:
+    """Local mode's one Builder: the defaults."""
+    return DEFAULT_LIMITS[role]
+
+
+def local_identity(request: object) -> tuple[str, str, str]:
+    """Local mode's one Builder."""
+    if not isinstance(request, LocalRequest):
+        raise InvalidContext("the request is not an authenticated local request")
+    return "local", request.project, "builder"
+
+
 @dataclass(frozen=True)
 class Semantic:
     """The semantic routes' composition: the source, the caller and the settings; in server
@@ -136,6 +157,34 @@ class Semantic:
     context: ContextSource
     settings: Settings
     audit: AuditLog | None = None
+    # Per-role limits (#445): a role's limits now (server mode: the instance settings; local
+    # mode's one Builder: the defaults), and this process's running questions.
+    limits: Callable[[str], RoleLimit] = local_limits
+    slots: QuerySlots = field(default_factory=QuerySlots)
+    # Who asks, before any turn or planning (#445): the slot's user and project, and the role
+    # whose limit it counts against. Server mode reads the directory now.
+    identity: Callable[[object], tuple[str, str, str]] = local_identity
+
+
+def server_identity(store: Store) -> Callable[[object], tuple[str, str, str]]:
+    """Server mode: the session's user, the project, and their role there now."""
+
+    def identity(request: object) -> tuple[str, str, str]:
+        if not isinstance(request, ServerRequest):
+            raise InvalidContext("the request is not an authenticated server request")
+        role = role_of(store, request)
+        if role is None:
+            raise AccessError(ACCESS_FORBIDDEN, "The operation is not allowed.")
+        return request.user, request.project, role
+
+    return identity
+
+
+def take_slot(semantic: Semantic, request: object) -> Slot:
+    """The caller's concurrency slot, taken before the question waits for its turn or is
+    planned; `QUERY_BUDGET_EXCEEDED` (`concurrent_queries`) at the role's limit, never queued."""
+    user, project, role = semantic.identity(request)
+    return semantic.slots.take(user, project, semantic.limits(role).max_concurrent)
 
 
 DETAIL_PAGE_CAP = 10_000  # rows of one detail page at most
@@ -162,6 +211,7 @@ _BY_CODE = {
     "MEMBER_NOT_FOUND": 404,
     "EVIDENCE_VIOLATED": 409,
     "MATRIX_TOO_WIDE": 413,
+    "QUERY_RESULT_WITHDRAWN": 409,
     "ENGINE_VERSION_UNTESTED": 503,
 }
 _BY_CATEGORY = {
@@ -174,10 +224,10 @@ _BY_CATEGORY = {
 
 
 def status_of(error: SemanticError) -> int:
-    """The HTTP status of an engine error: a budget is 429 for time and 413 for size; then by
-    code, then by category."""
+    """The HTTP status of an engine error: a budget is 429 for time and concurrency and 413 for
+    size; then by code, then by category."""
     if error.code == "QUERY_BUDGET_EXCEEDED":
-        return 429 if error.details.get("budget") == "time_ms" else 413
+        return 429 if error.details.get("budget") in {"time_ms", "concurrent_queries"} else 413
     return _BY_CODE.get(error.code, _BY_CATEGORY.get(error.category, 500))
 
 
@@ -193,6 +243,12 @@ def server_context(store: Store, audit: AuditLog) -> ContextSource:
         return provider.context_for(request).document()
 
     return build
+
+
+def server_limits(store: Store, audit: AuditLog) -> Callable[[str], RoleLimit]:
+    """Server mode (#445): a role's limits as the instance settings hold them now."""
+    limits = query_limits.QueryLimits(store, audit)
+    return lambda role: limits.current()[role]
 
 
 def semantic_message(error: SemanticError, audience: Audience) -> dict[str, Any]:
@@ -266,10 +322,13 @@ def _policies_at(semantic: Semantic, lake: Lake, snapshot: int) -> PolicyModel |
 
 @dataclass(frozen=True)
 class Asked:
-    """One answer: the result, its receipt view, and the result in the JSON form."""
+    """One answer: the result, its receipt view, and the result in the JSON form; the snapshot
+    and the context it was computed under, which its delivery checks again (#445)."""
 
     found: Answer
     receipt: dict[str, Any]
+    snapshot: int = 0
+    context: Mapping[str, Any] = field(default_factory=dict)
 
     def json_document(self) -> dict[str, Any]:
         result: dict[str, Any] = json.loads(self.found.result.wire(arrow_to_json))
@@ -363,16 +422,36 @@ def _question(
     return _Question(model, policies, context, engine)
 
 
-def ask(semantic: Semantic, body: bytes, request: object) -> Asked:
-    """The answer to the `semantic-query` v1 document `body` for the caller of `request`."""
+def ask(semantic: Semantic, body: bytes, request: object, cancel: Cancel | None = None) -> Asked:
+    """The answer to the `semantic-query` v1 document `body` for the caller of `request`, run
+    within the role's run time (#445); `cancel` interrupts its managed-lake reads. The caller's
+    slot is taken before (`take_slot`)."""
     with semantic.source.session() as lake:
-        question = _question(semantic, lake, body, request, lake.read)
+        read = lake.read if cancel is None else cancel.reading(lake)
+        question = _question(semantic, lake, body, request, read)
+        if cancel is not None:  # only the managed lake's reads are interruptible
+            cancel.known(not question.engine.adapters)
         compiled = question.model.compiled
-        found = answer(body, compiled, question.policies, question.context, question.engine)
-        if semantic.audit is not None:  # before the answer leaves (#443)
-            record_withheld(semantic.audit, found, question.context)
+        limit = semantic.limits(str(question.context["role"])).max_run_ms
+        engine = question.engine
+        timeout = limit if engine.timeout_ms is None else min(engine.timeout_ms, limit)
+        engine = replace(engine, timeout_ms=timeout)  # the role's run time (#445)
+        found = answer(body, compiled, question.policies, question.context, engine)
         viewer = CallerViewer(compiled, question.policies, question.context)
-        return Asked(found, found.receipt.view(viewer))
+        snapshot = int(str(question.engine.snapshot["id"]))
+        return Asked(found, found.receipt.view(viewer), snapshot, question.context)
+
+
+def current_context(semantic: Semantic, request: object, snapshot: int) -> Mapping[str, Any]:
+    """The caller's context as it is now, for an answer computed at `snapshot`: what the
+    delivery step compares with the context the answer was computed under (#445). Raises as
+    building it at the request does: a membership gone, a deactivated user."""
+    with semantic.source.session() as lake:
+        policies = _policies(_loaded(semantic, lake, snapshot))
+        state = permission_state(
+            lake, snapshot, policies, lambda n: _policies_at(semantic, lake, n)
+        )
+        return dict(semantic.context(request, state.policy_fingerprint, state.mapping_snapshot))
 
 
 def explanation(semantic: Semantic, body: bytes, request: object) -> dict[str, Any]:

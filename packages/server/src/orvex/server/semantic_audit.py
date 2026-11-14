@@ -1,11 +1,18 @@
-"""The audit events of a semantic answer (P3-09, #443): in server mode, one event per policy
-that withheld every row from the caller, `policy.attribute_missing` or `policy.mapping_missing`,
-with the policy's dataset, its name and the answer's receipt id, and never a value.
+"""The audit events of a semantic answer, in server mode:
+- **`query`** (#445; `security.md` §4): one per synchronous answer (`stage: synchronous`), one
+  when an asynchronous job ends (`executed`) and one per delivery of its result (`delivered`),
+  with the receipt id, the cache origin and the mode, never a value, member or policy. A job
+  that ends failed or cancelled with no answer records its `executed` event with its `end`
+  and no receipt;
+- **`policy.attribute_missing` / `policy.mapping_missing`** (P3-09, #443): one per policy that
+  withheld every row, with the policy's dataset, its name and the receipt id.
 
-The events are internal: nothing here reaches the caller's response. When one cannot be
-recorded, the answer is still returned (it withholds every row anyway), and the failure is
-counted on the audit log (`AuditLog.unrecorded`) and written once to the process log, naming
-only the kind and the project: never a user, dataset, policy, attribute or value.
+The events are internal: nothing here reaches the caller's response. The one exception to
+"no event, no answer" (Owner precision 5) is a **withheld** answer (a row policy withheld every
+row, `Answer.withheld`): when its events cannot be recorded it is still returned, and each
+failure is counted on the audit log (`AuditLog.unrecorded`) and written once to the process
+log, naming only the kind and the project. Any other answer, zero rows included, whose `query`
+event cannot be recorded is refused with `AUDIT_UNAVAILABLE`.
 """
 
 from __future__ import annotations
@@ -23,6 +30,45 @@ KINDS = {
     "POLICY_ATTRIBUTE_MISSING": "policy.attribute_missing",
     "POLICY_MAPPING_MISSING": "policy.mapping_missing",
 }
+
+
+def record_query(
+    audit: AuditLog,
+    found: Answer,
+    context: Mapping[str, Any],
+    stage: str,
+    job: str | None = None,
+) -> None:
+    """The `query` event of `stage`; `AUDIT_UNAVAILABLE` when it cannot be recorded, unless the
+    answer is withheld (#443: counted and logged, the answer still returned)."""
+    project = str(context["project"])
+    document = found.receipt.document()
+    details = {
+        "receipt": found.receipt.receipt_id,
+        "cache": str(document["execution"]["cache"]),
+        "mode": found.plan.mode,
+        "stage": stage,
+    } | ({"job": job} if job is not None else {})
+    try:
+        audit.record_alone(
+            "query", str(context["user"]), details, outcome="allowed", project=project
+        )
+    except AccessError:
+        if not found.withheld:
+            raise
+        audit.unrecorded += 1
+        LOG.error("audit: a query event of project %s could not be recorded", project)
+
+
+def record_unfinished(audit: AuditLog, user: str, project: str, job: str, end: str) -> None:
+    """The `executed` event of a job that ended with no answer (`end`: failed, cancelled).
+    Nothing is delivered, so a failure to record it is counted and logged, never raised."""
+    details = {"stage": "executed", "job": job, "end": end}
+    try:
+        audit.record_alone("query", user, details, outcome="allowed", project=project)
+    except AccessError:
+        audit.unrecorded += 1
+        LOG.error("audit: a query event of project %s could not be recorded", project)
 
 
 def record_withheld(audit: AuditLog, found: Answer, context: Mapping[str, Any]) -> None:

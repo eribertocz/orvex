@@ -63,5 +63,6 @@ engines:
 - managed
 - existing-ducklake
 - clickhouse
-pending: 444
 adr_0027: revoked-while-cached
+pending_engines:
+  existing-ducklake: P5-14

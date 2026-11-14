@@ -1130,7 +1130,10 @@
               "absolute_lifetime",
               "idle_lifetime",
               "public_origin",
-              "trusted_proxies"
+              "trusted_proxies",
+              "query_limits.builder",
+              "query_limits.author",
+              "query_limits.viewer"
             ]
           }
         }
@@ -1295,13 +1298,67 @@
     "QueryDetails": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "receipt"
-      ],
       "properties": {
         "receipt": {
           "$ref": "#/$defs/Fingerprint"
+        },
+        "cache": {
+          "enum": [
+            "hit",
+            "miss",
+            "bypass"
+          ]
+        },
+        "mode": {
+          "enum": [
+            "aggregate",
+            "detail"
+          ]
+        },
+        "stage": {
+          "enum": [
+            "synchronous",
+            "executed",
+            "delivered"
+          ]
+        },
+        "job": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "end": {
+          "enum": [
+            "failed",
+            "cancelled"
+          ],
+          "description": "An asynchronous job that ended with no answer (#445): no receipt."
         }
+      },
+      "if": {
+        "required": [
+          "end"
+        ]
+      },
+      "then": {
+        "required": [
+          "stage",
+          "job"
+        ],
+        "properties": {
+          "stage": {
+            "const": "executed"
+          }
+        },
+        "not": {
+          "required": [
+            "receipt"
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "receipt"
+        ]
       }
     },
     "UserAdministratorGrantedDetails": {

@@ -60,6 +60,7 @@ export type SemanticError =
 	| PolicyNotSupportedOnEnginePublicError
 	| QueryBudgetExceededError
 	| QueryBudgetExceededPublicError
+	| QueryResultWithdrawnError
 	| QueryInvalidError
 	| QueryInvalidPublicError
 	| ReaggregationNotAllowedError
@@ -1243,7 +1244,14 @@ export interface QueryBudgetExceededError {
  * Details of QUERY_BUDGET_EXCEEDED, as a builder sees them.
  */
 export interface QueryBudgetExceededDetails {
-	budget: 'rows_scanned' | 'result_rows' | 'matrix_cells' | 'time_ms' | 'memory_bytes';
+	budget:
+		| 'rows_scanned'
+		| 'result_rows'
+		| 'matrix_cells'
+		| 'time_ms'
+		| 'memory_bytes'
+		| 'concurrent_queries'
+		| 'retained_bytes';
 	limit: Count;
 	estimate?: Count;
 }
@@ -1264,8 +1272,34 @@ export interface QueryBudgetExceededPublicError {
  * Details of QUERY_BUDGET_EXCEEDED for any other audience: its builder fields are left out.
  */
 export interface QueryBudgetExceededPublicDetails {
-	budget: 'rows_scanned' | 'result_rows' | 'matrix_cells' | 'time_ms' | 'memory_bytes';
+	budget:
+		| 'rows_scanned'
+		| 'result_rows'
+		| 'matrix_cells'
+		| 'time_ms'
+		| 'memory_bytes'
+		| 'concurrent_queries'
+		| 'retained_bytes';
 	limit: Count;
+}
+/**
+ * QUERY_RESULT_WITHDRAWN: every detail is public, so both audiences see them all.
+ */
+export interface QueryResultWithdrawnError {
+	kind: 'semantic_error';
+	code: 'QUERY_RESULT_WITHDRAWN';
+	severity: 'error';
+	category: 'security';
+	audience: Audience;
+	message: string;
+	locale: Locale;
+	details: QueryResultWithdrawnDetails;
+}
+/**
+ * Details of QUERY_RESULT_WITHDRAWN: the caller's permissions changed between computing an answer and delivering it (#445), so nothing of it is sent; the reason says nothing about which permission changed.
+ */
+export interface QueryResultWithdrawnDetails {
+	reason: 'permissions_changed';
 }
 /**
  * QUERY_INVALID as a builder sees it.

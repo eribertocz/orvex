@@ -124,6 +124,7 @@ class SemanticErrorCode(
             "POLICY_NOT_SUPPORTED_ON_ENGINE",
             "QUERY_BUDGET_EXCEEDED",
             "QUERY_INVALID",
+            "QUERY_RESULT_WITHDRAWN",
             "REAGGREGATION_NOT_ALLOWED",
             "TEMPORAL_MATCH_NOT_UNIQUE",
             "UNSUPPORTED_OPERATION",
@@ -169,6 +170,7 @@ class SemanticErrorCode(
         "POLICY_NOT_SUPPORTED_ON_ENGINE",
         "QUERY_BUDGET_EXCEEDED",
         "QUERY_INVALID",
+        "QUERY_RESULT_WITHDRAWN",
         "REAGGREGATION_NOT_ALLOWED",
         "TEMPORAL_MATCH_NOT_UNIQUE",
         "UNSUPPORTED_OPERATION",
@@ -1532,7 +1534,15 @@ class QueryBudgetExceededDetails(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    budget: Literal["rows_scanned", "result_rows", "matrix_cells", "time_ms", "memory_bytes"]
+    budget: Literal[
+        "rows_scanned",
+        "result_rows",
+        "matrix_cells",
+        "time_ms",
+        "memory_bytes",
+        "concurrent_queries",
+        "retained_bytes",
+    ]
     limit: Count
     estimate: Count | None = None
 
@@ -1545,8 +1555,27 @@ class QueryBudgetExceededPublicDetails(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    budget: Literal["rows_scanned", "result_rows", "matrix_cells", "time_ms", "memory_bytes"]
+    budget: Literal[
+        "rows_scanned",
+        "result_rows",
+        "matrix_cells",
+        "time_ms",
+        "memory_bytes",
+        "concurrent_queries",
+        "retained_bytes",
+    ]
     limit: Count
+
+
+class QueryResultWithdrawnDetails(BaseModel):
+    """
+    Details of QUERY_RESULT_WITHDRAWN: the caller's permissions changed between computing an answer and delivering it (#445), so nothing of it is sent; the reason says nothing about which permission changed.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    reason: Literal["permissions_changed"]
 
 
 class QueryBudgetExceededError(BaseModel):
@@ -2134,6 +2163,24 @@ class PageCursorInvalidError(BaseModel):
     details: PageCursorInvalidDetails
 
 
+class QueryResultWithdrawnError(BaseModel):
+    """
+    QUERY_RESULT_WITHDRAWN: every detail is public, so both audiences see them all.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    kind: Literal["semantic_error"]
+    code: Literal["QUERY_RESULT_WITHDRAWN"]
+    severity: Literal["error"]
+    category: Literal["security"]
+    audience: Audience
+    message: Annotated[str, Field(max_length=2000, min_length=1)]
+    locale: Locale
+    details: QueryResultWithdrawnDetails
+
+
 class QueryInvalidError(BaseModel):
     """
     QUERY_INVALID as a builder sees it.
@@ -2229,6 +2276,7 @@ class SemanticError(
         | PolicyNotSupportedOnEnginePublicError
         | QueryBudgetExceededError
         | QueryBudgetExceededPublicError
+        | QueryResultWithdrawnError
         | QueryInvalidError
         | QueryInvalidPublicError
         | ReaggregationNotAllowedError
@@ -2297,6 +2345,7 @@ class SemanticError(
         | PolicyNotSupportedOnEnginePublicError
         | QueryBudgetExceededError
         | QueryBudgetExceededPublicError
+        | QueryResultWithdrawnError
         | QueryInvalidError
         | QueryInvalidPublicError
         | ReaggregationNotAllowedError

@@ -11,9 +11,13 @@ Before any route:
    `OIDC_REFRESH_REQUIRED`, naming the provider, for a silent re-authentication (#439).
    The OIDC routes check their own session or binding.
 
-The semantic routes (`query`, `explain`, `catalog`) of the served project, when given, run for
-the session's user with a context built at each request (#440), and write every error for that
-user's audience. No route may accept both a method that changes state and one that does not:
+The semantic routes (`query`, `explain`, `catalog`, the asynchronous jobs) of the served
+project, when given, run for the session's user with a context built at each request (#440),
+and write every error for that user's audience. Every request passes authentication, then
+origin/CSRF, then authorization by the route's declared permission (`route_permissions`), then
+the validation of its content (#445); an API route without a declared permission, or a served
+project without its audit log, refuses to build the application (the server does not start).
+No route may accept both a method that changes state and one that does not:
 the application is refused at construction if one does. The composition of server mode
 (`--server`) comes later.
 """
@@ -28,16 +32,18 @@ from dataclasses import dataclass
 
 from fastapi import FastAPI, Request, Response
 from fastapi.routing import APIRoute
+from orvex.access.audit.log import AuditLog
 from orvex.access.authentication.service import SignIn
 from orvex.access.authentication.settings import Settings
 from orvex.access.errors import (
+    ACCESS_FORBIDDEN,
     OIDC_REFRESH_REQUIRED,
     PASSWORD_CHANGE_REQUIRED,
     SESSION_EXPIRED,
     AccessError,
 )
 from orvex.access.oidc.service import OidcSignIn
-from orvex.access.server_context import Audience, ServerRequest, audience_of
+from orvex.access.server_context import Audience, ServerRequest, audience_of, role_of
 from orvex.access.storage.store import Store
 from orvex.contracts.http_api import v1
 from orvex.server import oidc_http, semantic_http, sign_in_http
@@ -48,8 +54,15 @@ from orvex.server.app import (
     mount_semantic,
     mount_status,
 )
+from orvex.server.route_permissions import allows, checked_permissions, permission_of
+from orvex.server.semantic_http import local_identity, local_limits
 from orvex.server.sign_in_errors import access_error_response
-from orvex.server.state_change_rules import SAFE_METHODS, changes_state, refusal
+from orvex.server.state_change_rules import (
+    SAFE_METHODS,
+    changes_state,
+    content_refusal,
+    origin_refusal,
+)
 from orvex.server.versions import Versions
 from starlette.concurrency import run_in_threadpool
 
@@ -97,23 +110,59 @@ def create_server_app(
         )
         return response
 
-    async def rules(request: Request) -> Response | None:
-        request_id: str = request.state.request_id
-        if changes_state(request.method):
-            current = await run_in_threadpool(settings.current)
-            found = refusal(request.method, request.headers, current.public_origin)
-            if found is not None:
-                name, value = found
-                return error_response(
-                    403,
-                    "ORIGIN_REFUSED",
-                    "This instance accepts changes only from its own pages",
-                    request_id,
-                    [v1.ErrorDetail(name=name, value=value)],
-                )
-        path = request.url.path
-        if not path.startswith(API_PREFIX) or path in PUBLIC or path.startswith(oidc_http.PREFIX):
+    async def origin(request: Request) -> Response | None:
+        if not changes_state(request.method):
             return None
+        current = await run_in_threadpool(settings.current)
+        return _origin_refused(
+            origin_refusal(request.method, request.headers, current.public_origin),
+            request.state.request_id,
+        )
+
+    async def rules(request: Request) -> Response | None:
+        """Authentication, origin/CSRF, authorization, validation of the content (#445): a
+        request refused at one step is told nothing of the later ones."""
+        request_id: str = request.state.request_id
+        path = request.url.path
+        public = (
+            not path.startswith(API_PREFIX) or path in PUBLIC or path.startswith(oidc_http.PREFIX)
+        )
+        if not public:
+            refused = await authenticated(request)
+            if refused is not None:
+                return refused
+        refused = await origin(request)
+        if refused is not None:
+            return refused
+        if not public:
+            refused = await authorized(request)
+            if refused is not None:
+                return refused
+        return _origin_refused(content_refusal(request.method, request.headers), request_id)
+
+    async def authorized(request: Request) -> Response | None:
+        permission = permission_of(request.url.path)
+        if permission is None or permission in {"public", "session"}:
+            return None  # an unknown path: the router's own 404
+        if served is None:
+            return None
+        user = request.state.session.user.id
+        caller = ServerRequest(user, served.project)
+        role = await run_in_threadpool(role_of, served.store, caller)
+        if allows(permission, role):
+            return None
+        audit = served.semantic.audit
+        if audit is not None:
+            await run_in_threadpool(
+                audit.refusal, "route", user, ACCESS_FORBIDDEN, project=served.project
+            )
+        return error_response(
+            403, ACCESS_FORBIDDEN, "The operation is not allowed", request.state.request_id
+        )
+
+    async def authenticated(request: Request) -> Response | None:
+        request_id: str = request.state.request_id
+        path = request.url.path
         session_id = request.cookies.get(cookie)
         if session_id is None:
             return access_error_response(
@@ -147,6 +196,11 @@ def create_server_app(
     sign_in_http.mount_sign_in(app, sign_in, settings, cookie)
     oidc_http.mount_oidc(app, oidc, settings, cookie, slug)
     if served is not None:
+        if not isinstance(served.semantic.audit, AuditLog):  # #445: no audit log, no server
+            raise ValueError("server mode needs its audit log: the server does not start")
+        if served.semantic.identity is local_identity or served.semantic.limits is local_limits:
+            raise ValueError("server mode needs its own identity and limits: no server")
+        served.semantic.audit.verify_at_start()  # a key or an anchor that fails: no server
         project = served.project
 
         def caller_of(request: Request) -> object:
@@ -157,9 +211,33 @@ def create_server_app(
                 return "other"
             return audience_of(served.store, caller)
 
-        mount_semantic(app, served.semantic, caller_of, audience)
+        def recheck(request: Request) -> None:
+            sign_in.session(request.state.session_id)  # ended since the request: refused
+
+        mount_semantic(
+            app,
+            served.semantic,
+            caller_of,
+            audience,
+            lambda request: (request.state.session.user.id, project),
+            recheck,
+        )
     checked_route_table(app)
+    checked_permissions(app)
     return app
+
+
+def _origin_refused(found: tuple[str, str] | None, request_id: str) -> Response | None:
+    if found is None:
+        return None
+    name, value = found
+    return error_response(
+        403,
+        "ORIGIN_REFUSED",
+        "This instance accepts changes only from its own pages",
+        request_id,
+        [v1.ErrorDetail(name=name, value=value)],
+    )
 
 
 @dataclass(frozen=True)

@@ -78,6 +78,7 @@ class Server:
         self.attributes = Attributes(store, audit)
         settings = Settings(store, audit)
         settings.change(self.admin, public_origin=ORIGIN)
+        self.settings = settings
         self.sign_in = SignIn(store, audit)
         built = semantic_http.server_context(store, audit)
         self.contexts: list[tuple[str, int]] = []  # (policy fingerprint, mapping snapshot)
@@ -91,8 +92,11 @@ class Server:
             served_project(tmp_path, IDENTITY),
             context,
             semantic_http.session_settings(),
-            audit,  # server mode records the answers' events (#443)
+            audit,  # server mode records the answers' events (#443, #445)
+            semantic_http.server_limits(store, audit),
+            identity=semantic_http.server_identity(store),
         )
+        self.semantic = semantic
         self.app = create_server_app(
             VERSIONS,
             self.sign_in,
@@ -135,9 +139,18 @@ class Server:
         assert http.cookies.get(cookie_name(IDENTITY.slug))
         return http
 
+    def author(self, name: str, *groups: str, tariff: str | None = "residential") -> str:
+        """A member who asks free-form questions: an Author (a Viewer may not, #445)."""
+        return self.member(name, *groups, tariff=tariff, role="author")
+
     def viewer(self, name: str, *groups: str, tariff: str | None = "residential") -> str:
+        return self.member(name, *groups, tariff=tariff, role="viewer")
+
+    def member(
+        self, name: str, *groups: str, tariff: str | None = "residential", role: str = "author"
+    ) -> str:
         user = self.person(name)
-        self.directory.add_membership(self.builder, "project-1", user, "viewer")
+        self.directory.add_membership(self.builder, "project-1", user, role)
         for group in groups:
             self.directory.add_group_member(self.builder, "project-1", group, user)
         if tariff is not None:
@@ -155,7 +168,7 @@ def server(tmp_path: Path) -> Server:
 
 
 def test_a_viewer_sees_what_their_groups_and_attributes_allow(server: Server) -> None:
-    server.viewer("ana", "finance")
+    server.author("ana", "finance")
     answer = ask(server.client("ana"), detail(10))
     assert answer.status_code == 200, answer.text
     rows = answer.json()["result"]["rows"]
@@ -164,7 +177,7 @@ def test_a_viewer_sees_what_their_groups_and_attributes_allow(server: Server) ->
 
 
 def test_a_missing_attribute_gives_zero_rows(server: Server) -> None:
-    server.viewer("ben", "finance", tariff=None)
+    server.author("ben", "finance", tariff=None)
     answer = ask(server.client("ben"), detail(10))
     assert answer.status_code == 200, answer.text
     assert answer.json()["result"]["rows"] == []
@@ -173,7 +186,7 @@ def test_a_missing_attribute_gives_zero_rows(server: Server) -> None:
 
 
 def test_a_next_page_under_changed_permissions_is_refused(server: Server) -> None:
-    ana = server.viewer("ana", "auditors")
+    ana = server.author("ana", "auditors")
     http = server.client("ana")
     first = ask(http, detail(2))
     assert first.status_code == 200, first.text
@@ -188,7 +201,7 @@ def test_a_next_page_under_changed_permissions_is_refused(server: Server) -> Non
 
 
 def test_a_next_page_after_an_attribute_change_is_refused(server: Server) -> None:
-    ana = server.viewer("ana", "auditors")
+    ana = server.author("ana", "auditors")
     http = server.client("ana")
     after = ask(http, detail(2)).json()["result"]["page"]["next"]
     server.attributes.set(server.builder, "project-1", ana, "tariff", "text", "commercial")
@@ -196,7 +209,7 @@ def test_a_next_page_after_an_attribute_change_is_refused(server: Server) -> Non
 
 
 def test_the_same_permissions_serve_the_next_page(server: Server) -> None:
-    server.viewer("ana", "auditors")
+    server.author("ana", "auditors")
     http = server.client("ana")
     after = ask(http, detail(2)).json()["result"]["page"]["next"]
     second = ask(http, detail(2, after))
@@ -213,7 +226,7 @@ def test_a_user_without_a_role_gets_nothing(server: Server) -> None:
 
 
 def test_each_error_is_written_for_the_callers_audience(server: Server) -> None:
-    server.viewer("ana")
+    server.author("ana")
     unknown = {**aggregate(), "metrics": [{"metric": "nothing"}]}
     as_viewer = ask(server.client("ana"), unknown).json()["error"]
     as_builder = ask(server.client("builder"), unknown).json()["error"]
@@ -223,7 +236,7 @@ def test_each_error_is_written_for_the_callers_audience(server: Server) -> None:
 
 
 def test_a_mistyped_attribute_gives_zero_rows_never_all(server: Server) -> None:
-    ana = server.viewer("ana", "finance")
+    ana = server.author("ana", "finance")
     server.attributes.set(server.builder, "project-1", ana, "tariff", "integer", "5")
     answer = ask(server.client("ana"), detail(10))
     assert answer.status_code == 200, answer.text
@@ -241,7 +254,7 @@ def snapshot_of(answer: Any) -> int:  # noqa: ANN401
 
 
 def test_a_mapping_reads_the_callers_own_user_id(mapped: Server) -> None:
-    ana = mapped.viewer("ana", tariff=None)
+    ana = mapped.author("ana", tariff=None)
     mapped.mapping({ana: ["residential"], "someone-else": ["commercial"]})
     run(mapped.folder)
     answer = ask(mapped.client("ana"), detail(10))
@@ -252,7 +265,7 @@ def test_a_mapping_reads_the_callers_own_user_id(mapped: Server) -> None:
 def test_a_revoked_mapping_refuses_the_next_page(mapped: Server) -> None:
     """SEC-REVOKE-001 over HTTP: the mapping that granted the next page's rows is removed
     between the two pages; the cursor is refused and no row of the next page is returned."""
-    ana = mapped.viewer("ana", tariff=None)
+    ana = mapped.author("ana", tariff=None)
     mapped.mapping({ana: ["residential", "commercial"]})
     run(mapped.folder)
     http = mapped.client("ana")
@@ -270,7 +283,7 @@ def test_a_revoked_mapping_refuses_the_next_page(mapped: Server) -> None:
 
 
 def test_a_policy_changed_between_pages_refuses_the_next_page(mapped: Server) -> None:
-    ana = mapped.viewer("ana", tariff=None)
+    ana = mapped.author("ana", tariff=None)
     mapped.mapping({ana: ["residential", "commercial"]})
     run(mapped.folder)
     http = mapped.client("ana")

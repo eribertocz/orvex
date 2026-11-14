@@ -260,6 +260,15 @@ def migrations_for(schema: str) -> tuple[tuple[str, ...], ...]:
                     ON DELETE CASCADE
             )""",
         ),
+        (
+            """CREATE TABLE query_limits (
+                role text PRIMARY KEY CHECK (role IN ('builder', 'author', 'viewer')),
+                max_concurrent integer NOT NULL CHECK (max_concurrent BETWEEN 1 AND 64),
+                max_run_ms integer NOT NULL CHECK (max_run_ms BETWEEN 1000 AND 3600000)
+            )""",
+            "INSERT INTO query_limits VALUES ('builder', 4, 120000), ('author', 2, 60000), "
+            "('viewer', 2, 30000)",
+        ),
     )
 
 

@@ -15,13 +15,14 @@ import pyarrow as pa
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-from orvex.access.errors import ACCESS_FORBIDDEN, AccessError
+from orvex.access.errors import ACCESS_FORBIDDEN, AUDIT_UNAVAILABLE, SESSION_EXPIRED, AccessError
 from orvex.access.local import LocalRequest
 from orvex.access.server_context import Audience
 from orvex.contracts.http_api import v1
 from orvex.semantic.errors import SemanticError
-from orvex.server import semantic_http
+from orvex.server import semantic_delivery, semantic_http, semantic_jobs
 from orvex.server.local_access import CODE_PARAMETER, LocalAccess
+from orvex.server.route_permissions import checked_permissions
 from orvex.server.versions import Versions
 from orvex.store.errors import StoreError
 from starlette.concurrency import run_in_threadpool
@@ -80,10 +81,21 @@ def semantic_error_response(
     )
 
 
-def refused_semantic(request: Request, access: LocalAccess) -> JSONResponse | None:
-    """The refusal of a semantic request that is not this session's own: one a browser sent
-    from another site, a body that is not JSON (no form or simple cross-site request can send
-    JSON), or a request without the session's token."""
+def refused_semantic(request: Request, access: LocalAccess, port: int) -> JSONResponse | None:
+    """The refusal of a semantic request that is not this session's own, in the order every
+    route keeps (#445): a request without the session's token; then one addressed to another
+    host or sent from another site; then a body that is not JSON (no form or simple cross-site
+    request can send JSON). The one local user is the Builder: authorization allows all."""
+    if not access.accepts(request.headers, request.cookies):
+        return error_response(
+            401,
+            "UNAUTHENTICATED",
+            "This local server answers only requests with its session token",
+            request_id_of(request),
+        )
+    addressed = refused_address(request, port)
+    if addressed is not None:
+        return addressed
     site = request.headers.get("sec-fetch-site")
     if site is not None and site.lower() not in FETCH_SITES:
         return error_response(
@@ -103,14 +115,30 @@ def refused_semantic(request: Request, access: LocalAccess) -> JSONResponse | No
                 request_id_of(request),
                 [v1.ErrorDetail(name="content-type", value=media[:SHOWN])],
             )
-    if not access.accepts(request.headers, request.cookies):
-        return error_response(
-            401,
-            "UNAUTHENTICATED",
-            "This local server answers only requests with its session token",
-            request_id_of(request),
-        )
     return None
+
+
+FAILURES = (
+    SemanticError,
+    AccessError,
+    semantic_http.Refused,
+    semantic_http.ProjectBusy,
+    semantic_jobs.JobNotFound,
+)
+
+
+def asynchronous(request: Request) -> bool:
+    """Whether the caller asked for an asynchronous answer (`Prefer: respond-async`, RFC 7240;
+    #445 Q1 = A): only then is a question a job."""
+    preferences = request.headers.get("prefer", "").lower().replace(" ", "").split(",")
+    return "respond-async" in preferences
+
+
+def job_response(job: str, status: str, code: int = 200) -> JSONResponse:
+    response = JSONResponse({"job": job, "status": status}, status_code=code)
+    if code == 202:
+        response.headers["Location"] = f"/api/v1/semantic/jobs/{job}"
+    return response
 
 
 def wants_arrow(request: Request) -> bool:
@@ -276,8 +304,10 @@ def create_app(
         request.state.request_id = uuid.uuid4().hex
         started = time.perf_counter()
         try:
-            # Before any route, the web build or the 404 handling.
-            refused: Response | None = refused_address(request, port)
+            # Before any route, the web build or the 404 handling. A semantic request is
+            # authenticated first, then its address and site, then its content (#445).
+            semantic = local is not None and request.url.path.startswith(SEMANTIC_PREFIX)
+            refused: Response | None = None if semantic else refused_address(request, port)
             if refused is None and local is not None:
                 refused = await session_gate(request, local)
             response = refused if refused is not None else await call_next(request)
@@ -304,7 +334,7 @@ def create_app(
         session cookie on a page request."""
         path = request.url.path
         if path.startswith(SEMANTIC_PREFIX):
-            return refused_semantic(request, local.access)
+            return refused_semantic(request, local.access, port)
         if path.startswith(API_PREFIX) or CODE_PARAMETER not in request.query_params:
             return None
         session = None
@@ -336,7 +366,14 @@ def create_app(
 
     if local is not None:
         caller = LocalRequest(local.project, authenticated=True)
-        mount_semantic(app, local.semantic, lambda request: caller, lambda caller: "builder")
+        mount_semantic(
+            app,
+            local.semantic,
+            lambda request: caller,
+            lambda caller: "builder",
+            lambda request: ("local", local.project),
+        )
+    checked_permissions(app)
     return app
 
 
@@ -345,16 +382,36 @@ def mount_semantic(
     semantic: semantic_http.Semantic,
     caller_of: Callable[[Request], object],
     audience_of: Callable[[object], Audience],
+    owner_of: Callable[[Request], tuple[str, str]],
+    recheck: Callable[[Request], None] | None = None,
 ) -> None:
-    """`query`, `explain` and `catalog` (`contracts/http-api/v1`). The session gate has already
-    checked the request's site, body type and session: what remains is the caller's own
-    permissions, which `access` gives and the engine applies. Every error is written for the
-    caller's audience (#440): a Builder's details reach nobody else."""
+    """`query`, `explain`, `catalog` and the asynchronous jobs (`contracts/http-api/v1`). The
+    request rules have already authenticated the caller, checked the origin, the role and the
+    body type: what remains is the caller's own data permissions, which `access` gives and the
+    engine applies. Every answer leaves through `semantic_delivery` (#445). Every error is
+    written for the caller's audience (#440): a Builder's details reach nobody else."""
+    jobs = semantic_jobs.Jobs(semantic)
+
+    def again(request: Request) -> Callable[[], None] | None:
+        return None if recheck is None else lambda: recheck(request)
 
     def refusal(error: Exception, request_id: str, caller: object) -> Response:
         audience = audience_of(caller)
         if isinstance(error, SemanticError):
-            return semantic_error_response(error, request_id, audience)
+            response = semantic_error_response(error, request_id, audience)
+            if error.details.get("budget") == "concurrent_queries":
+                response.headers["Retry-After"] = BUSY_RETRY_SECONDS
+            return response
+        if isinstance(error, AccessError) and error.code == AUDIT_UNAVAILABLE:
+            return error_response(
+                503, AUDIT_UNAVAILABLE, "The answer's audit event could not be recorded", request_id
+            )
+        if isinstance(error, AccessError) and error.code == SESSION_EXPIRED:
+            return error_response(
+                401, SESSION_EXPIRED, "The session has ended: sign in again.", request_id
+            )
+        if isinstance(error, semantic_jobs.JobNotFound):
+            return error_response(404, "SEMANTIC_JOB_NOT_FOUND", "No such job", request_id)
         if isinstance(error, AccessError):
             return error_response(403, ACCESS_FORBIDDEN, "The operation is not allowed", request_id)
         if isinstance(error, semantic_http.Refused):
@@ -374,21 +431,62 @@ def mount_semantic(
         body = await request.body()
         request_id = request_id_of(request)
         caller = caller_of(request)
-        try:
-            asked = await run_in_threadpool(semantic_http.ask, semantic, body, caller)
-            if wants_arrow(request):
+        arrow = wants_arrow(request)
+
+        def respond(asked: semantic_http.Asked) -> Response:
+            if arrow:
                 return arrow_response(asked.arrow_table())
             return JSONResponse(asked.json_document())
-        except (
-            SemanticError,
-            AccessError,
-            semantic_http.Refused,
-            semantic_http.ProjectBusy,
-        ) as error:
+
+        try:
+            if asynchronous(request):
+                job = await run_in_threadpool(jobs.start, body, caller, owner_of(request))
+                return job_response(job, "running", 202)
+            return await run_in_threadpool(
+                semantic_delivery.answered, semantic, body, caller, respond, again(request)
+            )
+        except FAILURES as error:
             return refusal(error, request_id, caller)
         except StoreError as error:
             log.error("store error", extra={"request_id": request_id, "code": error.code})
             return error_response(500, "INTERNAL_ERROR", "Unexpected server error", request_id)
+
+    @app.get("/api/v1/semantic/jobs/{job}")
+    async def job_status(request: Request, job: str) -> Response:
+        request_id = request_id_of(request)
+        caller = caller_of(request)
+        try:
+            found = await run_in_threadpool(jobs.status, job, owner_of(request))
+            if found.status != "done":
+                if found.status == "failed" and found.error is not None:
+                    raise found.error
+                return job_response(job, found.status)
+            arrow = wants_arrow(request)
+
+            def respond(asked: semantic_http.Asked) -> Response:
+                if arrow:
+                    return arrow_response(asked.arrow_table())
+                return JSONResponse({"job": job, "status": "done", "answer": asked.json_document()})
+
+            sent = await run_in_threadpool(
+                jobs.fetch, job, owner_of(request), caller, respond, again(request)
+            )
+            return job_response(job, found.status) if sent is None else sent
+        except FAILURES as error:
+            return refusal(error, request_id, caller)
+        except StoreError as error:
+            log.error("store error", extra={"request_id": request_id, "code": error.code})
+            return error_response(500, "INTERNAL_ERROR", "Unexpected server error", request_id)
+
+    @app.delete("/api/v1/semantic/jobs/{job}")
+    async def job_cancel(request: Request, job: str) -> Response:
+        request_id = request_id_of(request)
+        caller = caller_of(request)
+        try:
+            found = await run_in_threadpool(jobs.cancel, job, owner_of(request))
+            return job_response(job, found.status)
+        except FAILURES as error:
+            return refusal(error, request_id, caller)
 
     @app.post("/api/v1/semantic/explain")
     async def explain(request: Request) -> Response:
@@ -398,12 +496,7 @@ def mount_semantic(
         try:
             document = await run_in_threadpool(semantic_http.explanation, semantic, body, caller)
             return JSONResponse(document)
-        except (
-            SemanticError,
-            AccessError,
-            semantic_http.Refused,
-            semantic_http.ProjectBusy,
-        ) as error:
+        except FAILURES as error:
             return refusal(error, request_id, caller)
         except StoreError as error:
             log.error("store error", extra={"request_id": request_id, "code": error.code})
@@ -416,12 +509,7 @@ def mount_semantic(
         try:
             document = await run_in_threadpool(semantic_http.catalog, semantic, caller)
             return JSONResponse(document)
-        except (
-            SemanticError,
-            AccessError,
-            semantic_http.Refused,
-            semantic_http.ProjectBusy,
-        ) as error:
+        except FAILURES as error:
             return refusal(error, request_id, caller)
         except StoreError as error:
             log.error("store error", extra={"request_id": request_id, "code": error.code})

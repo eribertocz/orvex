@@ -41,7 +41,7 @@ request:
         zone_id: Z2
 expect:
   outcome: error
-  code_defined_by: 445
+  code: QUERY_RESULT_WITHDRAWN
   forbidden:
   - '30.75'
   - '30.00'
@@ -58,4 +58,4 @@ control:
   without_changes: true
 engines:
 - managed
-pending: 445
+pending: 447

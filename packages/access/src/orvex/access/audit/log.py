@@ -452,6 +452,11 @@ class AuditLog:
         with self._store.transaction(read_only=True) as transaction:
             return self._verify(transaction, anchors)
 
+    def verify_at_start(self) -> int:
+        """`verify` against the log's own anchor file: what server mode checks before it serves
+        (#445); raise the first problem, and the server does not start."""
+        return self.verify(self._local_anchors())
+
     def _verify(self, transaction: Transaction, anchors: Sequence[str]) -> int:
         events = [
             chain.EventRow(int(str(s)), str(i), str(a), str(k), str(d), str(h))
