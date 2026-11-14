@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -34,6 +35,9 @@ from orvex.server.server_app import create_server_app
 from orvex.server.versions import Versions
 
 from tests.support.access_directory import access_role, audit_events, postgres_connection
+from tests.support.sign_in import PASSWORD
+
+from .admin_instance import AdminInstance, admin_instance
 
 IDENTITY = load_identity()
 ORIGIN = "https://bi.example.com"
@@ -131,7 +135,11 @@ def kinds(made: Instance) -> list[str]:
     return [e["kind"] for e in audit_events(made.store)]
 
 
-def test_from_admin_create_to_a_builders_group_with_no_ui(instance: tuple[Instance, str]) -> None:
+def test_from_admin_create_to_a_builders_group_with_no_ui(
+    instance: tuple[Instance, str],
+    caplog: Any,  # noqa: ANN401
+) -> None:
+    caplog.set_level(logging.DEBUG)
     made, temporary = instance
     at = ["--server", ORIGIN, "--as"]
 
@@ -160,8 +168,9 @@ def test_from_admin_create_to_a_builders_group_with_no_ui(instance: tuple[Instan
     for kind in ("user.created", "user.password_changed", "membership.added", "group.created"):
         assert kind in seen, kind
     assert seen.count("auth.logout") >= 6  # every command signed out
-    assert temporary not in str(audit_events(made.store))
-    assert bea_temporary not in str(audit_events(made.store))
+    for secret in (temporary, bea_temporary, NEW):
+        assert secret not in str(audit_events(made.store))
+        assert secret not in caplog.text
 
 
 def test_a_refusal_exits_1_with_its_code_and_still_signs_out(
@@ -212,3 +221,87 @@ def test_the_password_is_never_an_argument() -> None:
                  ["admin", "users", "--as", "root", "list", "--password", "x"]):  # fmt: skip
         with pytest.raises(SystemExit):
             parser.parse_args(argv)
+
+
+@pytest.fixture
+def sqlite_instance(tmp_path: Path) -> Iterator[AdminInstance]:
+    with admin_instance("sqlite", tmp_path) as made:
+        yield made
+
+
+def test_every_command_runs_its_route(sqlite_instance: AdminInstance, caplog: Any) -> None:  # noqa: ANN401
+    """Each command, with its route's outcome: exit 0 and the change made, or exit 1 with the
+    route's code; no subject or temporary password in any log line."""
+    caplog.set_level(logging.DEBUG)
+    made = sqlite_instance
+    ana = made.person("ana")
+    builder = made.person("bob")
+    made.directory.add_membership(made.admin, "project-1", builder, "builder")
+    app = made.app
+
+    def run(signer: str, *argv: str) -> tuple[int, str, str]:
+        command = command_parser(IDENTITY).parse_args(
+            ["admin", argv[0], "--server", ORIGIN, "--as", signer, *argv[1:]]
+        )
+        out, err = io.StringIO(), io.StringIO()
+        code = remote(command, IDENTITY, out, err, {}, Typed(PASSWORD), through(app))
+        return code, out.getvalue(), err.getvalue()
+
+    def ok(signer: str, *argv: str) -> str:
+        code, out, err = run(signer, *argv)
+        assert code == 0, (argv, err)
+        return out
+
+    assert ok("root", "users", "list").count("\n") == 3
+    assert ana in ok("root", "users", "show", ana)
+    secret = ok("root", "users", "reset-password", ana).split(": ")[-1].strip()
+    assert ok("root", "users", "deactivate", ana).strip() == "done"
+    assert not made.directory.user(ana).active  # type: ignore[union-attr]
+    ok("root", "users", "reactivate", ana)
+    ok("root", "users", "administrator", ana, "on")
+    assert made.directory.user(ana).administrator  # type: ignore[union-attr]
+    ok("root", "users", "administrator", ana, "off")
+    assert json.loads(ok("bob", "lookup", "--json", "ANA")) == {"id": ana, "display_name": "Ana"}
+    assert run("bob", "lookup", "nobody")[2].startswith("USER_NOT_FOUND")
+    link = json.loads(ok("root", "identities", "--json", "link", ana, "corp", "sub-ana"))["id"]
+    assert link in ok("root", "identities", "list", ana)
+    ok("root", "identities", "unlink", ana, link)
+    assert run("root", "identities", "unlink", ana, link)[2].startswith("IDENTITY_NOT_FOUND")
+    ok("bob", "members", "set", "project-1", ana, "author")
+    assert "author" in ok("bob", "members", "list", "project-1")
+    ok("bob", "groups", "create", "project-1", "finance")
+    ok("bob", "groups", "add", "project-1", "finance", ana)
+    assert ok("bob", "groups", "list", "project-1").strip() == f"finance: {ana}"
+    ok("bob", "groups", "remove", "project-1", "finance", ana)
+    ok("bob", "groups", "delete", "project-1", "finance")
+    ok("bob", "attributes", "set", "project-1", ana, "tariff", "text", "residential")
+    ok("bob", "attributes", "set", "project-1", ana, "zones", "list", "n", "s")
+    ok("bob", "attributes", "set", "project-1", ana, "trusted", "boolean", "true")
+    listed = ok("bob", "attributes", "--json", "list", "project-1", ana)
+    assert {a["name"] for a in json.loads(listed)["attributes"]} == {"tariff", "zones", "trusted"}
+    ok("bob", "attributes", "remove", "project-1", ana, "tariff")
+    ok("bob", "members", "remove", "project-1", ana)
+    assert run("bob", "members", "list", "elsewhere")[2].startswith("PROJECT_NOT_SERVED")
+    assert run("bob", "users", "list")[2].startswith("ACCESS_FORBIDDEN")
+    assert "sub-ana" not in caplog.text
+    assert secret not in caplog.text
+
+
+def test_an_unreachable_server_is_a_refusal_not_a_traceback() -> None:
+    def broken(origin: str) -> Transport:
+        def send(method: str, path: str, body: bytes | None, headers: dict[str, str]) -> Answer:
+            raise ConnectionRefusedError("connection refused")
+
+        return send
+
+    command = command_parser(IDENTITY).parse_args(
+        ["admin", "users", "--server", ORIGIN, "--as", "root", "list"]
+    )
+    err = io.StringIO()
+    assert remote(command, IDENTITY, io.StringIO(), err, {}, Typed("x"), broken) == 1
+    assert err.getvalue().startswith("SERVER_UNREACHABLE: connection refused")
+
+
+def test_a_server_url_with_user_information_is_refused() -> None:
+    with pytest.raises(ValueError, match="origin"):
+        checked_server("https://user:secret@bi.example.com")

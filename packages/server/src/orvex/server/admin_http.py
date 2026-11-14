@@ -33,8 +33,9 @@ from starlette.concurrency import run_in_threadpool
 PREFIX = "/api/v1/admin"
 
 
-class _NotEmpty(Exception):
-    """An action's body that is not `{}`."""
+class _Malformed(Exception):
+    """A body the contract's shape refuses beyond its schema: an action's that is not `{}`, an
+    attribute with both or neither of `value` and `values`."""
 
 
 @dataclass(frozen=True)
@@ -82,7 +83,8 @@ def mount_administration(app: FastAPI, admin: Administration) -> None:
         return await run_in_threadpool(operation, request.state.session.user.id, *args)
 
     async def body[M: BaseModel](request: Request, model: type[M]) -> M:
-        return model.model_validate_json(await request.body())
+        """The body as the contract types it, strictly: `"true"` is not a boolean."""
+        return model.model_validate_json(await request.body(), strict=True)
 
     def done() -> Response:
         return Response(status_code=204)
@@ -97,7 +99,7 @@ def mount_administration(app: FastAPI, admin: Administration) -> None:
                 answered: Response = await handler(request, **path)
             except ValidationError as error:
                 return validation_response(error, request_id)
-            except _NotEmpty:
+            except _Malformed:
                 return validation_response(None, request_id)
             except AccessError as error:
                 return access_error_response(error, request_id)
@@ -108,7 +110,7 @@ def mount_administration(app: FastAPI, admin: Administration) -> None:
     async def nothing(request: Request) -> None:
         """An action's body: `{}` only."""
         if (await request.body()).strip() != b"{}":
-            raise _NotEmpty
+            raise _Malformed
 
     # --- users (administrator) ---------------------------------------------------------------
 
@@ -271,6 +273,10 @@ def mount_administration(app: FastAPI, admin: Administration) -> None:
     @routed
     async def set_attribute(request: Request, project: str, user: str, name: str) -> Response:
         asked = await body(request, v1.AttributeValue)
+        if (asked.type == "list") != (asked.values is not None) or (asked.value is not None) == (
+            asked.type == "list"
+        ):
+            raise _Malformed  # `values` for a list, `value` otherwise: exactly one
         value = asked.values if asked.type == "list" else asked.value
         await call(request, admin.attributes.set, project, user, name, asked.type, value)
         return done()

@@ -52,7 +52,7 @@ def add_remote_parsers(actions: argparse._SubParsersAction[argparse.ArgumentPars
         return parser.add_subparsers(dest="verb", required=True)
 
     users = verbs(command("users", "the instance's users (administrator)"))
-    users.add_parser("list")
+    users.add_parser("list").add_argument("--after", help="the next page, as the last one named")
     users.add_parser("show").add_argument("user")
     created = users.add_parser("create")
     created.add_argument("--user-name", required=True)
@@ -135,7 +135,7 @@ def _route(c: argparse.Namespace) -> tuple[str, str, dict[str, Any] | None, dict
     if what == "users":
         user = f"{ADMIN}/users/{_p(c.user)}" if hasattr(c, "user") else ""
         if verb == "list":
-            return "GET", f"{ADMIN}/users", None, {}
+            return "GET", f"{ADMIN}/users", None, {"after": c.after} if c.after else {}
         if verb == "show":
             return "GET", user, None, {}
         if verb == "create":
@@ -186,7 +186,9 @@ def _text(document: Any) -> list[str]:  # noqa: ANN401 - a route's document
         lines = [f"user: {document['user']['id']}"] if "user" in document else []
         return [*lines, f"temporary password (shown once): {document['temporary_password']}"]
     if "users" in document:
-        return [f"{u['id']}  {u['user_name']}  {u['state']}" for u in document["users"]]
+        lines = [f"{u['id']}  {u['user_name']}  {u['state']}" for u in document["users"]]
+        more = [f"more: --after {document['after']}"] if document.get("after") else []
+        return [*lines, *more]
     if "members" in document:
         return [f"{m['id']}  {m['user_name']}  {m['role']}" for m in document["members"]]
     if "groups" in document:

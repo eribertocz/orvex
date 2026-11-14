@@ -47,7 +47,7 @@ Under `/api/v1/admin/`, in server mode only, for a session that has changed its 
 - **Served projects.** A project the instance does not serve is `404 PROJECT_NOT_SERVED`, before any directory read. The set of served projects is explicit and never empty; the server-mode start (#156) is its authoritative source.
 - **Bodies and answers.**
   - An action's body is `{}`. Unknown fields are refused (`422 VALIDATION_FAILED`).
-  - A write that changes nothing answers `204` like one that did, and records nothing.
+  - A write that changes nothing answers `204` like one that did, and records nothing. The one exception is removing an attribute that is not set, which is `422 VALIDATION_FAILED` (#440).
   - A temporary password is in its one response only, with `Cache-Control: no-store`, and is never logged.
 - **Status codes.**
 

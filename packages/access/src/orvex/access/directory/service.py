@@ -199,7 +199,7 @@ class Directory:
             )
             locks.lock_users(transaction, target)
             if not self._existing(transaction, target).active:
-                raise _invalid("user")  # a deactivated user gets no new membership
+                raise not_found(USER_NOT_FOUND)  # deactivated: no new membership, and as unknown
             if sql.role(transaction, place, target) is not None:
                 raise _invalid("membership")
             try:

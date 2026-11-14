@@ -49,31 +49,41 @@ def people(server: Server) -> dict[str, str]:
     server.directory.add_membership(server.admin, "project-2", found["other"], "builder")
     found["ana"] = server.author("ana")
     found["vera"] = server.viewer("vera")
-    found["target"] = server.person("target")
+    found["target"] = server.member("target", tariff=None, role="viewer")
+    server.attributes.set(server.builder, "project-1", found["target"], "region", "text", "s")
     return found
 
 
 WRITES = [
-    ("POST", f"{A}/users", {"user_name": "newbie", "display_name": "Newbie"}, {"root"}),
-    ("POST", f"{A}/users/{{target}}/deactivate", {}, {"root"}),
-    ("PUT", f"{A}/users/{{target}}/administrator", {"value": True}, {"root"}),
-    ("POST", f"{A}/users/{{target}}/password-reset", {}, {"root"}),
-    ("PUT", f"{P1}/members/{{target}}", {"role": "viewer"}, {"builder"}),
-    ("POST", f"{P1}/groups", {"name": "new-group"}, {"builder"}),
-    ("PUT", f"{P1}/groups/finance/members/{{ana}}", {}, {"builder"}),
-    ("PUT", f"{P1}/members/{{ana}}/attributes/region", {"type": "text", "value": "n"}, {"builder"}),
-]
+    ("POST", f"{A}/users", {"user_name": "newbie", "display_name": "Newbie"}, {"root"}, None),
+    ("POST", f"{A}/users/{{target}}/deactivate", {}, {"root"}, "root"),
+    ("POST", f"{A}/users/{{target}}/reactivate", {}, {"root"}, "root"),
+    ("PUT", f"{A}/users/{{target}}/administrator", {"value": True}, {"root"}, "root"),
+    ("POST", f"{A}/users/{{target}}/password-reset", {}, {"root"}, "root"),
+    ("PUT", f"{P1}/members/{{target}}", {"role": "viewer"}, {"builder"}, "builder"),
+    ("DELETE", f"{P1}/members/{{target}}", None, {"builder"}, "builder"),
+    ("POST", f"{P1}/groups", {"name": "new-group"}, {"builder"}, None),
+    ("DELETE", f"{P1}/groups/auditors", None, {"builder"}, None),
+    ("PUT", f"{P1}/groups/finance/members/{{target}}", {}, {"builder"}, "builder"),
+    ("DELETE", f"{P1}/groups/finance/members/{{target}}", None, {"builder"}, "builder"),
+    ("PUT", f"{P1}/members/{{target}}/attributes/region", {"type": "text", "value": "n"},
+     {"builder"}, "builder"),
+    ("DELETE", f"{P1}/members/{{target}}/attributes/region", None, {"builder"}, "builder"),
+]  # fmt: skip
 
 
-@pytest.mark.parametrize(("method", "path", "body", "allowed"), WRITES)
+@pytest.mark.parametrize(("method", "path", "body", "allowed", "oneself"), WRITES)
 def test_each_write_is_allowed_exactly_to_whom_the_domain_allows(
     server: Server,
     people: dict[str, str],
     method: str,
     path: str,
-    body: dict[str, Any],
+    body: dict[str, Any] | None,
     allowed: set[str],
+    oneself: str | None,
 ) -> None:
+    """Every write route, for every kind of caller: refused (403, audited, nothing changed) to all
+    but the domain's caller; and refused to that caller too when they are the target."""
     concrete = path.format(**people)
     for name in ("vera", "ana", "other", "builder", "root"):
         if name in allowed:
@@ -82,9 +92,52 @@ def test_each_write_is_allowed_exactly_to_whom_the_domain_allows(
         answer = server.client(name).request(method, concrete, json=body, headers=SAME)
         assert code(answer) == (403, "ACCESS_FORBIDDEN"), (name, answer.text)
         assert refusals(server) == before + 1  # audited, nothing changed
+    if oneself is not None:
+        mine = path.format(**{**people, "target": people[oneself]})
+        answer = server.client(oneself).request(method, mine, json=body, headers=SAME)
+        assert code(answer)[0] in {403, 409}, answer.text  # nobody changes their own access
     for name in allowed:
         answer = server.client(name).request(method, concrete, json=body, headers=SAME)
         assert answer.status_code in {200, 201, 204}, (name, answer.text)
+
+
+def test_a_deactivated_administrators_session_changes_nothing(
+    server: Server, people: dict[str, str]
+) -> None:
+    second = server.person("second")
+    server.directory.set_administrator(server.admin, second, True)
+    http = server.client("second")
+    server.directory.deactivate_user(server.admin, second)
+    writes = [
+        ("POST", f"{A}/users", {"user_name": "x", "display_name": "X"}),
+        ("POST", f"{A}/users/{people['target']}/deactivate", {}),
+    ]
+    for method, path, body in writes:
+        answer = http.request(method, path, json=body, headers=SAME)
+        assert code(answer) == (401, "SESSION_EXPIRED")
+    assert server.directory.user(people["target"]).active  # type: ignore[union-attr]
+
+
+ROUTES = [
+    ("GET", f"{A}/users"), ("GET", f"{A}/users/{{target}}"),
+    ("GET", f"{A}/users/{{target}}/identities"), ("GET", f"{A}/user-lookup?user_name=root"),
+    ("GET", f"{P1}/members"), ("GET", f"{P1}/groups"),
+    ("GET", f"{P1}/members/{{target}}/attributes"),
+    *[(method, path) for method, path, *_ in WRITES],
+    ("POST", f"{A}/users/{{target}}/identities"),
+    ("DELETE", f"{A}/users/{{target}}/identities/{'0' * 32}"),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("name", ["ana", "vera"])
+def test_authors_and_viewers_get_403_on_every_admin_route(
+    server: Server, people: dict[str, str], name: str
+) -> None:
+    http = server.client(name)
+    for method, path in ROUTES:
+        body: dict[str, Any] | None = None if method in {"GET", "DELETE"} else {}
+        answer = http.request(method, path.format(**people), json=body, headers=SAME)
+        assert code(answer) == (403, "ACCESS_FORBIDDEN"), (method, path)
 
 
 def test_nobody_changes_their_own_permissions(server: Server, people: dict[str, str]) -> None:
@@ -321,3 +374,69 @@ def test_an_application_with_no_served_project_refuses_to_build(server: Server) 
             frozenset(),
             server.audit,
         )
+
+
+def test_a_change_through_the_api_withdraws_a_pending_jobs_answer(server: Server) -> None:
+    from .test_server_async_jobs import fetched, stages, start, until
+
+    ana = server.author("ana")
+    http = server.client("ana")
+    job = start(http, detail(10))
+    until(lambda: ("executed", job) in stages(server))
+    changed = server.client("builder").put(
+        f"{P1}/members/{ana}/attributes/tariff",
+        json={"type": "text", "value": "commercial"},
+        headers=SAME,
+    )
+    assert changed.status_code == 204
+    withdrawn = fetched(http, job)
+    assert code(withdrawn) == (409, "QUERY_RESULT_WITHDRAWN")
+    assert "rows" not in withdrawn.text
+
+
+def test_a_reset_ends_every_session_and_each_change_bumps_the_user(server: Server) -> None:
+    ana = server.author("ana")
+    sessions = [server.client("ana"), server.client("ana")]
+    root = server.client("root")
+
+    def version() -> int:
+        found = server.directory.user(ana)
+        assert found is not None
+        return found.authz_version
+
+    start_version = version()
+    for method, path, body in (
+        ("PUT", f"{A}/users/{ana}/administrator", {"value": True}),
+        ("PUT", f"{A}/users/{ana}/administrator", {"value": False}),
+        ("POST", f"{A}/users/{ana}/deactivate", {}),
+        ("POST", f"{A}/users/{ana}/reactivate", {}),
+    ):
+        before = version()
+        assert root.request(method, path, json=body, headers=SAME).status_code == 204
+        assert version() == before + 1, path
+    assert version() == start_version + 4
+    sessions = [server.client("ana"), server.client("ana")]
+    reset = root.post(f"{A}/users/{ana}/password-reset", json={}, headers=SAME)
+    temporary = reset.json()["temporary_password"]
+    for http in sessions:
+        assert code(http.get("/api/v1/auth/session")) == (401, "SESSION_EXPIRED")
+    for path in (f"{A}/users", f"{A}/users/{ana}", f"{P1}/members"):
+        assert temporary not in root.get(path).text  # in its one response only
+
+
+def test_bodies_are_typed_strictly(server: Server, people: dict[str, str]) -> None:
+    root, builder = server.client("root"), server.client("builder")
+    target = people["target"]
+    flag = root.put(f"{A}/users/{target}/administrator", json={"value": "true"}, headers=SAME)
+    assert code(flag) == (422, "VALIDATION_FAILED")
+    for wrong in (
+        {"type": "text", "value": "a", "values": ["b"]},
+        {"type": "list", "value": "a"},
+        {"type": "text"},
+        {"type": "list", "values": ["a"], "value": "b"},
+    ):
+        answer = builder.put(f"{P1}/members/{target}/attributes/x", json=wrong, headers=SAME)
+        assert code(answer) == (422, "VALIDATION_FAILED"), wrong
+    listed = builder.put(f"{P1}/members/{target}/attributes/x",
+                         json={"type": "list", "values": ["a", "b"]}, headers=SAME)  # fmt: skip
+    assert listed.status_code == 204

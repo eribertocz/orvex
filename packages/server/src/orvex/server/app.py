@@ -413,7 +413,9 @@ def mount_semantic(
         if isinstance(error, semantic_jobs.JobNotFound):
             return error_response(404, "SEMANTIC_JOB_NOT_FOUND", "No such job", request_id)
         if isinstance(error, AccessError):
-            return error_response(403, ACCESS_FORBIDDEN, "The operation is not allowed", request_id)
+            return error_response(
+                403, ACCESS_FORBIDDEN, "The operation is not allowed.", request_id
+            )
         if isinstance(error, semantic_http.Refused):
             shown = error.details if audience == "builder" else ()
             details = [v1.ErrorDetail(name=n, value=v) for n, v in shown]

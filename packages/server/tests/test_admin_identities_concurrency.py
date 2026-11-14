@@ -4,6 +4,7 @@ the project without one."""
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -36,7 +37,10 @@ def signs_in(instance: AdminInstance, subject: str) -> bool:
     return bool(client.get("/api/v1/auth/oidc/corp/callback", params=answer).status_code == 200)
 
 
-def test_an_identity_is_linked_and_unlinked_by_its_opaque_id(instance: AdminInstance) -> None:
+def test_an_identity_is_linked_and_unlinked_by_its_opaque_id(
+    instance: AdminInstance, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
     ana, ben = instance.person("ana"), instance.person("ben")
     root = instance.client("root")
     made = root.post(f"{A}/users/{ana}/identities", json={"provider": "corp", "subject": "sub-ana"},
@@ -58,6 +62,7 @@ def test_an_identity_is_linked_and_unlinked_by_its_opaque_id(instance: AdminInst
     assert root.delete(f"{A}/users/{ana}/identities/{link}", headers=SAME).status_code == 204
     assert not signs_in(instance, "sub-ana")
     assert "sub-ana" not in str(audit_events(instance.store))
+    assert "sub-ana" not in caplog.text  # nor in any log line
 
 
 def test_two_builders_removing_each_other_at_once_leave_one(instance: AdminInstance) -> None:

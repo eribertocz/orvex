@@ -1,7 +1,10 @@
 """The administration CLI's HTTP client (#446 Q1 A): it signs in to a server-mode instance as a
 person, calls the administration routes like any client, and signs out.
 
-- **The server** is reached over HTTPS; plain HTTP only to the loopback interface.
+- **The server** is reached over HTTPS; plain HTTP only to the loopback interface. Its URL is
+  an origin only: no user information, path, query or fragment.
+- **A failure to reach it** (`SERVER_UNREACHABLE`), or an answer that is not the contract's, is
+  a refusal like the server's own: `CODE: message`, never a traceback.
 - **The password** never comes from an argument: the caller passes it from the terminal.
 - **The session** is kept only for the one command, in memory: the session cookie is sent back
   as received and never written anywhere. A sign-out ends it, after a failure too.
@@ -53,7 +56,15 @@ class Transport(Protocol):
 def checked_server(url: str) -> str:
     """`url` as the server's origin: HTTPS, or HTTP to a loopback address only."""
     parts = urlsplit(url)
-    if parts.scheme not in {"https", "http"} or not parts.hostname or parts.path not in {"", "/"}:
+    if (
+        parts.scheme not in {"https", "http"}
+        or not parts.hostname
+        or parts.path not in {"", "/"}
+        or parts.username is not None
+        or parts.password is not None
+        or parts.query
+        or parts.fragment
+    ):
         raise ValueError("the server is an origin such as https://bi.example.com")
     if parts.scheme == "http" and not _loopback(parts.hostname):
         raise ValueError("plain http is refused except to the loopback interface")
@@ -105,9 +116,12 @@ class Client:
     def sign_in(self, user_name: str, password: str) -> None:
         body = {"user_name": user_name, "password": password}
         answer = self._call("POST", LOGIN, body)
-        self.password_change_required = bool(
-            json.loads(answer.body).get("password_change_required", False)
-        )
+        try:
+            self.password_change_required = bool(
+                json.loads(answer.body).get("password_change_required", False)
+            )
+        except ValueError, AttributeError:
+            raise Refused(answer.status, "INTERNAL_ERROR", "Unexpected answer") from None
 
     def sign_out(self) -> None:
         if self._cookie is not None:
@@ -133,7 +147,12 @@ class Client:
         if query:
             path += "?" + "&".join(f"{k}={quote(v, safe='')}" for k, v in query.items())
         answer = self._call(method, path, body)
-        return json.loads(answer.body) if answer.body else None
+        if not answer.body:
+            return None
+        try:
+            return json.loads(answer.body)
+        except ValueError:
+            raise Refused(answer.status, "INTERNAL_ERROR", "Unexpected answer") from None
 
     def _call(self, method: str, path: str, body: dict[str, Any] | None) -> Answer:
         headers = {"Accept": "application/json"}
@@ -146,7 +165,11 @@ class Client:
             headers["Content-Type"] = "application/json"
         if self._cookie is not None:
             headers["Cookie"] = self._cookie
-        answer = self._send(method, path, data, headers)
+        try:
+            answer = self._send(method, path, data, headers)
+        except OSError as failure:  # unreachable, refused, timed out, a TLS failure
+            reason = str(failure) or type(failure).__name__
+            raise Refused(0, "SERVER_UNREACHABLE", reason) from None
         for cookie in answer.headers.get("set-cookie", []):
             pair = cookie.split(";", 1)[0]
             name, _, value = pair.partition("=")

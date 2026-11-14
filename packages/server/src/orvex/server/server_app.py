@@ -173,7 +173,9 @@ def create_server_app(
                 return None
             refusal = administration.audit.refusal
             await run_in_threadpool(refusal, "route", user, ACCESS_FORBIDDEN, project=project)
-            return error_response(403, ACCESS_FORBIDDEN, "The operation is not allowed", request_id)
+            return error_response(
+                403, ACCESS_FORBIDDEN, "The operation is not allowed.", request_id
+            )
         if served is None:
             return None
         caller = ServerRequest(user, served.project)
@@ -185,7 +187,7 @@ def create_server_app(
             await run_in_threadpool(
                 audit.refusal, "route", user, ACCESS_FORBIDDEN, project=served.project
             )
-        return error_response(403, ACCESS_FORBIDDEN, "The operation is not allowed", request_id)
+        return error_response(403, ACCESS_FORBIDDEN, "The operation is not allowed.", request_id)
 
     async def authenticated(request: Request) -> Response | None:
         request_id: str = request.state.request_id
