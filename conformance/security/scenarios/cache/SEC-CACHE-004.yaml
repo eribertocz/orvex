@@ -70,4 +70,5 @@ engines:
 - managed
 - existing-ducklake
 - clickhouse
-pending: 444
+pending_engines:
+  existing-ducklake: P5-14

@@ -49,6 +49,7 @@ from orvex.semantic.receipt import Key
 from orvex.semantic.receipt.viewer import CallerViewer
 from orvex.semantic.result import SemanticResult
 from orvex.semantic.result.cursors import SealedForm
+from orvex.semantic.result_cache import ResultCache
 from orvex.server import evidence_records, lake_place, semantic_model
 from orvex.server.identity import Identity
 from orvex.server.permission_state import permission_state
@@ -122,6 +123,8 @@ class Settings:
     timeout_ms: int | None
     engine_version: str = field(default_factory=lambda: version("duckdb"))
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
+    # This process's result cache (#444): one per serve session, never shared or kept.
+    cache: ResultCache | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -136,6 +139,7 @@ class Semantic:
 
 
 DETAIL_PAGE_CAP = 10_000  # rows of one detail page at most
+RESULT_CACHE_BYTES = 256 * 2**20  # this process's result cache at most (#444)
 QUERY_TIMEOUT_MS = 120_000
 
 
@@ -148,6 +152,7 @@ def session_settings() -> Settings:
         cursors=SealedForm(secrets.token_bytes(32)),
         limits=QueryLimits(detail_page_size=DETAIL_PAGE_CAP),
         timeout_ms=QUERY_TIMEOUT_MS,
+        cache=ResultCache(RESULT_CACHE_BYTES),
     )
 
 
@@ -353,6 +358,7 @@ def _question(
         routing=model.routing,
         # The existing lakes the model was compiled on, read at those same snapshots (#399).
         adapters=model.adapters,
+        cache=settings.cache,  # keyed by this request's identity, at `pinned` (#444)
     )
     return _Question(model, policies, context, engine)
 
