@@ -34,7 +34,9 @@ def origin(place: Any, request: Any) -> tuple[str, list[Any] | None, int]:  # no
     received, found = ask(FOUND, place, request, context_for(FOUND, place, CALLER, {}), whole=True)
     assert received.code is None, received
     document = found.receipt.document()
-    snapshot = max(int(d["snapshot_id"]) for d in document["data"] if not d["for_policy"])
+    # A live engine has no snapshot: its reads carry a read instant instead.
+    reads = [d for d in document["data"] if not d["for_policy"]]
+    snapshot = max(int(d.get("snapshot_id", -1)) for d in reads)
     return str(document["execution"]["cache"]), received.rows, snapshot
 
 

@@ -329,6 +329,18 @@ def test_an_entry_older_than_its_ttl_misses() -> None:
     assert seen == ["miss", "hit", "miss"]
 
 
+def test_a_ttl_of_zero_bypasses_the_cache() -> None:
+    compiled = _with_cache({"enabled": True, "ttl": "PT0S"})
+    model = read_policies(yaml.safe_dump(UTILITY), compiled, groups=sf.GROUPS,
+                          managed_tables=FOUND.managed)  # fmt: skip
+    cache = ResultCache()
+    with lake() as opened:
+        context = caller(opened, model, "u-exempt", ("management",))
+        seen = [origin(ask(opened, cache, BY_ZONE, context, model, compiled)) for _ in range(2)]
+    assert seen == ["bypass", "bypass"]
+    assert len(cache) == 0
+
+
 def test_refusals_and_errors_are_never_stored() -> None:
     model, cache = policies(), ResultCache()
     refused = {**BY_ZONE, "group_by": [{"member": "consumers.national_id"}],
