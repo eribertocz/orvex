@@ -55,6 +55,7 @@ from orvex.server.app import (
     mount_status,
 )
 from orvex.server.route_permissions import allows, checked_permissions, permission_of
+from orvex.server.semantic_http import local_identity, local_limits
 from orvex.server.sign_in_errors import access_error_response
 from orvex.server.state_change_rules import (
     SAFE_METHODS,
@@ -197,6 +198,8 @@ def create_server_app(
     if served is not None:
         if not isinstance(served.semantic.audit, AuditLog):  # #445: no audit log, no server
             raise ValueError("server mode needs its audit log: the server does not start")
+        if served.semantic.identity is local_identity or served.semantic.limits is local_limits:
+            raise ValueError("server mode needs its own identity and limits: no server")
         served.semantic.audit.verify_at_start()  # a key or an anchor that fails: no server
         project = served.project
 

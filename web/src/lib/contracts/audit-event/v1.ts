@@ -333,11 +333,15 @@ export interface PolicyMappingMissingDetails {
  * via the `definition` "QueryDetails".
  */
 export interface QueryDetails {
-	receipt: Fingerprint;
+	receipt?: Fingerprint;
 	cache?: 'hit' | 'miss' | 'bypass';
 	mode?: 'aggregate' | 'detail';
 	stage?: 'synchronous' | 'executed' | 'delivered';
 	job?: string;
+	/**
+	 * An asynchronous job that ended with no answer (#445): no receipt.
+	 */
+	end?: 'failed' | 'cancelled';
 }
 /**
  * This interface was referenced by `AuditEvent`'s JSON-Schema

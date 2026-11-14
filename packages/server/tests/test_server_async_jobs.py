@@ -16,7 +16,8 @@ import pytest
 from orvex.access.authentication.query_limits import QueryLimits, RoleLimit
 from orvex.access.errors import AUDIT_UNAVAILABLE, AccessError
 from orvex.semantic.execution import answer
-from orvex.server import semantic_http
+from orvex.server import semantic_delivery, semantic_http
+from orvex.server.semantic_audit import record_query
 
 from tests.support.access_directory import audit_events
 from tests.support.semantic_http import detail, run
@@ -73,7 +74,16 @@ def queries(server: Server) -> list[dict[str, Any]]:
 
 
 def stages(server: Server) -> list[tuple[str, str | None]]:
-    return [(e["details"]["stage"], e["details"].get("job")) for e in queries(server)]
+    """The `query` events of answers: each with its receipt."""
+    found = [e for e in queries(server) if "end" not in e["details"]]
+    return [(e["details"]["stage"], e["details"].get("job")) for e in found]
+
+
+def ended(server: Server) -> list[tuple[str, str]]:
+    """The `executed` events of jobs that ended with no answer: no receipt, their end."""
+    found = [e["details"] for e in queries(server) if "end" in e["details"]]
+    assert all(set(d) == {"stage", "job", "end"} and d["stage"] == "executed" for d in found)
+    return [(d["job"], d["end"]) for d in found]
 
 
 def code(answer: Any) -> tuple[int, str]:  # noqa: ANN401
@@ -213,6 +223,9 @@ def test_a_mapping_removed_before_the_fetch_withdraws_the_answer(mapped: Server)
     assert "rows" not in withdrawn.text
     assert "answer" not in withdrawn.json()
     assert stages(mapped) == [("executed", job)]  # no delivery was made
+    (refusal,) = [e for e in audit_events(mapped.store) if e["kind"] == "access.refused"]
+    assert refusal["details"] == {"operation": "delivery", "code": "QUERY_RESULT_WITHDRAWN"}
+    assert (refusal["actor"], refusal["outcome"]) == (ana, "refused")
     again = ask(http, detail(10))  # asked again: the permissions in force now
     assert [row[0] for row in again.json()["result"]["rows"]] == [1, 2]
 
@@ -295,6 +308,8 @@ def test_a_running_job_holds_its_slot_and_a_cancel_frees_it_at_once(
     assert http.get(JOBS + job).json()["status"] == "cancelled"  # never delivered
     assert ("delivered", job) not in stages(server)
     until(lambda: server.semantic.slots.running(ana, "project-1") == 0)
+    assert ended(server) == [(job, "cancelled")]  # its one executed event, never a second
+    assert stages(server) == [("executed", second), ("delivered", second)]
 
 
 def test_a_job_that_fails_frees_its_slot(server: Server, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -308,4 +323,26 @@ def test_a_job_that_fails_frees_its_slot(server: Server, monkeypatch: pytest.Mon
     job = start(http, detail(10))
     assert code(fetched(http, job)) == (503, "PROJECT_BUSY")
     until(lambda: server.semantic.slots.running(ana, "project-1") == 0)
-    assert stages(server) == []  # no answer, no query event
+    until(lambda: ended(server) == [(job, "failed")])  # its one executed event
+    assert stages(server) == []  # no answer, no receipt
+
+
+def test_a_revocation_after_a_fetch_applies_to_the_next_fetch(
+    server: Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ana = server.author("ana", "finance")
+    http = server.client("ana")
+    job = start(http, detail(10))
+    until(lambda: ("executed", job) in stages(server))
+    recording = record_query
+    revoked: list[bool] = []
+
+    def recorded_then_revoked(*args: Any) -> None:  # noqa: ANN401
+        recording(*args)
+        if args[3] == "delivered" and not revoked:
+            revoked.append(True)
+            server.attributes.set(server.builder, "project-1", ana, "tariff", "text", "x")
+
+    monkeypatch.setattr(semantic_delivery, "record_query", recorded_then_revoked)
+    assert fetched(http, job).status_code == 200  # decided before the revocation
+    assert code(fetched(http, job)) == (409, "QUERY_RESULT_WITHDRAWN")

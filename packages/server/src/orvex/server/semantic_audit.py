@@ -1,7 +1,9 @@
 """The audit events of a semantic answer, in server mode:
 - **`query`** (#445; `security.md` §4): one per synchronous answer (`stage: synchronous`), one
   when an asynchronous job ends (`executed`) and one per delivery of its result (`delivered`),
-  with the receipt id, the cache origin and the mode, never a value, member or policy;
+  with the receipt id, the cache origin and the mode, never a value, member or policy. A job
+  that ends failed or cancelled with no answer records its `executed` event with its `end`
+  and no receipt;
 - **`policy.attribute_missing` / `policy.mapping_missing`** (P3-09, #443): one per policy that
   withheld every row, with the policy's dataset, its name and the receipt id.
 
@@ -54,6 +56,17 @@ def record_query(
     except AccessError:
         if not found.withheld:
             raise
+        audit.unrecorded += 1
+        LOG.error("audit: a query event of project %s could not be recorded", project)
+
+
+def record_unfinished(audit: AuditLog, user: str, project: str, job: str, end: str) -> None:
+    """The `executed` event of a job that ended with no answer (`end`: failed, cancelled).
+    Nothing is delivered, so a failure to record it is counted and logged, never raised."""
+    details = {"stage": "executed", "job": job, "end": end}
+    try:
+        audit.record_alone("query", user, details, outcome="allowed", project=project)
+    except AccessError:
         audit.unrecorded += 1
         LOG.error("audit: a query event of project %s could not be recorded", project)
 

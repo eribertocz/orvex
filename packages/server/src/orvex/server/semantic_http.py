@@ -136,6 +136,18 @@ class Settings:
     cache: ResultCache | None = field(default=None, repr=False)
 
 
+def local_limits(role: str) -> RoleLimit:
+    """Local mode's one Builder: the defaults."""
+    return DEFAULT_LIMITS[role]
+
+
+def local_identity(request: object) -> tuple[str, str, str]:
+    """Local mode's one Builder."""
+    if not isinstance(request, LocalRequest):
+        raise InvalidContext("the request is not an authenticated local request")
+    return "local", request.project, "builder"
+
+
 @dataclass(frozen=True)
 class Semantic:
     """The semantic routes' composition: the source, the caller and the settings; in server
@@ -147,18 +159,11 @@ class Semantic:
     audit: AuditLog | None = None
     # Per-role limits (#445): a role's limits now (server mode: the instance settings; local
     # mode's one Builder: the defaults), and this process's running questions.
-    limits: Callable[[str], RoleLimit] = lambda role: DEFAULT_LIMITS[role]
+    limits: Callable[[str], RoleLimit] = local_limits
     slots: QuerySlots = field(default_factory=QuerySlots)
     # Who asks, before any turn or planning (#445): the slot's user and project, and the role
     # whose limit it counts against. Server mode reads the directory now.
-    identity: Callable[[object], tuple[str, str, str]] = lambda request: local_identity(request)
-
-
-def local_identity(request: object) -> tuple[str, str, str]:
-    """Local mode's one Builder."""
-    if not isinstance(request, LocalRequest):
-        raise InvalidContext("the request is not an authenticated local request")
-    return "local", request.project, "builder"
+    identity: Callable[[object], tuple[str, str, str]] = local_identity
 
 
 def server_identity(store: Store) -> Callable[[object], tuple[str, str, str]]:

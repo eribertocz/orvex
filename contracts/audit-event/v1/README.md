@@ -35,7 +35,7 @@ Every object is closed.
 
 Adding a kind is a compatible change. Removing one, or changing its meaning, needs `v2`.
 
-**`details` holds identifiers, codes, counts and fingerprints only.** Each `kind` has its own schema with no other member. So a field that could carry a password, a token, a secret, free text or a result value cannot exist. A query is recorded by its receipt's fingerprint, never by its rows. A `query` event (#445) names the receipt, its `cache` origin, its `mode` and its `stage`: `synchronous`, an asynchronous job's `executed` (once, fetched or not) or `delivered` (once per fetch), with the job's id. An execution that gave no answer has no receipt, and no `query` event.
+**`details` holds identifiers, codes, counts and fingerprints only.** Each `kind` has its own schema with no other member. So a field that could carry a password, a token, a secret, free text or a result value cannot exist. A query is recorded by its receipt's fingerprint, never by its rows. A `query` event (#445) names the receipt, its `cache` origin, its `mode` and its `stage`: `synchronous`, an asynchronous job's `executed` (once, fetched or not) or `delivered` (once per fetch), with the job's id. A job that ends with no answer records its one `executed` event with its `end` (`failed` or `cancelled`) and no receipt. A delivery refused under the permissions in force records `access.refused` (operation `delivery`) and no `query` event.
 
 ## The log
 

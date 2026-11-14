@@ -16,6 +16,8 @@ For a synchronous question, `answered`:
   `QUERY_RESULT_WITHDRAWN`.
 - **The decision point** is that read: a revocation committed before it is honored; one
   committed after it applies to the next request, as for any request already authorized.
+- **A refusal** is recorded (`access.refused`, operation `delivery`, with its code) and no
+  `query` event.
 - **Audit** (`semantic_audit`): the `query` event of its stage, and #443's events of a withheld
   answer, at the stage that computed it (never again at a later delivery). Then the response
   goes.
@@ -40,15 +42,22 @@ def deliver(
     revalidate: Callable[[], None] | None = None,
     job: str | None = None,
 ) -> None:
-    """Revalidate `asked` for `request` now, then record its audit events; raise to refuse."""
-    if revalidate is not None:
-        revalidate()  # the session, as the request rules read it
-    now = semantic_http.current_context(semantic, request, asked.snapshot)
-    role = now.get("role")
-    if role != asked.context.get("role") and not allows("explorer", str(role)):
-        raise AccessError(ACCESS_FORBIDDEN, "The operation is not allowed.")  # lowered since
-    if now["permission_fingerprint"] != asked.context["permission_fingerprint"]:
-        raise SemanticError("QUERY_RESULT_WITHDRAWN", {"reason": "permissions_changed"})
+    """Revalidate `asked` for `request` now, then record its audit events; raise to refuse,
+    the refusal recorded."""
+    try:
+        if revalidate is not None:
+            revalidate()  # the session, as the request rules read it
+        now = semantic_http.current_context(semantic, request, asked.snapshot)
+        role = now.get("role")
+        if role != asked.context.get("role") and not allows("explorer", str(role)):
+            raise AccessError(ACCESS_FORBIDDEN, "The operation is not allowed.")  # lowered since
+        if now["permission_fingerprint"] != asked.context["permission_fingerprint"]:
+            raise SemanticError("QUERY_RESULT_WITHDRAWN", {"reason": "permissions_changed"})
+    except (AccessError, SemanticError) as error:
+        if semantic.audit is not None:  # never raises: a refusal it cannot record is counted
+            user, project = str(asked.context["user"]), str(asked.context["project"])
+            semantic.audit.refusal("delivery", user, error.code, project=project)
+        raise
     if semantic.audit is None:
         return  # local mode: no audit log
     record_query(semantic.audit, asked.found, asked.context, stage, job)

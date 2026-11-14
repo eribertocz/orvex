@@ -58,6 +58,31 @@ def jobs_of(stub: Stub, clock: Clock, run: Callable[[Callable[[], None]], None])
     return Jobs(stub, clock, run)  # type: ignore[arg-type]
 
 
+class Table:
+    def __init__(self, nbytes: int) -> None:
+        self.nbytes = nbytes
+
+
+@dataclass
+class Asked:
+    """What a job keeps of an answer: its result's Arrow size."""
+
+    nbytes: int = 100
+
+    @property
+    def found(self) -> Any:  # noqa: ANN401
+        size = self.nbytes
+
+        class Result:
+            def arrow(self) -> Table:
+                return Table(size)
+
+        class Found:
+            result = Result()
+
+        return Found()
+
+
 def answered_with(monkeypatch: pytest.MonkeyPatch, outcome: Callable[[], Any]) -> None:
     def ask(semantic: Any, body: bytes, request: object, cancel: Cancel) -> Any:  # noqa: ANN401
         return outcome()
@@ -73,7 +98,7 @@ def now(work: Callable[[], None]) -> None:
 def test_a_finished_job_frees_its_slot_once(
     stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    answered_with(monkeypatch, lambda: "the answer")
+    answered_with(monkeypatch, Asked)
     jobs = jobs_of(stub, clock, now)
     job = jobs.start(b"{}", object(), OWNER)
     assert jobs.status(job, OWNER).status == "done"
@@ -95,13 +120,13 @@ def test_a_failed_job_frees_its_slot_and_keeps_its_error(
     assert isinstance(found.error, SemanticError)
     assert stub.slots.running(*OWNER) == 0
     with pytest.raises(SemanticError):
-        jobs.fetch(job, OWNER, object())
+        jobs.fetch(job, OWNER, object(), lambda asked: asked)
 
 
 def test_a_start_at_the_limit_is_refused_and_leaves_no_job(
     stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    answered_with(monkeypatch, lambda: "the answer")
+    answered_with(monkeypatch, Asked)
     held: list[Callable[[], None]] = []
     jobs = jobs_of(stub, clock, held.append)  # started, never run
     first, second = jobs.start(b"{}", object(), OWNER), jobs.start(b"{}", object(), OWNER)
@@ -134,7 +159,7 @@ def test_a_cancel_frees_the_slot_at_once_stops_the_execution_and_is_never_overwr
 
     def ask(semantic: Any, body: bytes, request: object, cancel: Cancel) -> Any:  # noqa: ANN401
         stops.append(cancel)
-        return "the answer"
+        return Asked()
 
     monkeypatch.setattr(semantic_http, "ask", ask)
     held: list[Callable[[], None]] = []
@@ -147,7 +172,7 @@ def test_a_cancel_frees_the_slot_at_once_stops_the_execution_and_is_never_overwr
     assert stops == [jobs.status(job, OWNER).stop]
     assert stub.slots.running(*OWNER) == 0  # never released twice
     assert jobs.status(job, OWNER).status == "cancelled"
-    assert jobs.fetch(job, OWNER, object()) is None  # never delivered
+    assert jobs.fetch(job, OWNER, object(), lambda asked: asked) is None  # never delivered
 
 
 def test_racing_ends_release_the_slot_exactly_once(
@@ -160,7 +185,7 @@ def test_racing_ends_release_the_slot_exactly_once(
 
     def answer() -> Any:  # noqa: ANN401
         gate.wait(10)
-        return "the answer"
+        return Asked()
 
     answered_with(monkeypatch, answer)
     threads: list[threading.Thread] = []
@@ -189,7 +214,7 @@ def test_racing_ends_release_the_slot_exactly_once(
 def test_another_owner_never_finds_the_job(
     stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    answered_with(monkeypatch, lambda: "the answer")
+    answered_with(monkeypatch, Asked)
     jobs = jobs_of(stub, clock, now)
     job = jobs.start(b"{}", object(), OWNER)
     for other in (("ben", "project-1"), ("ana", "project-2")):
@@ -203,7 +228,7 @@ def test_another_owner_never_finds_the_job(
 def test_a_finished_job_is_kept_ten_minutes(
     stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    answered_with(monkeypatch, lambda: "the answer")
+    answered_with(monkeypatch, Asked)
     jobs = jobs_of(stub, clock, now)
     job = jobs.start(b"{}", object(), OWNER)
     clock.now = KEPT_SECONDS - 1
@@ -216,7 +241,7 @@ def test_a_finished_job_is_kept_ten_minutes(
 def test_at_most_max_jobs_are_kept_the_oldest_finished_go_first(
     stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    answered_with(monkeypatch, lambda: "the answer")
+    answered_with(monkeypatch, Asked)
     jobs = jobs_of(stub, clock, now)
     kept = []
     for second in range(MAX_JOBS + 3):
@@ -226,3 +251,65 @@ def test_at_most_max_jobs_are_kept_the_oldest_finished_go_first(
     with pytest.raises(JobNotFound):
         jobs.status(kept[0], OWNER)
     assert jobs.status(kept[-1], OWNER).status == "done"
+
+
+def test_the_kept_answers_are_bounded_in_bytes_and_the_heaviest_owner_goes_first(
+    stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One owner filling the byte bound evicts their own oldest answers, never another's."""
+    sizes = iter([10, *([semantic_jobs.MAX_BYTES // 4] * 6)])
+    answered_with(monkeypatch, lambda: Asked(next(sizes)))
+    jobs = jobs_of(stub, clock, now)
+    other = ("ben", "project-1")
+    small = jobs.start(b"{}", object(), other)
+    heavy = []
+    for second in range(6):
+        clock.now = second + 1
+        heavy.append(jobs.start(b"{}", object(), OWNER))
+    jobs.status(heavy[-1], OWNER)  # collects
+    assert jobs.status(small, other).status == "done"  # the other owner's answer stays
+    assert jobs._kept_bytes() <= semantic_jobs.MAX_BYTES + semantic_jobs.MAX_BYTES // 4
+    with pytest.raises(JobNotFound):
+        jobs.status(heavy[0], OWNER)
+    assert jobs.status(heavy[-1], OWNER).status == "done"
+
+
+@dataclass
+class Recorded:
+    """An audit log that keeps the `query` events it is given."""
+
+    events: list[dict[str, Any]] = field(default_factory=list)
+    unrecorded: int = 0
+
+    def record_alone(self, kind: str, actor: str, details: Any, **more: Any) -> str:  # noqa: ANN401
+        self.events.append({"kind": kind, "actor": actor, "details": dict(details), **more})
+        return "id"
+
+
+@pytest.mark.parametrize("end", ["failed", "cancelled"])
+def test_a_job_ended_with_no_answer_records_one_executed_event_with_its_end(
+    stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch, end: str
+) -> None:
+    def failing() -> Any:  # noqa: ANN401
+        raise SemanticError("MEMBER_NOT_FOUND", {"member": "x"})
+
+    answered_with(monkeypatch, failing if end == "failed" else Asked)
+    log = Recorded()
+    stub.audit = log  # type: ignore[assignment]
+    held: list[Callable[[], None]] = []
+    jobs = jobs_of(stub, clock, held.append)
+    job = jobs.start(b"{}", object(), OWNER)
+    if end == "cancelled":
+        jobs.cancel(job, OWNER)
+        jobs.cancel(job, OWNER)  # a second cancel records nothing more
+    held[0]()  # the execution ends after the cancel: nothing more either
+    assert log.events == [
+        {
+            "kind": "query",
+            "actor": "ana",
+            "details": {"stage": "executed", "job": job, "end": end},
+            "outcome": "allowed",
+            "project": "project-1",
+        }
+    ]
+    assert stub.slots.running(*OWNER) == 0

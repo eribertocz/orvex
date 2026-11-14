@@ -233,11 +233,15 @@ class QueryDetails(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    receipt: Fingerprint
+    receipt: Fingerprint | None = None
     cache: Literal["hit", "miss", "bypass"] | None = None
     mode: Literal["aggregate", "detail"] | None = None
     stage: Literal["synchronous", "executed", "delivered"] | None = None
     job: Annotated[str | None, Field(pattern="^[0-9a-f]{32}$")] = None
+    end: Literal["failed", "cancelled"] | None = None
+    """
+    An asynchronous job that ended with no answer (#445): no receipt.
+    """
 
 
 class UserAdministratorGrantedDetails(BaseModel):

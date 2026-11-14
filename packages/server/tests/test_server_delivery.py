@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from orvex.access.errors import ACCESS_FORBIDDEN, AUDIT_UNAVAILABLE, AccessError
 from orvex.access.server_context import ServerRequest
+from orvex.access.storage.store import TransientConflict
 from orvex.semantic.errors import SemanticError
 from orvex.server import semantic_delivery, semantic_http
 from orvex.server.semantic_audit import record_query
@@ -21,7 +22,7 @@ from orvex.server.semantic_audit import record_query
 from tests.support.access_directory import audit_events
 from tests.support.semantic_http import detail, extension, model, run, write
 
-from .test_server_semantic import SAME, Server, ask
+from .test_server_semantic import MAPPED, SAME, Server, ask
 
 
 def code(answer: Any) -> tuple[int, str]:  # noqa: ANN401
@@ -43,7 +44,11 @@ def origin(request: pytest.FixtureRequest) -> str:
 
 @pytest.fixture
 def server(tmp_path: Path, origin: str) -> Server:
-    built = Server(tmp_path)
+    return composed(tmp_path, origin)
+
+
+def composed(tmp_path: Path, origin: str, policies: str | None = None) -> Server:
+    built = Server(tmp_path) if policies is None else Server(tmp_path, policies)
     if origin == "bypass":  # the dataset turns the cache off
         document = json.loads(model())
         document["datasets"][0]["custom_extensions"] = [
@@ -89,6 +94,35 @@ def test_an_attribute_changed_before_delivery_withdraws_the_answer(
     assert "receipt" not in withdrawn.json()
     assert len(queries(server)) == before  # nothing was delivered
     assert server.semantic.slots.running(ana, "project-1") == 0
+    refusal = [e for e in audit_events(server.store) if e["kind"] == "access.refused"][-1]
+    assert refusal["details"] == {"operation": "delivery", "code": "QUERY_RESULT_WITHDRAWN"}
+    assert (refusal["actor"], refusal["project"]) == (ana, "project-1")
+
+
+def test_a_mapping_row_removed_before_delivery_withdraws_the_answer(
+    tmp_path: Path, origin: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SEC-REVOKE-002's revocation, for each origin: the mapping row that granted the rows is
+    removed after the answer is computed."""
+    mapped = composed(tmp_path, origin, MAPPED)
+    ana = mapped.author("ana", tariff=None)
+    mapped.mapping({ana: ["residential", "commercial"]})
+    run(mapped.folder)
+    http = mapped.client("ana")
+    if origin == "hit":
+        assert cache(ask(http, detail(10))) == "miss"
+
+    def removed() -> None:
+        mapped.mapping({ana: ["residential"]})
+        run(mapped.folder)
+
+    revoked_after_asking(monkeypatch, removed)
+    withdrawn = ask(http, detail(10))
+    assert code(withdrawn) == (409, "QUERY_RESULT_WITHDRAWN")
+    assert "rows" not in withdrawn.text
+    monkeypatch.undo()
+    again = ask(http, detail(10))  # the permissions in force now: residential only
+    assert [row[0] for row in again.json()["result"]["rows"]] == [1, 2]
 
 
 def test_a_group_removed_before_delivery_ends_the_session_and_sends_nothing(
@@ -242,3 +276,30 @@ def test_a_revocation_after_the_delivery_step_applies_to_the_next_request(
     after = ask(http, detail(10))
     assert after.status_code == 200
     assert after.json()["result"]["rows"] == []  # the permissions in force now
+
+
+def test_a_retried_recording_leaves_one_event(
+    server: Server, origin: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The store gives up on the event's first attempt (a serialization conflict: nothing of
+    it committed) and the log writes it again: one event, never two."""
+    server.author("ana", "finance")
+    http = server.client("ana")
+    primed(server, origin, http)
+    before = len(queries(server))
+    original = server.audit.record
+    conflicts: list[str] = []
+
+    def conflicting(transaction: Any, kind: str, *args: Any, **kwargs: Any) -> str:  # noqa: ANN401
+        if kind == "query" and not conflicts:
+            conflicts.append(kind)
+            raise TransientConflict("40001")
+        return original(transaction, kind, *args, **kwargs)
+
+    monkeypatch.setattr(server.audit, "record", conflicting)
+    answer = ask(http, detail(10))
+    assert answer.status_code == 200, answer.text
+    assert conflicts == ["query"]
+    (event,) = queries(server)[before:]
+    assert event["details"]["receipt"] == answer.json()["receipt"]["receipt_id"]
+    assert server.audit.verify() >= 1

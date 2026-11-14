@@ -297,3 +297,21 @@ def test_server_mode_does_not_start_when_its_audit_log_does_not_verify(server: S
             IDENTITY.slug,
             served=ServedProject("project-1", server.semantic, server.store),
         )
+
+
+@pytest.mark.parametrize("missing", ["identity", "limits"])
+def test_server_mode_does_not_start_with_local_modes_identity_or_limits(
+    server: Server, missing: str
+) -> None:
+    if missing == "identity":
+        composed = replace(server.semantic, identity=semantic_http.local_identity)
+    else:
+        composed = replace(server.semantic, limits=semantic_http.local_limits)
+    with pytest.raises(ValueError, match="identity and limits"):
+        create_server_app(
+            VERSIONS,
+            server.sign_in,
+            server.settings,
+            IDENTITY.slug,
+            served=ServedProject("project-1", composed, server.store),
+        )

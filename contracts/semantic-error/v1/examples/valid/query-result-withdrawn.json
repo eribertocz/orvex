@@ -1,0 +1,12 @@
+{
+  "kind": "semantic_error",
+  "code": "QUERY_RESULT_WITHDRAWN",
+  "severity": "error",
+  "category": "security",
+  "audience": "builder",
+  "message": "This answer was withdrawn because your permissions changed (permissions_changed); ask again.",
+  "locale": "en",
+  "details": {
+    "reason": "permissions_changed"
+  }
+}

@@ -461,15 +461,17 @@ def mount_semantic(
                 if found.status == "failed" and found.error is not None:
                     raise found.error
                 return job_response(job, found.status)
-            asked = await run_in_threadpool(
-                jobs.fetch, job, owner_of(request), caller, again(request)
+            arrow = wants_arrow(request)
+
+            def respond(asked: semantic_http.Asked) -> Response:
+                if arrow:
+                    return arrow_response(asked.arrow_table())
+                return JSONResponse({"job": job, "status": "done", "answer": asked.json_document()})
+
+            sent = await run_in_threadpool(
+                jobs.fetch, job, owner_of(request), caller, respond, again(request)
             )
-            if asked is None:
-                return job_response(job, found.status)
-            document = {"job": job, "status": "done", "answer": asked.json_document()}
-            if wants_arrow(request):
-                return arrow_response(asked.arrow_table())
-            return JSONResponse(document)
+            return job_response(job, found.status) if sent is None else sent
         except FAILURES as error:
             return refusal(error, request_id, caller)
         except StoreError as error:

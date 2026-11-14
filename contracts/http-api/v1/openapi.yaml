@@ -84,12 +84,6 @@ paths:
               schema: { $ref: "#/components/schemas/SemanticJob" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/semantic/jobs/{job}:
-    parameters:
-      - name: job
-        in: path
-        required: true
-        description: The job's id, 32 hexadecimal digits.
-        schema: { type: string }
     get:
       operationId: getSemanticJob
       summary: An asynchronous question's status, or its answer once done (#445).
@@ -99,6 +93,12 @@ paths:
         answer is delivered under the caller's permissions now: permissions changed since it
         ran give `409 QUERY_RESULT_WITHDRAWN`, and nothing of the answer is sent. A failed job
         gives the error the synchronous question would.
+      parameters:
+        - name: job
+          in: path
+          required: true
+          description: The job's id, 32 hexadecimal digits.
+          schema: { type: string }
       security: [{ session: [] }, { bearer: [] }, { serverSession: [] }]
       responses:
         "200":
@@ -119,6 +119,12 @@ paths:
       description: >-
         The job ends `cancelled` at once and its slot is free; its running read is interrupted
         and its answer is never delivered. A cancel of an ended job changes nothing.
+      parameters:
+        - name: job
+          in: path
+          required: true
+          description: The job's id, 32 hexadecimal digits.
+          schema: { type: string }
       security: [{ session: [] }, { bearer: [] }, { serverSession: [] }]
       responses:
         "200":

@@ -4,22 +4,23 @@ background under the caller's role limits, and delivered only through the one de
 - **Start.** The caller's slot is taken before the job exists: a caller at their limit gets
   `429` and no job. The job id is 128 random bits, owned by the caller's user and project; any
   other caller gets `404` for it, as for an id that never existed.
-- **The slot** is released exactly once, at the first of: the job finishing, failing or being
-  cancelled (Owner precision 2), never at the fetch; a fetch takes no slot. A cancel also stops
-  the execution (`query_cancel`): its managed-lake read is interrupted, and its answer, if one
-  still comes, is never delivered.
-- **Audit at execution** (precision 3). An execution that completes records its `query` event
-  (`stage: executed`, with its id) and #443's events at once, fetched or not, even when the
-  job was cancelled meanwhile: its rows were read. When that event cannot be recorded the job
+- **One end.** A job ends once, at the first of: finishing, failing or being cancelled. That
+  end releases the slot exactly once (Owner precision 2), never the fetch, which takes no slot,
+  and records the job's one `executed` event (precision 3), fetched or not: with the receipt
+  when it finished, with its `end` (failed, cancelled) and no receipt otherwise. A cancel also
+  stops the execution (`query_cancel`); an answer that still comes is never delivered.
+- **Audit at execution.** When a finished job's `executed` event cannot be recorded, the job
   fails with `AUDIT_UNAVAILABLE` and its result is discarded, unless the answer is withheld
-  (#443). An execution that fails has no answer, so no receipt and no `query` event, as a
-  refused synchronous question has none.
+  (#443).
 - **Fetch.** A finished job's answer goes through `semantic_delivery.deliver` (`stage:
-  delivered`), with a context built for the fetch: permissions changed since the job ran give
-  `QUERY_RESULT_WITHDRAWN`, and nothing of the answer is sent, in whole or in part.
-- **Keeping.** A finished job is kept for 10 minutes, and at most `MAX_JOBS` per process; then
-  it is gone (`404`). A restart loses every job (fail closed). The answer is never truncated:
-  it is the whole answer, or its error.
+  delivered`), with a context built for the fetch, after its response is built whole:
+  permissions changed since the job ran give `QUERY_RESULT_WITHDRAWN`, and nothing of the
+  answer is sent, in whole or in part.
+- **Keeping.** A finished job is kept for 10 minutes, then it is gone (`404`). The kept answers
+  are bounded, like the result cache, in number (`MAX_JOBS`) and in bytes (`MAX_BYTES`): beyond
+  either, the oldest finished job of the owner keeping the most bytes goes first, so a caller
+  filling the bound mostly evicts their own. A restart loses every job (fail closed). The answer
+  is never truncated: it is the whole answer, or its error.
 """
 
 from __future__ import annotations
@@ -27,17 +28,20 @@ from __future__ import annotations
 import secrets
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from orvex.access.errors import AccessError
 from orvex.server import semantic_http
 from orvex.server.query_cancel import Cancel
 from orvex.server.query_slots import Slot
-from orvex.server.semantic_audit import record_query, record_withheld
+from orvex.server.semantic_audit import record_query, record_unfinished, record_withheld
 from orvex.server.semantic_delivery import deliver
 
 KEPT_SECONDS = 600
 MAX_JOBS = 256
+MAX_BYTES = 256 * 2**20  # the kept answers' tables at most, as the result cache's bound
 
 
 class JobNotFound(Exception):
@@ -51,9 +55,11 @@ class Job:
     slot: Slot
     stop: Cancel = field(default_factory=Cancel)
     status: str = "running"  # running, done, failed, cancelled
+    claimed: bool = False  # its one end has begun
     asked: semantic_http.Asked | None = None
     error: Exception | None = None
     ended: float | None = None
+    size: int = 0
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -83,10 +89,10 @@ class Jobs:
         def work() -> None:
             try:
                 asked = semantic_http.ask(semantic, body, request, job.stop)
-                _executed(semantic, asked, job_id)  # audited at execution, fetched or not
-                self._end(job, "done", asked=asked)
             except Exception as error:  # noqa: BLE001 - kept as the job's outcome
-                self._end(job, "failed", error=error)
+                self._end(job, job_id, "failed", error=error)
+                return
+            self._end(job, job_id, "done", asked=asked)
 
         self._collect()
         with self._lock:
@@ -110,61 +116,88 @@ class Jobs:
 
     def cancel(self, job_id: str, owner: tuple[str, str]) -> Job:
         job = self.status(job_id, owner)
-        self._end(job, "cancelled")
-        job.stop.cancel()
+        if self._end(job, job_id, "cancelled"):
+            job.stop.cancel()
         return job
 
-    def fetch(
+    def fetch[R](
         self,
         job_id: str,
         owner: tuple[str, str],
         request: object,
+        respond: Callable[[semantic_http.Asked], R],
         revalidate: Callable[[], None] | None = None,
-    ) -> semantic_http.Asked | None:
-        """A finished job's answer, delivered now (None while it runs); its error raised."""
+    ) -> R | None:
+        """A finished job's response, built whole, then delivered now (None while it runs or
+        once cancelled); its error raised."""
         job = self.status(job_id, owner)
         with job.lock:
             status, asked, error = job.status, job.asked, job.error
-        if status == "running" or status == "cancelled":
+        if status in {"running", "cancelled"}:
             return None
         if status == "failed" and error is not None:
             raise error
         assert asked is not None
+        response = respond(asked)  # the whole response, before anything is decided
         deliver(self._semantic, request, asked, "delivered", revalidate, job_id)
-        return asked
+        return response
 
     def _end(
         self,
         job: Job,
+        job_id: str,
         status: str,
         asked: semantic_http.Asked | None = None,
         error: Exception | None = None,
-    ) -> None:
-        """The job's first end wins, and releases its slot, exactly once: a cancel is never
-        overwritten by a later finish."""
+    ) -> bool:
+        """The job's one end, whichever comes first: its `executed` event, then its outcome,
+        then its slot released. False when another end came first (a cancel racing the
+        finish): nothing more is recorded or released."""
         with job.lock:
-            if job.status != "running":
-                return
-            job.status, job.asked, job.error, job.ended = status, asked, error, self._clock()
+            if job.claimed:
+                return False
+            job.claimed = True
+        user, project = job.owner
+        audit = self._semantic.audit
+        size = 0
+        try:
+            if status == "done" and asked is not None:
+                if audit is not None:
+                    record_query(audit, asked.found, asked.context, "executed", job_id)
+                    record_withheld(audit, asked.found, asked.context)
+                size = asked.found.result.arrow().nbytes
+            elif audit is not None:
+                record_unfinished(audit, user, project, job_id, status)
+        except AccessError as refused:  # the event of an answer could not be recorded
+            status, asked, error = "failed", None, refused
+        with job.lock:
+            job.status, job.asked, job.error = status, asked, error
+            job.ended, job.size = self._clock(), size
         job.slot.release()
+        return True
 
     def _collect(self) -> None:
-        """Forget jobs kept past their time, and the oldest beyond the bound."""
+        """Forget the jobs kept past their time, then the oldest finished of the owner keeping
+        the most bytes while the bounds are passed."""
         now = self._clock()
         with self._lock:
             for job_id, job in list(self._jobs.items()):
                 if job.ended is not None and now - job.ended >= KEPT_SECONDS:
                     del self._jobs[job_id]
-            ended = sorted((j.ended, i) for i, j in self._jobs.items() if j.ended is not None)
-            while len(self._jobs) >= MAX_JOBS and ended:
-                del self._jobs[ended.pop(0)[1]]
+            while len(self._jobs) >= MAX_JOBS or self._kept_bytes() > MAX_BYTES:
+                held: Counter[tuple[str, str]] = Counter()
+                for job in self._jobs.values():
+                    if job.ended is not None:
+                        held[job.owner] += job.size + 1
+                if not held:
+                    return
+                heaviest = held.most_common(1)[0][0]
+                ended = [
+                    (j.ended or 0.0, i)
+                    for i, j in self._jobs.items()
+                    if j.ended is not None and j.owner == heaviest
+                ]
+                del self._jobs[min(ended)[1]]
 
-
-def _executed(semantic: semantic_http.Semantic, asked: semantic_http.Asked, job: str) -> None:
-    """The job's execution events (`stage: executed`): with no revalidation, since nothing
-    leaves; `AUDIT_UNAVAILABLE` fails the job unless the answer is withheld."""
-    audit = semantic.audit
-    if audit is None:
-        return
-    record_query(audit, asked.found, asked.context, "executed", job)
-    record_withheld(audit, asked.found, asked.context)
+    def _kept_bytes(self) -> int:
+        return sum(job.size for job in self._jobs.values())
