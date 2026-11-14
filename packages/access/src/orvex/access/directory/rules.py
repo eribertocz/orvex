@@ -12,6 +12,9 @@ refuses the change, or `None`. A rule never reads anything itself.
   the last active administrator or Builder that they are the last (`keeps_an_administrator`,
   `keeps_a_builder`), which is the more useful answer.
 - A deactivated caller may do nothing.
+- Reads (#446): the instance's users are an administrator's to list; one user is found by exact
+  name by an administrator or any Builder; a project's members are read by its Builder and an
+  administrator, its groups and attributes by its Builder only.
 """
 
 from __future__ import annotations
@@ -75,6 +78,31 @@ def manage_attributes(caller: Caller, member: str, member_active: bool) -> str |
     if not member_active:
         return ACCESS_FORBIDDEN
     return None
+
+
+def read_users(caller: Caller) -> str | None:
+    """List the instance's users, or read one: an active administrator only (#446)."""
+    if not (caller.active and caller.administrator):
+        return ACCESS_FORBIDDEN
+    return None
+
+
+def find_user(caller: Caller, builder_somewhere: bool) -> str | None:
+    """Find one user by exact user name, to add them (#446 Q4 A): an active administrator, or
+    an active Builder of some project."""
+    if not caller.active or not (caller.administrator or builder_somewhere):
+        return ACCESS_FORBIDDEN
+    return None
+
+
+def read_project(caller: Caller, members_only: bool) -> str | None:
+    """Read a project's members (`members_only`), groups or member attributes: its active
+    Builder; an active administrator reads only the members, to assign the first Builder."""
+    if not caller.active:
+        return ACCESS_FORBIDDEN
+    if caller.role == "builder" or (members_only and caller.administrator):
+        return None
+    return ACCESS_FORBIDDEN
 
 
 def keeps_a_builder(other_active_builders: int) -> str | None:

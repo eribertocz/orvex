@@ -27,6 +27,7 @@
 "packages/access/src/orvex/access/directory/bootstrap.py" = 94
 "packages/access/src/orvex/access/directory/locks.py" = 100
 "packages/access/src/orvex/access/directory/names.py" = 90
+"packages/access/src/orvex/access/directory/reads.py" = 100
 "packages/access/src/orvex/access/directory/records.py" = 100
 "packages/access/src/orvex/access/directory/recovery_file.py" = 87
 "packages/access/src/orvex/access/directory/rules.py" = 100

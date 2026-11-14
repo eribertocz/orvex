@@ -131,6 +131,190 @@ class SemanticJob(BaseModel):
     answer: SemanticAnswer | None = None
 
 
+class AdminUser(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    id: Annotated[str, Field(pattern="^[A-Za-z0-9_-]{1,128}$")]
+    user_name: Annotated[str, Field(min_length=1)]
+    display_name: Annotated[str, Field(min_length=1)]
+    state: Literal["active", "deactivated"]
+    administrator: bool
+    created_at: str
+    changed_at: str
+
+
+class UserPage(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    users: list[AdminUser]
+    after: str | None
+    """
+    The next page's `after`; null at the end.
+    """
+
+
+class NewUserRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    user_name: Annotated[str, Field(max_length=128, min_length=1)]
+    display_name: Annotated[str, Field(max_length=256, min_length=1)]
+
+
+class CreatedUser(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    user: AdminUser
+    temporary_password: Annotated[str, Field(min_length=1)]
+    """
+    Shown once; expires at 24 h.
+    """
+
+
+class TemporaryPassword(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    temporary_password: Annotated[str, Field(min_length=1)]
+    """
+    Shown once; expires at 24 h.
+    """
+
+
+class AdministratorFlag(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    value: bool
+
+
+class FoundUser(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    id: Annotated[str, Field(pattern="^[A-Za-z0-9_-]{1,128}$")]
+    display_name: Annotated[str, Field(min_length=1)]
+
+
+class Member(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    id: Annotated[str, Field(pattern="^[A-Za-z0-9_-]{1,128}$")]
+    user_name: Annotated[str, Field(min_length=1)]
+    display_name: Annotated[str, Field(min_length=1)]
+    state: Literal["active", "deactivated"]
+    role: Literal["builder", "author", "viewer"]
+
+
+class MemberList(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    members: list[Member]
+
+
+class RoleAssignment(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    role: Literal["builder", "author", "viewer"]
+
+
+class GroupRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    name: Annotated[str, Field(max_length=128, min_length=1)]
+
+
+class Member1(RootModel[str]):
+    root: Annotated[str, Field(pattern="^[A-Za-z0-9_-]{1,128}$")]
+
+
+class Group(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    name: Annotated[str, Field(min_length=1)]
+    members: list[Member1]
+
+
+class GroupList(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    groups: list[Group]
+
+
+class AttributeValue(BaseModel):
+    """
+    A `security-context` v1 attribute: `value` for text, integer and boolean, `values` for a list.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    type: Literal["text", "integer", "boolean", "list"]
+    value: str | bool | None = None
+    values: list[str] | None = None
+
+
+class Attribute(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    name: Annotated[str, Field(min_length=1)]
+    type: Literal["text", "integer", "boolean", "list"]
+    value: str | bool | None = None
+    values: list[str] | None = None
+
+
+class AttributeList(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    attributes: list[Attribute]
+    """
+    By name.
+    """
+
+
+class IdentityLinkRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    provider: Annotated[str, Field(max_length=32, min_length=1)]
+    subject: Annotated[str, Field(max_length=255, min_length=1)]
+
+
+class IdentityLinkCreated(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    id: Annotated[str, Field(pattern="^[0-9a-f]{32}$")]
+
+
+class Identity(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    id: Annotated[str, Field(pattern="^[0-9a-f]{32}$")]
+    provider: Annotated[str, Field(min_length=1)]
+    subject: Annotated[str, Field(min_length=1)]
+    linked_at: str
+
+
+class IdentityLinks(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    identities: list[Identity]
+
+
 class ErrorEnvelope(BaseModel):
     model_config = ConfigDict(
         extra="forbid",

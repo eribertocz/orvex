@@ -38,8 +38,9 @@ from orvex.access.errors import (
     LOGIN_DELAYED,
     LOGIN_FAILED,
     SESSION_EXPIRED,
-    VALIDATION_FAILED,
+    USER_NOT_FOUND,
     AccessError,
+    not_found,
 )
 from orvex.access.oidc import group_mapping, provider_sessions
 from orvex.access.storage import retry
@@ -226,7 +227,7 @@ class SignIn:
         def work(transaction: Transaction) -> None:
             refused(rules.manage_users(directory_sql.caller(transaction, actor), target))
             if directory_sql.user(transaction, target) is None:
-                raise AccessError(VALIDATION_FAILED, "The user is not valid.", {"field": "user"})
+                raise not_found(USER_NOT_FOUND)
             credentials.store(transaction, target, stored, now, temporary=True)
             sessions.end_all(transaction, target)
             self._audit.record(transaction, "user.password_reset", actor, {"user": target})

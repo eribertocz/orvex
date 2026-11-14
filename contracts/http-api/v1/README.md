@@ -27,6 +27,41 @@ The registry is `components.x-error-codes` in `openapi.yaml`; a test checks that
 - `Health.status` is the constant `ok`. Reporting degraded states later is a breaking change, so it would come as a new field or in v2.
 - `modules`, `contracts` and `details` are arrays of name/value objects, not maps, because every object in a contract is closed (`additionalProperties: false`).
 
+## Administration routes (server mode, #446)
+
+Under `/api/v1/admin/`, in server mode only, for a session that has changed its temporary password. Every route calls one `access` operation, and the directory's rules alone decide who may do what. Every change and every refusal is in the audit log; reads are not.
+
+- **The instance administrator:**
+  - users: list a page at a time by user name (`?after=`), read, create, deactivate, reactivate, the administrator flag, and the password reset;
+  - a user's OIDC links: list, link, and unlink by the link's opaque id (32 hexadecimal digits). No subject is ever in a route.
+- **Finding a user** (`GET /user-lookup?user_name=`): an administrator or any project's Builder.
+  - The match is exact, without regard to case. The answer is the id and the display name only.
+  - An unknown, invalid or deactivated name gets the same `404 USER_NOT_FOUND`.
+  - Each caller has 30 lookups a minute. Past them, `429 LOOKUP_LIMITED` with `Retry-After`, whatever the name.
+- **A project's Builder** (`/projects/{project}/…`):
+  - its members: list them, assign a role (`PUT`: added, or changed), remove one;
+  - its groups and their members;
+  - its members' attributes.
+
+  An administrator lists the members and assigns only the first Builder. A user who is not a member is `404 USER_NOT_FOUND`, the same as one who does not exist.
+- **Served projects.** A project the instance does not serve is `404 PROJECT_NOT_SERVED`, before any directory read. The set of served projects is explicit and never empty; the server-mode start (#156) is its authoritative source.
+- **Bodies and answers.**
+  - An action's body is `{}`. Unknown fields are refused (`422 VALIDATION_FAILED`).
+  - A write that changes nothing answers `204` like one that did, and records nothing.
+  - A temporary password is in its one response only, with `Cache-Control: no-store`, and is never logged.
+- **Status codes.**
+
+  | Status | Codes |
+  |---|---|
+  | 404 | `USER_NOT_FOUND`, `GROUP_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `PROJECT_NOT_SERVED` |
+  | 409 | `LAST_BUILDER`, `LAST_ADMINISTRATOR`, `USER_NAME_TAKEN`, `IDENTITY_TAKEN` |
+  | 429 | `LOOKUP_LIMITED` |
+
+- **The CLI** (`<slug> admin users|lookup|members|groups|attributes|identities|password`) calls these routes over HTTPS as the signed-in person.
+  - `--server`, or `<SLUG>_SERVER`, names the instance. Plain HTTP only reaches the loopback interface.
+  - `--as` names the user who signs in. The password is read from the terminal without echo, never from an argument.
+  - Each command signs out at its end. `admin password` changes the caller's own password, a temporary one included.
+
 ## Semantic routes (P2-27a; server mode, #445)
 
 `POST /api/v1/semantic/query`, `POST /api/v1/semantic/explain` (P2-27b, #364) and `GET /api/v1/semantic/catalog` exist in local mode and, with the job routes, in server mode. `explain` answers a `semantic-explain` v1 document and reads no data; its errors follow the same table, except that the plan's own refusals (categories `correctness`, `budget`, `engine`) are explained with `outcome: refused` instead.

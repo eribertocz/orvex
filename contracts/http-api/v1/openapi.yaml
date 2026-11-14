@@ -300,6 +300,522 @@ paths:
           headers:
             X-Request-Id: { $ref: "#/components/headers/RequestId" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/users:
+    get:
+      operationId: listUsers
+      summary: "The instance's users, a page at a time, by user name (administrator, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: after
+          in: query
+          required: false
+          description: The `after` of the previous page.
+          schema: { type: string }
+      responses:
+        "200":
+          description: "The instance's users, a page at a time, by user name (administrator, #446)."
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserPage" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createUser
+      summary: "Create a user with a temporary password, shown once (administrator, #446)."
+      security: [{ serverSession: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewUserRequest" }
+      responses:
+        "201":
+          description: "Create a user with a temporary password, shown once (administrator, #446)."
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control:
+              description: "`no-store`: the temporary password is shown once."
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreatedUser" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/users/{user}:
+    get:
+      operationId: getUser
+      summary: "One user (administrator, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: user
+          in: path
+          required: true
+          description: The user's id.
+          schema: { type: string }
+      responses:
+        "200":
+          description: "One user (administrator, #446)."
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminUser" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/users/{user}/deactivate:
+    post:
+      operationId: deactivateUser
+      summary: "Deactivate a user; their sessions end (administrator, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: user
+          in: path
+          required: true
+          description: The user's id.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, maxProperties: 0 }
+      responses:
+        "204":
+          description: Done, or nothing to change.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/users/{user}/reactivate:
+    post:
+      operationId: reactivateUser
+      summary: "Reactivate a user (administrator, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: user
+          in: path
+          required: true
+          description: The user's id.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, maxProperties: 0 }
+      responses:
+        "204":
+          description: Done, or nothing to change.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/users/{user}/administrator:
+    put:
+      operationId: setAdministrator
+      summary: "Grant or remove the administrator flag (administrator, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: user
+          in: path
+          required: true
+          description: The user's id.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AdministratorFlag" }
+      responses:
+        "204":
+          description: Done, or nothing to change.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/users/{user}/password-reset:
+    post:
+      operationId: resetPassword
+      summary: "A temporary password, shown once; every session of the user ends (administrator, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: user
+          in: path
+          required: true
+          description: The user's id.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, maxProperties: 0 }
+      responses:
+        "200":
+          description: "A temporary password, shown once; every session of the user ends (administrator, #446)."
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control:
+              description: "`no-store`: the temporary password is shown once."
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TemporaryPassword" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/users/{user}/identities:
+    get:
+      operationId: listIdentities
+      summary: "The user's OIDC links (administrator, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: user
+          in: path
+          required: true
+          description: The user's id.
+          schema: { type: string }
+      responses:
+        "200":
+          description: "The user's OIDC links (administrator, #446)."
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityLinks" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: linkIdentity
+      summary: "Link an OIDC identity to the user (administrator, #439, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: user
+          in: path
+          required: true
+          description: The user's id.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IdentityLinkRequest" }
+      responses:
+        "201":
+          description: "Link an OIDC identity to the user (administrator, #439, #446)."
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityLinkCreated" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/users/{user}/identities/{link}:
+    delete:
+      operationId: unlinkIdentity
+      summary: "Remove one of the user's OIDC links, by its opaque id (administrator, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: user
+          in: path
+          required: true
+          description: The user's id.
+          schema: { type: string }
+        - name: link
+          in: path
+          required: true
+          description: The link's opaque id (32 hexadecimal digits), never its subject.
+          schema: { type: string }
+      responses:
+        "204":
+          description: Done, or nothing to change.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/user-lookup:
+    get:
+      operationId: findUser
+      summary: "Find one user by exact user name, to add them: id and display name only (administrator or a Builder, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: user_name
+          in: query
+          required: true
+          description: The exact user name, compared without regard to case.
+          schema: { type: string }
+      responses:
+        "200":
+          description: "Find one user by exact user name, to add them: id and display name only (administrator or a Builder, #446)."
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FoundUser" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/projects/{project}/members:
+    get:
+      operationId: listMembers
+      summary: "The project's members and roles (its Builder, or an administrator, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          description: A project the instance serves.
+          schema: { type: string }
+      responses:
+        "200":
+          description: "The project's members and roles (its Builder, or an administrator, #446)."
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemberList" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/projects/{project}/members/{user}:
+    put:
+      operationId: setMembership
+      summary: "Add the member, or change their role (#446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          description: A project the instance serves.
+          schema: { type: string }
+        - name: user
+          in: path
+          required: true
+          description: The user's id.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RoleAssignment" }
+      responses:
+        "204":
+          description: Done, or nothing to change.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removeMembership
+      summary: "Remove the member (#446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          description: A project the instance serves.
+          schema: { type: string }
+        - name: user
+          in: path
+          required: true
+          description: The user's id.
+          schema: { type: string }
+      responses:
+        "204":
+          description: Done, or nothing to change.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/projects/{project}/groups:
+    get:
+      operationId: listGroups
+      summary: "The project's groups and their members (its Builder, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          description: A project the instance serves.
+          schema: { type: string }
+      responses:
+        "200":
+          description: "The project's groups and their members (its Builder, #446)."
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GroupList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createGroup
+      summary: "Create a group (its Builder, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          description: A project the instance serves.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GroupRequest" }
+      responses:
+        "201":
+          description: "Create a group (its Builder, #446)."
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GroupRequest" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/projects/{project}/groups/{group}:
+    delete:
+      operationId: deleteGroup
+      summary: "Delete a group (its Builder, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          description: A project the instance serves.
+          schema: { type: string }
+        - name: group
+          in: path
+          required: true
+          description: The group's name.
+          schema: { type: string }
+      responses:
+        "204":
+          description: Done, or nothing to change.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/projects/{project}/groups/{group}/members/{user}:
+    put:
+      operationId: addGroupMember
+      summary: "Add a member to the group (its Builder, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          description: A project the instance serves.
+          schema: { type: string }
+        - name: group
+          in: path
+          required: true
+          description: The group's name.
+          schema: { type: string }
+        - name: user
+          in: path
+          required: true
+          description: The user's id.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, maxProperties: 0 }
+      responses:
+        "204":
+          description: Done, or nothing to change.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removeGroupMember
+      summary: "Remove a member from the group (its Builder, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          description: A project the instance serves.
+          schema: { type: string }
+        - name: group
+          in: path
+          required: true
+          description: The group's name.
+          schema: { type: string }
+        - name: user
+          in: path
+          required: true
+          description: The user's id.
+          schema: { type: string }
+      responses:
+        "204":
+          description: Done, or nothing to change.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/projects/{project}/members/{user}/attributes:
+    get:
+      operationId: listAttributes
+      summary: "A member's attributes (its Builder, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          description: A project the instance serves.
+          schema: { type: string }
+        - name: user
+          in: path
+          required: true
+          description: The user's id.
+          schema: { type: string }
+      responses:
+        "200":
+          description: "A member's attributes (its Builder, #446)."
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttributeList" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/admin/projects/{project}/members/{user}/attributes/{name}:
+    put:
+      operationId: setAttribute
+      summary: "Set a member's attribute (its Builder, #440, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          description: A project the instance serves.
+          schema: { type: string }
+        - name: user
+          in: path
+          required: true
+          description: The user's id.
+          schema: { type: string }
+        - name: name
+          in: path
+          required: true
+          description: The attribute's name.
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AttributeValue" }
+      responses:
+        "204":
+          description: Done, or nothing to change.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removeAttribute
+      summary: "Remove a member's attribute (its Builder, #446)."
+      security: [{ serverSession: [] }]
+      parameters:
+        - name: project
+          in: path
+          required: true
+          description: A project the instance serves.
+          schema: { type: string }
+        - name: user
+          in: path
+          required: true
+          description: The user's id.
+          schema: { type: string }
+        - name: name
+          in: path
+          required: true
+          description: The attribute's name.
+          schema: { type: string }
+      responses:
+        "204":
+          description: Done, or nothing to change.
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        default: { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     session:
@@ -365,6 +881,18 @@ components:
     ACCESS_FORBIDDEN: >-
       The caller may not perform this administration operation (#436). The message never says
       which rule refused it.
+    USER_NOT_FOUND: >-
+      No such user for this caller (#446): unknown, deactivated in a lookup by name, or not a
+      member of the caller's project, all alike.
+    GROUP_NOT_FOUND: No such group in the project (#446).
+    IDENTITY_NOT_FOUND: >-
+      No such OIDC link of this user (#446): unknown, or another user's, alike.
+    IDENTITY_TAKEN: The OIDC identity is already linked to a user (#439, #446).
+    PROJECT_NOT_SERVED: >-
+      The project is not one the instance serves (#446); refused before any directory work.
+    LOOKUP_LIMITED: >-
+      The caller has used up their user lookups for the minute (#446); `Retry-After` says when
+      to try again, the same for every name.
     LAST_BUILDER: The change would leave a project without an active Builder (#436).
     LAST_ADMINISTRATOR: The change would leave the instance without an active administrator (#436).
     USER_NAME_TAKEN: Another user already has this user name, compared without regard to case (#436).
@@ -512,6 +1040,156 @@ components:
         job: { type: string, pattern: "^[0-9a-f]{32}$" }
         status: { type: string, enum: [running, done, cancelled] }
         answer: { $ref: "#/components/schemas/SemanticAnswer" }
+    AdminUser:
+      type: object
+      additionalProperties: false
+      required: [id, user_name, display_name, state, administrator, created_at, changed_at]
+      properties:
+        id: { type: string, pattern: "^[A-Za-z0-9_-]{1,128}$" }
+        user_name: { type: string, minLength: 1 }
+        display_name: { type: string, minLength: 1 }
+        state: { type: string, enum: [active, deactivated] }
+        administrator: { type: boolean }
+        created_at: { type: string }
+        changed_at: { type: string }
+    UserPage:
+      type: object
+      additionalProperties: false
+      required: [users, after]
+      properties:
+        users: { type: array, items: { $ref: "#/components/schemas/AdminUser" } }
+        after: { type: [string, "null"], description: "The next page's `after`; null at the end." }
+    NewUserRequest:
+      type: object
+      additionalProperties: false
+      required: [user_name, display_name]
+      properties:
+        user_name: { type: string, minLength: 1, maxLength: 128 }
+        display_name: { type: string, minLength: 1, maxLength: 256 }
+    CreatedUser:
+      type: object
+      additionalProperties: false
+      required: [user, temporary_password]
+      properties:
+        user: { $ref: "#/components/schemas/AdminUser" }
+        temporary_password: { type: string, minLength: 1, description: "Shown once; expires at 24 h." }
+    TemporaryPassword:
+      type: object
+      additionalProperties: false
+      required: [temporary_password]
+      properties:
+        temporary_password: { type: string, minLength: 1, description: "Shown once; expires at 24 h." }
+    AdministratorFlag:
+      type: object
+      additionalProperties: false
+      required: [value]
+      properties:
+        value: { type: boolean }
+    FoundUser:
+      type: object
+      additionalProperties: false
+      required: [id, display_name]
+      properties:
+        id: { type: string, pattern: "^[A-Za-z0-9_-]{1,128}$" }
+        display_name: { type: string, minLength: 1 }
+    MemberList:
+      type: object
+      additionalProperties: false
+      required: [members]
+      properties:
+        members:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, user_name, display_name, state, role]
+            properties:
+              id: { type: string, pattern: "^[A-Za-z0-9_-]{1,128}$" }
+              user_name: { type: string, minLength: 1 }
+              display_name: { type: string, minLength: 1 }
+              state: { type: string, enum: [active, deactivated] }
+              role: { type: string, enum: [builder, author, viewer] }
+    RoleAssignment:
+      type: object
+      additionalProperties: false
+      required: [role]
+      properties:
+        role: { type: string, enum: [builder, author, viewer] }
+    GroupRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 128 }
+    GroupList:
+      type: object
+      additionalProperties: false
+      required: [groups]
+      properties:
+        groups:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, members]
+            properties:
+              name: { type: string, minLength: 1 }
+              members: { type: array, items: { type: string, pattern: "^[A-Za-z0-9_-]{1,128}$" } }
+    AttributeValue:
+      type: object
+      additionalProperties: false
+      required: [type]
+      description: "A `security-context` v1 attribute: `value` for text, integer and boolean, `values` for a list."
+      properties:
+        type: { type: string, enum: [text, integer, boolean, list] }
+        value: { type: [string, boolean] }
+        values: { type: array, items: { type: string } }
+    AttributeList:
+      type: object
+      additionalProperties: false
+      required: [attributes]
+      properties:
+        attributes:
+          type: array
+          description: By name.
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, type]
+            properties:
+              name: { type: string, minLength: 1 }
+              type: { type: string, enum: [text, integer, boolean, list] }
+              value: { type: [string, boolean] }
+              values: { type: array, items: { type: string } }
+    IdentityLinkRequest:
+      type: object
+      additionalProperties: false
+      required: [provider, subject]
+      properties:
+        provider: { type: string, minLength: 1, maxLength: 32 }
+        subject: { type: string, minLength: 1, maxLength: 255 }
+    IdentityLinkCreated:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id: { type: string, pattern: "^[0-9a-f]{32}$" }
+    IdentityLinks:
+      type: object
+      additionalProperties: false
+      required: [identities]
+      properties:
+        identities:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, provider, subject, linked_at]
+            properties:
+              id: { type: string, pattern: "^[0-9a-f]{32}$" }
+              provider: { type: string, minLength: 1 }
+              subject: { type: string, minLength: 1 }
+              linked_at: { type: string }
     ErrorEnvelope:
       type: object
       additionalProperties: false

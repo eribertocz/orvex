@@ -24,6 +24,12 @@ SENT_OVER_HTTP = {
     "OIDC_FAILED",
     "OIDC_NOT_CONFIGURED",
     "OIDC_REFRESH_REQUIRED",
+    "USER_NOT_FOUND",
+    "GROUP_NOT_FOUND",
+    "IDENTITY_NOT_FOUND",
+    "IDENTITY_TAKEN",
+    "PROJECT_NOT_SERVED",
+    "LOOKUP_LIMITED",
 }
 # They stop a start or a command, or report on the audit log; none reaches a response.
 STORE_ONLY = {

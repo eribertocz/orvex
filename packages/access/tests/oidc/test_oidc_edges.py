@@ -6,11 +6,18 @@ from __future__ import annotations
 
 import base64
 import json
-from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from orvex.access.errors import OIDC_FAILED, OIDC_NOT_CONFIGURED, VALIDATION_FAILED, AccessError
+from orvex.access.errors import (
+    IDENTITY_NOT_FOUND,
+    IDENTITY_TAKEN,
+    OIDC_FAILED,
+    OIDC_NOT_CONFIGURED,
+    USER_NOT_FOUND,
+    VALIDATION_FAILED,
+    AccessError,
+)
 from orvex.access.oidc import tokens
 from orvex.access.oidc.configuration import Provider, parsed
 from orvex.access.oidc.discovery import Keys, checked_metadata
@@ -176,21 +183,30 @@ def test_a_time_claim_of_the_wrong_type_is_refused(oidc: Oidc, claims: dict[str,
 
 
 def test_the_link_operations_refuse_what_does_not_exist(oidc: Oidc) -> None:
-    ana = oidc.world.user("ana")
+    ana, ben = oidc.world.user("ana"), oidc.world.user("ben")
     admin = oidc.world.admin
-    actions: tuple[Callable[[], None], ...] = (
-        lambda: oidc.identities.link(admin, ana, "corp", ""),
-        lambda: oidc.identities.link(admin, "u-nobody", "corp", "s"),
-        lambda: oidc.identities.unlink(admin, ana, "corp", "never-linked"),
-    )
-    for action in actions:
-        with pytest.raises(AccessError) as caught:
-            action()
-        assert caught.value.code == VALIDATION_FAILED
-    oidc.identities.link(admin, ana, "corp", "s")
     with pytest.raises(AccessError) as caught:
-        oidc.identities.link(admin, oidc.world.user("ben"), "corp", "s")  # already linked
-    assert caught.value.details == {"field": "identity"}
+        oidc.identities.link(admin, ana, "corp", "")
+    assert caught.value.code == VALIDATION_FAILED
+    with pytest.raises(AccessError) as caught:
+        oidc.identities.link(admin, "u-nobody", "corp", "s")
+    assert caught.value.code == USER_NOT_FOUND
+    link = oidc.identities.link(admin, ana, "corp", "s")
+    assert len(link) == 32
+    assert int(link, 16) >= 0
+    for user, wrong in ((ana, "0" * 32), (ben, link)):  # unknown, and another user's
+        with pytest.raises(AccessError) as caught:
+            oidc.identities.unlink(admin, user, wrong)
+        assert (caught.value.code, dict(caught.value.details)) == (IDENTITY_NOT_FOUND, {})
+    with pytest.raises(AccessError) as caught:
+        oidc.identities.link(admin, ben, "corp", "s")  # already linked
+    assert caught.value.code == IDENTITY_TAKEN
+    (listed,) = oidc.identities.links(admin, ana)
+    assert (listed.id, listed.provider, listed.subject) == (link, "corp", "s")
+    oidc.identities.unlink(admin, ana, link)
+    assert oidc.identities.links(admin, ana) == []
+    events = [e for e in oidc.world.events() if e["kind"].startswith("user.oidc")]
+    assert all("s" not in e["details"].values() for e in events)  # never the subject
 
 
 def test_a_session_from_a_provider_no_longer_configured_is_always_due(oidc: Oidc) -> None:

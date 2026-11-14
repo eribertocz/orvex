@@ -2,7 +2,8 @@
 response may show.
 
 A refusal's message and its safe details become the ErrorEnvelope; a delay's length goes only to
-`Retry-After`, so the body of `LOGIN_DELAYED` is the same for every account.
+`Retry-After`, so the body of `LOGIN_DELAYED` is the same for every account, and that of
+`LOOKUP_LIMITED` (#446) for every name.
 """
 
 from __future__ import annotations
@@ -11,14 +12,23 @@ from fastapi.responses import JSONResponse
 from orvex.access.errors import (
     ACCESS_FORBIDDEN,
     AUDIT_UNAVAILABLE,
+    GROUP_NOT_FOUND,
+    IDENTITY_NOT_FOUND,
+    IDENTITY_TAKEN,
+    LAST_ADMINISTRATOR,
+    LAST_BUILDER,
     LOGIN_DELAYED,
     LOGIN_FAILED,
+    LOOKUP_LIMITED,
     OIDC_FAILED,
     OIDC_NOT_CONFIGURED,
     OIDC_REFRESH_REQUIRED,
     PASSWORD_CHANGE_REQUIRED,
     PASSWORD_REJECTED,
+    PROJECT_NOT_SERVED,
     SESSION_EXPIRED,
+    USER_NAME_TAKEN,
+    USER_NOT_FOUND,
     VALIDATION_FAILED,
     AccessError,
 )
@@ -38,6 +48,16 @@ STATUS = {
     OIDC_FAILED: 400,
     OIDC_NOT_CONFIGURED: 404,
     OIDC_REFRESH_REQUIRED: 401,
+    # The administration routes (#446).
+    USER_NOT_FOUND: 404,
+    GROUP_NOT_FOUND: 404,
+    IDENTITY_NOT_FOUND: 404,
+    PROJECT_NOT_SERVED: 404,
+    LAST_BUILDER: 409,
+    LAST_ADMINISTRATOR: 409,
+    USER_NAME_TAKEN: 409,
+    IDENTITY_TAKEN: 409,
+    LOOKUP_LIMITED: 429,
 }
 # A delay's length goes to `Retry-After` only; which OIDC step or setting failed goes to the audit
 # log and the operator, never to the browser.
@@ -55,6 +75,8 @@ def access_error_response(error: AccessError, request_id: str) -> JSONResponse:
     )
     if error.code == LOGIN_DELAYED:
         response.headers["Retry-After"] = error.details.get("retry_after", "1")
+    if error.code == LOOKUP_LIMITED:  # the same body for every name; the wait in the header
+        response.headers["Retry-After"] = str(getattr(error, "retry_after", 60))
     response.headers["Cache-Control"] = "no-store"
     return response
 

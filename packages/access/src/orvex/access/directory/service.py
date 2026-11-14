@@ -42,7 +42,14 @@ from orvex.access.directory.names import (
 )
 from orvex.access.directory.records import NewUser, Role, User
 from orvex.access.directory.rules import refused
-from orvex.access.errors import USER_NAME_TAKEN, VALIDATION_FAILED, AccessError
+from orvex.access.errors import (
+    GROUP_NOT_FOUND,
+    USER_NAME_TAKEN,
+    USER_NOT_FOUND,
+    VALIDATION_FAILED,
+    AccessError,
+    not_found,
+)
 from orvex.access.storage.instants import instant, parsed
 from orvex.access.storage.store import Store, Transaction, UniqueViolation
 
@@ -116,10 +123,7 @@ class Directory:
             self._event(
                 transaction, "user.created", actor, {"user": created, "via": "administrator"}
             )
-            found = sql.user(transaction, created)
-            if found is None:
-                raise _invalid("user")
-            return NewUser(found, temporary)
+            return NewUser(self._existing(transaction, created), temporary)
 
         return self._write("create_user", actor, None, None, work)
 
@@ -195,7 +199,7 @@ class Directory:
             )
             locks.lock_users(transaction, target)
             if not self._existing(transaction, target).active:
-                raise _invalid("user")
+                raise _invalid("user")  # a deactivated user gets no new membership
             if sql.role(transaction, place, target) is not None:
                 raise _invalid("membership")
             try:
@@ -207,6 +211,21 @@ class Directory:
             self._event(transaction, "membership.added", actor, details, place)
 
         self._write("add_membership", actor, project, target, work)
+
+    def set_membership(self, actor: str, project: str, target: str, role: str) -> None:
+        """Give `target` the role in the project: add the membership, or change its role
+        (#446's one assignment). Each path keeps its own rule and event."""
+        with self._store.transaction(read_only=True) as transaction:
+            current = sql.role(transaction, project, target)
+        if current is None:
+            try:
+                self.add_membership(actor, project, target, role)
+                return
+            except AccessError as error:
+                if error.details.get("field") != "membership":
+                    raise
+                # added meanwhile by another call: a change from here
+        self.change_role(actor, project, target, role)
 
     def change_role(self, actor: str, project: str, target: str, role: str) -> None:
         def work(transaction: Transaction, now: str) -> None:
@@ -263,7 +282,7 @@ class Directory:
             caller = sql.caller(transaction, actor, project)
             refused(rules.manage_groups(caller))
             if not sql.group_exists(transaction, project, name):
-                raise _invalid("group")
+                raise not_found(GROUP_NOT_FOUND)
             members = sql.group_members(transaction, project, name)
             refused(rules.manage_groups(caller, actor if actor in members else None))
             sql.delete_group(transaction, project, name)
@@ -278,9 +297,9 @@ class Directory:
         def work(transaction: Transaction, now: str) -> None:
             refused(rules.manage_groups(sql.caller(transaction, actor, project), member))
             if not sql.group_exists(transaction, project, name):
-                raise _invalid("group")
+                raise not_found(GROUP_NOT_FOUND)
             if sql.role(transaction, project, member) is None:
-                raise _invalid("membership")
+                raise not_found(USER_NOT_FOUND)  # not a member: as if no such user
             if name in sql.groups_of(transaction, project, member):
                 return
             try:
@@ -310,7 +329,7 @@ class Directory:
     def _existing(self, transaction: Transaction, user_id: str) -> User:
         found = sql.user(transaction, user_id)
         if found is None:
-            raise _invalid("user")
+            raise not_found(USER_NOT_FOUND)
         return found
 
     def _membership(
@@ -327,7 +346,7 @@ class Directory:
         locks.lock_users(transaction, target)
         current = sql.role(transaction, project, target)
         if current is None:
-            raise _invalid("membership")
+            raise not_found(USER_NOT_FOUND)  # not a member: as if no such user
         return current
 
     def _lowering_oneself(

@@ -17,6 +17,8 @@ and write every error for that user's audience. Every request passes authenticat
 origin/CSRF, then authorization by the route's declared permission (`route_permissions`), then
 the validation of its content (#445); an API route without a declared permission, or a served
 project without its audit log, refuses to build the application (the server does not start).
+The administration routes (#446), when given, are checked against the projects the instance
+serves (`PROJECT_NOT_SERVED`, before any directory read) and by the directory's own read rules.
 No route may accept both a method that changes state and one that does not:
 the application is refused at construction if one does. The composition of server mode
 (`--server`) comes later.
@@ -39,14 +41,17 @@ from orvex.access.errors import (
     ACCESS_FORBIDDEN,
     OIDC_REFRESH_REQUIRED,
     PASSWORD_CHANGE_REQUIRED,
+    PROJECT_NOT_SERVED,
     SESSION_EXPIRED,
     AccessError,
+    not_found,
 )
 from orvex.access.oidc.service import OidcSignIn
 from orvex.access.server_context import Audience, ServerRequest, audience_of, role_of
 from orvex.access.storage.store import Store
 from orvex.contracts.http_api import v1
 from orvex.server import oidc_http, semantic_http, sign_in_http
+from orvex.server.admin_http import Administration, mount_administration
 from orvex.server.app import (
     REQUEST_ID_HEADER,
     error_response,
@@ -54,7 +59,13 @@ from orvex.server.app import (
     mount_semantic,
     mount_status,
 )
-from orvex.server.route_permissions import allows, checked_permissions, permission_of
+from orvex.server.route_permissions import (
+    ADMINISTRATION,
+    allows,
+    checked_permissions,
+    permission_of,
+    project_of,
+)
 from orvex.server.semantic_http import local_identity, local_limits
 from orvex.server.sign_in_errors import access_error_response
 from orvex.server.state_change_rules import (
@@ -79,8 +90,13 @@ def create_server_app(
     slug: str,
     oidc: OidcSignIn | None = None,
     served: ServedProject | None = None,
+    administration: Administration | None = None,
 ) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    if administration is not None:
+        if served is not None and served.project not in administration.projects:
+            raise ValueError("the served project is not one of the instance's projects")
+        administration.audit.verify_at_start()  # a key or an anchor that fails: no server
     cookie = sign_in_http.cookie_name(slug)
 
     @app.middleware("http")
@@ -144,9 +160,22 @@ def create_server_app(
         permission = permission_of(request.url.path)
         if permission is None or permission in {"public", "session"}:
             return None  # an unknown path: the router's own 404
+        request_id: str = request.state.request_id
+        user = request.state.session.user.id
+        if permission in ADMINISTRATION:
+            if administration is None:
+                return None  # not mounted: the router's own 404
+            project = project_of(request.url.path)
+            if project is not None and project not in administration.projects:
+                return access_error_response(not_found(PROJECT_NOT_SERVED), request_id)
+            reads = administration.reads
+            if await run_in_threadpool(reads.allowed, user, permission, project):
+                return None
+            refusal = administration.audit.refusal
+            await run_in_threadpool(refusal, "route", user, ACCESS_FORBIDDEN, project=project)
+            return error_response(403, ACCESS_FORBIDDEN, "The operation is not allowed", request_id)
         if served is None:
             return None
-        user = request.state.session.user.id
         caller = ServerRequest(user, served.project)
         role = await run_in_threadpool(role_of, served.store, caller)
         if allows(permission, role):
@@ -156,9 +185,7 @@ def create_server_app(
             await run_in_threadpool(
                 audit.refusal, "route", user, ACCESS_FORBIDDEN, project=served.project
             )
-        return error_response(
-            403, ACCESS_FORBIDDEN, "The operation is not allowed", request.state.request_id
-        )
+        return error_response(403, ACCESS_FORBIDDEN, "The operation is not allowed", request_id)
 
     async def authenticated(request: Request) -> Response | None:
         request_id: str = request.state.request_id
@@ -195,6 +222,8 @@ def create_server_app(
     mount_status(app, versions)
     sign_in_http.mount_sign_in(app, sign_in, settings, cookie)
     oidc_http.mount_oidc(app, oidc, settings, cookie, slug)
+    if administration is not None:
+        mount_administration(app, administration)
     if served is not None:
         if not isinstance(served.semantic.audit, AuditLog):  # #445: no audit log, no server
             raise ValueError("server mode needs its audit log: the server does not start")
