@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from orvex.access.errors import (
+    ACCESS_FORBIDDEN,
     IDENTITY_NOT_FOUND,
     IDENTITY_TAKEN,
     OIDC_FAILED,
@@ -205,6 +206,12 @@ def test_the_link_operations_refuse_what_does_not_exist(oidc: Oidc) -> None:
     assert (listed.id, listed.provider, listed.subject) == (link, "corp", "s")
     oidc.identities.unlink(admin, ana, link)
     assert oidc.identities.links(admin, ana) == []
+    with pytest.raises(AccessError) as caught:
+        oidc.identities.links(admin, "u-nobody")
+    assert caught.value.code == USER_NOT_FOUND
+    with pytest.raises(AccessError) as caught:
+        oidc.identities.links(ana, ben)  # not an administrator
+    assert caught.value.code == ACCESS_FORBIDDEN
     events = [e for e in oidc.world.events() if e["kind"].startswith("user.oidc")]
     assert all("s" not in e["details"].values() for e in events)  # never the subject
 

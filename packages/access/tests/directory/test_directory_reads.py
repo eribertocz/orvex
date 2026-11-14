@@ -235,3 +235,15 @@ def test_a_route_is_allowed_by_its_resources_read_rule(
     for (permission, place), allowed in cases.items():
         found = {c for c in callers if read.allowed(c, permission, place)}
         assert found == allowed, permission
+
+
+def test_a_deactivated_builder_reads_nothing_of_their_project(
+    world: World, read: DirectoryReads, project: dict[str, str]
+) -> None:
+    world.directory.add_membership(project["builder"], "p1", world.user("second"), "builder")
+    world.directory.deactivate_user(world.admin, project["builder"])
+    for action in (
+        lambda: read.members(project["builder"], "p1"),
+        lambda: read.groups(project["builder"], "p1"),
+    ):
+        assert code(action) == ACCESS_FORBIDDEN
