@@ -4,7 +4,7 @@ module = "store"
 
 [dependencies]
 runtime = ["duckdb", "orvex-contracts", "pyarrow"]
-tests = ["hypothesis", "moto", "pytest"]
+tests = ["hypothesis", "moto", "orvex-testing", "pytest"]
 
 [[provides]]
 contract = "store"

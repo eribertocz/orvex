@@ -25,7 +25,6 @@ from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.project import load_project
 from orvex.server.store_access import store
-
 from orvex.testing import azurite
 
 SLUG = load_identity().slug
