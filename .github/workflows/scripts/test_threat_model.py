@@ -62,6 +62,7 @@ def repository(root: Path, model: str = MODEL, openapi: str = OPENAPI_TEXT) -> P
     (root / "docs/product/laws.md").write_text("# Laws\n\n### Law 3 — Security by design\n")
     (root / "docs/roadmap.md").write_text("| P3-01 | Security scenarios | conformance |\n")
     (root / "tests/test_api.py").write_text("")
+    (root / "tests/sub").mkdir()
     (root / "packages/one/tests/test_one.py").write_text("")
     (root / "README.md").write_text("")
     (root / MODEL_PATH).write_text(model)
@@ -224,6 +225,13 @@ class ThreatModelTests(unittest.TestCase):
             self.problems(outside),
         )
 
+    def test_a_model_without_an_inventory_block(self) -> None:
+        model = MODEL[: MODEL.index("```inventory")] + MODEL[MODEL.index("## Surface: api") :]
+        self.assertIn(
+            self.model_problem("THREAT_MODEL_INVALID", 1, "the model has no inventory block"),
+            self.problems(model),
+        )
+
     def test_r6_a_rule_naming_nothing_that_exists(self) -> None:
         cases = {
             "security.md §9": "Rule 'security.md §9' names no security.md heading",
@@ -240,11 +248,17 @@ class ThreatModelTests(unittest.TestCase):
 
     def test_r7_a_verification_of_no_allowed_form(self) -> None:
         tail = "is not a test file, a scenario path, a roadmap ID, a gap or n/a"
+        plain = "is not written as its plain repository path"
         cases = {
             "tests/missing.py": f"Verification 'tests/missing.py' {tail}",
             "README.md": f"Verification 'README.md' {tail}",
             "tests": f"Verification 'tests' {tail}",
-            "../outside.py": f"Verification '../outside.py' {tail}",
+            "../outside.py": "Verification '../outside.py' points outside the repository",
+            "tests/../README.md": f"Verification 'tests/../README.md' {plain}",
+            "conformance/security/scenarios/../../README.md": (
+                f"Verification 'conformance/security/scenarios/../../README.md' {plain}"
+            ),
+            "tests/sub": f"Verification 'tests/sub' {tail}",
             "tested elsewhere": f"Verification 'tested elsewhere' {tail}",
             "roadmap:P9-99": "Verification 'roadmap:P9-99' names no roadmap ID",
             "gap:": "Verification 'gap:' has no reason or no valid ID",

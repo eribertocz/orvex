@@ -133,10 +133,14 @@ def verification_problem(root: Path, known: References, value: str, alone: bool)
     if value.startswith(("gap:", "n/a:", "roadmap:")):
         return f"Verification {value!r} has no reason or no valid ID"
     target = (root / value).resolve()
-    inside = root.resolve() in target.parents
-    if inside and TEST_FILES.match(value) and target.is_file():
+    if root.resolve() not in target.parents:
+        return f"Verification {value!r} points outside the repository"
+    relative = target.relative_to(root.resolve()).as_posix()
+    if relative != value:
+        return f"Verification {value!r} is not written as its plain repository path"
+    if TEST_FILES.match(relative) and target.is_file():
         return None
-    if inside and value.startswith(SCENARIOS) and target.exists():
+    if relative.startswith(SCENARIOS) and target.exists():
         return None
     return f"Verification {value!r} is not a test file, a scenario path, a roadmap ID, a gap or n/a"
 
