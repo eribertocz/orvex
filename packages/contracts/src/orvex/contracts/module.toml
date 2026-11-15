@@ -1,7 +1,7 @@
 # The manifest of this module (#486 §2.5, orvex.contracts.manifest): it implements no interface
-# contract and requires none; the contract types depend on pydantic.
+# contract and requires none; the contract types depend on pydantic, Arrow tables on pyarrow.
 module = "contracts"
 
 [dependencies]
-runtime = ["pydantic"]
+runtime = ["pyarrow", "pydantic"]
 tests = ["pytest"]

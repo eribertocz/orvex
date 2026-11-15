@@ -2,7 +2,10 @@
 
 Every value becomes tagged JSON: exact types survive (a tuple stays a tuple, `bool` is never an
 `int`), a `Decimal` keeps its scale, an integer of any width stays exact, a `datetime` keeps its
-zone (an IANA zone by its key) and its `fold`. Only the classes the contract declares
+zone (an IANA zone by its key) and its `fold`. A pydantic model crosses field by field through
+the same tree and is validated again when rebuilt, so nothing inside it is weakened (its own
+JSON would turn an IANA zone into a fixed offset). An Arrow table crosses as Arrow IPC, which
+keeps every type, NULL and time zone of its schema. Only the classes the contract declares
 (`InterfaceContract.value_classes`) are built back, and only of exactly that class. Anything
 else is refused with INTERFACE_VALUE_NOT_SERIALIZABLE: a live object never crosses.
 """
@@ -18,6 +21,7 @@ from enum import Enum
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import pyarrow as pa
 from pydantic import BaseModel
 
 from .interface_errors import InterfaceContractError
@@ -69,6 +73,8 @@ class Codec:
             return {"$time": value.isoformat()}
         if kind is timedelta and isinstance(value, timedelta):
             return {"$timedelta": [value.days, value.seconds, value.microseconds]}
+        if kind is pa.Table and isinstance(value, pa.Table):
+            return {"$arrow": base64.b64encode(_ipc(value)).decode()}
         if kind in (tuple, list) and isinstance(value, (tuple, list)):
             return {f"${kind.__name__}": [self._tree(item) for item in value]}
         if kind is dict and isinstance(value, dict):
@@ -85,7 +91,8 @@ class Codec:
         if isinstance(value, Enum):
             return {"$enum": name, "member": value.name}
         if isinstance(value, BaseModel):
-            return {"$model": name, "json": value.model_dump_json()}
+            fields = {f: self._tree(getattr(value, f)) for f in type(value).model_fields}
+            return {"$model": name, "fields": fields}
         if not dataclasses.is_dataclass(value):
             raise _refused(f"a {name} is not a value")
         fields = {f.name: self._tree(getattr(value, f.name)) for f in dataclasses.fields(value)}
@@ -100,7 +107,7 @@ class Codec:
         payload = tree[tag]
         try:
             return self._tagged(tag, payload, tree)
-        except (ValueError, TypeError, KeyError) as error:
+        except (ValueError, TypeError, KeyError, ArithmeticError) as error:
             raise _refused(f"not an encoded {tag}: {error}") from None
 
     def _tagged(self, tag: str, payload: Any, tree: dict[str, Any]) -> object:  # noqa: ANN401
@@ -120,6 +127,8 @@ class Codec:
         if tag == "$timedelta":
             days, seconds, microseconds = payload
             return timedelta(days=days, seconds=seconds, microseconds=microseconds)
+        if tag == "$arrow":
+            return pa.ipc.open_stream(base64.b64decode(payload, validate=True)).read_all()
         if tag == "$tuple":
             return tuple(self._value(item) for item in payload)
         if tag == "$list":
@@ -132,10 +141,18 @@ class Codec:
         if tag == "$enum" and issubclass(kind, Enum):
             return kind[tree["member"]]
         if tag == "$model" and issubclass(kind, BaseModel):
-            return kind.model_validate_json(tree["json"])
+            fields = {name: self._value(item) for name, item in tree["fields"].items()}
+            return kind.model_validate(fields, by_alias=False, by_name=True)
         if tag == "$dataclass" and dataclasses.is_dataclass(kind):
             return kind(**{name: self._value(item) for name, item in tree["fields"].items()})
         raise _refused(f"{tag} does not match {payload}")
+
+
+def _ipc(table: pa.Table) -> bytes:
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    return bytes(sink.getvalue())
 
 
 def _zone(value: datetime) -> dict[str, object]:

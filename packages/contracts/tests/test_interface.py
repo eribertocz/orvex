@@ -11,6 +11,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, Literal, Protocol
 
+import pyarrow as pa
 import pytest
 from orvex.contracts.envelope import CallEnvelope
 from orvex.contracts.interface import InterfaceContract, Operation
@@ -106,7 +107,7 @@ class TestDescription:
             "name": "envelope",
             "kind": "positional-or-keyword",
             "type": f"{CallEnvelope.__module__}.CallEnvelope",
-            "default": False,
+            "default": None,
         }
         assert operations["record"] == {
             "capability": "write",
@@ -119,7 +120,7 @@ class TestDescription:
                     "name": "reading",
                     "kind": "positional-or-keyword",
                     "type": READING_TYPE,
-                    "default": False,
+                    "default": None,
                 },
             ],
             "returns": "int",
@@ -305,3 +306,47 @@ class TestCrossingTypes:
         assert code_of(lambda: dataclasses.replace(LEDGER, name="Bad")) == (
             "INTERFACE_CONTRACT_INVALID"
         )
+
+
+@dataclass(frozen=True, slots=True)
+class Use:
+    key: str | None
+    ttl_seconds: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class Stored:
+    table: pa.Table
+    withheld: tuple[str, ...]
+    estimate: int | None
+
+
+class ResultCache(Protocol):
+    def get(self, envelope: CallEnvelope, use: Use) -> Stored | None: ...
+
+    def put(self, envelope: CallEnvelope, use: Use, stored: Stored) -> None: ...
+
+    def size_bytes(self, envelope: CallEnvelope) -> int: ...
+
+    def len(self, envelope: CallEnvelope) -> int: ...
+
+
+def test_the_format_expresses_the_result_cache_that_g1_substitutes() -> None:
+    cache = InterfaceContract(
+        name="result-cache",
+        version=Version(1, 0),
+        protocol=ResultCache,
+        error_type=LedgerError,
+        capabilities=("cache",),
+        errors=(),
+        operations=(
+            Operation("get", "cache"),
+            Operation("put", "cache", changes_state=True),
+            Operation("size_bytes", "cache"),
+            Operation("len", "cache"),
+        ),
+    )
+    assert cache.value_classes() == {CallEnvelope, Use, Stored}
+    assert cache.describe()["operations"]["get"]["returns"] == (  # type: ignore[index]
+        f"{Stored.__module__}.Stored | None"
+    )

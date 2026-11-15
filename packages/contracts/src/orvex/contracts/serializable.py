@@ -1,11 +1,11 @@
 """Which annotated types may cross an interface contract (#486 G5): plain values, never live
 objects, so every operation can later run in another process (#156).
 
-A value type is one of `SCALARS`, a `Literal` of booleans, integers, strings or `None`, a
-union of value types, a parameterized `tuple`, `list` or `dict` with `str` keys, an `Enum`, a
-pydantic model (the generated contract types) or a frozen dataclass whose fields are all value
-types. Anything else (`Any`, `object`, callables, iterators, locks, connections, a mutable
-dataclass, a bare `tuple`) is refused.
+A value type is one of `SCALARS` (an Arrow table among them), a `Literal` of booleans,
+integers, strings or `None`, a union of value types, a parameterized `tuple`, `list` or `dict`
+with `str` keys, an `Enum`, or a pydantic model (the generated contract types) or frozen
+dataclass whose fields are all value types. Anything else (`Any`, `object`, callables,
+iterators, locks, connections, a mutable dataclass, a bare `tuple`) is refused.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
 
+import pyarrow as pa
 from pydantic import BaseModel
 
 SCALARS: tuple[type, ...] = (
@@ -31,6 +32,7 @@ SCALARS: tuple[type, ...] = (
     date,
     time,
     timedelta,
+    pa.Table,
 )
 LITERAL_TYPES = (bool, int, str, type(None))
 SEQUENCES = (tuple, list)
@@ -88,9 +90,13 @@ def crossing_problem(annotation: object, classes: set[type]) -> str | None:
 def _class_problem(annotation: type, classes: set[type]) -> str | None:
     if annotation in classes:
         return None
-    if issubclass(annotation, (Enum, BaseModel)):
+    if issubclass(annotation, Enum):
         classes.add(annotation)
         return None
+    if issubclass(annotation, BaseModel):
+        classes.add(annotation)
+        fields = (field.annotation for field in annotation.model_fields.values())
+        return _first(crossing_problem(field, classes) for field in fields)
     if dataclasses.is_dataclass(annotation):
         if not annotation.__dataclass_params__.frozen:  # type: ignore[attr-defined]
             return f"{type_name(annotation)} is a mutable dataclass"

@@ -22,8 +22,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .interface_errors import ContractCallRefused
-from .version import VERSION, Version
+from .interface_errors import ContractCallRefused, InterfaceContractError
+from .version import Version
 
 if TYPE_CHECKING:
     from .interface import InterfaceContract, Operation
@@ -80,10 +80,10 @@ def envelope_refusal(
         return invalid(IDEMPOTENCY_KEY, "an idempotency key is a string")
     if envelope.contract_name != contract.name:
         return invalid("contract_name", f"the envelope is for {envelope.contract_name!r}")
-    match = VERSION.fullmatch(envelope.contract_version)
-    if match is None:
+    try:
+        spoken = Version.parse(envelope.contract_version)
+    except InterfaceContractError:
         return invalid("contract_version", f"{envelope.contract_version!r} is not MAJOR.MINOR")
-    spoken = Version(int(match[1]), int(match[2]))
     since = contract.since(operation)
     problem = (
         f"the caller speaks {spoken} and the provider serves {provided}"

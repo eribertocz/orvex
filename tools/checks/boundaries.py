@@ -2,7 +2,8 @@
 with the materialization and data-reader checks.
 
 1. MODULE_BOUNDARY_VIOLATION (here): code in `packages/<module>/` imports only its own module,
-   `<namespace>.contracts`, the standard library and third-party packages; `server` composes all.
+   `<namespace>.contracts`, the standard library and third-party packages, statically or by a
+   constant dynamic import (`tools/checks/imports.py`); `server` composes all.
 2. MATERIALIZATION_IN_PYTHON: `tools/checks/materialization.py`.
 3. DATA_READ_OUTSIDE_DUCKDB: `tools/checks/data_readers.py`.
 4. CONSUMER_BOUNDARY_VIOLATION: `tools/checks/consumers.py`, reported without failing until
@@ -24,6 +25,7 @@ from tools.checks.data_readers import (
     reader_scan,
     stale_reader_entries,
 )
+from tools.checks.imports import imported_names
 from tools.checks.materialization import (
     ALLOW_LIST,
     MATERIALIZING_NAMES,
@@ -38,7 +40,6 @@ __all__ = [
     "AllowListError",
     "Finding",
     "boundary_findings",
-    "imported_modules",
     "load_allow_list",
     "load_reader_allow_list",
     "main",
@@ -56,23 +57,12 @@ SHARED_MODULES = frozenset({"contracts"})
 COMPOSER = "server"
 
 
-def imported_modules(tree: ast.AST) -> list[tuple[str, int]]:
-    found: list[tuple[str, int]] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            found.extend((alias.name, node.lineno) for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            found.append((node.module, node.lineno))
-            found.extend((f"{node.module}.{alias.name}", node.lineno) for alias in node.names)
-    return found
-
-
 def boundary_findings(tree: ast.AST, owner: str, namespace: str, relative: str) -> list[Finding]:
     if owner == COMPOSER:
         return []
     findings: list[Finding] = []
     reported: set[tuple[str, int]] = set()
-    for name, line in imported_modules(tree):
+    for name, line in imported_names(tree):
         parts = name.split(".")
         if len(parts) < 2 or parts[0] != namespace or parts[1] not in MODULES:
             continue

@@ -2,8 +2,8 @@
 tests import only `<namespace>.contracts`; `server/assembly.py` may also import the modules'
 `api` packages, and the server's own files the server.
 
-CONSUMER_BOUNDARY_VIOLATION: any other import of a module, written as `import`, `from … import`
-or a constant `importlib.import_module(…)` / `__import__(…)`. In report mode until #486 step 7:
+CONSUMER_BOUNDARY_VIOLATION: any other import of a module, as `tools/checks/imports.py` reads
+it (static, or dynamic with a constant name). In report mode until #486 step 7:
 `python -m tools.checks.boundaries` prints every violation and a summary per area, and fails
 only on the module boundaries.
 """
@@ -15,6 +15,7 @@ from collections import Counter
 from pathlib import Path
 
 from tools.checks.architecture import Finding
+from tools.checks.imports import imported_names
 from tools.repository import MODULES, identity
 
 CODE = "CONSUMER_BOUNDARY_VIOLATION"
@@ -27,32 +28,10 @@ AREAS = {
 }
 SHARED = "contracts"
 PUBLIC = "api"
-DYNAMIC = {"import_module", "__import__"}
 
 
 def assembly(namespace: str) -> str:
     return f"packages/server/src/{namespace}/server/assembly.py"
-
-
-def _imports(tree: ast.AST) -> list[tuple[str, int]]:
-    found: list[tuple[str, int]] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            found.extend((alias.name, node.lineno) for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            found.append((node.module, node.lineno))
-            found.extend((f"{node.module}.{alias.name}", node.lineno) for alias in node.names)
-        elif isinstance(node, ast.Call) and node.args:
-            function = node.func
-            name = (
-                function.attr
-                if isinstance(function, ast.Attribute)
-                else getattr(function, "id", "")
-            )
-            first = node.args[0]
-            if name in DYNAMIC and isinstance(first, ast.Constant) and isinstance(first.value, str):
-                found.append((first.value, node.lineno))
-    return found
 
 
 def _area(relative: str) -> str | None:
@@ -66,7 +45,7 @@ def consumer_findings(tree: ast.AST, namespace: str, relative: str) -> list[Find
         return []
     findings: list[Finding] = []
     reported: set[tuple[str, int]] = set()
-    for name, line in _imports(tree):
+    for name, line in imported_names(tree):
         parts = name.split(".")
         if len(parts) < 2 or parts[0] != namespace or parts[1] not in MODULES:
             continue

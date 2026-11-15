@@ -6,15 +6,17 @@ Compares the record of this checkout with the record committed at the last produ
 (the newest `v<semver>` tag HEAD contains): within a major version a contract only grows. These
 fail, unless the major version went up: a removed contract (INTERFACE_CONTRACT_REMOVED), a
 lowered version (INTERFACE_VERSION_LOWERED), a removed operation (INTERFACE_OPERATION_REMOVED),
-a changed signature, capability, state change or version of an operation
-(INTERFACE_SIGNATURE_CHANGED), a removed capability (INTERFACE_CAPABILITY_REMOVED), a removed
-or renamed error code (INTERFACE_ERROR_CODE_REMOVED), a removed kit case
+a changed signature (a default value included), capability, state change or version of an
+operation (INTERFACE_SIGNATURE_CHANGED), an error code added to or removed from an operation
+(INTERFACE_OPERATION_ERRORS_CHANGED), a removed capability (INTERFACE_CAPABILITY_REMOVED), a
+removed or renamed error code (INTERFACE_ERROR_CODE_REMOVED), a removed kit case
 (INTERFACE_KIT_CASE_REMOVED), a changed expectation (INTERFACE_KIT_EXPECTATION_CHANGED), and an
 operation or kit case added since the release that claims to exist at the released version
-(INTERFACE_ADDITION_UNVERSIONED). Allowed: new contracts, and new operations, capabilities,
-error codes, kit cases and parameters with a default at a new minor version. No release tag
-fails closed (INTERFACE_RELEASE_UNKNOWN); a release without a record released no interface
-contract. Running N against N-1 in both directions is the kit's (`orvex.contracts.kit_run`).
+(INTERFACE_ADDITION_UNVERSIONED). Allowed at a new minor version: new contracts, operations,
+capabilities, kit cases, the error codes of new operations and parameters with a default. No
+release tag fails closed (INTERFACE_RELEASE_UNKNOWN); a release without a record released no
+interface contract. Running N against N-1 in both directions is the kit's
+(`orvex.contracts.kit_run`).
 """
 
 from __future__ import annotations
@@ -58,16 +60,22 @@ def _operation_problems(
     changed = (
         len(after) < len(before)
         or [_shape(p) for p in after[: len(before)]] != [_shape(p) for p in before]
-        or any(p["default"] and not q["default"] for p, q in zip(before, after, strict=False))
-        or any(not p["default"] for p in after[len(before) :])
+        or any(p["default"] is None for p in after[len(before) :])
     )
     if changed:
         problems.append(f"INTERFACE_SIGNATURE_CHANGED: {where} changed its parameters")
+    added = sorted(set(new["errors"]) - set(old["errors"]))
+    removed = sorted(set(old["errors"]) - set(new["errors"]))
+    if added or removed:
+        problems.append(
+            f"INTERFACE_OPERATION_ERRORS_CHANGED: {where} raises {added} more and {removed} fewer"
+        )
     return problems
 
 
-def _shape(parameter: dict[str, Any]) -> tuple[str, str, str]:
-    return parameter["name"], parameter["kind"], parameter["type"]
+def _shape(parameter: dict[str, Any]) -> tuple[str, str, str, str | None]:
+    """Everything a parameter promises its callers: name, kind, type and default value."""
+    return parameter["name"], parameter["kind"], parameter["type"], parameter["default"]
 
 
 def _unversioned(name: str, old: dict[str, Any], new: dict[str, Any]) -> list[str]:

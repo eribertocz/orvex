@@ -210,6 +210,41 @@ class TestEnvelopeCases:
         assert "reached ['names']" in message
 
 
+class FakingV10(MemoryLedgerV10):
+    """A planted older provider that dodges a newer guarantee by faking the version refusal."""
+
+    def names(self, envelope: CallEnvelope) -> tuple[str, ...]:
+        if envelope.contract_version == "1.1":
+            raise ContractCallRefused("CONTRACT_VERSION_UNSUPPORTED", "faked", {})
+        return super().names(envelope)
+
+
+def newer_names_case(check: Callable[[KitClient], None]) -> Kit:
+    case = KitCase("names.newer", "names", "a newer guarantee on an old operation", check, V11)
+    return Kit(LEDGER, recorded=7, cases=(*LEDGER_KIT.cases, case))
+
+
+class TestFakedRefusals:
+    def test_a_refusal_faked_by_an_older_provider_is_a_failure(self) -> None:
+        kit = newer_names_case(_noop)
+        with pytest.raises(InterfaceContractError) as raised:
+            verify_kit(kit, FakingV10, provided=V10)
+        message = raised.value.message
+        assert "KIT_CASE_FAILED: names.newer (in process, consumer 1.1, provider 1.0)" in message
+        assert "INTERFACE_ERROR_UNDECLARED" in message
+
+    def test_a_refusal_down_the_cause_chain_is_not_a_refusal(self) -> None:
+        def wrapped(ledger: KitClient) -> None:
+            try:
+                ledger.count()
+            except ContractCallRefused as error:
+                raise AssertionError("the case swallowed the refusal") from error
+
+        kit = newer_names_case(wrapped)
+        report = run_kit(kit, MemoryLedgerV10, serialized=False, provided=V10)
+        assert next(r for r in report.results if r.id == "names.newer").outcome == "failed"
+
+
 class TestVersions:
     def test_consumers_are_n_1_n_and_the_newest(self) -> None:
         assert consumers(LEDGER, V11) == (V10, V11)
@@ -241,12 +276,11 @@ class TestVersions:
             if ledger.names() != ("z",):
                 raise AssertionError("not z")
 
-        case = KitCase("names.z", "names", "a newer guarantee on an old operation", wrong, V11)
-        kit = Kit(LEDGER, recorded=7, cases=(*LEDGER_KIT.cases, case))
+        kit = newer_names_case(wrong)
         with pytest.raises(InterfaceContractError) as raised:
             verify_kit(kit, MemoryLedgerV10, provided=V10)
         message = raised.value.message
-        assert "KIT_CASE_FAILED: names.z (in process, consumer 1.1, provider 1.0)" in message
+        assert "KIT_CASE_FAILED: names.newer (in process, consumer 1.1, provider 1.0)" in message
 
     def test_a_version_the_contract_does_not_describe_cannot_run(self) -> None:
         newer = Version(2, 0)
