@@ -137,6 +137,8 @@ packages/contracts/src/orvex/contracts/   generated contract types
 !packages/contracts/src/orvex/contracts/store/interface.py            hand-written: counted (#486, the store contract)
 !packages/contracts/src/orvex/contracts/store/kit.py                  hand-written: counted (#486, the store contract)
 !packages/contracts/src/orvex/contracts/store/kit_support.py          hand-written: counted (#486, the store contract)
+!packages/contracts/src/orvex/contracts/store/kit_codes.py            hand-written: counted (#486, the store contract)
+!packages/contracts/src/orvex/contracts/store/kit_services.py         hand-written: counted (#486, the store contract)
 !packages/contracts/src/orvex/contracts/store/values.py               hand-written: counted (#486, the store contract)
 tests/contracts/generated/        generated contract fixtures
 !tests/contracts/generated/__init__.py                  hand-written: counted

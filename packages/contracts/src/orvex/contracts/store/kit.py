@@ -1,10 +1,11 @@
 """The store's conformance kit (#486 G1): every operation of `orvex.contracts.store.interface`,
 its exactness, its fail-closed refusals and the security cases consumers rely on (the SQL guard,
 the sandbox, forged handles, TLS and secrets), and one idempotency case per operation that
-changes state. No skips; its case count is recorded.
+changes state, and one case per error code each operation declares (`kit_codes`). No skips; its
+case count is recorded.
 
-Every case runs on local folders and SQLite files only, so the kit needs no server. ClickHouse
-is reached in its refusals and its handles; its answers are the store's own tests' (CI).
+Most cases run on local folders and SQLite files; the ClickHouse cases take a server from the
+environment (`kit_services`) and fail, never skip, without one.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from orvex.contracts.envelope import CallEnvelope
 from orvex.contracts.kit import Idempotent, Kit, KitCase
 from orvex.contracts.kit_client import KitClient
 from orvex.contracts.store.interface import STORE
+from orvex.contracts.store.kit_codes import code_cases
 from orvex.contracts.store.kit_support import (
     EXISTING_LIMITS,
     LIMITS,
@@ -45,10 +47,8 @@ from orvex.contracts.store.v1 import (
 from orvex.contracts.store.values import (
     Budget,
     ClickHouseHandle,
-    ClickHouseTarget,
     ExistingLakeHandle,
     LakeHandle,
-    Limits,
     ReadHandle,
     TransactionHandle,
 )
@@ -86,17 +86,6 @@ def _lakes(client: KitClient) -> int:
     return len(client.held().lakes)
 
 
-def _open_refuses_missing_limits(client: KitClient) -> None:
-    refused(
-        "STORE_LIMITS_REQUIRED", lambda: client.open_lake(local_location(), Limits(None, None), ())
-    )
-
-
-def _open_refuses_missing_source(client: KitClient) -> None:
-    source = sqlite_source().model_copy(update={"path": "/nonexistent/kit.sqlite"})
-    refused("SOURCE_NOT_FOUND", lambda: client.open_lake(local_location(), LIMITS, (source,)))
-
-
 _closing = Scenario(open_lake)
 
 
@@ -110,10 +99,6 @@ def _held_lists(client: KitClient) -> None:
     client.close_lake(lake)
     check(lake.id not in client.held().lakes, "a closed lake is let go")
     refused(PARAMETER, lambda: client.current_snapshot(lake))
-
-
-def _forged_lake(client: KitClient) -> None:
-    refused(PARAMETER, lambda: client.current_snapshot(FORGED_LAKE))
 
 
 def _current_after_commit(client: KitClient) -> None:
@@ -141,14 +126,12 @@ def _describe(client: KitClient) -> None:
     lake = open_lake(client)
     found = client.describe(lake, "SELECT 1.50::DECIMAL(18,2) AS a, NULL::VARCHAR AS b", ())
     check(found == (("a", "DECIMAL(18,2)"), ("b", "VARCHAR")), f"described: {found}")
-    refused(STATEMENT, lambda: client.describe(lake, "DELETE FROM x", ()))
 
 
 def _describe_source(client: KitClient) -> None:
     lake = open_lake(client, (sqlite_source(),))
     found = client.describe_source(lake, "field", "SELECT * FROM meters", ())
     check(found == (("id", "BIGINT"), ("name", "VARCHAR")), f"source columns: {found}")
-    refused(SOURCE, lambda: client.describe_source(lake, "nope", "SELECT 1", ()))
 
 
 def _statistics(client: KitClient) -> None:
@@ -160,10 +143,6 @@ def _statistics(client: KitClient) -> None:
     (table,) = client.statistics(lake, request).tables
     counted = table.inlined_rows + sum(file.row_count for file in table.files)
     check(counted == 3, f"three rows are counted: {table}")
-    unknown = StatisticsRequest.model_validate(
-        {"kind": "statistics", "tables": ["main.nope"], "snapshot": snapshot.id}
-    )
-    refused(STATEMENT, lambda: client.statistics(lake, unknown))
 
 
 def _changes(client: KitClient) -> None:
@@ -175,10 +154,6 @@ def _changes(client: KitClient) -> None:
     )
     (table,) = client.changes(lake, request).tables
     check(table.changed and table.removed_rows == 1, f"one row removed: {table}")
-    backwards = ChangesRequest.model_validate(
-        {"kind": "changes", "tables": ["main.t"], "since": after.id, "snapshot": since.id}
-    )
-    refused(STATEMENT, lambda: client.changes(lake, backwards))
 
 
 def _table_columns(client: KitClient) -> None:
@@ -201,18 +176,6 @@ def _exact(client: KitClient) -> None:
     check(str(row["huge"]) == "170141183460469231731687303715884105727", f"HUGEINT: {row}")
     check(row["at"] == dt.datetime(2026, 3, 29, 1, 30, tzinfo=dt.UTC), f"TIMESTAMPTZ: {row}")
     check(row["missing"] is None, f"NULL is never zero: {row}")
-
-
-def _read_refusals(client: KitClient) -> None:
-    lake = open_lake(client)
-    snapshot = commit(client, lake, "CREATE TABLE t AS SELECT 1 AS a").id
-    for sql in ("SELECT * FROM read_csv('/etc/passwd')", "DELETE FROM t", "SELECT 1; SELECT 2"):
-        request = read_request(sql, snapshot)
-        refused(STATEMENT, functools.partial(client.start_read, lake, request))
-    refused(
-        "STORE_SNAPSHOT_NOT_FOUND",
-        lambda: client.start_read(lake, read_request("SELECT 1", 999_999)),
-    )
 
 
 def _read_parameters(client: KitClient) -> None:
@@ -240,7 +203,6 @@ def _read_ends(client: KitClient) -> None:
     check(seen == [0, 1, 2], f"every row, once: {seen}")
     check(client.read_batch(read) is None, "an ended read stays ended")
     client.close_read(read)
-    refused(PARAMETER, lambda: client.read_batch(FORGED_READ))
 
 
 _cancelling = Scenario(
@@ -300,19 +262,6 @@ def _count(client: KitClient, transaction: TransactionHandle, table: str) -> str
     return found
 
 
-def _write_refusals(client: KitClient) -> None:
-    lake = open_lake(client)
-    for sql in (
-        "ATTACH '/tmp/kit.db' AS other",
-        "COPY (SELECT 1) TO '/tmp/kit.csv'",
-        "SET threads = 8",
-    ):
-        transaction = client.begin(lake)
-        refused(STATEMENT, functools.partial(client.execute, transaction, statement(sql)))
-        client.rollback(transaction)
-    check(client.tables(lake) == (), "nothing was written")
-
-
 def _value(client: KitClient) -> None:
     lake = open_lake(client)
     write(client, lake, "CREATE TABLE t AS SELECT 1.50::DECIMAL(18,2) AS a")
@@ -347,14 +296,6 @@ def _cancel_rolls_back(client: KitClient) -> None:
     client.cancel_transaction(transaction)
     refused("STORE_CANCELLED", lambda: client.commit(transaction))
     check(client.tables(lake) == (), "a cancelled transaction writes nothing")
-
-
-def _commit_refuses_views(client: KitClient) -> None:
-    lake = open_lake(client)
-    transaction = client.begin(lake)
-    refused(STATEMENT, lambda: client.execute(transaction, statement("CREATE VIEW v AS SELECT 1")))
-    client.rollback(transaction)
-    refused(PARAMETER, lambda: client.commit(FORGED_TRANSACTION))
 
 
 def _uncommitted(client: KitClient) -> tuple[LakeHandle, TransactionHandle]:
@@ -403,12 +344,6 @@ def _expired(client: KitClient) -> bool:
     return client.snapshot(lake, first) is None
 
 
-def _maintain_refuses_naive(client: KitClient) -> None:
-    lake = open_lake(client)
-    naive = dt.datetime(2020, 1, 1)
-    refused(PARAMETER, lambda: client.maintain(lake, naive, naive))
-
-
 # --- existing lake -------------------------------------------------------------------------------
 
 _attaching = Scenario(lambda client: existing_lake(client)[1])
@@ -438,68 +373,13 @@ def _existing_reads(client: KitClient) -> None:
     client.close_existing_lake(lake)
 
 
-def _existing_refusals(client: KitClient) -> None:
-    _, attachment = existing_lake(client)
-    encrypted = attachment.model_copy(
-        update={"location": attachment.location.model_copy(update={"encrypted": True})}
-    )
-    refused("STORE_LOCATION_INVALID", lambda: client.open_existing_lake(encrypted, EXISTING_LIMITS))
-    unprotected = attachment.model_copy(update={"protected_locations": None})
-    refused(SOURCE, lambda: client.open_existing_lake(unprotected, EXISTING_LIMITS))
-    refused(PARAMETER, lambda: client.existing_latest(FORGED_EXISTING))
-
-
-def _existing_forged(operation: str) -> KitCase:
-    def run(client: KitClient) -> None:
-        lake, attachment = existing_lake(client)
-        latest = client.existing_latest(lake)
-        arguments: dict[str, tuple[object, ...]] = {
-            "existing_latest": (),
-            "existing_verify": (latest, attachment),
-            "existing_committed_at": (latest.id,),
-            "existing_table_columns": (latest,),
-            "existing_views": (latest,),
-            "start_existing_read": (read_request("SELECT 1", latest.id), latest.committed_at),
-        }
-        envelope = client.envelope(operation)
-        refused(
-            PARAMETER,
-            lambda: client.send(operation, envelope, FORGED_EXISTING, *arguments[operation]),
-        )
-
-    return KitCase(
-        f"{operation.replace('_', '-')}.forged-handle", operation, "a forged handle is refused", run
-    )
-
-
 # --- clickhouse ----------------------------------------------------------------------------------
-
-
-def _clickhouse_refusals(client: KitClient) -> None:
-    remote = ClickHouseTarget(
-        "clickhouse.example", 8123, "db", "reader", "KIT_UNSET_PASSWORD", tls=False
-    )
-    refused("STORE_TLS_REQUIRED", lambda: client.connect_clickhouse(remote, BUDGET))
-    local = ClickHouseTarget("localhost", 8123, "db", "reader", "KIT_UNSET_PASSWORD_486", tls=False)
-    refused("STORE_SECRET_MISSING", lambda: client.connect_clickhouse(local, BUDGET))
 
 
 def _clickhouse_close(client: KitClient) -> None:
     client.close_clickhouse(FORGED_ENGINE)
     client.close_clickhouse(FORGED_ENGINE)
     check(client.held().clickhouse == (), "closing what is not held changes nothing")
-
-
-def _clickhouse_forged(operation: str, *arguments: object) -> KitCase:
-    def run(client: KitClient) -> None:
-        refused(
-            PARAMETER,
-            lambda: client.send(operation, client.envelope(operation), FORGED_ENGINE, *arguments),
-        )
-
-    return KitCase(
-        f"{operation.replace('_', '-')}.forged-handle", operation, "a forged handle is refused", run
-    )
 
 
 # --- encoding ------------------------------------------------------------------------------------
@@ -525,8 +405,6 @@ def _json_frame(client: KitClient) -> None:
         '{"name": "h", "type": "HUGEINT"}],"rows":['
     )
     check(found == expected, f"the head: {found}")
-    bare = pa.schema([("x", pa.int64())]).empty_table()
-    refused("STORE_TYPE_UNSUPPORTED", lambda: client.json_frame(bare))
 
 
 def _json_rows(client: KitClient) -> None:
@@ -560,8 +438,6 @@ def _overlap(client: KitClient) -> None:
 
 
 def _apart(client: KitClient) -> None:
-    root = str(local_location().path)
-    refused(SOURCE, lambda: client.check_apart("c", root + "/data", None, (root,), ()))
     client.check_apart("c", "s3://bucket/lake/", None, ("s3://bucket/other/",), ())
 
 
@@ -579,18 +455,6 @@ CASES = (
         "one key opens one lake",
         Idempotent(_open_call, _lakes),
     ),
-    _case(
-        "open-lake.limits-required",
-        "open_lake",
-        "a lake without every limit is refused (law 7)",
-        _open_refuses_missing_limits,
-    ),
-    _case(
-        "open-lake.source-not-found",
-        "open_lake",
-        "a missing source file is refused before anything opens",
-        _open_refuses_missing_source,
-    ),
     KitCase(
         "close-lake.idempotent",
         "close_lake",
@@ -602,12 +466,6 @@ CASES = (
         "held",
         "what is held is listed; a closed lake is let go and refused",
         _held_lists,
-    ),
-    _case(
-        "current-snapshot.forged-handle",
-        "current_snapshot",
-        "a forged lake handle is refused",
-        _forged_lake,
     ),
     _case(
         "current-snapshot.after-commit",
@@ -660,12 +518,6 @@ CASES = (
         _exact,
     ),
     _case(
-        "start-read.guarded",
-        "start_read",
-        "file readers, writes, two statements and unknown snapshots are refused",
-        _read_refusals,
-    ),
-    _case(
         "start-read.parameters",
         "start_read",
         "a parameter is bound by name with its type",
@@ -712,12 +564,6 @@ CASES = (
             ),
             lambda c: _count(c, _executing.of(c), "t"),
         ),
-    ),
-    _case(
-        "execute.guarded",
-        "execute",
-        "ATTACH, COPY TO and SET are refused in a transaction",
-        _write_refusals,
     ),
     _case("value.first-cell", "value", "the first cell as text; None when there is no row", _value),
     KitCase(
@@ -779,12 +625,6 @@ CASES = (
         "one key commits once and answers the same",
         Idempotent(lambda c, e: c.send("commit", e, _committing.of(c)[1]), _committed),
     ),
-    _case(
-        "commit.guarded",
-        "commit",
-        "a view is refused; a forged transaction is refused",
-        _commit_refuses_views,
-    ),
     KitCase(
         "rollback.idempotent",
         "rollback",
@@ -810,12 +650,6 @@ CASES = (
             _expired,
         ),
     ),
-    _case(
-        "maintain.naive-cutoff",
-        "maintain",
-        "a cutoff without a zone is refused",
-        _maintain_refuses_naive,
-    ),
     # existing lake
     KitCase(
         "open-existing-lake.idempotent",
@@ -825,12 +659,6 @@ CASES = (
             lambda c, e: c.send("open_existing_lake", e, _attaching.of(c), EXISTING_LIMITS),
             lambda c: (_attaching.of(c), _existing(c))[1],
         ),
-    ),
-    _case(
-        "open-existing-lake.guarded",
-        "open_existing_lake",
-        "encryption and a missing protected set are refused",
-        _existing_refusals,
     ),
     KitCase(
         "close-existing-lake.idempotent",
@@ -847,30 +675,13 @@ CASES = (
         "latest, verify, committed-at, columns, views and a read, exact",
         _existing_reads,
     ),
-    _existing_forged("existing_latest"),
-    _existing_forged("existing_verify"),
-    _existing_forged("existing_committed_at"),
-    _existing_forged("existing_table_columns"),
-    _existing_forged("existing_views"),
-    _existing_forged("start_existing_read"),
     # clickhouse
-    _case(
-        "connect-clickhouse.guarded",
-        "connect_clickhouse",
-        "plain HTTP to another machine and a missing secret are refused",
-        _clickhouse_refusals,
-    ),
     _case(
         "close-clickhouse.harmless",
         "close_clickhouse",
         "closing what is not held changes nothing",
         _clickhouse_close,
     ),
-    _clickhouse_forged("clickhouse_columns", "t"),
-    _clickhouse_forged("clickhouse_catalog"),
-    _clickhouse_forged("clickhouse_estimate", "SELECT 1", ()),
-    _clickhouse_forged("clickhouse_now"),
-    _clickhouse_forged("start_clickhouse_read", "SELECT 1", (), (("a", "INTEGER"),), None),
     # encoding
     _case(
         "json-frame.columns",
@@ -906,4 +717,5 @@ CASES = (
     ),
 )
 
-STORE_KIT = Kit(contract=STORE, recorded=58, cases=CASES)
+RECORDED = 153
+STORE_KIT = Kit(contract=STORE, recorded=RECORDED, cases=(*CASES, *code_cases(STORE)))

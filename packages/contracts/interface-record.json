@@ -46,9 +46,39 @@
             "operation": "begin",
             "since": "1.0"
           },
+          "begin.raises.store-busy": {
+            "expectation": "begin refuses with STORE_BUSY",
+            "idempotency": false,
+            "operation": "begin",
+            "since": "1.0"
+          },
+          "begin.raises.store-parameter-invalid": {
+            "expectation": "begin refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "begin",
+            "since": "1.0"
+          },
+          "begin.raises.store-statement-invalid": {
+            "expectation": "begin refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "begin",
+            "since": "1.0"
+          },
+          "begin.raises.store-timeout": {
+            "expectation": "begin refuses with STORE_TIMEOUT",
+            "idempotency": false,
+            "operation": "begin",
+            "since": "1.0"
+          },
           "cancel-read.idempotent": {
             "expectation": "one key cancels once",
             "idempotency": true,
+            "operation": "cancel_read",
+            "since": "1.0"
+          },
+          "cancel-read.raises.store-parameter-invalid": {
+            "expectation": "cancel_read refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
             "operation": "cancel_read",
             "since": "1.0"
           },
@@ -58,10 +88,46 @@
             "operation": "cancel_transaction",
             "since": "1.0"
           },
+          "cancel-transaction.raises.store-parameter-invalid": {
+            "expectation": "cancel_transaction refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "cancel_transaction",
+            "since": "1.0"
+          },
           "cancel-transaction.rolls-back": {
             "expectation": "a cancelled transaction never commits",
             "idempotency": false,
             "operation": "cancel_transaction",
+            "since": "1.0"
+          },
+          "changes.raises.store-busy": {
+            "expectation": "changes refuses with STORE_BUSY",
+            "idempotency": false,
+            "operation": "changes",
+            "since": "1.0"
+          },
+          "changes.raises.store-parameter-invalid": {
+            "expectation": "changes refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "changes",
+            "since": "1.0"
+          },
+          "changes.raises.store-snapshot-expired": {
+            "expectation": "changes refuses with STORE_SNAPSHOT_EXPIRED",
+            "idempotency": false,
+            "operation": "changes",
+            "since": "1.0"
+          },
+          "changes.raises.store-snapshot-not-found": {
+            "expectation": "changes refuses with STORE_SNAPSHOT_NOT_FOUND",
+            "idempotency": false,
+            "operation": "changes",
+            "since": "1.0"
+          },
+          "changes.raises.store-statement-invalid": {
+            "expectation": "changes refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "changes",
             "since": "1.0"
           },
           "changes.removed": {
@@ -76,26 +142,50 @@
             "operation": "check_apart",
             "since": "1.0"
           },
-          "clickhouse-catalog.forged-handle": {
-            "expectation": "a forged handle is refused",
+          "check-apart.raises.store-source-invalid": {
+            "expectation": "check_apart refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "check_apart",
+            "since": "1.0"
+          },
+          "clickhouse-catalog.raises.store-parameter-invalid": {
+            "expectation": "clickhouse_catalog refuses with STORE_PARAMETER_INVALID",
             "idempotency": false,
             "operation": "clickhouse_catalog",
             "since": "1.0"
           },
-          "clickhouse-columns.forged-handle": {
-            "expectation": "a forged handle is refused",
+          "clickhouse-columns.raises.source-not-found": {
+            "expectation": "clickhouse_columns refuses with SOURCE_NOT_FOUND",
             "idempotency": false,
             "operation": "clickhouse_columns",
             "since": "1.0"
           },
-          "clickhouse-estimate.forged-handle": {
-            "expectation": "a forged handle is refused",
+          "clickhouse-columns.raises.store-parameter-invalid": {
+            "expectation": "clickhouse_columns refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "clickhouse_columns",
+            "since": "1.0"
+          },
+          "clickhouse-columns.raises.unsupported-source-type": {
+            "expectation": "clickhouse_columns refuses with UNSUPPORTED_SOURCE_TYPE",
+            "idempotency": false,
+            "operation": "clickhouse_columns",
+            "since": "1.0"
+          },
+          "clickhouse-estimate.raises.store-parameter-invalid": {
+            "expectation": "clickhouse_estimate refuses with STORE_PARAMETER_INVALID",
             "idempotency": false,
             "operation": "clickhouse_estimate",
             "since": "1.0"
           },
-          "clickhouse-now.forged-handle": {
-            "expectation": "a forged handle is refused",
+          "clickhouse-estimate.raises.store-statement-invalid": {
+            "expectation": "clickhouse_estimate refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "clickhouse_estimate",
+            "since": "1.0"
+          },
+          "clickhouse-now.raises.store-parameter-invalid": {
+            "expectation": "clickhouse_now refuses with STORE_PARAMETER_INVALID",
             "idempotency": false,
             "operation": "clickhouse_now",
             "since": "1.0"
@@ -112,9 +202,21 @@
             "operation": "close_existing_lake",
             "since": "1.0"
           },
+          "close-existing-lake.raises.store-parameter-invalid": {
+            "expectation": "close_existing_lake refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "close_existing_lake",
+            "since": "1.0"
+          },
           "close-lake.idempotent": {
             "expectation": "one key closes once",
             "idempotency": true,
+            "operation": "close_lake",
+            "since": "1.0"
+          },
+          "close-lake.raises.store-parameter-invalid": {
+            "expectation": "close_lake refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
             "operation": "close_lake",
             "since": "1.0"
           },
@@ -124,10 +226,10 @@
             "operation": "close_read",
             "since": "1.0"
           },
-          "commit.guarded": {
-            "expectation": "a view is refused; a forged transaction is refused",
+          "close-read.raises.store-parameter-invalid": {
+            "expectation": "close_read refuses with STORE_PARAMETER_INVALID",
             "idempotency": false,
-            "operation": "commit",
+            "operation": "close_read",
             "since": "1.0"
           },
           "commit.idempotent": {
@@ -136,8 +238,62 @@
             "operation": "commit",
             "since": "1.0"
           },
-          "connect-clickhouse.guarded": {
-            "expectation": "plain HTTP to another machine and a missing secret are refused",
+          "commit.raises.store-cancelled": {
+            "expectation": "commit refuses with STORE_CANCELLED",
+            "idempotency": false,
+            "operation": "commit",
+            "since": "1.0"
+          },
+          "commit.raises.store-parameter-invalid": {
+            "expectation": "commit refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "commit",
+            "since": "1.0"
+          },
+          "commit.raises.store-query-failed": {
+            "expectation": "commit refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "commit",
+            "since": "1.0"
+          },
+          "commit.raises.store-timeout": {
+            "expectation": "commit refuses with STORE_TIMEOUT",
+            "idempotency": false,
+            "operation": "commit",
+            "since": "1.0"
+          },
+          "commit.raises.store-transaction-conflict": {
+            "expectation": "commit refuses with STORE_TRANSACTION_CONFLICT",
+            "idempotency": false,
+            "operation": "commit",
+            "since": "1.0"
+          },
+          "connect-clickhouse.raises.engine-setting-required": {
+            "expectation": "connect_clickhouse refuses with ENGINE_SETTING_REQUIRED",
+            "idempotency": false,
+            "operation": "connect_clickhouse",
+            "since": "1.0"
+          },
+          "connect-clickhouse.raises.source-not-read-only": {
+            "expectation": "connect_clickhouse refuses with SOURCE_NOT_READ_ONLY",
+            "idempotency": false,
+            "operation": "connect_clickhouse",
+            "since": "1.0"
+          },
+          "connect-clickhouse.raises.store-connection-failed": {
+            "expectation": "connect_clickhouse refuses with STORE_CONNECTION_FAILED",
+            "idempotency": false,
+            "operation": "connect_clickhouse",
+            "since": "1.0"
+          },
+          "connect-clickhouse.raises.store-secret-missing": {
+            "expectation": "connect_clickhouse refuses with STORE_SECRET_MISSING",
+            "idempotency": false,
+            "operation": "connect_clickhouse",
+            "since": "1.0"
+          },
+          "connect-clickhouse.raises.store-tls-required": {
+            "expectation": "connect_clickhouse refuses with STORE_TLS_REQUIRED",
             "idempotency": false,
             "operation": "connect_clickhouse",
             "since": "1.0"
@@ -148,8 +304,8 @@
             "operation": "current_snapshot",
             "since": "1.0"
           },
-          "current-snapshot.forged-handle": {
-            "expectation": "a forged lake handle is refused",
+          "current-snapshot.raises.store-parameter-invalid": {
+            "expectation": "current_snapshot refuses with STORE_PARAMETER_INVALID",
             "idempotency": false,
             "operation": "current_snapshot",
             "since": "1.0"
@@ -160,16 +316,52 @@
             "operation": "describe_source",
             "since": "1.0"
           },
+          "describe-source.raises.store-parameter-invalid": {
+            "expectation": "describe_source refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "describe_source",
+            "since": "1.0"
+          },
+          "describe-source.raises.store-query-failed": {
+            "expectation": "describe_source refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "describe_source",
+            "since": "1.0"
+          },
+          "describe-source.raises.store-source-invalid": {
+            "expectation": "describe_source refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "describe_source",
+            "since": "1.0"
+          },
+          "describe-source.raises.store-statement-invalid": {
+            "expectation": "describe_source refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "describe_source",
+            "since": "1.0"
+          },
           "describe.binder-only": {
             "expectation": "a SELECT's columns from the binder; anything else refused",
             "idempotency": false,
             "operation": "describe",
             "since": "1.0"
           },
-          "execute.guarded": {
-            "expectation": "ATTACH, COPY TO and SET are refused in a transaction",
+          "describe.raises.store-parameter-invalid": {
+            "expectation": "describe refuses with STORE_PARAMETER_INVALID",
             "idempotency": false,
-            "operation": "execute",
+            "operation": "describe",
+            "since": "1.0"
+          },
+          "describe.raises.store-query-failed": {
+            "expectation": "describe refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "describe",
+            "since": "1.0"
+          },
+          "describe.raises.store-statement-invalid": {
+            "expectation": "describe refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "describe",
             "since": "1.0"
           },
           "execute.idempotent": {
@@ -178,14 +370,44 @@
             "operation": "execute",
             "since": "1.0"
           },
-          "existing-committed-at.forged-handle": {
-            "expectation": "a forged handle is refused",
+          "execute.raises.store-cancelled": {
+            "expectation": "execute refuses with STORE_CANCELLED",
+            "idempotency": false,
+            "operation": "execute",
+            "since": "1.0"
+          },
+          "execute.raises.store-parameter-invalid": {
+            "expectation": "execute refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "execute",
+            "since": "1.0"
+          },
+          "execute.raises.store-query-failed": {
+            "expectation": "execute refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "execute",
+            "since": "1.0"
+          },
+          "execute.raises.store-statement-invalid": {
+            "expectation": "execute refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "execute",
+            "since": "1.0"
+          },
+          "execute.raises.store-timeout": {
+            "expectation": "execute refuses with STORE_TIMEOUT",
+            "idempotency": false,
+            "operation": "execute",
+            "since": "1.0"
+          },
+          "existing-committed-at.raises.store-parameter-invalid": {
+            "expectation": "existing_committed_at refuses with STORE_PARAMETER_INVALID",
             "idempotency": false,
             "operation": "existing_committed_at",
             "since": "1.0"
           },
-          "existing-latest.forged-handle": {
-            "expectation": "a forged handle is refused",
+          "existing-latest.raises.store-parameter-invalid": {
+            "expectation": "existing_latest refuses with STORE_PARAMETER_INVALID",
             "idempotency": false,
             "operation": "existing_latest",
             "since": "1.0"
@@ -196,20 +418,32 @@
             "operation": "existing_latest",
             "since": "1.0"
           },
-          "existing-table-columns.forged-handle": {
-            "expectation": "a forged handle is refused",
+          "existing-table-columns.raises.store-parameter-invalid": {
+            "expectation": "existing_table_columns refuses with STORE_PARAMETER_INVALID",
             "idempotency": false,
             "operation": "existing_table_columns",
             "since": "1.0"
           },
-          "existing-verify.forged-handle": {
-            "expectation": "a forged handle is refused",
+          "existing-table-columns.raises.store-source-invalid": {
+            "expectation": "existing_table_columns refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "existing_table_columns",
+            "since": "1.0"
+          },
+          "existing-verify.raises.store-parameter-invalid": {
+            "expectation": "existing_verify refuses with STORE_PARAMETER_INVALID",
             "idempotency": false,
             "operation": "existing_verify",
             "since": "1.0"
           },
-          "existing-views.forged-handle": {
-            "expectation": "a forged handle is refused",
+          "existing-verify.raises.store-source-invalid": {
+            "expectation": "existing_verify refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "existing_verify",
+            "since": "1.0"
+          },
+          "existing-views.raises.store-parameter-invalid": {
+            "expectation": "existing_views refuses with STORE_PARAMETER_INVALID",
             "idempotency": false,
             "operation": "existing_views",
             "since": "1.0"
@@ -232,8 +466,20 @@
             "operation": "json_frame",
             "since": "1.0"
           },
+          "json-frame.raises.store-type-unsupported": {
+            "expectation": "json_frame refuses with STORE_TYPE_UNSUPPORTED",
+            "idempotency": false,
+            "operation": "json_frame",
+            "since": "1.0"
+          },
           "json-rows.exact": {
             "expectation": "exact text, NULL as null, rows separated",
+            "idempotency": false,
+            "operation": "json_rows",
+            "since": "1.0"
+          },
+          "json-rows.raises.store-type-unsupported": {
+            "expectation": "json_rows refuses with STORE_TYPE_UNSUPPORTED",
             "idempotency": false,
             "operation": "json_rows",
             "since": "1.0"
@@ -241,6 +487,36 @@
           "land.idempotent": {
             "expectation": "one key lands once",
             "idempotency": true,
+            "operation": "land",
+            "since": "1.0"
+          },
+          "land.raises.store-cancelled": {
+            "expectation": "land refuses with STORE_CANCELLED",
+            "idempotency": false,
+            "operation": "land",
+            "since": "1.0"
+          },
+          "land.raises.store-parameter-invalid": {
+            "expectation": "land refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "land",
+            "since": "1.0"
+          },
+          "land.raises.store-query-failed": {
+            "expectation": "land refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "land",
+            "since": "1.0"
+          },
+          "land.raises.store-source-invalid": {
+            "expectation": "land refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "land",
+            "since": "1.0"
+          },
+          "land.raises.store-timeout": {
+            "expectation": "land refuses with STORE_TIMEOUT",
+            "idempotency": false,
             "operation": "land",
             "since": "1.0"
           },
@@ -256,8 +532,38 @@
             "operation": "load_arrow",
             "since": "1.0"
           },
+          "load-arrow.raises.store-cancelled": {
+            "expectation": "load_arrow refuses with STORE_CANCELLED",
+            "idempotency": false,
+            "operation": "load_arrow",
+            "since": "1.0"
+          },
+          "load-arrow.raises.store-parameter-invalid": {
+            "expectation": "load_arrow refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "load_arrow",
+            "since": "1.0"
+          },
+          "load-arrow.raises.store-query-failed": {
+            "expectation": "load_arrow refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "load_arrow",
+            "since": "1.0"
+          },
+          "load-arrow.raises.store-timeout": {
+            "expectation": "load_arrow refuses with STORE_TIMEOUT",
+            "idempotency": false,
+            "operation": "load_arrow",
+            "since": "1.0"
+          },
           "location-components.parts": {
             "expectation": "object storage and local paths by parts; anything else refused",
+            "idempotency": false,
+            "operation": "location_components",
+            "since": "1.0"
+          },
+          "location-components.raises.store-source-invalid": {
+            "expectation": "location_components refuses with STORE_SOURCE_INVALID",
             "idempotency": false,
             "operation": "location_components",
             "since": "1.0"
@@ -268,27 +574,75 @@
             "operation": "locations_overlap",
             "since": "1.0"
           },
+          "locations-overlap.raises.store-source-invalid": {
+            "expectation": "locations_overlap refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "locations_overlap",
+            "since": "1.0"
+          },
           "maintain.idempotent": {
             "expectation": "one key maintains once and answers the same",
             "idempotency": true,
             "operation": "maintain",
             "since": "1.0"
           },
-          "maintain.naive-cutoff": {
-            "expectation": "a cutoff without a zone is refused",
+          "maintain.raises.store-busy": {
+            "expectation": "maintain refuses with STORE_BUSY",
             "idempotency": false,
             "operation": "maintain",
             "since": "1.0"
           },
-          "open-existing-lake.guarded": {
-            "expectation": "encryption and a missing protected set are refused",
+          "maintain.raises.store-parameter-invalid": {
+            "expectation": "maintain refuses with STORE_PARAMETER_INVALID",
             "idempotency": false,
-            "operation": "open_existing_lake",
+            "operation": "maintain",
             "since": "1.0"
           },
           "open-existing-lake.idempotent": {
             "expectation": "one key attaches once",
             "idempotency": true,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-existing-lake.raises.engine-version-untested": {
+            "expectation": "open_existing_lake refuses with ENGINE_VERSION_UNTESTED",
+            "idempotency": false,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-existing-lake.raises.store-connection-failed": {
+            "expectation": "open_existing_lake refuses with STORE_CONNECTION_FAILED",
+            "idempotency": false,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-existing-lake.raises.store-limits-required": {
+            "expectation": "open_existing_lake refuses with STORE_LIMITS_REQUIRED",
+            "idempotency": false,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-existing-lake.raises.store-location-invalid": {
+            "expectation": "open_existing_lake refuses with STORE_LOCATION_INVALID",
+            "idempotency": false,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-existing-lake.raises.store-secret-missing": {
+            "expectation": "open_existing_lake refuses with STORE_SECRET_MISSING",
+            "idempotency": false,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-existing-lake.raises.store-source-invalid": {
+            "expectation": "open_existing_lake refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-existing-lake.raises.store-tls-required": {
+            "expectation": "open_existing_lake refuses with STORE_TLS_REQUIRED",
+            "idempotency": false,
             "operation": "open_existing_lake",
             "since": "1.0"
           },
@@ -298,20 +652,80 @@
             "operation": "open_lake",
             "since": "1.0"
           },
-          "open-lake.limits-required": {
-            "expectation": "a lake without every limit is refused (law 7)",
+          "open-lake.raises.source-not-found": {
+            "expectation": "open_lake refuses with SOURCE_NOT_FOUND",
             "idempotency": false,
             "operation": "open_lake",
             "since": "1.0"
           },
-          "open-lake.source-not-found": {
-            "expectation": "a missing source file is refused before anything opens",
+          "open-lake.raises.store-catalog-unavailable": {
+            "expectation": "open_lake refuses with STORE_CATALOG_UNAVAILABLE",
+            "idempotency": false,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "open-lake.raises.store-limits-required": {
+            "expectation": "open_lake refuses with STORE_LIMITS_REQUIRED",
+            "idempotency": false,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "open-lake.raises.store-location-invalid": {
+            "expectation": "open_lake refuses with STORE_LOCATION_INVALID",
+            "idempotency": false,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "open-lake.raises.store-secret-inline": {
+            "expectation": "open_lake refuses with STORE_SECRET_INLINE",
+            "idempotency": false,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "open-lake.raises.store-secret-missing": {
+            "expectation": "open_lake refuses with STORE_SECRET_MISSING",
+            "idempotency": false,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "open-lake.raises.store-source-invalid": {
+            "expectation": "open_lake refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "open-lake.raises.store-tls-required": {
+            "expectation": "open_lake refuses with STORE_TLS_REQUIRED",
             "idempotency": false,
             "operation": "open_lake",
             "since": "1.0"
           },
           "read-batch.ends": {
             "expectation": "every row once, then None; a forged read is refused",
+            "idempotency": false,
+            "operation": "read_batch",
+            "since": "1.0"
+          },
+          "read-batch.raises.store-cancelled": {
+            "expectation": "read_batch refuses with STORE_CANCELLED",
+            "idempotency": false,
+            "operation": "read_batch",
+            "since": "1.0"
+          },
+          "read-batch.raises.store-parameter-invalid": {
+            "expectation": "read_batch refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "read_batch",
+            "since": "1.0"
+          },
+          "read-batch.raises.store-query-failed": {
+            "expectation": "read_batch refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "read_batch",
+            "since": "1.0"
+          },
+          "read-batch.raises.store-timeout": {
+            "expectation": "read_batch refuses with STORE_TIMEOUT",
             "idempotency": false,
             "operation": "read_batch",
             "since": "1.0"
@@ -328,20 +742,62 @@
             "operation": "rollback",
             "since": "1.0"
           },
+          "rollback.raises.store-parameter-invalid": {
+            "expectation": "rollback refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "rollback",
+            "since": "1.0"
+          },
           "snapshot.kept-or-none": {
             "expectation": "a kept snapshot is found; an unknown or negative id is None",
             "idempotency": false,
             "operation": "snapshot",
             "since": "1.0"
           },
-          "start-clickhouse-read.forged-handle": {
-            "expectation": "a forged handle is refused",
+          "snapshot.raises.store-parameter-invalid": {
+            "expectation": "snapshot refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "snapshot",
+            "since": "1.0"
+          },
+          "start-clickhouse-read.raises.store-parameter-invalid": {
+            "expectation": "start_clickhouse_read refuses with STORE_PARAMETER_INVALID",
             "idempotency": false,
             "operation": "start_clickhouse_read",
             "since": "1.0"
           },
-          "start-existing-read.forged-handle": {
-            "expectation": "a forged handle is refused",
+          "start-clickhouse-read.raises.store-query-failed": {
+            "expectation": "start_clickhouse_read refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "start_clickhouse_read",
+            "since": "1.0"
+          },
+          "start-clickhouse-read.raises.store-statement-invalid": {
+            "expectation": "start_clickhouse_read refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "start_clickhouse_read",
+            "since": "1.0"
+          },
+          "start-existing-read.raises.store-parameter-invalid": {
+            "expectation": "start_existing_read refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "start_existing_read",
+            "since": "1.0"
+          },
+          "start-existing-read.raises.store-query-failed": {
+            "expectation": "start_existing_read refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "start_existing_read",
+            "since": "1.0"
+          },
+          "start-existing-read.raises.store-source-invalid": {
+            "expectation": "start_existing_read refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "start_existing_read",
+            "since": "1.0"
+          },
+          "start-existing-read.raises.store-statement-invalid": {
+            "expectation": "start_existing_read refuses with STORE_STATEMENT_INVALID",
             "idempotency": false,
             "operation": "start_existing_read",
             "since": "1.0"
@@ -352,14 +808,38 @@
             "operation": "start_read",
             "since": "1.0"
           },
-          "start-read.guarded": {
-            "expectation": "file readers, writes, two statements and unknown snapshots are refused",
+          "start-read.parameters": {
+            "expectation": "a parameter is bound by name with its type",
             "idempotency": false,
             "operation": "start_read",
             "since": "1.0"
           },
-          "start-read.parameters": {
-            "expectation": "a parameter is bound by name with its type",
+          "start-read.raises.store-busy": {
+            "expectation": "start_read refuses with STORE_BUSY",
+            "idempotency": false,
+            "operation": "start_read",
+            "since": "1.0"
+          },
+          "start-read.raises.store-parameter-invalid": {
+            "expectation": "start_read refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "start_read",
+            "since": "1.0"
+          },
+          "start-read.raises.store-snapshot-expired": {
+            "expectation": "start_read refuses with STORE_SNAPSHOT_EXPIRED",
+            "idempotency": false,
+            "operation": "start_read",
+            "since": "1.0"
+          },
+          "start-read.raises.store-snapshot-not-found": {
+            "expectation": "start_read refuses with STORE_SNAPSHOT_NOT_FOUND",
+            "idempotency": false,
+            "operation": "start_read",
+            "since": "1.0"
+          },
+          "start-read.raises.store-statement-invalid": {
+            "expectation": "start_read refuses with STORE_STATEMENT_INVALID",
             "idempotency": false,
             "operation": "start_read",
             "since": "1.0"
@@ -370,8 +850,62 @@
             "operation": "statistics",
             "since": "1.0"
           },
+          "statistics.raises.store-busy": {
+            "expectation": "statistics refuses with STORE_BUSY",
+            "idempotency": false,
+            "operation": "statistics",
+            "since": "1.0"
+          },
+          "statistics.raises.store-parameter-invalid": {
+            "expectation": "statistics refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "statistics",
+            "since": "1.0"
+          },
+          "statistics.raises.store-snapshot-expired": {
+            "expectation": "statistics refuses with STORE_SNAPSHOT_EXPIRED",
+            "idempotency": false,
+            "operation": "statistics",
+            "since": "1.0"
+          },
+          "statistics.raises.store-snapshot-not-found": {
+            "expectation": "statistics refuses with STORE_SNAPSHOT_NOT_FOUND",
+            "idempotency": false,
+            "operation": "statistics",
+            "since": "1.0"
+          },
+          "statistics.raises.store-statement-invalid": {
+            "expectation": "statistics refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "statistics",
+            "since": "1.0"
+          },
           "table-columns.as-of": {
             "expectation": "the columns as of the snapshot asked",
+            "idempotency": false,
+            "operation": "table_columns",
+            "since": "1.0"
+          },
+          "table-columns.raises.store-busy": {
+            "expectation": "table_columns refuses with STORE_BUSY",
+            "idempotency": false,
+            "operation": "table_columns",
+            "since": "1.0"
+          },
+          "table-columns.raises.store-parameter-invalid": {
+            "expectation": "table_columns refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "table_columns",
+            "since": "1.0"
+          },
+          "table-columns.raises.store-snapshot-expired": {
+            "expectation": "table_columns refuses with STORE_SNAPSHOT_EXPIRED",
+            "idempotency": false,
+            "operation": "table_columns",
+            "since": "1.0"
+          },
+          "table-columns.raises.store-snapshot-not-found": {
+            "expectation": "table_columns refuses with STORE_SNAPSHOT_NOT_FOUND",
             "idempotency": false,
             "operation": "table_columns",
             "since": "1.0"
@@ -382,14 +916,50 @@
             "operation": "tables",
             "since": "1.0"
           },
+          "tables.raises.store-parameter-invalid": {
+            "expectation": "tables refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "tables",
+            "since": "1.0"
+          },
           "value.first-cell": {
             "expectation": "the first cell as text; None when there is no row",
             "idempotency": false,
             "operation": "value",
             "since": "1.0"
+          },
+          "value.raises.store-cancelled": {
+            "expectation": "value refuses with STORE_CANCELLED",
+            "idempotency": false,
+            "operation": "value",
+            "since": "1.0"
+          },
+          "value.raises.store-parameter-invalid": {
+            "expectation": "value refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "value",
+            "since": "1.0"
+          },
+          "value.raises.store-query-failed": {
+            "expectation": "value refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "value",
+            "since": "1.0"
+          },
+          "value.raises.store-statement-invalid": {
+            "expectation": "value refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "value",
+            "since": "1.0"
+          },
+          "value.raises.store-timeout": {
+            "expectation": "value refuses with STORE_TIMEOUT",
+            "idempotency": false,
+            "operation": "value",
+            "since": "1.0"
           }
         },
-        "recorded": 58
+        "recorded": 153
       },
       "name": "store",
       "operations": {
@@ -397,41 +967,20 @@
           "capability": "write",
           "changes_state": true,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
             "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
             "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_TIMEOUT"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.LakeHandle"
@@ -444,41 +993,17 @@
           "capability": "read",
           "changes_state": true,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_PARAMETER_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "read",
               "type": "orvex.contracts.store.values.ReadHandle"
@@ -491,41 +1016,17 @@
           "capability": "write",
           "changes_state": true,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_PARAMETER_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "transaction",
               "type": "orvex.contracts.store.values.TransactionHandle"
@@ -538,47 +1039,27 @@
           "capability": "lake",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
             "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
             "STORE_SNAPSHOT_EXPIRED",
             "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_STATEMENT_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.LakeHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "request",
               "type": "orvex.contracts.store.v1.ChangesRequest"
@@ -591,65 +1072,41 @@
           "capability": "separation",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_SOURCE_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "name",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "data_path",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "catalog",
               "type": "str | None"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "protected",
               "type": "tuple[str, ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "protected_files",
               "type": "tuple[str, ...]"
@@ -662,41 +1119,17 @@
           "capability": "clickhouse",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_PARAMETER_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "engine",
               "type": "orvex.contracts.store.values.ClickHouseHandle"
@@ -709,47 +1142,25 @@
           "capability": "clickhouse",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
             "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
             "UNSUPPORTED_SOURCE_TYPE"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "engine",
               "type": "orvex.contracts.store.values.ClickHouseHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "table",
               "type": "str"
@@ -762,53 +1173,30 @@
           "capability": "clickhouse",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_STATEMENT_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "engine",
               "type": "orvex.contracts.store.values.ClickHouseHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "sql",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "parameters",
               "type": "tuple[orvex.contracts.store.v1.Parameter, ...]"
@@ -821,41 +1209,17 @@
           "capability": "clickhouse",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_PARAMETER_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "engine",
               "type": "orvex.contracts.store.values.ClickHouseHandle"
@@ -867,42 +1231,16 @@
         "close_clickhouse": {
           "capability": "clickhouse",
           "changes_state": false,
-          "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
-          ],
+          "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "engine",
               "type": "orvex.contracts.store.values.ClickHouseHandle"
@@ -915,41 +1253,17 @@
           "capability": "existing-lake",
           "changes_state": true,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_PARAMETER_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.ExistingLakeHandle"
@@ -962,41 +1276,17 @@
           "capability": "lake",
           "changes_state": true,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_PARAMETER_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.LakeHandle"
@@ -1009,41 +1299,17 @@
           "capability": "read",
           "changes_state": true,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_PARAMETER_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "read",
               "type": "orvex.contracts.store.values.ReadHandle"
@@ -1056,41 +1322,21 @@
           "capability": "write",
           "changes_state": true,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
             "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
             "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
             "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_TRANSACTION_CONFLICT"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "transaction",
               "type": "orvex.contracts.store.values.TransactionHandle"
@@ -1104,46 +1350,26 @@
           "changes_state": false,
           "errors": [
             "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
             "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
             "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
             "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_TLS_REQUIRED"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "target",
               "type": "orvex.contracts.store.values.ClickHouseTarget"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "budget",
               "type": "orvex.contracts.store.values.Budget"
@@ -1156,41 +1382,17 @@
           "capability": "lake",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_PARAMETER_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.LakeHandle"
@@ -1203,53 +1405,31 @@
           "capability": "lake",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
             "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_STATEMENT_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.LakeHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "sql",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "parameters",
               "type": "tuple[orvex.contracts.store.v1.Parameter, ...]"
@@ -1262,59 +1442,38 @@
           "capability": "lake",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
             "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
             "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_STATEMENT_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.LakeHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "name",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "sql",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "parameters",
               "type": "tuple[orvex.contracts.store.v1.Parameter, ...]"
@@ -1327,47 +1486,27 @@
           "capability": "write",
           "changes_state": true,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
             "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
             "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
             "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_TIMEOUT"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "transaction",
               "type": "orvex.contracts.store.values.TransactionHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "request",
               "type": "orvex.contracts.store.v1.StatementRequest"
@@ -1380,47 +1519,23 @@
           "capability": "existing-lake",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_PARAMETER_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.ExistingLakeHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "snapshot",
               "type": "int"
@@ -1433,41 +1548,17 @@
           "capability": "existing-lake",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_PARAMETER_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.ExistingLakeHandle"
@@ -1480,47 +1571,24 @@
           "capability": "existing-lake",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_SOURCE_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.ExistingLakeHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "snapshot",
               "type": "orvex.contracts.store.v1.Snapshot"
@@ -1533,53 +1601,30 @@
           "capability": "existing-lake",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_SOURCE_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.ExistingLakeHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "snapshot",
               "type": "orvex.contracts.store.v1.Snapshot"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "current",
               "type": "orvex.contracts.store.v1.ExistingLakeAttachment"
@@ -1592,47 +1637,23 @@
           "capability": "existing-lake",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_PARAMETER_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.ExistingLakeHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "snapshot",
               "type": "orvex.contracts.store.v1.Snapshot"
@@ -1644,36 +1665,10 @@
         "held": {
           "capability": "lake",
           "changes_state": false,
-          "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
-          ],
+          "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
@@ -1685,42 +1680,16 @@
         "is_object_storage": {
           "capability": "separation",
           "changes_state": false,
-          "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
-          ],
+          "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "location",
               "type": "str"
@@ -1733,44 +1702,20 @@
           "capability": "encoding",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_TYPE_UNSUPPORTED"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "schema",
-              "type": "bytes"
+              "type": "pyarrow.lib.Table"
             }
           ],
           "returns": "orvex.contracts.store.values.JsonFrame",
@@ -1780,47 +1725,23 @@
           "capability": "encoding",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_TYPE_UNSUPPORTED"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
-              "name": "batch",
-              "type": "bytes"
+              "name": "rows",
+              "type": "pyarrow.lib.Table"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "first",
               "type": "bool"
@@ -1833,77 +1754,57 @@
           "capability": "write",
           "changes_state": true,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
             "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
             "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
             "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_TIMEOUT"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "transaction",
               "type": "orvex.contracts.store.values.TransactionHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "source",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "sql",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "parameters",
               "type": "tuple[orvex.contracts.store.v1.Parameter, ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "schema",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "table",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "timeout_ms",
               "type": "int | None"
@@ -1916,71 +1817,50 @@
           "capability": "write",
           "changes_state": true,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
             "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
             "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_TIMEOUT"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "transaction",
               "type": "orvex.contracts.store.values.TransactionHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "schema",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "table",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "data",
-              "type": "bytes"
+              "type": "pyarrow.lib.Table"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "columns",
               "type": "tuple[tuple[str, str], ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "timeout_ms",
               "type": "int | None"
@@ -1993,47 +1873,23 @@
           "capability": "separation",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_SOURCE_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "name",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "location",
               "type": "str"
@@ -2046,53 +1902,29 @@
           "capability": "separation",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_SOURCE_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "name",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "first",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "second",
               "type": "str"
@@ -2105,53 +1937,30 @@
           "capability": "maintenance",
           "changes_state": true,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
             "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_PARAMETER_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.LakeHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "expire_before",
               "type": "datetime.datetime"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "orphans_before",
               "type": "datetime.datetime"
@@ -2164,47 +1973,29 @@
           "capability": "existing-lake",
           "changes_state": true,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
             "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
             "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
             "STORE_LIMITS_REQUIRED",
             "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
             "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
             "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_TLS_REQUIRED"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "attachment",
               "type": "orvex.contracts.store.v1.ExistingLakeAttachment"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "limits",
               "type": "orvex.contracts.store.values.ExistingLakeLimits"
@@ -2217,53 +2008,36 @@
           "capability": "lake",
           "changes_state": true,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
             "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
             "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
             "STORE_LIMITS_REQUIRED",
             "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
             "STORE_SECRET_INLINE",
             "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
             "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_TLS_REQUIRED"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "location",
               "type": "orvex.contracts.store.v1.LocalLakeLocation | orvex.contracts.store.v1.SqliteLakeLocation | orvex.contracts.store.v1.PostgresLakeLocation"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "limits",
               "type": "orvex.contracts.store.values.Limits"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "sources",
               "type": "tuple[orvex.contracts.store.v1.FileSourceAttachment | orvex.contracts.store.v1.SqliteSourceAttachment | orvex.contracts.store.v1.PostgresSourceAttachment, ...]"
@@ -2276,88 +2050,43 @@
           "capability": "read",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
             "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
             "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_TIMEOUT"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "read",
               "type": "orvex.contracts.store.values.ReadHandle"
             }
           ],
-          "returns": "bytes | None",
+          "returns": "pyarrow.lib.Table | None",
           "since": "1.0"
         },
         "rollback": {
           "capability": "write",
           "changes_state": true,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_PARAMETER_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "transaction",
               "type": "orvex.contracts.store.values.TransactionHandle"
@@ -2370,47 +2099,23 @@
           "capability": "lake",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_PARAMETER_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.LakeHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "snapshot_id",
               "type": "int"
@@ -2423,65 +2128,43 @@
           "capability": "clickhouse",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
             "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_STATEMENT_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "engine",
               "type": "orvex.contracts.store.values.ClickHouseHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "sql",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "parameters",
               "type": "tuple[orvex.contracts.store.v1.Parameter, ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "columns",
               "type": "tuple[tuple[str, str], ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "timeout_ms",
               "type": "int | None"
@@ -2494,53 +2177,32 @@
           "capability": "existing-lake",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
             "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
             "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_STATEMENT_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.ExistingLakeHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "request",
               "type": "orvex.contracts.store.v1.ReadRequest"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "committed_at",
               "type": "datetime.datetime"
@@ -2553,47 +2215,27 @@
           "capability": "read",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
             "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
             "STORE_SNAPSHOT_EXPIRED",
             "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_STATEMENT_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.LakeHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "request",
               "type": "orvex.contracts.store.v1.ReadRequest"
@@ -2606,47 +2248,27 @@
           "capability": "lake",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
             "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
             "STORE_SNAPSHOT_EXPIRED",
             "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_STATEMENT_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.LakeHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "request",
               "type": "orvex.contracts.store.v1.StatisticsRequest"
@@ -2659,47 +2281,26 @@
           "capability": "lake",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
             "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
             "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_SNAPSHOT_NOT_FOUND"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.LakeHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "request",
               "type": "orvex.contracts.store.v1.TablesRequest"
@@ -2712,41 +2313,17 @@
           "capability": "lake",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
-            "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
-            "STORE_PARAMETER_INVALID",
-            "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
-            "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_PARAMETER_INVALID"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lake",
               "type": "orvex.contracts.store.values.LakeHandle"
@@ -2759,47 +2336,27 @@
           "capability": "write",
           "changes_state": false,
           "errors": [
-            "ENGINE_SETTING_REQUIRED",
-            "ENGINE_VERSION_UNTESTED",
-            "SOURCE_NOT_FOUND",
-            "SOURCE_NOT_READ_ONLY",
-            "STORE_BUSY",
             "STORE_CANCELLED",
-            "STORE_CATALOG_UNAVAILABLE",
-            "STORE_CONNECTION_FAILED",
-            "STORE_EXTENSION_UNAVAILABLE",
-            "STORE_LIMITS_REQUIRED",
-            "STORE_LOCATION_INVALID",
             "STORE_PARAMETER_INVALID",
             "STORE_QUERY_FAILED",
-            "STORE_SECRET_INLINE",
-            "STORE_SECRET_MISSING",
-            "STORE_SNAPSHOT_EXPIRED",
-            "STORE_SNAPSHOT_NOT_FOUND",
-            "STORE_SOURCE_FAILED",
-            "STORE_SOURCE_INVALID",
             "STORE_STATEMENT_INVALID",
-            "STORE_TIMEOUT",
-            "STORE_TLS_REQUIRED",
-            "STORE_TRANSACTION_CONFLICT",
-            "STORE_TYPE_UNSUPPORTED",
-            "UNSUPPORTED_SOURCE_TYPE"
+            "STORE_TIMEOUT"
           ],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "transaction",
               "type": "orvex.contracts.store.values.TransactionHandle"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "request",
               "type": "orvex.contracts.store.v1.StatementRequest"

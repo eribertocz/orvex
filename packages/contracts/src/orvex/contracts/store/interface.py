@@ -294,8 +294,8 @@ REQUIRED_SETTINGS: Mapping[str, str] = {
 }
 
 
-# Every code of `contracts/store/v1`: each operation reaches DuckDB, a source or a check that
-# may refuse with any of them, so each declares them all.
+# Every code of `contracts/store/v1` is the contract's; each operation declares only the codes
+# it raises, and the kit proves every one (`orvex.contracts.store.kit_codes`).
 CODES = (
     "STORE_SNAPSHOT_NOT_FOUND",
     "STORE_SNAPSHOT_EXPIRED",
@@ -323,10 +323,96 @@ CODES = (
     "ENGINE_VERSION_UNTESTED",
     "ENGINE_SETTING_REQUIRED",
 )
+HANDLE = "STORE_PARAMETER_INVALID"  # a handle that names nothing held, or a parameter refused
+SNAPSHOT = ("STORE_SNAPSHOT_NOT_FOUND", "STORE_SNAPSHOT_EXPIRED")
+SLOT = ("STORE_BUSY",)
+STATEMENT = ("STORE_STATEMENT_INVALID", "STORE_QUERY_FAILED")
+ERRORS_OF: dict[str, tuple[str, ...]] = {
+    "open_lake": (
+        "STORE_LIMITS_REQUIRED",
+        "STORE_LOCATION_INVALID",
+        "STORE_SECRET_MISSING",
+        "STORE_SECRET_INLINE",
+        "STORE_TLS_REQUIRED",
+        "STORE_CATALOG_UNAVAILABLE",
+        "SOURCE_NOT_FOUND",
+        "STORE_SOURCE_INVALID",
+    ),
+    "close_lake": (HANDLE,),
+    "held": (),
+    "current_snapshot": (HANDLE,),
+    "snapshot": (HANDLE,),
+    "tables": (HANDLE,),
+    "describe": (HANDLE, *STATEMENT),
+    "describe_source": (HANDLE, *STATEMENT, "STORE_SOURCE_INVALID"),
+    "statistics": (HANDLE, *SNAPSHOT, *SLOT, "STORE_STATEMENT_INVALID"),
+    "changes": (HANDLE, *SNAPSHOT, *SLOT, "STORE_STATEMENT_INVALID"),
+    "table_columns": (HANDLE, *SNAPSHOT, *SLOT),
+    "start_read": (HANDLE, *SNAPSHOT, *SLOT, "STORE_STATEMENT_INVALID"),
+    "read_batch": (HANDLE, "STORE_QUERY_FAILED", "STORE_TIMEOUT", "STORE_CANCELLED"),
+    "cancel_read": (HANDLE,),
+    "close_read": (HANDLE,),
+    "begin": (HANDLE, *SLOT, "STORE_STATEMENT_INVALID", "STORE_TIMEOUT"),
+    "execute": (HANDLE, *STATEMENT, "STORE_CANCELLED", "STORE_TIMEOUT"),
+    "value": (HANDLE, *STATEMENT, "STORE_CANCELLED", "STORE_TIMEOUT"),
+    "land": (
+        HANDLE,
+        "STORE_SOURCE_INVALID",
+        "STORE_QUERY_FAILED",
+        "STORE_CANCELLED",
+        "STORE_TIMEOUT",
+    ),
+    "load_arrow": (HANDLE, "STORE_QUERY_FAILED", "STORE_CANCELLED", "STORE_TIMEOUT"),
+    "cancel_transaction": (HANDLE,),
+    "commit": (
+        HANDLE,
+        "STORE_CANCELLED",
+        "STORE_QUERY_FAILED",
+        "STORE_TIMEOUT",
+        "STORE_TRANSACTION_CONFLICT",
+    ),
+    "rollback": (HANDLE,),
+    "maintain": (HANDLE, *SLOT),
+    "open_existing_lake": (
+        "STORE_LIMITS_REQUIRED",
+        "STORE_LOCATION_INVALID",
+        "STORE_SECRET_MISSING",
+        "STORE_TLS_REQUIRED",
+        "STORE_CONNECTION_FAILED",
+        "STORE_SOURCE_INVALID",
+        "ENGINE_VERSION_UNTESTED",
+    ),
+    "close_existing_lake": (HANDLE,),
+    "existing_latest": (HANDLE,),
+    "existing_verify": (HANDLE, "STORE_SOURCE_INVALID"),
+    "existing_committed_at": (HANDLE,),
+    "existing_table_columns": (HANDLE, "STORE_SOURCE_INVALID"),
+    "existing_views": (HANDLE,),
+    "start_existing_read": (HANDLE, *STATEMENT, "STORE_SOURCE_INVALID"),
+    "connect_clickhouse": (
+        "STORE_TLS_REQUIRED",
+        "STORE_SECRET_MISSING",
+        "STORE_CONNECTION_FAILED",
+        "SOURCE_NOT_READ_ONLY",
+        "ENGINE_SETTING_REQUIRED",
+    ),
+    "close_clickhouse": (),
+    "clickhouse_columns": (HANDLE, "SOURCE_NOT_FOUND", "UNSUPPORTED_SOURCE_TYPE"),
+    "clickhouse_catalog": (HANDLE,),
+    "clickhouse_estimate": (HANDLE, "STORE_STATEMENT_INVALID"),
+    "clickhouse_now": (HANDLE,),
+    "start_clickhouse_read": (HANDLE, *STATEMENT),
+    "json_frame": ("STORE_TYPE_UNSUPPORTED",),
+    "json_rows": ("STORE_TYPE_UNSUPPORTED",),
+    "is_object_storage": (),
+    "location_components": ("STORE_SOURCE_INVALID",),
+    "locations_overlap": ("STORE_SOURCE_INVALID",),
+    "check_apart": ("STORE_SOURCE_INVALID",),
+}
 
 
 def _operation(name: str, capability: str, *, changes_state: bool = False) -> Operation:
-    return Operation(name, capability, CODES, changes_state=changes_state)
+    return Operation(name, capability, ERRORS_OF[name], changes_state=changes_state)
 
 
 STORE = InterfaceContract(

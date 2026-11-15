@@ -80,7 +80,7 @@ def _fields(envelope: CallEnvelope) -> dict[str, object]:
     [
         (_ExecutesTwice, "execute.idempotent"),
         (_DecimalAsFloat, "start-read.exact"),
-        (_ForgedHandleAccepted, "read-batch.ends"),
+        (_ForgedHandleAccepted, "read-batch.raises.store-parameter-invalid"),
     ],
 )
 def test_the_kit_fails_a_planted_broken_guarantee(planted: type[Store], case: str) -> None:
