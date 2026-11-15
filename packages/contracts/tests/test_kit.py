@@ -303,6 +303,7 @@ def test_the_description_lists_every_case_and_the_recorded_count() -> None:
         "expectation": LEDGER_KIT.cases[4].expectation,
         "idempotency": True,
         "since": "1.0",
+        "environment": None,
     }
     assert cases["count.readings"]["since"] == "1.1"
     assert cases["names.sorted"]["idempotency"] is False
