@@ -154,4 +154,15 @@ The instance administrator is trusted with identities, not with data (§3.1). Ev
 - linking an OIDC identity the administrator controls to that user;
 - creating a user they control and making it a project's first Builder.
 
-Each path is audited (`user.password_reset`, `user.oidc_linked`, `user.created`, `membership.added`), and none is refused. Their evaluation before production is in `threat-model.md` (`TM-ACCESS-10` to `TM-ACCESS-12`).
+Each path is audited (`user.password_reset`, `user.oidc_linked`, `user.created`, `membership.added`), and none is refused. Their evaluation before production is in `threat-model.md` (`TM-ACCESS-14` to `TM-ACCESS-16`).
+
+## 9. Secrets, files and supply chain
+
+- **Secrets** come only from the environment, named by `connections.yaml`. A literal password in a project file is refused without being echoed. No secret reaches an error, a run record or a log.
+- **Files the server reads** from a project are regular files, never symbolic links, and bounded in size and nesting. The static files it serves stay inside the web build.
+- **Logs** are JSON lines, one event per line.
+- **Supply chain.**
+  - Every workflow action is pinned by commit SHA.
+  - A workflow is read-only unless its job lists its write permissions.
+  - Every build makes and checks an SBOM.
+  - A release publishes its wheels and SBOM with attestations, and only the publish job signs.
