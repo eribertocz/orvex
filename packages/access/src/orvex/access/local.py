@@ -15,11 +15,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from orvex.access.context import (
-    InvalidContext,
     SecurityContext,
     permission_fingerprint,
     read_context,
 )
+from orvex.contracts.access.errors import InvalidContext
 
 LOCAL_USER = "local"
 

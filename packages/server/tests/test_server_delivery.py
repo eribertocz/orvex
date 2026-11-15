@@ -12,14 +12,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from orvex.access.errors import ACCESS_FORBIDDEN, AUDIT_UNAVAILABLE, AccessError
-from orvex.access.server_context import ServerRequest
-from orvex.access.storage.store import TransientConflict
+from orvex.contracts.access.client import AccessClient
+from orvex.contracts.access.errors import ACCESS_FORBIDDEN, AUDIT_UNAVAILABLE, AccessError
+from orvex.contracts.access.values import ServerRequest
 from orvex.semantic.errors import SemanticError
 from orvex.server import semantic_delivery, semantic_http
 from orvex.server.semantic_audit import record_query
 
-from tests.support.access_directory import audit_events
 from tests.support.semantic_http import detail, extension, model, run, write
 
 from .test_server_semantic import MAPPED, SAME, Server, ask
@@ -34,7 +33,7 @@ def cache(answer: Any) -> str:  # noqa: ANN401
 
 
 def queries(server: Server) -> list[dict[str, Any]]:
-    return [e for e in audit_events(server.store) if e["kind"] == "query"]
+    return [e for e in server.instance.events() if e["kind"] == "query"]
 
 
 @pytest.fixture(params=["miss", "hit", "bypass"])
@@ -86,7 +85,7 @@ def test_an_attribute_changed_before_delivery_withdraws_the_answer(
     before = len(queries(server))
     revoked_after_asking(
         monkeypatch,
-        lambda: server.attributes.set(server.builder, "project-1", ana, "tariff", "text", "x"),
+        lambda: server.actor(server.builder).set_attribute("project-1", ana, "tariff", "text", "x"),
     )
     withdrawn = ask(http, detail(10))
     assert code(withdrawn) == (409, "QUERY_RESULT_WITHDRAWN")
@@ -94,7 +93,7 @@ def test_an_attribute_changed_before_delivery_withdraws_the_answer(
     assert "receipt" not in withdrawn.json()
     assert len(queries(server)) == before  # nothing was delivered
     assert server.semantic.slots.running(ana, "project-1") == 0
-    refusal = [e for e in audit_events(server.store) if e["kind"] == "access.refused"][-1]
+    refusal = [e for e in server.instance.events() if e["kind"] == "access.refused"][-1]
     assert refusal["details"] == {"operation": "delivery", "code": "QUERY_RESULT_WITHDRAWN"}
     assert (refusal["actor"], refusal["project"]) == (ana, "project-1")
 
@@ -133,7 +132,7 @@ def test_a_group_removed_before_delivery_ends_the_session_and_sends_nothing(
     primed(server, origin, http)
     revoked_after_asking(
         monkeypatch,
-        lambda: server.directory.remove_group_member(server.builder, "project-1", "finance", ana),
+        lambda: server.actor(server.builder).remove_group_member("project-1", "finance", ana),
     )
     refused = ask(http, detail(10))
     assert code(refused) == (401, "SESSION_EXPIRED")
@@ -150,7 +149,7 @@ def test_a_role_lowered_before_delivery_is_forbidden(server: Server, origin: str
         semantic_http.ask(server.semantic, body, request)
     asked = semantic_http.ask(server.semantic, body, request)
     assert asked.receipt["cache"] == origin
-    server.directory.change_role(server.builder, "project-1", ana, "viewer")
+    server.actor(server.builder).set_membership("project-1", ana, "viewer")
     with pytest.raises(AccessError) as caught:
         semantic_delivery.deliver(server.semantic, request, asked, "synchronous")
     assert caught.value.code == ACCESS_FORBIDDEN
@@ -163,7 +162,7 @@ def test_a_membership_removed_before_delivery_refuses(server: Server, origin: st
     if origin == "hit":
         semantic_http.ask(server.semantic, body, request)
     asked = semantic_http.ask(server.semantic, body, request)
-    server.directory.remove_membership(server.builder, "project-1", ana)
+    server.actor(server.builder).remove_membership("project-1", ana)
     with pytest.raises((AccessError, SemanticError)):
         semantic_delivery.deliver(server.semantic, request, asked, "synchronous")
 
@@ -191,19 +190,19 @@ def test_an_unrecordable_query_event_refuses_the_answer(
     ana = server.author("ana", "finance")
     http = server.client("ana")
     primed(server, origin, http)
-    original = server.audit.record_alone
+    original = AccessClient.record
 
-    def refused(kind: str, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+    def refused(client: AccessClient, kind: str, *args: Any, **kwargs: Any) -> str:  # noqa: ANN401
         if kind == "query":
             raise AccessError(AUDIT_UNAVAILABLE, "The audit log cannot record.")
-        original(kind, *args, **kwargs)
+        return original(client, kind, *args, **kwargs)
 
-    monkeypatch.setattr(server.audit, "record_alone", refused)
-    unrecorded = server.audit.unrecorded
+    monkeypatch.setattr(AccessClient, "record", refused)
+    unrecorded = server.access.unrecorded()
     answer = ask(http, detail(10))
     assert code(answer) == (503, AUDIT_UNAVAILABLE)
     assert "rows" not in answer.text
-    assert server.audit.unrecorded == unrecorded  # refused, not counted: the exception is #443's
+    assert server.access.unrecorded() == unrecorded  # refused, not counted: the exception is #443's
     assert server.semantic.slots.running(ana, "project-1") == 0
 
 
@@ -216,10 +215,10 @@ def test_an_empty_answer_that_is_not_withheld_still_needs_its_event(
     http = server.client("ana")
     primed(server, origin, http)
 
-    def refused(kind: str, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+    def refused(client: AccessClient, *args: Any, **kwargs: Any) -> str:  # noqa: ANN401
         raise AccessError(AUDIT_UNAVAILABLE, "The audit log cannot record.")
 
-    monkeypatch.setattr(server.audit, "record_alone", refused)
+    monkeypatch.setattr(AccessClient, "record", refused)
     assert code(ask(http, detail(10))) == (503, AUDIT_UNAVAILABLE)
 
 
@@ -244,7 +243,7 @@ def test_a_withdrawn_response_is_refused_whole(
     shown = {str(row[1]) for row in answer.json()["result"]["rows"]} - {"None"}
     revoked_after_asking(
         monkeypatch,
-        lambda: server.attributes.set(server.builder, "project-1", ana, "tariff", "text", "x"),
+        lambda: server.actor(server.builder).set_attribute("project-1", ana, "tariff", "text", "x"),
     )
     withdrawn = http.post(
         "/api/v1/semantic/query", json=detail(10), headers={**SAME, "Accept": accept}
@@ -268,7 +267,7 @@ def test_a_revocation_after_the_delivery_step_applies_to_the_next_request(
         recording(*args)
         if not revoked:
             revoked.append(True)
-            server.attributes.set(server.builder, "project-1", ana, "tariff", "text", "x")
+            server.actor(server.builder).set_attribute("project-1", ana, "tariff", "text", "x")
 
     monkeypatch.setattr(semantic_delivery, "record_query", recorded_then_revoked)
     delivered = ask(http, detail(10))
@@ -276,30 +275,3 @@ def test_a_revocation_after_the_delivery_step_applies_to_the_next_request(
     after = ask(http, detail(10))
     assert after.status_code == 200
     assert after.json()["result"]["rows"] == []  # the permissions in force now
-
-
-def test_a_retried_recording_leaves_one_event(
-    server: Server, origin: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The store gives up on the event's first attempt (a serialization conflict: nothing of
-    it committed) and the log writes it again: one event, never two."""
-    server.author("ana", "finance")
-    http = server.client("ana")
-    primed(server, origin, http)
-    before = len(queries(server))
-    original = server.audit.record
-    conflicts: list[str] = []
-
-    def conflicting(transaction: Any, kind: str, *args: Any, **kwargs: Any) -> str:  # noqa: ANN401
-        if kind == "query" and not conflicts:
-            conflicts.append(kind)
-            raise TransientConflict("40001")
-        return original(transaction, kind, *args, **kwargs)
-
-    monkeypatch.setattr(server.audit, "record", conflicting)
-    answer = ask(http, detail(10))
-    assert answer.status_code == 200, answer.text
-    assert conflicts == ["query"]
-    (event,) = queries(server)[before:]
-    assert event["details"]["receipt"] == answer.json()["receipt"]["receipt_id"]
-    assert server.audit.verify() >= 1

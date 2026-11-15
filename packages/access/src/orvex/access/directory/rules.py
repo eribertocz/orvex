@@ -22,7 +22,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from orvex.access.directory.records import Role
-from orvex.access.errors import ACCESS_FORBIDDEN, LAST_ADMINISTRATOR, LAST_BUILDER, AccessError
+from orvex.contracts.access.errors import (
+    ACCESS_FORBIDDEN,
+    LAST_ADMINISTRATOR,
+    LAST_BUILDER,
+    AccessError,
+)
 
 
 @dataclass(frozen=True, slots=True)

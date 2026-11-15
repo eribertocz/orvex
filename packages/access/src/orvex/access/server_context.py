@@ -26,7 +26,6 @@ from typing import Literal
 
 from orvex.access.audit.log import AuditLog
 from orvex.access.context import (
-    InvalidContext,
     SecurityContext,
     normalize_list,
     permission_fingerprint,
@@ -39,8 +38,8 @@ from orvex.access.directory.attribute_sources import (
     UnreadableAttribute,
     merged,
 )
-from orvex.access.errors import ACCESS_FORBIDDEN, AccessError
 from orvex.access.storage.store import Store
+from orvex.contracts.access.errors import ACCESS_FORBIDDEN, AccessError, InvalidContext
 
 type Audience = Literal["builder", "other"]
 

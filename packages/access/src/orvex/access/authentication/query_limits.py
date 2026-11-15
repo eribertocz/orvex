@@ -11,33 +11,19 @@ limit on rows read or returned (Owner principle).
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 
 from orvex.access.audit.log import AuditLog
 from orvex.access.audit.operation import audited
 from orvex.access.directory import rules
 from orvex.access.directory import statements as directory_sql
 from orvex.access.directory.rules import refused
-from orvex.access.errors import VALIDATION_FAILED, AccessError
 from orvex.access.storage.store import Store, Transaction
+from orvex.contracts.access.errors import VALIDATION_FAILED, AccessError
+from orvex.contracts.access.values import RoleLimit
 
 ROLES = ("builder", "author", "viewer")
 CONCURRENT = (1, 64)
 RUN_MS = (1_000, 3_600_000)
-
-
-@dataclass(frozen=True, slots=True)
-class RoleLimit:
-    max_concurrent: int
-    max_run_ms: int
-
-
-# The defaults the store starts with (Q2 = A), and local mode's one Builder's limits.
-DEFAULT_LIMITS = {
-    "builder": RoleLimit(4, 120_000),
-    "author": RoleLimit(2, 60_000),
-    "viewer": RoleLimit(2, 30_000),
-}
 
 
 def read(transaction: Transaction) -> dict[str, RoleLimit]:

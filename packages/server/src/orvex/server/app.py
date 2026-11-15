@@ -14,9 +14,13 @@ import pyarrow as pa
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-from orvex.access.errors import ACCESS_FORBIDDEN, AUDIT_UNAVAILABLE, SESSION_EXPIRED, AccessError
-from orvex.access.local import LocalRequest
-from orvex.access.server_context import Audience
+from orvex.contracts.access.errors import (
+    ACCESS_FORBIDDEN,
+    AUDIT_UNAVAILABLE,
+    SESSION_EXPIRED,
+    AccessError,
+)
+from orvex.contracts.access.values import Audience, LocalRequest
 from orvex.contracts.http_api import v1
 from orvex.semantic.errors import SemanticError
 from orvex.server import lake_refusals, semantic_delivery, semantic_http, semantic_jobs

@@ -12,12 +12,12 @@ from types import SimpleNamespace
 import pytest
 from orvex.access.directory import reads
 from orvex.access.directory.reads import LOOKUP_BUDGET, DirectoryReads, Found, LookupLimited
-from orvex.access.errors import ACCESS_FORBIDDEN, USER_NOT_FOUND, AccessError
 from orvex.access.storage import PostgresStore, SqliteStore, migrate
 from orvex.access.storage.postgres import migrations_for
 from orvex.access.storage.sqlite import MIGRATIONS
+from orvex.contracts.access.errors import ACCESS_FORBIDDEN, USER_NOT_FOUND, AccessError
 
-from tests.support.access_directory import AnyStore, Backend, Raw, World
+from ..access_directory import AnyStore, Backend, Raw, World
 
 
 class Clock:
@@ -63,7 +63,7 @@ def test_an_administrator_lists_the_users_a_page_at_a_time(
 ) -> None:
     for name in ("cid", "Ben", "ana"):
         world.user(name)
-    monkeypatch.setattr(reads, "PAGE", 2)
+    monkeypatch.setattr(reads, "USERS_PAGE", 2)
     first = read.users(world.admin)
     assert [u.user_name for u in first.users] == ["ana", "Ben"]
     second = read.users(world.admin, first.after)

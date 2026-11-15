@@ -18,6 +18,8 @@ from orvex.server.identity import load_identity
 from orvex.server.local_access import LocalAccess, new_access
 from orvex.server.versions import Versions
 
+from tests.support.access_contexts import contexts
+
 IDENTITY = load_identity()
 VENDORS = (IDENTITY.ossie_vendor_name, *IDENTITY.previous_vendor_names)
 SLUG = IDENTITY.slug
@@ -130,7 +132,7 @@ def local(folder: Path, access: LocalAccess | None = None) -> LocalSemantic:
         access or new_access(SLUG, PORT),
         semantic_http.Semantic(
             served_project(folder, IDENTITY),
-            semantic_http.local_context,
+            semantic_http.local_context(contexts()),
             semantic_http.session_settings(),
         ),
     )

@@ -21,24 +21,21 @@ import re
 import socket
 import ssl
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
-from orvex.access.audit import open_audit_log
-from orvex.access.authentication.service import SignIn
-from orvex.access.authentication.settings import Settings
-from orvex.access.directory import Bootstrap, Directory, statements
-from orvex.access.oidc.configuration import parsed
-from orvex.access.oidc.identities import Identities
-from orvex.access.oidc.service import OidcSignIn
-from orvex.access.storage import SqliteStore
+from orvex.contracts.access.kit_world import KitClock
+from orvex.contracts.access.values import OidcSetup
 from orvex.server.identity import load_identity
 from orvex.server.provider_fetch import ProviderFetch
 from orvex.server.server_app import create_server_app
 from orvex.server.versions import Versions
+
+from .access_instance import AccessInstance
 
 KEYCLOAK = os.environ.get("KEYCLOAK_TEST_URL", "")
 CA = os.environ.get("KEYCLOAK_TEST_CA", "")
@@ -47,6 +44,7 @@ pytestmark = pytest.mark.skipif(not KEYCLOAK, reason="needs the python-oidc job'
 
 REALM = "ci-realm"
 ORIGIN = "https://bi.example.com"
+
 SLUG = load_identity().slug
 VERSIONS = Versions("0.1.0", (("server", "0.1.0"),), (("http-api", "v1"),))
 
@@ -71,51 +69,39 @@ def _fetcher() -> ProviderFetch:
 
 class World:
     def __init__(self, tmp_path: Path) -> None:
-        self.store = SqliteStore(tmp_path / "access.sqlite")
-        audit = open_audit_log(self.store, tmp_path / "audit.key", tmp_path / "anchors.log")
-        self.admin = (
-            Bootstrap(self.store, tmp_path / "recovery.key", audit)
-            .create_administrator("root", "Root")
-            .id
+        mapping = "".join(
+            f'[[mapping]]\nprovider = "kc"\nclaim = "groups"\nvalue = "{v}"\n'
+            f'project = "p1"\ngroup = "{v}"\n'
+            for v in ("finance", "ops")
         )
-        directory = Directory(self.store, audit)
-        settings = Settings(self.store, audit)
-        settings.change(self.admin, public_origin=ORIGIN)
-        configuration = parsed(
-            {
-                "providers": {
-                    "kc": {
-                        "issuer": f"{KEYCLOAK}/realms/{REALM}",
-                        "client_id": "bi-client",
-                        "client_secret_variable": "KC_SECRET",
-                        "algorithms": ["RS256"],
-                    }
-                },
-                "mapping": [
-                    {"provider": "kc", "claim": "groups", "value": v, "project": "p1", "group": v}
-                    for v in ("finance", "ops")
-                ],
-            },
-            {"KC_SECRET": "ci-disposable-client-secret"},
+        document = (
+            "[providers.kc]\n"
+            f'issuer = "{KEYCLOAK}/realms/{REALM}"\n'
+            'client_id = "bi-client"\n'
+            'client_secret_variable = "KC_SECRET"\n'
+            'algorithms = ["RS256"]\n'
+            "group_refresh_minutes = 5\n"
+            f"{mapping}"
         )
-        self.oidc = OidcSignIn(self.store, audit, configuration, _fetcher())
-        self.oidc.start_up()
-        builder = directory.create_user(self.admin, "builder", "Builder").id
-        directory.add_membership(self.admin, "p1", builder, "builder")
+        setup = OidcSetup(document, {"KC_SECRET": "ci-disposable-client-secret"})
+        self.clock = KitClock()
+        self.instance = AccessInstance(tmp_path, clock=self.clock, fetcher=_fetcher(), oidc=setup)
+        admin = self.instance.admin
+        self.builder = admin.create_user("builder", "Builder").user.id
+        admin.set_membership("p1", self.builder, "builder")
+        builder = self.instance.actor(self.builder)
         for group in ("finance", "ops"):
-            directory.create_group(builder, "p1", group)
-        self.alice = directory.create_user(self.admin, "alice", "Alice").id
-        directory.add_membership(builder, "p1", self.alice, "viewer")
-        Identities(self.store, audit, configuration).link(
-            self.admin, self.alice, "kc", _subject("alice")
-        )
-        app = create_server_app(VERSIONS, SignIn(self.store, audit), settings, SLUG, self.oidc)
+            builder.create_group("p1", group)
+        self.alice = admin.create_user("alice", "Alice").user.id
+        builder.set_membership("p1", self.alice, "viewer")
+        admin.link_identity(self.alice, "kc", _subject("alice"))
+        app = create_server_app(VERSIONS, self.instance.access, SLUG)
         self.app = TestClient(app, base_url=ORIGIN, follow_redirects=False)
         self.browser = httpx2.Client(verify=_trust(), follow_redirects=False, timeout=20)
 
     def groups(self) -> set[str]:
-        with self.store.transaction(read_only=True) as transaction:
-            return set(statements.groups_of(transaction, "p1", self.alice))
+        found = self.instance.actor(self.builder).groups("p1")
+        return {name for name, members in found.items() if self.alice in members}
 
     def provider_answer(self, location: str, password: str | None) -> dict[str, str]:
         """Keycloak's redirect to the callback, through its login form when `password`."""
@@ -143,7 +129,6 @@ class World:
     def close(self) -> None:
         self.browser.close()
         self.app.close()
-        self.store.close()
 
 
 def _admin_token() -> str:
@@ -187,10 +172,9 @@ def world(tmp_path: Path) -> Iterator[World]:
 
 
 def _make_due(world: World) -> None:
-    """The group-refresh period has passed: rather than move a clock past Keycloak's own token
-    lifetimes, the session's last refresh is set an hour back."""
-    with world.store.transaction() as transaction:
-        transaction.run("UPDATE oidc_sessions SET refreshed_at = '2000-01-01T00:00:00.000000Z'")
+    """The group-refresh period (5 minutes) has passed. Keycloak's tokens live an hour in the
+    realm fixture, so the next answers are still valid on the moved clock."""
+    world.clock.advance(timedelta(minutes=5, seconds=1))
 
 
 def test_the_whole_flow_against_keycloak(world: World) -> None:

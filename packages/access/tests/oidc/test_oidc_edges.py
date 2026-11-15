@@ -9,7 +9,10 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from orvex.access.errors import (
+from orvex.access.oidc import tokens
+from orvex.access.oidc.configuration import Provider, parsed
+from orvex.access.oidc.discovery import Keys, checked_metadata
+from orvex.contracts.access.errors import (
     ACCESS_FORBIDDEN,
     IDENTITY_NOT_FOUND,
     IDENTITY_TAKEN,
@@ -19,12 +22,9 @@ from orvex.access.errors import (
     VALIDATION_FAILED,
     AccessError,
 )
-from orvex.access.oidc import tokens
-from orvex.access.oidc.configuration import Provider, parsed
-from orvex.access.oidc.discovery import Keys, checked_metadata
 
-from tests.support.oidc_provider import FakeFetcher, FakeProvider
-from tests.support.oidc_world import ENVIRONMENT, Oidc, document
+from ..oidc_provider import FakeFetcher, FakeProvider
+from ..oidc_world import ENVIRONMENT, Oidc, document
 
 
 def provider() -> Provider:
@@ -231,7 +231,7 @@ def test_a_session_from_a_provider_no_longer_configured_is_always_due(oidc: Oidc
 
 
 def test_a_failure_reason_outside_the_closed_list_is_a_programming_error() -> None:
-    from orvex.access.oidc.failure import failed
+    from orvex.contracts.access.oidc_failure import failed
 
     with pytest.raises(ValueError, match="reason"):
         failed("something else")

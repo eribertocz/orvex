@@ -12,10 +12,10 @@ import pytest
 from argon2 import PasswordHasher, Type
 from orvex.access.authentication import credentials, passwords
 from orvex.access.authentication.service import SignIn
-from orvex.access.errors import LOGIN_FAILED, PASSWORD_REJECTED, AccessError
+from orvex.contracts.access.errors import LOGIN_FAILED, PASSWORD_REJECTED, AccessError
 
-from tests.support.access_directory import World
-from tests.support.sign_in import ADDRESS, PASSWORD, Accounts, Clock
+from ..access_directory import World
+from ..sign_in import ADDRESS, PASSWORD, Accounts, Clock
 
 
 def stored_hash(world: World, user: str) -> str:

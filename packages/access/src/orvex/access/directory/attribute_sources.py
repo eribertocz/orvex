@@ -16,8 +16,8 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from orvex.access.directory import attribute_values
-from orvex.access.errors import AccessError
 from orvex.access.storage.store import Transaction
+from orvex.contracts.access.errors import AccessError
 
 
 class UnreadableAttribute(Exception):

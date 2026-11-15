@@ -17,16 +17,12 @@ from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-from orvex.access.audit.log import AuditLog
-from orvex.access.authentication.service import SignIn
-from orvex.access.directory.attributes import Attributes
-from orvex.access.directory.reads import DirectoryReads
-from orvex.access.directory.records import User
-from orvex.access.directory.service import Directory
-from orvex.access.errors import AccessError
-from orvex.access.oidc.identities import Identities
+from orvex.contracts.access.client import AccessClient
+from orvex.contracts.access.errors import OIDC_NOT_CONFIGURED, AccessError
+from orvex.contracts.access.values import Attribute, User
 from orvex.contracts.http_api import v1
 from orvex.server.sign_in_errors import access_error_response, validation_response
+from orvex.server.sign_in_http import signed_in_caller
 from pydantic import BaseModel, ValidationError
 from starlette.concurrency import run_in_threadpool
 
@@ -40,22 +36,17 @@ class _Malformed(Exception):
 
 @dataclass(frozen=True)
 class Administration:
-    """What the administration routes call, and the projects the instance serves: an explicit,
-    non-empty set (#446 precision 3); any other project is `PROJECT_NOT_FOUND`."""
+    """The access instance the administration routes call, and the projects the instance
+    serves: an explicit, non-empty set (#446 precision 3); any other project is
+    `PROJECT_NOT_FOUND`. The instance's audit log is mandatory (#445): it is verified before
+    the server starts (`server_app.py`)."""
 
-    directory: Directory
-    reads: DirectoryReads
-    sign_in: SignIn
-    attributes: Attributes
-    identities: Identities | None
+    access: AccessClient
     projects: frozenset[str]
-    audit: AuditLog  # mandatory (#445): no audit log, no server
 
     def __post_init__(self) -> None:
         if not self.projects:
             raise ValueError("server mode serves at least one project (#446): no server")
-        if not isinstance(self.audit, AuditLog):
-            raise ValueError("server mode needs its audit log: the server does not start")
 
 
 def _user(found: User) -> dict[str, Any]:
@@ -70,6 +61,13 @@ def _user(found: User) -> dict[str, Any]:
     ).model_dump(mode="json")
 
 
+def _attribute(name: str, attribute: Attribute) -> dict[str, Any]:
+    """An attribute as `http-api` v1 lists it: `values` for a list, `value` otherwise."""
+    if attribute.values is not None:
+        return {"name": name, "type": attribute.type, "values": list(attribute.values)}
+    return {"name": name, "type": attribute.type, "value": attribute.value}
+
+
 def _secret(document: dict[str, Any], status: int) -> Response:
     response = JSONResponse(document, status_code=status)
     response.headers["Cache-Control"] = "no-store"
@@ -79,8 +77,10 @@ def _secret(document: dict[str, Any], status: int) -> Response:
 def mount_administration(app: FastAPI, admin: Administration) -> None:
     """The routes of `http-api` v1 under `PREFIX`."""
 
-    async def call[T](request: Request, operation: Callable[..., T], *args: object) -> T:
-        return await run_in_threadpool(operation, request.state.session.user.id, *args)
+    async def call[T](request: Request, operation: Callable[[AccessClient], T]) -> T:
+        """`operation` on the instance, as the signed-in caller, under the request's id."""
+        caller = admin.access.acting_for(signed_in_caller(request))
+        return await run_in_threadpool(operation, caller)
 
     async def body[M: BaseModel](request: Request, model: type[M]) -> M:
         """The body as the contract types it, strictly: `"true"` is not a boolean."""
@@ -117,7 +117,8 @@ def mount_administration(app: FastAPI, admin: Administration) -> None:
     @app.get(PREFIX + "/users")
     @routed
     async def list_users(request: Request) -> Response:
-        page = await call(request, admin.reads.users, request.query_params.get("after"))
+        after = request.query_params.get("after")
+        page = await call(request, lambda access: access.users(after))
         users = [_user(found) for found in page.users]
         return JSONResponse({"users": users, "after": page.after})
 
@@ -125,54 +126,57 @@ def mount_administration(app: FastAPI, admin: Administration) -> None:
     @routed
     async def create_user(request: Request) -> Response:
         asked = await body(request, v1.NewUserRequest)
-        made = await call(request, admin.directory.create_user, asked.user_name, asked.display_name)
+        made = await call(
+            request, lambda access: access.create_user(asked.user_name, asked.display_name)
+        )
         document = {"user": _user(made.user), "temporary_password": made.temporary_password}
         return _secret(document, 201)
 
     @app.get(PREFIX + "/users/{user}")
     @routed
     async def get_user(request: Request, user: str) -> Response:
-        return JSONResponse(_user(await call(request, admin.reads.user, user)))
+        return JSONResponse(_user(await call(request, lambda access: access.user(user))))
 
     @app.post(PREFIX + "/users/{user}/deactivate")
     @routed
     async def deactivate_user(request: Request, user: str) -> Response:
         await nothing(request)
-        await call(request, admin.directory.deactivate_user, user)
+        await call(request, lambda access: access.deactivate_user(user))
         return done()
 
     @app.post(PREFIX + "/users/{user}/reactivate")
     @routed
     async def reactivate_user(request: Request, user: str) -> Response:
         await nothing(request)
-        await call(request, admin.directory.reactivate_user, user)
+        await call(request, lambda access: access.reactivate_user(user))
         return done()
 
     @app.put(PREFIX + "/users/{user}/administrator")
     @routed
     async def set_administrator(request: Request, user: str) -> Response:
         asked = await body(request, v1.AdministratorFlag)
-        await call(request, admin.directory.set_administrator, user, asked.value)
+        await call(request, lambda access: access.set_administrator(user, asked.value))
         return done()
 
     @app.post(PREFIX + "/users/{user}/password-reset")
     @routed
     async def reset_password(request: Request, user: str) -> Response:
         await nothing(request)
-        temporary = await call(request, admin.sign_in.reset_password, user)
+        temporary = await call(request, lambda access: access.reset_password(user))
         return _secret({"temporary_password": temporary}, 200)
 
     # --- OIDC links (administrator) ----------------------------------------------------------
 
-    def identities() -> Identities:
-        if admin.identities is None:
-            raise AccessError("OIDC_NOT_CONFIGURED", "No sign-in provider is configured.")
-        return admin.identities
+    def linked(access: AccessClient) -> AccessClient:
+        """The instance, for an OIDC link route: none without a sign-in provider."""
+        if not access.oidc_providers():
+            raise AccessError(OIDC_NOT_CONFIGURED, "No sign-in provider is configured.")
+        return access
 
     @app.get(PREFIX + "/users/{user}/identities")
     @routed
     async def list_identities(request: Request, user: str) -> Response:
-        links = await call(request, identities().links, user)
+        links = await call(request, lambda access: linked(access).identity_links(user))
         listed = [
             {"id": link.id, "provider": link.provider, "subject": link.subject,
              "linked_at": link.linked_at}
@@ -184,13 +188,16 @@ def mount_administration(app: FastAPI, admin: Administration) -> None:
     @routed
     async def link_identity(request: Request, user: str) -> Response:
         asked = await body(request, v1.IdentityLinkRequest)
-        link = await call(request, identities().link, user, asked.provider, asked.subject)
+        link = await call(
+            request,
+            lambda access: linked(access).link_identity(user, asked.provider, asked.subject),
+        )
         return JSONResponse({"id": link}, status_code=201)
 
     @app.delete(PREFIX + "/users/{user}/identities/{link}")
     @routed
     async def unlink_identity(request: Request, user: str, link: str) -> Response:
-        await call(request, identities().unlink, user, link)
+        await call(request, lambda access: linked(access).unlink_identity(user, link))
         return done()
 
     # --- finding a user by name (administrator, or any Builder) ------------------------------
@@ -198,7 +205,9 @@ def mount_administration(app: FastAPI, admin: Administration) -> None:
     @app.get(PREFIX + "/user-lookup")
     @routed
     async def find_user(request: Request) -> Response:
-        found = await call(request, admin.reads.find, request.query_params.get("user_name", ""))
+        found = await call(
+            request, lambda access: access.find_user(request.query_params.get("user_name", ""))
+        )
         return _secret({"id": found.id, "display_name": found.display_name}, 200)
 
     # --- a project's members, groups and attributes ------------------------------------------
@@ -206,7 +215,7 @@ def mount_administration(app: FastAPI, admin: Administration) -> None:
     @app.get(PREFIX + "/projects/{project}/members")
     @routed
     async def list_members(request: Request, project: str) -> Response:
-        members = await call(request, admin.reads.members, project)
+        members = await call(request, lambda access: access.members(project))
         listed = [
             {"id": m.user.id, "user_name": m.user.user_name, "display_name": m.user.display_name,
              "state": m.user.state, "role": m.role}
@@ -218,40 +227,40 @@ def mount_administration(app: FastAPI, admin: Administration) -> None:
     @routed
     async def set_membership(request: Request, project: str, user: str) -> Response:
         asked = await body(request, v1.RoleAssignment)
-        await call(request, admin.directory.set_membership, project, user, asked.role)
+        await call(request, lambda access: access.set_membership(project, user, asked.role))
         return done()
 
     @app.delete(PREFIX + "/projects/{project}/members/{user}")
     @routed
     async def remove_membership(request: Request, project: str, user: str) -> Response:
-        await call(request, admin.directory.remove_membership, project, user)
+        await call(request, lambda access: access.remove_membership(project, user))
         return done()
 
     @app.get(PREFIX + "/projects/{project}/groups")
     @routed
     async def list_groups(request: Request, project: str) -> Response:
-        groups = await call(request, admin.reads.groups, project)
-        listed = [{"name": name, "members": members} for name, members in groups.items()]
+        groups = await call(request, lambda access: access.groups(project))
+        listed = [{"name": name, "members": list(members)} for name, members in groups.items()]
         return JSONResponse({"groups": listed})
 
     @app.post(PREFIX + "/projects/{project}/groups")
     @routed
     async def create_group(request: Request, project: str) -> Response:
         asked = await body(request, v1.GroupRequest)
-        await call(request, admin.directory.create_group, project, asked.name)
+        await call(request, lambda access: access.create_group(project, asked.name))
         return JSONResponse({"name": asked.name}, status_code=201)
 
     @app.delete(PREFIX + "/projects/{project}/groups/{group}")
     @routed
     async def delete_group(request: Request, project: str, group: str) -> Response:
-        await call(request, admin.directory.delete_group, project, group)
+        await call(request, lambda access: access.delete_group(project, group))
         return done()
 
     @app.put(PREFIX + "/projects/{project}/groups/{group}/members/{user}")
     @routed
     async def add_group_member(request: Request, project: str, group: str, user: str) -> Response:
         await nothing(request)
-        await call(request, admin.directory.add_group_member, project, group, user)
+        await call(request, lambda access: access.add_group_member(project, group, user))
         return done()
 
     @app.delete(PREFIX + "/projects/{project}/groups/{group}/members/{user}")
@@ -259,14 +268,14 @@ def mount_administration(app: FastAPI, admin: Administration) -> None:
     async def remove_group_member(
         request: Request, project: str, group: str, user: str
     ) -> Response:
-        await call(request, admin.directory.remove_group_member, project, group, user)
+        await call(request, lambda access: access.remove_group_member(project, group, user))
         return done()
 
     @app.get(PREFIX + "/projects/{project}/members/{user}/attributes")
     @routed
     async def list_attributes(request: Request, project: str, user: str) -> Response:
-        found = await call(request, admin.reads.attributes, project, user)
-        listed = [{"name": name, **attribute} for name, attribute in sorted(found.items())]
+        found = await call(request, lambda access: access.attributes(project, user))
+        listed = [_attribute(name, attribute) for name, attribute in sorted(found.items())]
         return JSONResponse({"attributes": listed})
 
     @app.put(PREFIX + "/projects/{project}/members/{user}/attributes/{name}")
@@ -278,11 +287,13 @@ def mount_administration(app: FastAPI, admin: Administration) -> None:
         ):
             raise _Malformed  # `values` for a list, `value` otherwise: exactly one
         value = asked.values if asked.type == "list" else asked.value
-        await call(request, admin.attributes.set, project, user, name, asked.type, value)
+        await call(
+            request, lambda access: access.set_attribute(project, user, name, asked.type, value)
+        )
         return done()
 
     @app.delete(PREFIX + "/projects/{project}/members/{user}/attributes/{name}")
     @routed
     async def remove_attribute(request: Request, project: str, user: str, name: str) -> Response:
-        await call(request, admin.attributes.remove, project, user, name)
+        await call(request, lambda access: access.remove_attribute(project, user, name))
         return done()

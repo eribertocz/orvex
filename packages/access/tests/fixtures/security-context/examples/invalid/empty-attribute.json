@@ -1,0 +1,17 @@
+{
+  "kind": "security_context",
+  "version": 1,
+  "user": "u-7",
+  "project": "p1",
+  "role": "viewer",
+  "groups": [
+    "collections"
+  ],
+  "attributes": {
+    "zone_id": {
+      "type": "text",
+      "value": ""
+    }
+  },
+  "permission_fingerprint": "sha256:3226aea6bf76bd195d8ccee8ce09f68edb642c25066e3643a9e835a9eae5ffc9"
+}

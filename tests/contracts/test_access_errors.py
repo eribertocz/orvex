@@ -1,10 +1,11 @@
-"""#436: every refusal the access module can send through the HTTP API is registered in
-`http-api` v1, with the exact spelling the module raises; its store's own refusals stop a start
-or a command and never reach a response."""
+"""#436, #486: every refusal of the access contracts (`orvex.contracts.access.errors`) that can
+reach the HTTP API is registered in `http-api` v1, with the exact spelling raised; the store's
+own refusals and the contract's own two stop a start or a command, or are turned into another
+refusal, and never reach a response."""
 
 from __future__ import annotations
 
-from orvex.access import errors
+from orvex.contracts.access import errors
 
 from tools.checks import error_codes
 from tools.repository import REPOSITORY_ROOT
@@ -40,10 +41,12 @@ STORE_ONLY = {
     "AUDIT_CHAIN_BROKEN",
     "AUDIT_CHECKPOINT_INVALID",
     "AUDIT_KEY_UNSAFE",
+    "ACCESS_INSTANCE_UNKNOWN",
+    "CONTEXT_INVALID",
 }
 
 
-def test_the_module_raises_exactly_these_codes() -> None:
+def test_the_contract_declares_exactly_these_codes() -> None:
     defined = {
         value for name, value in vars(errors).items() if name.isupper() and isinstance(value, str)
     }

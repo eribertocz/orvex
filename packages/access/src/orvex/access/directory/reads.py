@@ -28,20 +28,19 @@ from orvex.access.directory.attribute_sources import stored_attributes
 from orvex.access.directory.names import canonical_user_name
 from orvex.access.directory.records import Role, User
 from orvex.access.directory.rules import refused
-from orvex.access.errors import (
+from orvex.access.storage import retry
+from orvex.access.storage.instants import instant, parsed
+from orvex.access.storage.store import Store, Transaction
+from orvex.contracts.access.errors import (
     ACCESS_FORBIDDEN,
     LOOKUP_LIMITED,
     USER_NOT_FOUND,
     AccessError,
     not_found,
 )
-from orvex.access.storage import retry
-from orvex.access.storage.instants import instant, parsed
-from orvex.access.storage.store import Store, Transaction
+from orvex.contracts.access.values import LOOKUP_BUDGET, USERS_PAGE
 
-LOOKUP_BUDGET = 30
 LOOKUP_WINDOW = timedelta(minutes=1)
-PAGE = 100  # users per page
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,9 +104,9 @@ class DirectoryReads:
     def users(self, actor: str, after: str | None = None) -> Page:
         def read(transaction: Transaction) -> Page:
             refused(rules.read_users(sql.caller(transaction, actor)))
-            rows = sql.users_after(transaction, (after or "").lower(), PAGE + 1)
-            more = len(rows) > PAGE
-            shown = rows[:PAGE]
+            rows = sql.users_after(transaction, (after or "").lower(), USERS_PAGE + 1)
+            more = len(rows) > USERS_PAGE
+            shown = rows[:USERS_PAGE]
             return Page(shown, shown[-1].user_name.lower() if more else None)
 
         return self._read("list_users", actor, None, read)

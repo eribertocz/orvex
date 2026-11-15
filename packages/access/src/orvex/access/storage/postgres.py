@@ -33,8 +33,8 @@ from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass
 
 import pg8000.native
-from orvex.access.errors import ACCESS_STORE_UNSAFE, VALIDATION_FAILED, AccessError
 from orvex.access.storage.store import Row, Transaction, TransientConflict, UniqueViolation
+from orvex.contracts.access.errors import ACCESS_STORE_UNSAFE, VALIDATION_FAILED, AccessError
 from pg8000.exceptions import DatabaseError, InterfaceError
 
 CONNECT_TIMEOUT_S = 10

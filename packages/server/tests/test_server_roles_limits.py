@@ -13,15 +13,14 @@ from typing import Any
 
 import pytest
 from fastapi import FastAPI
-from orvex.access.authentication.query_limits import QueryLimits, RoleLimit
-from orvex.access.errors import AccessError
+from orvex.contracts.access.errors import AccessError
+from orvex.contracts.access.values import RoleLimit
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import answer
 from orvex.server import semantic_delivery, semantic_http
 from orvex.server.route_permissions import PERMISSIONS, checked_permissions
 from orvex.server.server_app import ServedProject, create_server_app
 
-from tests.support.access_directory import audit_events
 from tests.support.semantic_http import IDENTITY, VERSIONS, aggregate, detail
 
 from .test_server_semantic import ORIGIN, SAME, Server, ask
@@ -94,7 +93,7 @@ def test_a_viewer_is_refused_by_role_before_the_content_is_read(
     assert code(answer) == (403, "ACCESS_FORBIDDEN")
     assert opened == []  # refused before any lake work
     refusals = [
-        e for e in audit_events(server.store)
+        e for e in server.instance.events()
         if e["kind"] == "access.refused" and e["actor"] == vera
     ]  # fmt: skip
     assert refusals[-1]["details"] == {"operation": "route", "code": "ACCESS_FORBIDDEN"}
@@ -143,7 +142,7 @@ def test_a_builder_and_an_author_ask(server: Server) -> None:
 def test_a_role_lowered_to_viewer_asks_no_more(server: Server) -> None:
     ana = server.author("ana")
     assert ask(server.client("ana"), detail(1)).status_code == 200
-    server.directory.change_role(server.builder, "project-1", ana, "viewer")
+    server.actor(server.builder).set_membership("project-1", ana, "viewer")
     assert code(ask(server.client("ana"), detail(1))) == (403, "ACCESS_FORBIDDEN")
 
 
@@ -151,7 +150,7 @@ def test_a_role_lowered_to_viewer_asks_no_more(server: Server) -> None:
 
 
 def limited(server: Server, role: str, limit: RoleLimit) -> None:
-    QueryLimits(server.store, server.audit).change(server.admin, {role: limit})
+    server.actor(server.admin).change_query_limits({role: limit})
 
 
 def test_a_question_beyond_the_roles_concurrency_is_refused_then_served(server: Server) -> None:
@@ -275,15 +274,14 @@ def test_server_mode_does_not_start_without_its_audit_log(server: Server) -> Non
     with pytest.raises(ValueError, match="audit"):
         create_server_app(
             VERSIONS,
-            server.sign_in,
-            server.settings,
+            server.access,
             IDENTITY.slug,
-            served=ServedProject("project-1", unaudited, server.store),
+            served=ServedProject("project-1", unaudited),
         )
 
 
 def test_server_mode_does_not_start_when_its_audit_log_does_not_verify(server: Server) -> None:
-    anchors = server.audit.anchors
+    anchors = Path(server.instance.configuration.audit_anchors)
     lines = anchors.read_text("ascii").splitlines()
     assert lines  # the bootstrap's checkpoints were anchored
     last = lines[-1]
@@ -292,10 +290,9 @@ def test_server_mode_does_not_start_when_its_audit_log_does_not_verify(server: S
     with pytest.raises(AccessError):
         create_server_app(
             VERSIONS,
-            server.sign_in,
-            server.settings,
+            server.access,
             IDENTITY.slug,
-            served=ServedProject("project-1", server.semantic, server.store),
+            served=ServedProject("project-1", server.semantic),
         )
 
 
@@ -310,8 +307,7 @@ def test_server_mode_does_not_start_with_local_modes_identity_or_limits(
     with pytest.raises(ValueError, match="identity and limits"):
         create_server_app(
             VERSIONS,
-            server.sign_in,
-            server.settings,
+            server.access,
             IDENTITY.slug,
-            served=ServedProject("project-1", composed, server.store),
+            served=ServedProject("project-1", composed),
         )

@@ -18,7 +18,7 @@ import re
 import unicodedata
 
 from orvex.access.directory.records import ROLES, Role
-from orvex.access.errors import VALIDATION_FAILED, AccessError
+from orvex.contracts.access.errors import VALIDATION_FAILED, AccessError
 
 _ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _USER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@+-]{0,127}")

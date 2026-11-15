@@ -8,15 +8,19 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pytest
-from orvex.access.authentication.query_limits import RoleLimit
+from orvex.contracts.access.client import AccessClient
+from orvex.contracts.access.values import RoleLimit
 from orvex.semantic.errors import SemanticError
 from orvex.server import semantic_http, semantic_jobs
 from orvex.server.query_cancel import Cancel
 from orvex.server.query_slots import QuerySlots
 from orvex.server.semantic_jobs import KEPT_SECONDS, MAX_JOBS, JobNotFound, Jobs
+
+from .access_instance import AccessInstance
 
 OWNER = ("ana", "project-1")
 
@@ -27,7 +31,7 @@ class Stub:
 
     limit: int = 2
     slots: QuerySlots = field(default_factory=QuerySlots)
-    audit: None = None
+    audit: AccessClient | None = None
 
     def identity(self, request: object) -> tuple[str, str, str]:
         return "ana", "project-1", "author"
@@ -271,11 +275,11 @@ def test_cancelling_and_starting_again_never_exceeds_the_limit(
 
 
 def test_an_answer_larger_than_the_retention_fails_explicitly_and_is_never_kept(
-    stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch
+    stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     answered_with(monkeypatch, lambda: Asked(semantic_jobs.MAX_BYTES + 1))
-    log = Recorded()
-    stub.audit = log  # type: ignore[assignment]
+    log = Recorded(tmp_path)
+    stub.audit = log.client
     jobs = jobs_of(stub, clock, now)
     job = jobs.start(b"{}", object(), OWNER)
     found = jobs.status(job, OWNER)
@@ -397,28 +401,32 @@ def test_the_kept_answers_are_bounded_in_bytes_and_the_heaviest_owner_goes_first
     assert jobs.status(heavy[-1], OWNER).status == "done"
 
 
-@dataclass
 class Recorded:
-    """An audit log that keeps the `query` events it is given."""
+    """A real audit log, through the access contract, and the `query` events it holds."""
 
-    events: list[dict[str, Any]] = field(default_factory=list)
-    unrecorded: int = 0
+    def __init__(self, folder: Path) -> None:
+        self.instance = AccessInstance(folder)
+        self.client = self.instance.access
 
-    def record_alone(self, kind: str, actor: str, details: Any, **more: Any) -> str:  # noqa: ANN401
-        self.events.append({"kind": kind, "actor": actor, "details": dict(details), **more})
-        return "id"
+    @property
+    def events(self) -> list[dict[str, Any]]:
+        return [
+            {key: event[key] for key in ("kind", "actor", "details", "outcome", "project")}
+            for event in self.instance.events()
+            if event["kind"] == "query"
+        ]
 
 
 @pytest.mark.parametrize("end", ["failed", "cancelled"])
 def test_a_job_ended_with_no_answer_records_one_executed_event_with_its_end(
-    stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch, end: str
+    stub: Stub, clock: Clock, monkeypatch: pytest.MonkeyPatch, end: str, tmp_path: Path
 ) -> None:
     def failing() -> Any:  # noqa: ANN401
         raise SemanticError("MEMBER_NOT_FOUND", {"member": "x"})
 
     answered_with(monkeypatch, failing if end == "failed" else Asked)
-    log = Recorded()
-    stub.audit = log  # type: ignore[assignment]
+    log = Recorded(tmp_path)
+    stub.audit = log.client
     held: list[Callable[[], None]] = []
     jobs = jobs_of(stub, clock, held.append)
     job = jobs.start(b"{}", object(), OWNER)

@@ -10,9 +10,9 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from orvex.access.directory import reads
+from orvex.contracts.access.client import AccessClient
+from orvex.contracts.access.values import LOOKUP_BUDGET, USERS_PAGE
 
-from tests.support.access_directory import audit_events
 from tests.support.semantic_http import detail
 
 from .test_server_semantic import ORIGIN, SAME, Server, ask
@@ -31,7 +31,7 @@ def code(answer: Any) -> tuple[int, str]:  # noqa: ANN401
 
 
 def events(server: Server, kind: str) -> list[dict[str, Any]]:
-    return [e for e in audit_events(server.store) if e["kind"] == kind]
+    return [e for e in server.instance.events() if e["kind"] == kind]
 
 
 def refusals(server: Server) -> int:
@@ -46,11 +46,11 @@ def people(server: Server) -> dict[str, str]:
     """root (administrator), builder (p1), other (p2's Builder), ana (author), vera (viewer)."""
     found = {"root": server.admin, "builder": server.builder}
     found["other"] = server.person("other")
-    server.directory.add_membership(server.admin, "project-2", found["other"], "builder")
+    server.actor(server.admin).set_membership("project-2", found["other"], "builder")
     found["ana"] = server.author("ana")
     found["vera"] = server.viewer("vera")
     found["target"] = server.member("target", tariff=None, role="viewer")
-    server.attributes.set(server.builder, "project-1", found["target"], "region", "text", "s")
+    server.actor(server.builder).set_attribute("project-1", found["target"], "region", "text", "s")
     return found
 
 
@@ -105,9 +105,9 @@ def test_a_deactivated_administrators_session_changes_nothing(
     server: Server, people: dict[str, str]
 ) -> None:
     second = server.person("second")
-    server.directory.set_administrator(server.admin, second, True)
+    server.actor(server.admin).set_administrator(second, True)
     http = server.client("second")
-    server.directory.deactivate_user(server.admin, second)
+    server.actor(server.admin).deactivate_user(second)
     writes = [
         ("POST", f"{A}/users", {"user_name": "x", "display_name": "X"}),
         ("POST", f"{A}/users/{people['target']}/deactivate", {}),
@@ -115,7 +115,7 @@ def test_a_deactivated_administrators_session_changes_nothing(
     for method, path, body in writes:
         answer = http.request(method, path, json=body, headers=SAME)
         assert code(answer) == (401, "SESSION_EXPIRED")
-    assert server.directory.user(people["target"]).active  # type: ignore[union-attr]
+    assert server.actor(server.admin).user(people["target"]).state == "active"
 
 
 ROUTES = [
@@ -191,25 +191,27 @@ def test_an_administrator_manages_a_user_end_to_end(server: Server, caplog: Any)
         404,
         "USER_NOT_FOUND",
     )
-    kinds = [e["kind"] for e in audit_events(server.store)]
+    kinds = [e["kind"] for e in server.instance.events()]
     for kind in ("user.created", "user.deactivated", "user.reactivated", "user.password_reset",
                  "user.administrator_granted"):  # fmt: skip
         assert kind in kinds
-    everything = caplog.text + str(audit_events(server.store))
+    everything = caplog.text + str(server.instance.events())
     assert temporary not in everything
     assert second not in everything
 
 
-def test_the_user_list_pages_and_shows_no_credential(
-    server: Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(reads, "PAGE", 1)
+def test_the_user_list_pages_and_shows_no_credential(server: Server) -> None:
+    for index in range(USERS_PAGE - 1):  # with root and builder: one more than a page
+        server.instance.admin.create_user(f"user-{index:03}", "Someone")
     root = server.client("root")
     first = root.get(f"{A}/users").json()
-    assert [u["user_name"] for u in first["users"]] == ["builder"]
+    assert len(first["users"]) == USERS_PAGE
     second = root.get(f"{A}/users", params={"after": first["after"]}).json()
-    assert [u["user_name"] for u in second["users"]] == ["root"]
+    assert len(second["users"]) == 1
     assert second["after"] is None
+    listed = {u["user_name"] for u in first["users"] + second["users"]}
+    assert {"root", "builder"} <= listed
+    assert len(listed) == USERS_PAGE + 1
     text = str(first) + str(second)
     for secret in ("authz_version", "password", "session", "hash"):
         assert secret not in text
@@ -276,7 +278,7 @@ def test_a_group_and_an_attribute_change_the_next_answer(server: Server) -> None
 def test_a_builder_finds_a_user_by_exact_name_only(server: Server) -> None:
     newcomer = server.person("newcomer")
     gone = server.person("gone")
-    server.directory.deactivate_user(server.admin, gone)
+    server.actor(server.admin).deactivate_user(gone)
     builder = server.client("builder")
     found = builder.get(f"{A}/user-lookup", params={"user_name": "NEWCOMER"})
     assert found.json() == {"id": newcomer, "display_name": "Newcomer"}
@@ -294,13 +296,11 @@ def test_a_builder_finds_a_user_by_exact_name_only(server: Server) -> None:
     assert code(author) == (403, "ACCESS_FORBIDDEN")
 
 
-def test_the_lookup_budget_answers_429_with_retry_after(
-    server: Server, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(reads, "LOOKUP_BUDGET", 3)
+def test_the_lookup_budget_answers_429_with_retry_after(server: Server) -> None:
     builder = server.client("builder")
-    for typed in ("root", "nobody", "root"):
-        builder.get(f"{A}/user-lookup", params={"user_name": typed})
+    for index in range(LOOKUP_BUDGET):
+        typed = "root" if index % 2 else "nobody"
+        assert builder.get(f"{A}/user-lookup", params={"user_name": typed}).status_code != 429
     for typed in ("root", "nobody"):
         limited = builder.get(f"{A}/user-lookup", params={"user_name": typed})
         assert code(limited) == (429, "LOOKUP_LIMITED")
@@ -329,13 +329,13 @@ def test_a_project_the_instance_does_not_serve_is_not_found_before_any_directory
 ) -> None:
     builder = server.client("builder")
     asked: list[str] = []
-    allowed = reads.DirectoryReads.allowed
+    allowed = AccessClient.allowed
 
-    def spied(self: Any, *args: Any) -> bool:  # noqa: ANN401
+    def spied(self: AccessClient, *args: Any) -> bool:  # noqa: ANN401
         asked.append(str(args))
         return allowed(self, *args)
 
-    monkeypatch.setattr(reads.DirectoryReads, "allowed", spied)
+    monkeypatch.setattr(AccessClient, "allowed", spied)
     for method, path in (("GET", f"{A}/projects/elsewhere/members"),
                          ("PUT", f"{A}/projects/elsewhere/members/x"),
                          ("GET", f"{A}/projects/elsewhere/groups")):  # fmt: skip
@@ -361,19 +361,10 @@ def test_the_request_rules_hold_on_the_admin_routes(server: Server) -> None:
 
 
 def test_an_application_with_no_served_project_refuses_to_build(server: Server) -> None:
-    from orvex.access.directory.reads import DirectoryReads
     from orvex.server.admin_http import Administration
 
     with pytest.raises(ValueError, match="at least one project"):
-        Administration(
-            server.directory,
-            DirectoryReads(server.store, server.audit),
-            server.sign_in,
-            server.attributes,
-            None,
-            frozenset(),
-            server.audit,
-        )
+        Administration(server.access, frozenset())
 
 
 def test_a_change_through_the_api_withdraws_a_pending_jobs_answer(server: Server) -> None:
@@ -400,9 +391,7 @@ def test_a_reset_ends_every_session_and_each_change_bumps_the_user(server: Serve
     root = server.client("root")
 
     def version() -> int:
-        found = server.directory.user(ana)
-        assert found is not None
-        return found.authz_version
+        return server.actor(server.admin).user(ana).authz_version
 
     start_version = version()
     for method, path, body in (

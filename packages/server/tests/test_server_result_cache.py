@@ -12,7 +12,6 @@ import pytest
 from orvex.server import semantic_delivery
 from orvex.server.semantic_audit import record_withheld as recording
 
-from tests.support.access_directory import audit_events
 from tests.support.semantic_http import aggregate, detail
 
 from .test_server_semantic import Server, ask
@@ -56,7 +55,7 @@ def test_a_hit_goes_through_the_response_step_and_is_audited(
     answers = [ask(http, detail(10)) for _ in range(2)]
     assert [a.status_code for a in answers] == [200, 200]
     assert calls == ["miss", "hit"]
-    events = [e for e in audit_events(server.store) if e["kind"] in KINDS]
+    events = [e for e in server.instance.events() if e["kind"] in KINDS]
     assert [e["details"]["receipt"] for e in events] == [
         a.json()["receipt"]["receipt_id"] for a in answers
     ]
@@ -69,7 +68,7 @@ def test_a_revocation_between_two_requests_is_refused_whatever_was_cached(
     http = server.client("ana")
     assert ask(http, aggregate()).status_code == 200
     assert cache(ask(http, aggregate())) == "hit"
-    server.directory.remove_membership(server.builder, "project-1", ana)
+    server.actor(server.builder).remove_membership("project-1", ana)
     refused = ask(http, aggregate())
     assert refused.status_code in {401, 403, 404}, refused.text
     assert "rows" not in refused.text
@@ -79,7 +78,7 @@ def test_a_lost_group_misses_and_answers_for_the_permissions_now(server: Server)
     ana = server.author("ana", "finance")
     http = server.client("ana")
     before = ask(http, detail(10))
-    server.directory.remove_group_member(server.builder, "project-1", "finance", ana)
+    server.actor(server.builder).remove_group_member("project-1", "finance", ana)
     after = ask(server.client("ana"), detail(10))  # the change ended the session: sign in
     assert after.status_code == 200, after.text
     assert cache(after) == "miss"

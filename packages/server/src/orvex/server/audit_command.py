@@ -13,13 +13,11 @@ rotate its signing key (#437).
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 from typing import TextIO
 
-from orvex.access.audit import AuditLog
-from orvex.access.audit import signing_key as keys
-from orvex.access.errors import AccessError
+from orvex.contracts.access.client import AccessClient
+from orvex.contracts.access.errors import AccessError
 
 
 def add_audit_parser(actions: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -33,15 +31,15 @@ def add_audit_parser(actions: argparse._SubParsersAction[argparse.ArgumentParser
 
 def audit(
     command: argparse.Namespace,
-    log: AuditLog,
-    key: Path,
+    log: AccessClient,
     retention_days: int,
     out: TextIO,
     err: TextIO,
 ) -> int:
     try:
         if command.audit_action == "verify":
-            lines = command.anchors.read_text("ascii").splitlines() if command.anchors else []
+            shipped = command.anchors.read_text("ascii") if command.anchors else ""
+            lines = tuple(shipped.splitlines())
             print(f"audit log verified: {log.verify(lines)} events", file=out)
         elif command.audit_action == "retain":
             removed = log.retain(retention_days)
@@ -50,18 +48,7 @@ def audit(
             else:
                 print(f"audit retention: removed events {removed[0]} to {removed[1]}", file=out)
         else:
-            staged = key.with_name(key.name + ".new")
-            if staged.exists() or staged.is_symlink():
-                print(
-                    f"AUDIT_KEY_UNSAFE: {staged} exists: a rotation was interrupted. Move it into "
-                    "place if the log already uses it (verify says which), or remove it.",
-                    file=err,
-                )
-                return 1
-            new = keys.create(staged)
-            log.rotate(new)
-            os.replace(staged, key)
-            print(f"audit signing key rotated: {new.fingerprint}", file=out)
+            print(f"audit signing key rotated: {log.rotate_key()}", file=out)
     except AccessError as error:
         detail = " ".join(f"{name}={value}" for name, value in sorted(error.details.items()))
         print(f"{error.code}: {error.message} {detail}".rstrip(), file=err)

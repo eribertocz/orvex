@@ -42,7 +42,9 @@ from orvex.access.directory.names import (
 )
 from orvex.access.directory.records import NewUser, Role, User
 from orvex.access.directory.rules import refused
-from orvex.access.errors import (
+from orvex.access.storage.instants import instant, parsed
+from orvex.access.storage.store import Store, Transaction, UniqueViolation
+from orvex.contracts.access.errors import (
     GROUP_NOT_FOUND,
     USER_NAME_TAKEN,
     USER_NOT_FOUND,
@@ -50,8 +52,6 @@ from orvex.access.errors import (
     AccessError,
     not_found,
 )
-from orvex.access.storage.instants import instant, parsed
-from orvex.access.storage.store import Store, Transaction, UniqueViolation
 
 
 def new_user_id() -> str:

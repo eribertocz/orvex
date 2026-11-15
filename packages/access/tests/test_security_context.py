@@ -20,11 +20,12 @@ from orvex.access.context import (
 )
 from orvex.access.fixtures import FixtureContextProvider, Member, Request
 
-ROOT = Path(__file__).resolve().parents[3]
-EXAMPLES = ROOT / "contracts/security-context/v1/examples"
+HERE = Path(__file__).resolve().parent
+# The contract's examples, carried here (equal to `contracts/`: tests/contracts).
+EXAMPLES = HERE / "fixtures/security-context/examples"
 POLICIES = "sha256:" + "a" * 64
 SNAPSHOTS = {"security.user_zone": "41"}
-GOLDEN = ROOT / "tests/golden/security-context-fingerprint.sha256"
+GOLDEN = HERE / "fixtures/security-context-fingerprint.sha256"
 
 
 def provider() -> FixtureContextProvider:
@@ -56,13 +57,6 @@ def refused(document: dict[str, Any]) -> None:
 
 
 # --- the contract -------------------------------------------------------------------------------
-
-
-def test_the_package_reads_the_contracts_own_schema() -> None:
-    packaged = ROOT / "packages/access/src/orvex/access/security-context-v1.json"
-    assert (
-        packaged.read_bytes() == (ROOT / "contracts/security-context/v1/schema.json").read_bytes()
-    )
 
 
 @pytest.mark.parametrize("path", sorted((EXAMPLES / "valid").glob("*.json")), ids=lambda p: p.stem)
@@ -219,7 +213,7 @@ def test_the_fingerprint_is_equal_across_processes_and_hash_seeds() -> None:
             capture_output=True,
             text=True,
             env={**os.environ, "PYTHONHASHSEED": seed},
-            cwd=ROOT,
+            cwd=HERE,
             check=False,
         )
         assert run.returncode == 0, run.stderr[-2000:]

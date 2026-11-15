@@ -14,13 +14,13 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from orvex.access.oidc.failure import failed
 from orvex.access.storage.instants import instant, parsed
 from orvex.access.storage.store import Transaction
+from orvex.contracts.access.oidc_failure import failed
+from orvex.contracts.access.values import OIDC_BINDING_LIFETIME
 
-LIFETIME = timedelta(minutes=10)
 _BYTES = 32  # 256 bits each
 
 
@@ -52,7 +52,8 @@ def create(
 ) -> tuple[str, Binding]:
     """A new binding; returns the reference for the cookie, which is stored nowhere."""
     transaction.run(
-        "DELETE FROM oidc_bindings WHERE created_at < :old", old=instant(now - LIFETIME)
+        "DELETE FROM oidc_bindings WHERE created_at < :old",
+        old=instant(now - OIDC_BINDING_LIFETIME),
     )
     reference = _random()
     binding = Binding(provider, _random(), _random(), _random(), refreshing)
@@ -104,7 +105,8 @@ def take(transaction: Transaction, reference: str | None) -> Taken | None:
 def checked(taken: Taken | None, provider: str, state: str | None, now: datetime) -> Binding:
     """`OIDC_FAILED` (`state`) unless the binding existed, is under 10 minutes old, is for this
     provider, and `state` matches it in constant time."""
-    if taken is None or taken.binding.provider != provider or now >= taken.created_at + LIFETIME:
+    expired = taken is None or now >= taken.created_at + OIDC_BINDING_LIFETIME
+    if expired or taken is None or taken.binding.provider != provider:
         raise failed("state")
     expected = taken.binding.state.encode()
     if not isinstance(state, str) or not hmac.compare_digest(state.encode(), expected):

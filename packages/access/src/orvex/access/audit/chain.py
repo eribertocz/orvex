@@ -18,7 +18,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from orvex.access.audit.signing_key import fingerprint, verifies
-from orvex.access.errors import AUDIT_CHAIN_BROKEN, AUDIT_CHECKPOINT_INVALID, AccessError
+from orvex.contracts.access.errors import AUDIT_CHAIN_BROKEN, AUDIT_CHECKPOINT_INVALID, AccessError
 
 ZERO = "0" * 64
 

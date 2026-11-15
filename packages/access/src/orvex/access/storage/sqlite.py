@@ -23,7 +23,6 @@ from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 
-from orvex.access.errors import ACCESS_STORE_UNSAFE, AccessError
 from orvex.access.storage.store import (
     Row,
     Transaction,
@@ -31,6 +30,7 @@ from orvex.access.storage.store import (
     UniqueViolation,
     UnreadableValue,
 )
+from orvex.contracts.access.errors import ACCESS_STORE_UNSAFE, AccessError
 
 BUSY_TIMEOUT_S = 10.0
 

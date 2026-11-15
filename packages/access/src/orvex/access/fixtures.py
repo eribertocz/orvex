@@ -12,12 +12,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from orvex.access.context import (
-    InvalidContext,
     SecurityContext,
     normalize_list,
     permission_fingerprint,
     read_context,
 )
+from orvex.contracts.access.errors import InvalidContext
 
 
 @dataclass(frozen=True, slots=True)

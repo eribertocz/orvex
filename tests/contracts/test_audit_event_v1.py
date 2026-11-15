@@ -1,15 +1,13 @@
-"""#437 AC1, R1, AC6: the `audit-event` v1 contract has an example for every kind, the package
-reads the contract's own schema, the canonical form is RFC 8785 for the values an event holds,
-and a planted secret or value never fits a `details` schema."""
+"""#437 AC1, R1, AC6: the `audit-event` v1 contract has an example for every kind, the access
+package ships the contract's own schema, and a planted secret or value never fits a `details`
+schema; the RFC 8785 vectors the access tests carry are the vendored ones."""
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator
-from orvex.access.audit.canonical import NotInProfile, canonical
 
 from tools.repository import REPOSITORY_ROOT
 
@@ -62,29 +60,10 @@ def test_r1_an_unknown_kind_is_refused_by_the_contract() -> None:
     assert list(Draft202012Validator(SCHEMA).iter_errors(event))
 
 
-def vendored_pairs() -> list[tuple[str, Path, Path]]:
-    return [
-        (path.name, path, VENDOR / "output" / path.name)
-        for path in sorted((VENDOR / "input").glob("*.json"))
-    ]
-
-
-def test_the_canonical_form_is_rfc_8785_for_every_value_an_event_holds() -> None:
-    """Every vendored RFC 8785 case within the profile gives the upstream bytes exactly; every
-    case outside it (floats, large numbers) is refused, never approximated."""
-    within = 0
-    for _, given, expected in vendored_pairs():
-        document = json.loads(given.read_text("utf-8"))
-        try:
-            produced = canonical(document)
-        except NotInProfile:
-            continue
-        assert produced == expected.read_bytes().rstrip(b"\n"), given.name
-        within += 1
-    assert within == 2  # arrays and unicode; the others hold floats or non-ASCII names
-
-
-@pytest.mark.parametrize("value", [0.5, 2**53, "\ud800", {"é": 1}, b"bytes"])
-def test_a_value_outside_the_profile_is_refused(value: object) -> None:
-    with pytest.raises(NotInProfile):
-        canonical({"value": value})
+def test_the_access_tests_carry_the_vendored_rfc_8785_vectors() -> None:
+    carried = REPOSITORY_ROOT / "packages/access/tests/fixtures/json-canonicalization"
+    for part in ("input", "output"):
+        names = sorted(path.name for path in (VENDOR / part).glob("*.json"))
+        assert sorted(path.name for path in (carried / part).glob("*.json")) == names
+        for name in names:
+            assert (carried / part / name).read_bytes() == (VENDOR / part / name).read_bytes()

@@ -1,0 +1,1 @@
+{'type': 'integer', 'value': '0.5'} is not valid under any of the give

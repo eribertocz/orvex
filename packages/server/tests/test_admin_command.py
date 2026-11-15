@@ -11,15 +11,16 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from orvex.access.audit import open_audit_log
-from orvex.access.authentication.service import SignIn
-from orvex.server.access_store import access_store, postgres_variables
+from orvex.contracts.access.client import AccessClient, unauthenticated
+from orvex.server.access_configuration import access_configuration
+from orvex.server.access_store import postgres_variables
+from orvex.server.assembly import access_bindings
 from orvex.server.audit_settings import audit_settings
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.instance import home_variable
 
-from tests.support.access_directory import access_role, audit_events, postgres_connection
+from tests.support.postgres_roles import postgres_location
 
 IDENTITY = load_identity()
 PREFIX = IDENTITY.slug.upper().replace("-", "_")
@@ -35,10 +36,10 @@ def instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def server_instance(instance: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    with access_role(*postgres_connection()) as (connection, password):
+    with postgres_location() as location:
         variable, password_variable = postgres_variables(IDENTITY)
-        monkeypatch.setenv(variable, connection)
-        monkeypatch.setenv(password_variable, password)
+        monkeypatch.setenv(variable, location.connection)
+        monkeypatch.setenv(password_variable, location.password)
         yield instance
 
 
@@ -114,12 +115,14 @@ def test_the_first_administrator_signs_in_once_with_the_printed_temporary_passwo
     out = capsys.readouterr().out
     (line,) = [line for line in out.splitlines() if line.startswith("temporary password")]
     temporary = line.rsplit(" ", 1)[1]
-    store = access_store("server", IDENTITY, server_instance, os.environ)
+    settings = audit_settings(IDENTITY, server_instance, os.environ)
+    configuration = access_configuration(
+        "server", IDENTITY, server_instance, os.environ, settings, with_oidc=False
+    )
+    opened = AccessClient(*access_bindings(IDENTITY), unauthenticated("t")).open(configuration)
     try:
-        settings = audit_settings(IDENTITY, server_instance, os.environ)
-        log = open_audit_log(store, settings.key, settings.anchors)
-        signed = SignIn(store, log).login("root", temporary, "127.0.0.1")
+        signed = opened.login("root", temporary, "127.0.0.1")
         assert signed.password_change_only
-        assert temporary not in json.dumps(audit_events(store))
+        assert temporary not in json.dumps(opened.events())
     finally:
-        store.close()
+        opened.close()

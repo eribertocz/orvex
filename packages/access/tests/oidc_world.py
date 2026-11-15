@@ -10,9 +10,9 @@ from orvex.access.oidc.configuration import Configuration
 from orvex.access.oidc.identities import Identities
 from orvex.access.oidc.service import OidcSignIn
 
-from tests.support.access_directory import World
-from tests.support.oidc_provider import CLIENT_ID, ISSUER, SECRET, FakeFetcher, FakeProvider
-from tests.support.sign_in import Clock
+from .access_directory import World
+from .oidc_provider import CLIENT_ID, ISSUER, SECRET, FakeFetcher, FakeProvider
+from .sign_in import Clock
 
 ORIGIN = "https://bi.example.com"
 

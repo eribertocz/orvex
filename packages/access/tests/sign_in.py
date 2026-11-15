@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 from orvex.access.authentication.service import SignIn
 
-from tests.support.access_directory import World
+from .access_directory import World
 
 ADDRESS = "203.0.113.7"
 PASSWORD = "correct horse battery"

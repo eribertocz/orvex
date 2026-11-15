@@ -7,7 +7,7 @@ import pytest
 from orvex.access.directory import rules
 from orvex.access.directory.records import Role
 from orvex.access.directory.rules import Caller
-from orvex.access.errors import ACCESS_FORBIDDEN, LAST_ADMINISTRATOR, LAST_BUILDER
+from orvex.contracts.access.errors import ACCESS_FORBIDDEN, LAST_ADMINISTRATOR, LAST_BUILDER
 
 ADMIN = Caller("root", active=True, administrator=True, role=None)
 BUILDER = Caller("bea", active=True, administrator=False, role="builder")

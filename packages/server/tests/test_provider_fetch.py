@@ -19,27 +19,22 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
-from orvex.access.errors import OIDC_FAILED, AccessError
-from orvex.access.oidc.configuration import Provider, parsed
+from orvex.contracts.access.errors import OIDC_FAILED, AccessError
+from orvex.contracts.access.values import ProviderTarget
 from orvex.server.provider_fetch import ProviderFetch, allowed
 
 HOST = "idp.test"
 PUBLIC = "93.184.215.14"
 
 
-def provider(**settings: object) -> Provider:
-    document = {
-        "providers": {
-            "corp": {
-                "issuer": f"https://{HOST}/realms/corp",
-                "client_id": "bi-client",
-                "client_secret_variable": "SECRET",
-                "algorithms": ["RS256"],
-                **settings,
-            }
-        }
-    }
-    return parsed(document, {"SECRET": "s3cret"}).provider("corp")
+def provider(
+    *,
+    internal: bool = False,
+    internal_ranges: tuple[str, ...] = (),
+    endpoint_hosts: tuple[str, ...] = (),
+) -> ProviderTarget:
+    """The provider `corp` as the fetcher sees it (`orvex.contracts.access.fetcher`)."""
+    return ProviderTarget("corp", HOST, endpoint_hosts, internal, internal_ranges)
 
 
 def _certificates(directory: Path) -> tuple[Path, Path, Path]:
@@ -218,7 +213,7 @@ def test_a_redirect_is_not_followed(server: tuple[int, ssl.SSLContext]) -> None:
 def test_another_host_is_refused_unless_listed(server: tuple[int, ssl.SSLContext]) -> None:
     network(lambda: fetch(server, [PUBLIC]).get(provider(), "https://elsewhere.test/ok"))
     network(lambda: fetch(server, [PUBLIC]).get(provider(), f"http://{HOST}/ok"))
-    listed = provider(endpoint_hosts=["elsewhere.test"])
+    listed = provider(endpoint_hosts=("elsewhere.test",))
     with pytest.raises(AccessError):  # listed, so tried: the certificate is for idp.test only
         fetch(server, [PUBLIC]).get(listed, "https://elsewhere.test/ok")
 
@@ -253,7 +248,7 @@ def test_a_slow_response_is_cut_off_at_the_deadline(server: tuple[int, ssl.SSLCo
 
 
 def test_a_certificate_for_another_host_is_refused(server: tuple[int, ssl.SSLContext]) -> None:
-    other = provider(issuer="https://other.test/realms/corp")
+    other = ProviderTarget("corp", "other.test", (), False, ())
     network(lambda: fetch(server, [PUBLIC]).get(other, "https://other.test/ok"))
 
 
@@ -281,7 +276,7 @@ def test_the_token_endpoint_gets_basic_authentication_and_its_errors(
 def test_an_internal_provider_reaches_its_range_and_nothing_else(
     server: tuple[int, ssl.SSLContext],
 ) -> None:
-    internal = provider(internal=True, internal_ranges=["10.20.0.0/16"])
+    internal = provider(internal=True, internal_ranges=("10.20.0.0/16",))
     assert fetch(server, ["10.20.1.2"]).get(internal, f"https://{HOST}/ok") == b'{"ok": true}'
     network(lambda: fetch(server, ["10.21.0.1"]).get(internal, f"https://{HOST}/ok"))
     network(lambda: fetch(server, ["127.0.0.1"]).get(internal, f"https://{HOST}/ok"))

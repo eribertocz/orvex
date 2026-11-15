@@ -1,9 +1,10 @@
-"""The one refusal of an OIDC step (domain, #439): `OIDC_FAILED` for the browser, with a reason
-from a closed list for the audit log alone."""
+"""The one refusal of an OIDC step (#439), shared by `access` and the provider fetcher the server
+composes it with: `OIDC_FAILED` for the browser, with a reason from a closed list for the audit
+log alone."""
 
 from __future__ import annotations
 
-from orvex.access.errors import OIDC_FAILED, AccessError
+from orvex.contracts.access.errors import OIDC_FAILED, AccessError
 
 REASONS = (
     "state",

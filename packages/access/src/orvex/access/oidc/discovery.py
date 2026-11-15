@@ -24,9 +24,9 @@ from urllib.parse import urlsplit
 
 from joserfc.errors import JoseError
 from joserfc.jwk import KeySet
-from orvex.access.errors import OIDC_NOT_CONFIGURED, AccessError
 from orvex.access.oidc.configuration import Provider
-from orvex.access.oidc.failure import failed
+from orvex.contracts.access.errors import OIDC_NOT_CONFIGURED, AccessError
+from orvex.contracts.access.oidc_failure import failed
 
 KEYS_REFRESH = timedelta(minutes=1)
 

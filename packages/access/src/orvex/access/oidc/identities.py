@@ -23,7 +23,10 @@ from orvex.access.audit.operation import audited
 from orvex.access.directory import rules
 from orvex.access.directory import statements as directory_sql
 from orvex.access.directory.rules import refused
-from orvex.access.errors import (
+from orvex.access.oidc.configuration import Configuration
+from orvex.access.storage.instants import instant
+from orvex.access.storage.store import Store, Transaction, UniqueViolation
+from orvex.contracts.access.errors import (
     IDENTITY_NOT_FOUND,
     IDENTITY_TAKEN,
     USER_NOT_FOUND,
@@ -31,9 +34,6 @@ from orvex.access.errors import (
     AccessError,
     not_found,
 )
-from orvex.access.oidc.configuration import Configuration
-from orvex.access.storage.instants import instant
-from orvex.access.storage.store import Store, Transaction, UniqueViolation
 
 
 def linked_user(transaction: Transaction, issuer: str, subject: str) -> str | None:

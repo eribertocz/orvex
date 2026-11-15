@@ -18,7 +18,7 @@ from typing import Any
 
 import duckdb
 import pytest
-from orvex.access.local import LocalRequest
+from orvex.contracts.access.values import LocalRequest
 from orvex.server import cli, existing_lakes, semantic_http
 from orvex.server.commands import project_lock
 from orvex.server.existing_lakes import ExistingLakes, memory_share
@@ -28,6 +28,7 @@ from orvex.server.project import load_project
 from orvex.store.errors import StoreError
 from orvex.store.existing_lake import ExistingLake
 
+from .access_instance import local_contexts
 from .test_lake_separation import other_device  # noqa: F401 - a fixture
 from .test_semantic_model import extension, model, ran
 
@@ -125,7 +126,7 @@ def opened(served: Served, memory: str = "256MB") -> Any:  # noqa: ANN401 - a co
 
 def ask(source: semantic_http.ProjectSource) -> semantic_http.Asked:
     semantic = semantic_http.Semantic(
-        source, semantic_http.local_context, semantic_http.session_settings()
+        source, semantic_http.local_context(local_contexts()), semantic_http.session_settings()
     )
     return semantic_http.ask(semantic, json.dumps(QUERY).encode(), LocalRequest("p", True))
 

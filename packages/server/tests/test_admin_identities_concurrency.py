@@ -13,9 +13,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.support.access_directory import audit_events
-
-from .admin_instance import ORIGIN, SAME, AdminInstance, admin_instance
+from .access_instance import ORIGIN
+from .admin_instance import SAME, AdminInstance, admin_instance
 
 A = "/api/v1/admin"
 
@@ -61,14 +60,14 @@ def test_an_identity_is_linked_and_unlinked_by_its_opaque_id(
         )
     assert root.delete(f"{A}/users/{ana}/identities/{link}", headers=SAME).status_code == 204
     assert not signs_in(instance, "sub-ana")
-    assert "sub-ana" not in str(audit_events(instance.store))
+    assert "sub-ana" not in str(instance.instance.events())
     assert "sub-ana" not in caplog.text  # nor in any log line
 
 
 def test_two_builders_removing_each_other_at_once_leave_one(instance: AdminInstance) -> None:
     first, second = instance.person("first"), instance.person("second")
-    instance.directory.add_membership(instance.admin, "project-1", first, "builder")
-    instance.directory.add_membership(first, "project-1", second, "builder")
+    instance.actor(instance.admin).set_membership("project-1", first, "builder")
+    instance.actor(first).set_membership("project-1", second, "builder")
     clients = {first: instance.client("first"), second: instance.client("second")}
     gate = threading.Barrier(2)
     answers: dict[str, int] = {}

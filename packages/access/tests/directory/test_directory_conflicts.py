@@ -8,11 +8,11 @@ from contextlib import AbstractContextManager
 
 import pytest
 from orvex.access.directory import Directory
-from orvex.access.errors import USER_NAME_TAKEN, AccessError
 from orvex.access.storage.retry import ATTEMPTS
 from orvex.access.storage.store import Transaction, TransientConflict, UniqueViolation
+from orvex.contracts.access.errors import USER_NAME_TAKEN, AccessError
 
-from tests.support.access_directory import AnyStore, World
+from ..access_directory import AnyStore, World
 
 
 class _GivenUp(AbstractContextManager[Transaction]):

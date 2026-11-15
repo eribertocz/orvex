@@ -9,10 +9,10 @@ from orvex.access.oidc.configuration import parsed
 from orvex.access.oidc.identities import Identities
 from orvex.access.oidc.service import OidcSignIn
 
-from tests.support.access_directory import World
-from tests.support.oidc_provider import FakeFetcher, FakeProvider
-from tests.support.oidc_world import ENVIRONMENT, ORIGIN, Oidc, document
-from tests.support.sign_in import Clock
+from ..access_directory import World
+from ..oidc_provider import FakeFetcher, FakeProvider
+from ..oidc_world import ENVIRONMENT, ORIGIN, Oidc, document
+from ..sign_in import Clock
 
 
 @pytest.fixture

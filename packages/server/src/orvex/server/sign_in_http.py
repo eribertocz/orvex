@@ -12,11 +12,10 @@ from datetime import timedelta
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-from orvex.access.authentication.service import SignIn
-from orvex.access.authentication.sessions import Session
-from orvex.access.authentication.settings import Settings
-from orvex.access.directory.records import User
-from orvex.access.errors import AccessError
+from orvex.contracts.access.client import AccessClient, signed_in, unauthenticated
+from orvex.contracts.access.errors import AccessError
+from orvex.contracts.access.values import Session, User
+from orvex.contracts.context import CallContext
 from orvex.contracts.http_api import v1
 from orvex.server.client_address import client_address
 from orvex.server.sign_in_errors import access_error_response, validation_response
@@ -60,9 +59,16 @@ def session_view(user: User, password_change_only: bool) -> v1.SessionView:
     )
 
 
-def mount_sign_in(app: FastAPI, sign_in: SignIn, settings: Settings, cookie: str) -> None:
-    """The routes above. The middleware has already checked a state change's origin, and that a
-    session route has a live session (`request.state.session`)."""
+def signed_in_caller(request: Request) -> CallContext:
+    """The caller of a request with a live session: its user, under the request's id."""
+    live: Session = request.state.session
+    return signed_in(live.user.id, request.state.request_id)
+
+
+def mount_sign_in(app: FastAPI, access: AccessClient, cookie: str) -> None:
+    """The routes above, on the access instance `access`. The middleware has already checked a
+    state change's origin, and that a session route has a live session
+    (`request.state.session`)."""
 
     def set_session(response: Response, session_id: str, lifetime: timedelta) -> None:
         set_session_cookie(response, cookie, session_id, lifetime)
@@ -74,14 +80,15 @@ def mount_sign_in(app: FastAPI, sign_in: SignIn, settings: Settings, cookie: str
             asked = v1.SignIn.model_validate_json(await request.body())
         except ValidationError as error:
             return validation_response(error, request_id)
-        current = await run_in_threadpool(settings.current)
+        caller = access.acting_for(unauthenticated(request_id))
+        current = await run_in_threadpool(caller.sign_in_settings)
         peer = request.client.host if request.client is not None else None
         address = client_address(
             peer, request.headers.getlist("x-forwarded-for"), current.trusted_proxies
         )
         try:
             signed = await run_in_threadpool(
-                sign_in.login,
+                caller.login,
                 asked.user_name,
                 asked.password,
                 address,
@@ -111,7 +118,8 @@ def mount_sign_in(app: FastAPI, sign_in: SignIn, settings: Settings, cookie: str
         if body.strip() != b"{}":
             return validation_response(None, request_id)
         try:
-            await run_in_threadpool(sign_in.logout, request.state.session_id)
+            caller = access.acting_for(signed_in_caller(request))
+            await run_in_threadpool(caller.logout, request.state.session_id)
         except AccessError as error:
             return access_error_response(error, request_id)
         response = Response(status_code=204)
@@ -125,14 +133,15 @@ def mount_sign_in(app: FastAPI, sign_in: SignIn, settings: Settings, cookie: str
             asked = v1.PasswordChange.model_validate_json(await request.body())
         except ValidationError as error:
             return validation_response(error, request_id)
-        current = await run_in_threadpool(settings.current)
+        caller = access.acting_for(signed_in_caller(request))
+        current = await run_in_threadpool(caller.sign_in_settings)
         peer = request.client.host if request.client is not None else None
         address = client_address(
             peer, request.headers.getlist("x-forwarded-for"), current.trusted_proxies
         )
         try:
             renewed = await run_in_threadpool(
-                sign_in.change_password,
+                caller.change_password,
                 request.state.session_id,
                 asked.current_password,
                 asked.new_password,

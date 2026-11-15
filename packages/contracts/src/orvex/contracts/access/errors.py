@@ -1,9 +1,13 @@
-"""The access module's refusals: one exception, each with a stable code.
+"""The refusals of the access interface contracts (#486 §2 item 3): one exception, each with a
+stable code, moved from `orvex.access.errors` with the same codes and the same details.
 
 The codes a caller of the HTTP API can receive are registered in `http-api` v1
 (`components.x-error-codes`); the administration routes that send them come in #446. The store's
 own refusals (`ACCESS_STORE_*`) and the audit log's (`AUDIT_*`, except `AUDIT_UNAVAILABLE`, which
 refuses the request it would have recorded) stop the server or a command, or report on the log.
+The contract's own two (`ACCESS_INSTANCE_UNKNOWN`, `CONTEXT_INVALID`) never reach a response
+either. `details` is a plain `dict` of its own, copied when the error is made, so an error
+crosses the serializing binding (#486 G5) unchanged.
 """
 
 from __future__ import annotations
@@ -66,6 +70,11 @@ AUDIT_CHAIN_BROKEN = "AUDIT_CHAIN_BROKEN"
 AUDIT_CHECKPOINT_INVALID = "AUDIT_CHECKPOINT_INVALID"
 # The signing key's file is missing, unsafe, or not the key the log knows.
 AUDIT_KEY_UNSAFE = "AUDIT_KEY_UNSAFE"
+# An instance handle the implementation did not open, or has closed (#486): nothing is done.
+ACCESS_INSTANCE_UNKNOWN = "ACCESS_INSTANCE_UNKNOWN"
+# A security context that breaks `security-context` v1 (`InvalidContext`): the caller gets no
+# access.
+CONTEXT_INVALID = "CONTEXT_INVALID"
 
 
 class AccessError(Exception):
@@ -75,7 +84,12 @@ class AccessError(Exception):
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
-        self.details: Mapping[str, str] = MappingProxyType(dict(details or {}))
+        self.details: dict[str, str] = dict(details or {})
+
+
+class InvalidContext(ValueError):
+    """A context that breaks `security-context` v1: the caller gets no access. Through the
+    contract it is the refusal `CONTEXT_INVALID`."""
 
 
 _NOT_FOUND = MappingProxyType(

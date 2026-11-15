@@ -13,11 +13,11 @@ from orvex.access.context import permission_fingerprint, read_context
 from orvex.access.directory import statements as sql
 from orvex.access.directory.attribute_sources import ProjectAttributes
 from orvex.access.directory.attributes import Attributes
-from orvex.access.errors import ACCESS_FORBIDDEN, AccessError
 from orvex.access.server_context import ServerContextProvider, ServerRequest, audience_of
 from orvex.access.storage.store import Transaction
+from orvex.contracts.access.errors import ACCESS_FORBIDDEN, AccessError
 
-from tests.support.access_directory import World
+from .access_directory import World
 
 P = "p1"
 POLICIES = "sha256:" + "a" * 64

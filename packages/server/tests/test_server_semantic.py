@@ -10,13 +10,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from orvex.access.audit import open_audit_log
-from orvex.access.authentication.service import SignIn
-from orvex.access.authentication.settings import Settings
-from orvex.access.directory import Bootstrap, Directory
-from orvex.access.directory.attributes import Attributes
-from orvex.access.directory.reads import DirectoryReads
-from orvex.access.storage import SqliteStore
+from orvex.contracts.access.client import AccessClient
 from orvex.server import semantic_http
 from orvex.server.admin_http import Administration
 from orvex.server.cli import served_project
@@ -32,7 +26,8 @@ from tests.support.semantic_http import (
     run,
     write,
 )
-from tests.support.sign_in import PASSWORD
+
+from .access_instance import PASSWORD, AccessInstance
 
 ORIGIN = "https://bi.example.com"
 SAME = {"Origin": ORIGIN, "Sec-Fetch-Site": "same-origin"}
@@ -70,64 +65,44 @@ class Server:
         project(tmp_path, policies)
         self.mapping({})
         run(tmp_path)
-        store = SqliteStore(tmp_path / "access.sqlite")
-        self.store = store
-        audit = open_audit_log(store, tmp_path / "audit.key", tmp_path / "anchors.log")
-        first = Bootstrap(store, tmp_path / "recovery.key", audit).create_administrator(
-            "root", "Root"
-        )
-        self.admin = first.id
-        signed = SignIn(store, audit).login("root", first.temporary_password, "192.0.2.9")
-        SignIn(store, audit).change_password(
-            signed.session_id, first.temporary_password, PASSWORD, "192.0.2.9"
-        )
-        self.directory = Directory(store, audit)
-        self.attributes = Attributes(store, audit)
-        settings = Settings(store, audit)
-        settings.change(self.admin, public_origin=ORIGIN)
-        self.settings = settings
-        self.sign_in = SignIn(store, audit)
-        built = semantic_http.server_context(store, audit)
+        self.instance = AccessInstance(tmp_path)
+        self.access = self.instance.access
+        self.admin = self.instance.admin_id
+        built = semantic_http.server_context(self.access)
         self.contexts: list[tuple[str, int]] = []  # (policy fingerprint, mapping snapshot)
 
         def context(request: object, policy_fingerprint: str, mapping_snapshot: int) -> Any:  # noqa: ANN401
             self.contexts.append((policy_fingerprint, mapping_snapshot))
             return built(request, policy_fingerprint, mapping_snapshot)
 
-        self.audit = audit
         semantic = semantic_http.Semantic(
             served_project(tmp_path, IDENTITY),
             context,
             semantic_http.session_settings(),
-            audit,  # server mode records the answers' events (#443, #445)
-            semantic_http.server_limits(store, audit),
-            identity=semantic_http.server_identity(store),
+            self.access,  # server mode records the answers' events (#443, #445)
+            semantic_http.server_limits(self.access),
+            identity=semantic_http.server_identity(self.access),
         )
         self.semantic = semantic
         self.app = create_server_app(
             VERSIONS,
-            self.sign_in,
-            settings,
+            self.access,
             IDENTITY.slug,
-            served=ServedProject("project-1", semantic, store),
+            served=ServedProject("project-1", semantic),
             administration=(
-                Administration(
-                    self.directory,
-                    DirectoryReads(store, audit),
-                    self.sign_in,
-                    self.attributes,
-                    None,
-                    frozenset({"project-1", "project-2"}),
-                    audit,
-                )
+                Administration(self.access, frozenset({"project-1", "project-2"}))
                 if administration
                 else None
             ),
         )
         self.builder = self.person("builder")
-        self.directory.add_membership(self.admin, "project-1", self.builder, "builder")
+        self.actor(self.admin).set_membership("project-1", self.builder, "builder")
         for group in ("finance", "auditors"):
-            self.directory.create_group(self.builder, "project-1", group)
+            self.actor(self.builder).create_group("project-1", group)
+
+    def actor(self, user: str) -> AccessClient:
+        """The access instance, for `user`."""
+        return self.access.as_actor(user)
 
     def mapping(self, tariffs: dict[str, list[str]]) -> None:
         """The managed-lake table `security.user_tariff`, as the next run writes it."""
@@ -143,12 +118,7 @@ class Server:
         )
 
     def person(self, name: str) -> str:
-        created = self.directory.create_user(self.admin, name, name.title())
-        first = self.sign_in.login(name, created.temporary_password, "192.0.2.9")
-        self.sign_in.change_password(
-            first.session_id, created.temporary_password, PASSWORD, "192.0.2.9"
-        )
-        return created.id
+        return self.instance.person(name)
 
     def client(self, name: str) -> TestClient:
         http = TestClient(self.app, base_url=ORIGIN)
@@ -170,11 +140,12 @@ class Server:
         self, name: str, *groups: str, tariff: str | None = "residential", role: str = "author"
     ) -> str:
         user = self.person(name)
-        self.directory.add_membership(self.builder, "project-1", user, role)
+        builder = self.actor(self.builder)
+        builder.set_membership("project-1", user, role)
         for group in groups:
-            self.directory.add_group_member(self.builder, "project-1", group, user)
+            builder.add_group_member("project-1", group, user)
         if tariff is not None:
-            self.attributes.set(self.builder, "project-1", user, "tariff", "text", tariff)
+            builder.set_attribute("project-1", user, "tariff", "text", tariff)
         return user
 
 
@@ -211,7 +182,7 @@ def test_a_next_page_under_changed_permissions_is_refused(server: Server) -> Non
     first = ask(http, detail(2))
     assert first.status_code == 200, first.text
     after = first.json()["result"]["page"]["next"]
-    server.directory.remove_group_member(server.builder, "project-1", "auditors", ana)
+    server.actor(server.builder).remove_group_member("project-1", "auditors", ana)
     ended = ask(http, detail(2, after))  # a group change ends the session itself (#438)
     assert (ended.status_code, ended.json()["error"]["code"]) == (401, "SESSION_EXPIRED")
     second = ask(server.client("ana"), detail(2, after))  # signed in again, the old cursor
@@ -224,7 +195,7 @@ def test_a_next_page_after_an_attribute_change_is_refused(server: Server) -> Non
     ana = server.author("ana", "auditors")
     http = server.client("ana")
     after = ask(http, detail(2)).json()["result"]["page"]["next"]
-    server.attributes.set(server.builder, "project-1", ana, "tariff", "text", "commercial")
+    server.actor(server.builder).set_attribute("project-1", ana, "tariff", "text", "commercial")
     assert ask(http, detail(2, after)).json()["error"]["code"] == "PAGE_CURSOR_INVALID"
 
 
@@ -257,7 +228,7 @@ def test_each_error_is_written_for_the_callers_audience(server: Server) -> None:
 
 def test_a_mistyped_attribute_gives_zero_rows_never_all(server: Server) -> None:
     ana = server.author("ana", "finance")
-    server.attributes.set(server.builder, "project-1", ana, "tariff", "integer", "5")
+    server.actor(server.builder).set_attribute("project-1", ana, "tariff", "integer", "5")
     answer = ask(server.client("ana"), detail(10))
     assert answer.status_code == 200, answer.text
     assert answer.json()["result"]["rows"] == []  # an integer never equals text: no row

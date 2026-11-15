@@ -13,13 +13,13 @@ from pathlib import Path
 
 import pg8000.native
 import pytest
-from orvex.access.errors import ACCESS_STORE_NEWER, ACCESS_STORE_UNSAFE, AccessError
 from orvex.access.storage import PostgresStore, SqliteStore, migrate, read_settings
 from orvex.access.storage.postgres import migrations_for
 from orvex.access.storage.sqlite import MIGRATIONS
+from orvex.contracts.access.errors import ACCESS_STORE_NEWER, ACCESS_STORE_UNSAFE, AccessError
 from pg8000.exceptions import DatabaseError
 
-from tests.support.access_directory import (
+from ..access_directory import (
     AnyStore,
     Backend,
     Raw,

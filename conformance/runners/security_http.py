@@ -24,13 +24,10 @@ from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
-from orvex.access.audit import open_audit_log
-from orvex.access.authentication.service import SignIn
-from orvex.access.authentication.settings import Settings
-from orvex.access.directory import Bootstrap, Directory
-from orvex.access.directory.attributes import Attributes
-from orvex.access.storage import SqliteStore
+from orvex.contracts.access.client import AccessClient, system
+from orvex.contracts.access.values import Configuration, SqliteLocation
 from orvex.server import semantic_http, semantic_model
+from orvex.server.assembly import access_bindings
 from orvex.server.identity import load_identity
 from orvex.server.server_app import ServedProject, create_server_app
 from orvex.server.versions import Versions
@@ -78,41 +75,41 @@ class Instance:
 
     def __init__(self, found: sf.Fixture, lake: Lake, folder: Path, groups: set[str]) -> None:
         self.found, self.lake = found, lake
-        store = SqliteStore(folder / "access.sqlite")
-        self.store = store
-        audit = open_audit_log(store, folder / "audit.key", folder / "anchors.log")
-        self.audit = audit
-        first = Bootstrap(store, folder / "recovery.key", audit).create_administrator(
-            "root", "Root"
-        )
-        self.admin = first.id
-        self.sign_in = SignIn(store, audit)
         self._ids: list[str] = []
-        self.directory = Directory(store, audit, new_id=self._next_id)
-        self.attributes = Attributes(store, audit)
-        settings = Settings(store, audit)
-        settings.change(self.admin, public_origin=ORIGIN)
-        self.builder = self.person("runner-builder")
+        identity = load_identity()
+        bindings = access_bindings(identity, new_id=self._next_id)
+        configuration = Configuration(
+            store=SqliteLocation(str(folder / "access.sqlite")),
+            audit_key=str(folder / "audit.key"),
+            audit_anchors=str(folder / "anchors.log"),
+            recovery_file=str(folder / "recovery.key"),
+        )
+        self.access = AccessClient(*bindings, system("security-cases")).open(configuration)
+        self._ids.append("runner-admin")
+        first = self.access.create_administrator("root", "Root")
+        self.admin = self.access.as_actor(first.user.id)
+        self.admin.change_sign_in_settings(public_origin=ORIGIN)
+        self.builder_id = self.person("runner-builder")
+        self.project = found.name
+        self.builder = self.admin.as_actor(self.builder_id, self.project)
         policies = found.policies(groups)
         model = semantic_model.SemanticModel(found.compiled, policies, 0, "model.ossie.json")
         semantic = semantic_http.Semantic(
             _Source(lake, model),
-            semantic_http.server_context(store, audit),
+            semantic_http.server_context(self.access),
             semantic_http.session_settings(),
-            audit,
-            semantic_http.server_limits(store, audit),
-            identity=semantic_http.server_identity(store),
+            self.access,
+            semantic_http.server_limits(self.access),
+            identity=semantic_http.server_identity(self.access),
         )
-        self.project = found.name
-        self.directory.add_membership(self.admin, self.project, self.builder, "builder")
+        self.admin.set_membership(self.project, self.builder_id, "builder")
         for group in sorted(groups):
-            self.directory.create_group(self.builder, self.project, group)
+            self.builder.create_group(self.project, group)
         self.app = create_server_app(
             VERSIONS,
-            self.sign_in,
-            settings,
-            load_identity().slug,
-            served=ServedProject(self.project, semantic, store),
+            self.access,
+            identity.slug,
+            served=ServedProject(self.project, semantic),
             run_jobs=lambda work: work(),  # at once: deterministic (precision 4)
         )
         self.clients: dict[str, TestClient] = {}
@@ -122,12 +119,15 @@ class Instance:
 
     def person(self, user_id: str) -> str:
         self._ids.append(user_id)
-        made = self.directory.create_user(self.admin, user_id, user_id)
-        signed = self.sign_in.login(user_id, made.temporary_password, "192.0.2.1")
-        self.sign_in.change_password(
+        made = self.admin.create_user(user_id, user_id)
+        signed = self.access.login(user_id, made.temporary_password, "192.0.2.1")
+        self.access.as_actor(made.user.id).change_password(
             signed.session_id, made.temporary_password, PASSWORD, "192.0.2.1"
         )
-        return made.id
+        return made.user.id
+
+    def close(self) -> None:
+        self.access.close()
 
     def caller(self, context: Mapping[str, Any]) -> TestClient:
         """The case's caller, provisioned once, signed in."""
@@ -135,13 +135,13 @@ class Instance:
         if user in self.clients:
             return self.clients[user]
         self.person(user)
-        self.directory.add_membership(self.builder, self.project, user, str(context["role"]))
+        self.builder.set_membership(self.project, user, str(context["role"]))
         for group in context["groups"]:
-            self.directory.add_group_member(self.builder, self.project, group, user)
+            self.builder.add_group_member(self.project, group, user)
         for name, attribute in dict(context["attributes"]).items():
             kind = str(attribute["type"])
             value = attribute["values"] if kind == "list" else attribute["value"]
-            self.attributes.set(self.builder, self.project, user, name, kind, value)
+            self.builder.set_attribute(self.project, user, name, kind, value)
         http = TestClient(self.app, base_url=ORIGIN)
         signed = http.post(
             "/api/v1/auth/login", json={"user_name": user, "password": PASSWORD}, headers=SAME
@@ -156,8 +156,8 @@ class Instance:
             managed_delete(self.lake, str(change["table"]), change["row"])
             return
         if change["op"] == "remove_group":
-            self.directory.remove_group_member(
-                self.builder, self.project, str(change["group"]), str(change["user"])
+            self.builder.remove_group_member(
+                self.project, str(change["group"]), str(change["user"])
             )
             return
         raise RuntimeError(f"no change {change['op']!r} over HTTP")
@@ -190,41 +190,49 @@ def run(
     groups = {g for step in steps for g in step["caller"]["groups"]}
     with sf.managed_lake(found) as lake, tempfile.TemporaryDirectory() as folder:
         instance = Instance(found, lake, Path(folder), groups)
-        answers: list[Received] = []
-        last_body: dict[str, Any] | None = None
-        last_next: str | None = None
-        job: str | None = None
-        for step in steps:
-            if changes and step.get("change") is not None:
-                instance.change(step["change"])
-            http = instance.caller(step["caller"])
-            kind = step["request"]["kind"]
-            if kind == "semantic-query":
-                last_body = dict(step["request"]["body"])
-                answer = http.post(QUERY, json=last_body, headers=SAME)
-                got = received(answer)
-                last_next = answer.json().get("result", {}).get("page", {}).get("next")
-            elif kind == "next-page":
-                if last_body is None or last_next is None:
-                    raise RuntimeError("a next page with no page before it")
-                body = {**last_body, "page": {**last_body["page"], "after": last_next}}
-                got = received(http.post(QUERY, json=body, headers=SAME))
-            elif kind == "async-start":
-                started = http.post(
-                    QUERY,
-                    json=step["request"]["body"],
-                    headers={**SAME, "Prefer": "respond-async"},
-                )
-                if started.status_code != 202:
-                    got = received(started)
-                else:
-                    job = str(started.json()["job"])
-                    got = Received(None, [], [], None, [started.text])
-            elif kind == "async-result":
-                if job is None:
-                    raise RuntimeError("an asynchronous result with no job started")
-                got = received(http.get(JOBS + job))
+        try:
+            return _steps(instance, steps, changes)
+        finally:
+            instance.close()
+
+
+def _steps(instance: Instance, steps: list[Any], changes: bool) -> list[Received]:
+    """Every step's answer, asked of `instance` in order; `changes` as in `run`."""
+    answers: list[Received] = []
+    last_body: dict[str, Any] | None = None
+    last_next: str | None = None
+    job: str | None = None
+    for step in steps:
+        if changes and step.get("change") is not None:
+            instance.change(step["change"])
+        http = instance.caller(step["caller"])
+        kind = step["request"]["kind"]
+        if kind == "semantic-query":
+            last_body = dict(step["request"]["body"])
+            answer = http.post(QUERY, json=last_body, headers=SAME)
+            got = received(answer)
+            last_next = answer.json().get("result", {}).get("page", {}).get("next")
+        elif kind == "next-page":
+            if last_body is None or last_next is None:
+                raise RuntimeError("a next page with no page before it")
+            body = {**last_body, "page": {**last_body["page"], "after": last_next}}
+            got = received(http.post(QUERY, json=body, headers=SAME))
+        elif kind == "async-start":
+            started = http.post(
+                QUERY,
+                json=step["request"]["body"],
+                headers={**SAME, "Prefer": "respond-async"},
+            )
+            if started.status_code != 202:
+                got = received(started)
             else:
-                raise RuntimeError(f"no step {kind!r} over HTTP")
-            answers.append(got)
-        return answers
+                job = str(started.json()["job"])
+                got = Received(None, [], [], None, [started.text])
+        elif kind == "async-result":
+            if job is None:
+                raise RuntimeError("an asynchronous result with no job started")
+            got = received(http.get(JOBS + job))
+        else:
+            raise RuntimeError(f"no step {kind!r} over HTTP")
+        answers.append(got)
+    return answers

@@ -10,9 +10,9 @@ from collections.abc import Callable
 import pytest
 from orvex.access.directory.attribute_sources import UnreadableAttribute, stored_attributes
 from orvex.access.directory.attributes import Attributes
-from orvex.access.errors import ACCESS_FORBIDDEN, VALIDATION_FAILED, AccessError
+from orvex.contracts.access.errors import ACCESS_FORBIDDEN, VALIDATION_FAILED, AccessError
 
-from tests.support.access_directory import World
+from ..access_directory import World
 
 P = "p1"
 

@@ -1,5 +1,6 @@
-"""The server's own requests to an OIDC provider (#439), under SSRF rules: the `Fetcher` that
-`orvex.access.oidc` reads discovery documents, keys and tokens through.
+"""The server's own requests to an OIDC provider (#439), under SSRF rules: the provider fetcher
+(`orvex.contracts.access.fetcher`) the access implementation is composed with, which it reads
+discovery documents, keys and tokens through.
 
 - Only `https`, with the certificate and host name verified. No redirect is followed, and no
   environment proxy is used.
@@ -37,8 +38,8 @@ import time
 from collections.abc import Callable, Mapping
 from urllib.parse import quote, urlencode, urlsplit
 
-from orvex.access.oidc.configuration import Provider
-from orvex.access.oidc.failure import failed
+from orvex.contracts.access.oidc_failure import failed
+from orvex.contracts.access.values import ProviderTarget
 
 TIMEOUT = 5.0
 LIMIT = 1024 * 1024
@@ -78,7 +79,7 @@ def _embedded(address: ipaddress.IPv6Address) -> list[ipaddress.IPv4Address]:
     return found
 
 
-def allowed(address: Address, provider: Provider) -> bool:
+def allowed(address: Address, provider: ProviderTarget) -> bool:
     """Whether a provider's request may reach `address`; an IPv6 address that carries an IPv4
     one is allowed only if that one is too."""
     if (
@@ -96,7 +97,7 @@ def allowed(address: Address, provider: Provider) -> bool:
         return True
     return provider.internal and any(
         address.version == network.version and address in network
-        for network in provider.internal_ranges
+        for network in map(ipaddress.ip_network, provider.internal_ranges)
     )
 
 
@@ -155,11 +156,11 @@ class ProviderFetch:
         self._timeout = timeout
         self._limit = limit
 
-    def get(self, provider: Provider, url: str) -> bytes:
+    def get(self, provider: ProviderTarget, url: str) -> bytes:
         return self._request(provider, "GET", url, None, {})
 
     def post_form(
-        self, provider: Provider, url: str, form: Mapping[str, str], basic: tuple[str, str]
+        self, provider: ProviderTarget, url: str, form: Mapping[str, str], basic: tuple[str, str]
     ) -> bytes:
         user, secret = (quote(part, safe="") for part in basic)  # RFC 6749 §2.3.1
         credentials = base64.b64encode(f"{user}:{secret}".encode()).decode()
@@ -171,7 +172,7 @@ class ProviderFetch:
 
     def _request(
         self,
-        provider: Provider,
+        provider: ProviderTarget,
         method: str,
         url: str,
         body: bytes | None,
@@ -219,7 +220,9 @@ class ProviderFetch:
             raise failed("token_exchange" if method == "POST" and status < 500 else "network")
         return content
 
-    def _checked_address(self, provider: Provider, host: str, port: int, deadline: float) -> str:
+    def _checked_address(
+        self, provider: ProviderTarget, host: str, port: int, deadline: float
+    ) -> str:
         """Resolve once, within the deadline, and check every address."""
         worker = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
