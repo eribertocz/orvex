@@ -1,7 +1,8 @@
 """Consumer boundaries (#486 G2): `server`, the conformance runners, `tools/` and the repository
-tests import only `<namespace>.contracts`; `server/assembly.py` may also import the modules'
-`api` packages, and the server's own files the server. Tests (`tests/`, a package's `tests/`)
-may also import the shared test helpers, `<namespace>.testing`; nothing else may.
+tests import only `<namespace>.contracts` and, from the server, its composition root
+`server.assembly`; `server/assembly.py` may also import the modules' `api` packages, and the
+server's own files the server. Tests (`tests/`, a package's `tests/`) may also import the shared
+test helpers, `<namespace>.testing`; nothing else may.
 
 CONSUMER_BOUNDARY_VIOLATION: any other import of a module, as `tools/checks/imports.py` reads
 it (static, or dynamic with a constant name). In report mode until #486 step 7:
@@ -29,6 +30,8 @@ AREAS = {
 }
 SHARED = "contracts"
 PUBLIC = "api"
+COMPOSER = "server"
+ROOT = "assembly"  # the composition root, the server's one face to the other consumers
 
 
 def assembly(namespace: str) -> str:
@@ -58,7 +61,7 @@ def consumer_findings(tree: ast.AST, namespace: str, relative: str) -> list[Find
         allowed = (
             target == SHARED
             or (target == TESTING and _is_test(relative))
-            or (area == "server" and target == "server")
+            or (target == COMPOSER and (area == "server" or parts[2:3] in ([], [ROOT])))
             or (relative == assembly(namespace) and len(parts) > 2 and parts[2] == PUBLIC)
         )
         if allowed or (target, line) in reported:

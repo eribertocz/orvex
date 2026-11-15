@@ -31,6 +31,10 @@ PLANTED = {
     "internal in assembly": (ASSEMBLY, "from orvex.store.lake import x\n"),
     "test helpers in a runner": ("conformance/runners/y.py", "import orvex.testing.environment\n"),
     "test helpers in a tool": ("tools/z.py", "from orvex.testing.fixtures import frozen\n"),
+    "a server internal beside the assembly": (
+        "tests/x/test_w.py",
+        "from orvex.server.assembly import provider\nfrom orvex.server import cli\n",
+    ),
 }
 
 
@@ -66,6 +70,15 @@ ALLOWED = {
         "packages/server/tests/t.py",
         "from orvex.testing import azurite\n",
     ),
+    "the composition root from a test": (
+        "tests/x/t.py",
+        "from orvex.server.assembly import provider\n",
+    ),
+    "the composition root from a runner": (
+        "conformance/runners/x.py",
+        "import orvex.server.assembly\n",
+    ),
+    "the composition root from a tool": ("tools/x.py", "from orvex.server import assembly\n"),
 }
 
 
@@ -93,7 +106,7 @@ def test_the_scan_covers_the_consumers_and_leaves_the_modules_to_the_module_rule
     assert "server 4" in summary
     assert "runners 2" in summary
     assert "tools 3" in summary
-    assert "tests 2" in summary
+    assert "tests 3" in summary
 
 
 def test_report_mode_prints_every_violation_and_does_not_fail(
