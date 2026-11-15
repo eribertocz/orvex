@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 MODEL = "docs/architecture/threat-model.md"
@@ -24,31 +25,65 @@ CATEGORIES = (
 STALE = "THREAT_MODEL_STALE"
 INVALID = "THREAT_MODEL_INVALID"
 ROW = re.compile(r"^\| (TM-[A-Z]+-[0-9]+) \|(.*)\|\s*$")
+HEADER = re.compile(r"^\| ID \| Category \| Threat \| Rule \| Verification \|\s*$")
+SEPARATOR = re.compile(r"^\|(?:-+\|)+\s*$")
 SECTION = re.compile(r"^## Surface: (\S+)\s*$")
 ADR = re.compile(r"^ADR-([0-9]{4})$")
 SECURITY = re.compile(r"^security\.md §([0-9]+(?:\.[0-9]+)*)$")
 LAW = re.compile(r"^laws\.md Law ([0-9]+)$")
 ROADMAP = re.compile(r"^roadmap:(P[0-9]+-[0-9]+[a-z]?)$")
 REASONED = re.compile(r"^(gap|n/a): \S")
+# An OpenAPI path key at indent 2. The key ends at its last colon before the end of the line or a
+# space, so a colon inside the path (`/x:run`) and an inline value (`/a: {...}`) are both read.
+PATH_KEY = re.compile(r"^  (['\"]?)(/\S*?)\1:(?:\s.*)?$")
+# The only places a Verification may point to: test files, and security scenario files or folders.
+TEST_FILES = re.compile(r"^(?:tests/|packages/[a-z]+/tests/)\S+$")
+SCENARIOS = "conformance/security/scenarios/"
 
 
-def http_paths(root: Path) -> set[str]:
-    """The keys of the OpenAPI document's top-level `paths` mapping, read without a YAML parser:
-    the two-space-indented keys between `paths:` and the next top-level key."""
+@dataclass(frozen=True)
+class References:
+    """What rows may cite, read once: security.md section numbers, laws and roadmap IDs."""
+
+    security: frozenset[str]
+    laws: frozenset[str]
+    roadmap: frozenset[str]
+
+
+def strip_comment(line: str) -> str:
+    """A YAML line without its comment (a `#` at the start of the line or after a space)."""
+    return re.sub(r"(^|\s)#.*$", "", line).rstrip()
+
+
+def http_paths(root: Path) -> tuple[set[str], list[str]]:
+    """The keys of the OpenAPI document's top-level `paths` mapping, read without a YAML parser,
+    and a problem for every indent-2 line inside it that is not a path key (fails closed)."""
     paths: set[str] = set()
-    inside = False
-    for line in (root / OPENAPI).read_text(encoding="utf-8").splitlines():
-        if re.match(r"^\S", line):
-            inside = line.rstrip() == "paths:"
+    problems: list[str] = []
+    inside = found_block = False
+    text = (root / OPENAPI).read_text(encoding="utf-8")
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = strip_comment(raw)
+        if not line:
             continue
-        if inside and (found := re.match(r"^  (['\"]?)(/[^'\":]*)\1:\s*$", line)):
-            paths.add(found.group(2))
-    return paths
+        if re.match(r"^\S", line):
+            inside = line == "paths:"
+            found_block = found_block or inside
+            continue
+        if not inside or not re.match(r"^  \S", line):
+            continue
+        if key := PATH_KEY.match(line):
+            paths.add(key.group(2))
+        else:
+            problems.append(f"{INVALID} {OPENAPI}:{number}: {raw.strip()!r} is not a path key")
+    if not found_block or not paths:
+        problems.append(f"{INVALID} {OPENAPI}:1: no top-level `paths:` mapping with a path")
+    return paths, problems
 
 
-def present(root: Path) -> set[tuple[str, str]]:
+def present(root: Path, paths: set[str]) -> set[tuple[str, str]]:
     """Every item the inventory must list: (kind, name)."""
-    items = {("http", path) for path in http_paths(root)}
+    items = {("http", path) for path in paths}
     items |= {("package", d.name) for d in (root / "packages").iterdir() if d.is_dir()}
     items |= {
         ("contract", d.name)
@@ -58,43 +93,59 @@ def present(root: Path) -> set[tuple[str, str]]:
     return items
 
 
-def headings(path: Path, pattern: str) -> set[str]:
-    return set(re.findall(pattern, path.read_text(encoding="utf-8"), re.MULTILINE))
+def references(root: Path) -> References:
+    """The headings, laws and roadmap IDs rows may cite, each document read once."""
+
+    def found(path: str, pattern: str) -> frozenset[str]:
+        text = (root / path).read_text(encoding="utf-8")
+        return frozenset(re.findall(pattern, text, re.MULTILINE))
+
+    return References(
+        security=found("docs/architecture/security.md", r"^#+ ([0-9]+(?:\.[0-9]+)*)\.? "),
+        laws=found("docs/product/laws.md", r"^### Law ([0-9]+) "),
+        roadmap=found("docs/roadmap.md", r"^\| (P[0-9]+-[0-9]+[a-z]?) \|"),
+    )
 
 
-def rule_problem(root: Path, rule: str) -> str | None:
+def rule_problem(root: Path, known: References, rule: str) -> str | None:
     if found := SECURITY.match(rule):
-        known = headings(root / "docs/architecture/security.md", r"^#+ ([0-9]+(?:\.[0-9]+)*)\.? ")
-        return None if found.group(1) in known else f"Rule {rule!r} names no security.md heading"
+        if found.group(1) in known.security:
+            return None
+        return f"Rule {rule!r} names no security.md heading"
     if found := ADR.match(rule):
-        exists = any((root / "docs/adr").glob(f"{found.group(1)}-*.md"))
-        return None if exists else f"Rule {rule!r} names no ADR file"
+        if any((root / "docs/adr").glob(f"{found.group(1)}-*.md")):
+            return None
+        return f"Rule {rule!r} names no ADR file"
     if found := LAW.match(rule):
-        known = headings(root / "docs/product/laws.md", r"^### Law ([0-9]+) ")
-        return None if found.group(1) in known else f"Rule {rule!r} names no law"
+        return None if found.group(1) in known.laws else f"Rule {rule!r} names no law"
     return f"Rule {rule!r} is not a security.md section, an ADR or a law"
 
 
-def verification_problem(root: Path, value: str, alone: bool) -> str | None:
+def verification_problem(root: Path, known: References, value: str, alone: bool) -> str | None:
     if found := ROADMAP.match(value):
-        known = headings(root / "docs/roadmap.md", r"^\| (P[0-9]+-[0-9]+[a-z]?) \|")
-        return None if found.group(1) in known else f"Verification {value!r} names no roadmap ID"
+        if found.group(1) in known.roadmap:
+            return None
+        return f"Verification {value!r} names no roadmap ID"
     if REASONED.match(value):
         if value.startswith("n/a") and not alone:
             return f"Verification {value!r}: n/a only on a category with no other row"
         return None
     if value.startswith(("gap:", "n/a:", "roadmap:")):
         return f"Verification {value!r} has no reason or no valid ID"
-    resolved = (root / value).resolve()
-    if root.resolve() in resolved.parents and resolved.exists():
+    target = (root / value).resolve()
+    inside = root.resolve() in target.parents
+    if inside and TEST_FILES.match(value) and target.is_file():
         return None
-    return f"Verification {value!r} is not an existing path, a roadmap ID, a gap or n/a"
+    if inside and value.startswith(SCENARIOS) and target.exists():
+        return None
+    return f"Verification {value!r} is not a test file, a scenario path, a roadmap ID, a gap or n/a"
 
 
 def check(root: Path) -> list[str]:
     """Every problem of the model at `root`, each `<CODE> <file>:<line>: <why>`."""
     lines = (root / MODEL).read_text(encoding="utf-8").splitlines()
-    problems: list[str] = []
+    paths, problems = http_paths(root)
+    known = references(root)
 
     def report(code: str, number: int, why: str) -> None:
         problems.append(f"{code} {MODEL}:{number}: {why}")
@@ -103,10 +154,11 @@ def check(root: Path) -> list[str]:
     sections: dict[str, int] = {}
     rows: dict[str, list[tuple[int, str, str, str, str]]] = {}
     fence = False
+    fence_line = 0
     current: str | None = None
     for number, line in enumerate(lines, start=1):
         if line.strip() == "```inventory":
-            fence = True
+            fence, fence_line = True, number
             continue
         if fence:
             if line.strip() == "```":
@@ -116,36 +168,51 @@ def check(root: Path) -> list[str]:
             if len(parts) < 3 or parts[0] not in {"http", "package", "contract"}:
                 report(INVALID, number, f"inventory line {line!r} is not '<kind> <name> <surface>'")
                 continue
+            if (parts[0], parts[1]) in inventory:
+                report(INVALID, number, f"{parts[0]} {parts[1]} is listed twice in the inventory")
+                continue
             inventory[(parts[0], parts[1])] = (number, parts[2])
             continue
         if found := SECTION.match(line):
             current = found.group(1)
+            if current in sections:
+                report(INVALID, number, f"surface {current} has a second section")
+                continue
             sections[current] = number
             rows[current] = []
             continue
-        if found := ROW.match(line):
-            cells = [cell.strip() for cell in found.group(2).split("|")]
-            if current is None or len(cells) != 4:
-                report(
-                    INVALID, number, f"row {found.group(1)} is outside a surface or not 5 columns"
-                )
-                continue
-            rows[current].append((number, found.group(1), cells[0], cells[2], cells[3]))
+        row = ROW.match(line)
+        if current is None:
+            if row:
+                report(INVALID, number, f"row {row.group(1)} is outside a surface section")
+            continue
+        if not line.startswith("|") or HEADER.match(line) or SEPARATOR.match(line):
+            continue
+        cells = [cell.strip() for cell in row.group(2).split("|")] if row else []
+        if not row or len(cells) != 4:
+            report(
+                INVALID, number, f"table line {line[:40]!r} is not a 5-column TM-<SURFACE>-<n> row"
+            )
+            continue
+        rows[current].append((number, row.group(1), cells[0], cells[2], cells[3]))
     if fence:
         report(INVALID, len(lines), "the inventory block is not closed")
+    if not fence_line:
+        report(INVALID, 1, "the model has no inventory block")
 
-    for kind, name in sorted(present(root) - inventory.keys()):
-        report(STALE, 1, f"{kind} {name} is missing from the inventory")
-    for (kind, name), (number, _) in sorted(inventory.items()):
-        if (kind, name) not in present(root):
+    expected = present(root, paths)
+    for kind, name in sorted(expected - inventory.keys()):
+        report(STALE, fence_line or 1, f"{kind} {name} is missing from the inventory")
+    for (kind, name), (number, surface) in sorted(inventory.items(), key=lambda item: item[1][0]):
+        if (kind, name) not in expected:
             report(STALE, number, f"{kind} {name} no longer exists")
-    for (kind, name), (number, surface) in sorted(inventory.items(), key=lambda i: i[1][0]):
-        if not surface.startswith("internal: ") and surface not in sections:
+        if surface.startswith("internal:"):
+            if not surface[len("internal:") :].strip():
+                report(INVALID, number, f"{kind} {name} is internal with no reason")
+        elif surface not in sections:
             report(
                 INVALID, number, f"{kind} {name} names surface {surface!r}, which has no section"
             )
-        if surface.startswith("internal:") and not surface[len("internal:") :].strip():
-            report(INVALID, number, f"{kind} {name} is internal with no reason")
 
     seen: dict[str, int] = {}
     for surface, found_rows in rows.items():
@@ -164,11 +231,11 @@ def check(root: Path) -> list[str]:
                 report(INVALID, number, f"{row_id}: unknown category {category!r}")
             if not rule:
                 report(INVALID, number, f"{row_id}: empty Rule")
-            elif why := rule_problem(root, rule):
+            elif why := rule_problem(root, known, rule):
                 report(INVALID, number, f"{row_id}: {why}")
             if not value:
                 report(INVALID, number, f"{row_id}: empty Verification")
-            elif why := verification_problem(root, value, counts.get(category, 0) == 1):
+            elif why := verification_problem(root, known, value, counts.get(category, 0) == 1):
                 report(INVALID, number, f"{row_id}: {why}")
     return problems
 
