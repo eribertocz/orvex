@@ -13,25 +13,10 @@ from dataclasses import dataclass
 
 import duckdb
 import pyarrow as pa
-from orvex.store.errors import StoreError
+from orvex.contracts.store.errors import StoreError
+from orvex.contracts.store.values import Limits
 
 MAX_TIMEOUT_MS = 3_600_000
-
-
-@dataclass(frozen=True, slots=True)
-class Limits:
-    """Resource limits of a lake; every field is required (law 7).
-
-    `max_concurrent` statements (reads in progress and open transactions) run at once; up to
-    `queue_size` more wait in arrival order; `default_timeout_ms` applies when a request sets no
-    `timeout_ms`.
-    """
-
-    memory_limit: str | None
-    threads: int | None
-    max_concurrent: int | None = None
-    queue_size: int | None = None
-    default_timeout_ms: int | None = None
 
 
 def _require_limits(limits: Limits) -> tuple[str, int, int, int]:

@@ -5,9 +5,9 @@ each one did.
 from __future__ import annotations
 
 import duckdb
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import MaintenanceReport
 from orvex.store.catalog_values import _single_value, _snapshot_of
-from orvex.store.errors import StoreError
 from orvex.store.lake_names import LAKE
 
 

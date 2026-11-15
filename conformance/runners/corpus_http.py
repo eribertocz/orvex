@@ -18,15 +18,15 @@ from typing import Any
 
 import pyarrow as pa
 from fastapi.testclient import TestClient
+from orvex.contracts.store.client import Lake
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.policies import PolicyModel
 from orvex.server import semantic_http, semantic_model
 from orvex.server.app import LocalSemantic, create_app
 from orvex.server.local_access import new_access
+from orvex.server.store_access import store
 from orvex.server.versions import Versions
-from orvex.store.json_encoding import arrow_to_json
-from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 
@@ -58,7 +58,7 @@ class _CaseSource:
 
 def _cells(envelope: Mapping[str, Any], rows: list[list[Any]], table: pa.Table) -> None:
     text = "".join(
-        arrow_to_json(pa.RecordBatchReader.from_batches(table.schema, table.to_batches()))
+        store().arrow_to_json(pa.RecordBatchReader.from_batches(table.schema, table.to_batches()))
     )
     values = json.loads(text)["rows"]
     states = {(s["row"], s["column"]) for s in envelope.get("cell_states", [])}

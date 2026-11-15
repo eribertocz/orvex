@@ -9,7 +9,7 @@ import re
 from collections.abc import Iterator
 from typing import Any
 
-from orvex.store.errors import StoreError
+from orvex.contracts.store.errors import StoreError
 from orvex.store.lake_names import LAKE
 from orvex.store.sql_guard import _EXTERNAL_SQL_FUNCTIONS, READ_TABLE_FUNCTIONS
 from orvex.store.sql_parser import _parser

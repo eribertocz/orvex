@@ -12,10 +12,10 @@ import json
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import ChangesRequest, ReadRequest
 from orvex.semantic.evidence import EvidenceRecord
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake
 
 RECORDS = "_meta.evidence_records"
 CHECKED = "_meta.evidence_checked"

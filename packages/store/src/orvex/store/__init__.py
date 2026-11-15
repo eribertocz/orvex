@@ -1,7 +1,8 @@
 """Store and read analytical data in DuckLake through DuckDB (contract `store` v1).
 
-The API lives in `orvex.store.lake` (`open_lake`, `Lake`, `Limits`, `Transaction`) and
-`orvex.store.errors` (`StoreError`); importing the package itself needs no dependency.
+Its one public face is `orvex.store.api.Store`, the implementation of the interface contract
+`orvex.contracts.store.interface.STORE` (#486); everything else is internal. Importing the
+package itself needs no dependency.
 """
 
 from importlib.metadata import version

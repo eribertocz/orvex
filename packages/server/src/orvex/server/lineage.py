@@ -11,6 +11,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.server import run_metadata
 from orvex.server.identity import Identity
 from orvex.server.problems import Problem
@@ -19,8 +21,6 @@ from orvex.server.project_check import Checked
 from orvex.server.run_metadata import _Outcome
 from orvex.server.run_reads import _table_columns
 from orvex.server.versions import module_versions
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake
 from orvex.transform import lineage
 from orvex.transform.incremental import Columns
 

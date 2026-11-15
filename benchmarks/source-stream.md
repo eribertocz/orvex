@@ -1,6 +1,6 @@
 # Source isolation cost (#372, ADR-0031 §6)
 
-Measured with `tools/benchmarks/source_stream.py` on 2026-11-07. Every number below comes from that run; none is estimated.
+Measured with `tools/benchmarks/source_stream.py` (since #486, `packages/store/benchmarks/source_stream.py`) on 2026-11-07. Every number below comes from that run; none is estimated.
 
 - **Code:** the #372 branch on top of `493426e` (main), with the script as committed here; the measured code is that of this pull request
 - **Command:** `python -m tools.benchmarks.source_stream --rows 10000000 --rows 50000000 --runs 3`

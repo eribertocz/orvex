@@ -18,6 +18,7 @@ refuses it. Database, roles and data are dropped after each case.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import os
 import shutil
@@ -31,6 +32,8 @@ from typing import Any
 
 import duckdb
 import pyarrow as pa
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.client_sources import open_existing_lake
 from orvex.contracts.store.v1 import (
     ExistingLakeAttachment,
     PostgresLakeLocation,
@@ -38,6 +41,7 @@ from orvex.contracts.store.v1 import (
     Snapshot,
     TablesRequest,
 )
+from orvex.contracts.store.values import ExistingLakeLimits
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.engines import EngineEntry, Routing
 from orvex.semantic.execution import answer
@@ -48,9 +52,7 @@ from orvex.server.existing_lake_adapter import ExistingLakeAdapter
 from orvex.server.existing_lake_evidence import violated
 from orvex.server.existing_lake_snapshots import SnapshotSchedule
 from orvex.server.identity import load_identity
-from orvex.store.existing_lake import ExistingLake
-from orvex.store.existing_lake_reads import LakeReads
-from orvex.store.lake import Lake
+from orvex.server.store_access import store
 
 from conformance.runners import corpus_execution as ce
 
@@ -214,8 +216,8 @@ def existing_ducklake(
             EXISTING_DUCKLAKE_CAPABILITIES,
         )
         routing = Routing({str(d["name"]): entry for d in datasets})
-        with ExistingLake(made.attachment(), memory_limit="1GB", threads=2) as existing:
-            reads = LakeReads(existing, timeout_ms=TIMEOUT_MS)
+        limits = ExistingLakeLimits(memory_limit="1GB", threads=2, timeout_ms=TIMEOUT_MS)
+        with contextlib.closing(open_existing_lake(store(), made.attachment(), limits)) as reads:
 
             def evidence(snapshot: Snapshot) -> str | None:
                 return violated(

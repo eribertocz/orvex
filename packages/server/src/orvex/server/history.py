@@ -6,6 +6,7 @@ import datetime as dt
 from pathlib import Path
 from typing import IO
 
+from orvex.contracts.store.errors import StoreError
 from orvex.server import heartbeat, lake_open, lake_place, run_metadata
 from orvex.server.error_problems import _load_problem, _store_problem
 from orvex.server.identity import Identity
@@ -13,7 +14,6 @@ from orvex.server.lake_open import lake_location
 from orvex.server.locking import LOCK_FILE, ProjectLocked, project_lock
 from orvex.server.problems import Problem
 from orvex.server.project import ProjectLoadError, load_project
-from orvex.store.errors import StoreError
 from orvex.transform.run_records import history_request
 
 

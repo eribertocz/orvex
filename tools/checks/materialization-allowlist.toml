@@ -203,3 +203,13 @@ reason = "The access store (module state, not analytical data, #436): a user, a 
 file = "packages/access/src/orvex/access/storage/sqlite.py"
 call = "fetchone"
 reason = "The access store's connection setup (#436): the one row of PRAGMA foreign_keys"
+
+[[allow]]
+file = "packages/contracts/src/orvex/contracts/store/kit.py"
+call = "to_pylist"
+reason = "The store contract's conformance kit (#486 G1): the few rows of its own fixed cases, compared value by value to prove exactness; never a consumer's data"
+
+[[allow]]
+file = "packages/contracts/src/orvex/contracts/store/kit_support.py"
+call = "to_pylist"
+reason = "The store contract's conformance kit (#486 G1): the few rows of its own fixed cases, read back to compare; never a consumer's data"

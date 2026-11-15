@@ -58,6 +58,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import duckdb
+from orvex.contracts.store.errors import StoreError, register_secret, separation_refused
 from orvex.contracts.store.v1 import (
     AzureStorage,
     CredentialsInUseItem,
@@ -68,7 +69,6 @@ from orvex.contracts.store.v1 import (
     SqliteLakeLocation,
 )
 from orvex.store import existing_lake_guard, locations, separation
-from orvex.store.errors import StoreError, register_secret
 from orvex.store.sql_text import literal as _quote
 
 LAKE = "lake"
@@ -225,7 +225,7 @@ class ExistingLake:
                 "STORE_LIMITS_REQUIRED", "The lake needs a memory limit and a thread count.", {}
             )
         if attachment.protected_locations is None:
-            raise separation.refused(self.name, "the instance's protected locations were not given")
+            raise separation_refused(self.name, "the instance's protected locations were not given")
         # Location checks first, and every secret registered, before anything is opened.
         password = ""
         if isinstance(location, PostgresLakeLocation):
@@ -552,7 +552,7 @@ class ExistingLake:
         if self._folder is None:
             self._folder = folder
         elif folder != self._folder:
-            raise separation.refused(
+            raise separation_refused(
                 self.name, "its data folder was replaced after it was attached"
             )
 
@@ -560,9 +560,9 @@ class ExistingLake:
         """The protected set, roles and credentials in use as `current` gives them now; refused
         when it is another lake's attachment or carries no protected set."""
         if current.name != self.name or current.location != self.attachment.location:
-            raise separation.refused(self.name, "the attachment given is not this lake's")
+            raise separation_refused(self.name, "the attachment given is not this lake's")
         if current.protected_locations is None:
-            raise separation.refused(self.name, "the instance's protected locations were not given")
+            raise separation_refused(self.name, "the instance's protected locations were not given")
         if isinstance(current.location, PostgresLakeLocation):
             self._catalog_connection(current.location, current.roles_in_use)
         if self._storage is not None:
@@ -594,7 +594,7 @@ class ExistingLake:
                 {"id": snapshot.id},
             ).fetchone()
             if found is None or int(found[0]) != since_epoch:
-                raise separation.refused(
+                raise separation_refused(
                     self.name, "the catalog no longer lists the snapshot with its commit time"
                 )
             tables = self._connection.execute(

@@ -33,9 +33,18 @@ from dataclasses import dataclass, replace
 from typing import Any, NoReturn
 
 import duckdb
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.client_sources import (
+    ClickHouse,
+    ExistingLakeReads,
+    connect_clickhouse,
+    open_existing_lake,
+)
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     StatementRequest,
 )
+from orvex.contracts.store.values import Budget, ClickHouseTarget, ExistingLakeLimits
 from orvex.semantic.adapters import clickhouse as ch
 from orvex.semantic.adapters.clickhouse import CAPABILITIES as CLICKHOUSE_CAPABILITIES
 from orvex.semantic.catalog.building import catalog_for_context
@@ -52,12 +61,7 @@ from orvex.server.clickhouse_evidence import EvidenceSchedule, checked
 from orvex.server.engine_catalog import EXISTING_DUCKLAKE_CAPABILITIES
 from orvex.server.existing_lake_adapter import ExistingLakeAdapter
 from orvex.server.existing_lake_snapshots import SnapshotSchedule
-from orvex.store.clickhouse import Budget, ClickHouse, ClickHouseTarget
-from orvex.store.errors import StoreError
-from orvex.store.existing_lake import ExistingLake
-from orvex.store.existing_lake_reads import LakeReads
-from orvex.store.json_encoding import arrow_to_json
-from orvex.store.lake import Lake
+from orvex.server.store_access import store
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_existing_lake as sx
@@ -69,6 +73,7 @@ INTERNAL = "INTERNAL_ERROR"  # what the server answers for a store error reachin
 NOW = dt.datetime(2026, 11, 8, 12, 0, tzinfo=dt.UTC)  # the schedules' first check
 READER_PASSWORD = "SECURITY_CASES_CLICKHOUSE_READER"  # set for each served database only
 BUDGET = Budget(timeout_ms=30_000, memory_bytes=1_000_000_000)
+LIMITS = ExistingLakeLimits(memory_limit="512MB", threads=1, timeout_ms=60_000)
 PROFILE = {
     "readonly": "1",
     "join_use_nulls": "1",
@@ -174,7 +179,9 @@ def _datasets(found: sf.Fixture) -> list[str]:
 class _Undeclared(ExistingLakeAdapter):
     """A connection whose declaration was refused: it serves nothing, and says why."""
 
-    def __init__(self, reads: LakeReads, schedule: SnapshotSchedule, refusal: StoreError) -> None:
+    def __init__(
+        self, reads: ExistingLakeReads, schedule: SnapshotSchedule, refusal: StoreError
+    ) -> None:
         super().__init__(reads, schedule, "test")
         self._refusal = refusal
 
@@ -186,31 +193,25 @@ class _Undeclared(ExistingLakeAdapter):
 
 
 def _declared(
-    host: sx.Host, reads: LakeReads, schedule: SnapshotSchedule, made: list[object]
+    host: sx.Host, reads: ExistingLakeReads, schedule: SnapshotSchedule, made: list[object]
 ) -> _Undeclared:
     """The connection declared again with its location as changed, as the server opens it: it
     must be refused before DuckLake attaches anything, with no read made (DQ-018)."""
-    attached: list[str] = []
-    real = ExistingLake._attach
-
-    def spied(lake: ExistingLake, target: str, options: list[str]) -> None:
-        attached.append(target)
-        real(lake, target, options)
-
+    client = store()
+    held = client.call("held").existing_lakes
     reads_before = len(made)
-    ExistingLake._attach = spied  # type: ignore[method-assign, assignment]
     try:
-        ExistingLake(host.attachment(), memory_limit="512MB", threads=1).close()
+        open_existing_lake(client, host.attachment(), LIMITS).close()
     except StoreError as error:
         refusal = error
     else:
         raise RuntimeError("the lake was declared with a location overlapping a protected one")
-    finally:
-        ExistingLake._attach = real  # type: ignore[method-assign]
     if "overlaps" not in str(refusal.details.get("reason", "")):  # refused, but for the overlap
         raise RuntimeError(f"the declaration was refused for another reason: {refusal.code}")
-    if attached or len(made) != reads_before:
-        raise RuntimeError("the lake was attached or read before its declaration was refused")
+    # That nothing is attached before the refusal is the store's own test
+    # (`test_existing_lake_files.py`); here, nothing is held and nothing is read.
+    if client.call("held").existing_lakes != held or len(made) != reads_before:
+        raise RuntimeError("the lake was held or read before its declaration was refused")
     return _Undeclared(reads, schedule, refusal)
 
 
@@ -245,9 +246,8 @@ def served(
                 EXISTING_DUCKLAKE_CAPABILITIES,
             )
             with sx.existing_lake(found, catalog, unavailable) as host:
-                existing = ExistingLake(host.attachment(), memory_limit="512MB", threads=1)
+                reads = open_existing_lake(store(), host.attachment(), LIMITS)
                 try:
-                    reads = LakeReads(existing, timeout_ms=60_000)
                     made: list[object] = []
                     reading = reads.read
 
@@ -299,7 +299,7 @@ def served(
                         lake_change=lake_changed,
                     )
                 finally:
-                    existing.close()
+                    reads.close()
             return
         with _clickhouse(found, clickhouse or default_clickhouse()) as (server, client):
             routing, adapters = _wired(client, found.compiled)
@@ -356,7 +356,7 @@ def _clickhouse(
             _load(admin, table, found.catalog[table], found.rows[table])
         os.environ[READER_PASSWORD] = password
         target = ClickHouseTarget(admin.host, admin.port, name, name, READER_PASSWORD, tls=False)
-        yield admin, ClickHouse.connect(target, BUDGET)
+        yield admin, connect_clickhouse(store(), target, BUDGET)
     finally:
         os.environ.pop(READER_PASSWORD, None)
         admin.database = ""
@@ -449,7 +449,7 @@ def ask(
         [column_name(c) for c in envelope["columns"]],
         [str(n["code"]) for n in envelope.get("notices", [])],
         None,
-        [got.result.wire(arrow_to_json), json.dumps(view, default=str)],
+        [got.result.wire(store().arrow_to_json), json.dumps(view, default=str)],
     )
     return (received, got) if whole else received
 

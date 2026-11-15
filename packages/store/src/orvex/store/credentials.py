@@ -7,8 +7,8 @@ from __future__ import annotations
 import os
 import re
 
+from orvex.contracts.store.errors import StoreError, register_secret
 from orvex.contracts.store.v1 import PostgresSourceAttachment
-from orvex.store.errors import StoreError, register_secret
 from orvex.store.locations import _local_connection
 
 _VARIABLE = re.compile(r"\$\{env:([A-Z_][A-Z0-9_]*)\}")

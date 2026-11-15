@@ -10,9 +10,9 @@ from collections.abc import Callable, Iterator
 
 import duckdb
 import pyarrow as pa
+from orvex.contracts.store.errors import StoreError
 from orvex.store import nested_types
 from orvex.store.arrow_exact import _utc_schema, _with_duckdb_types, exact_select
-from orvex.store.errors import StoreError
 from orvex.store.limits import Guard, ReadHandle
 
 

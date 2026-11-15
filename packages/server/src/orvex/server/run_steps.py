@@ -6,10 +6,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from orvex.contracts.run_record.v1 import CheckResult
+from orvex.contracts.store.client import Transaction
 from orvex.contracts.store.v1 import StatementRequest
 from orvex.server.problems import Problem
 from orvex.server.run_metadata import _Outcome
-from orvex.store.lake import Transaction
 from orvex.transform import incremental
 from orvex.transform.incremental import Count, Land, Refuse, Step, Watermark
 from orvex.transform.model_tests import ModelTest

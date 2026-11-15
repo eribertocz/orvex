@@ -17,13 +17,13 @@ from typing import IO, Any
 
 import duckdb
 import pyarrow as pa
+from orvex.contracts.store.errors import StoreError, register_secret, source_not_found
 from orvex.contracts.store.v1 import (
     FileSourceAttachment,
     Parameter,
     PostgresSourceAttachment,
     SqliteSourceAttachment,
 )
-from orvex.store.errors import StoreError, _source_not_found, register_secret
 from orvex.store.locations import POSTGRES_CONNECT_TIMEOUT_S
 from orvex.store.nested_types import refuse_nested_uhugeint
 from orvex.store.parameters import _bound, _typed
@@ -109,7 +109,7 @@ def _open(
     else:
         path = Path(source.path)
         if not path.is_file():
-            raise _source_not_found(source)
+            raise source_not_found(source)
         _attach(source, connection, f"ATTACH {_quote(source.path)} AS {name} (READ_ONLY)")
         readable.append(path.as_posix())
     connection.execute(f"USE {name}")

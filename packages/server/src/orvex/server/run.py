@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import IO, Literal
 
 from orvex.contracts.run_record.v1 import RunError, RunRecord
+from orvex.contracts.store.client import Transaction
+from orvex.contracts.store.errors import StoreError
 from orvex.server import lake_place, project_check, run_metadata
 from orvex.server.error_problems import _load_problem, _store_message, _store_problem
 from orvex.server.evidence_command import _evidence_after_run
@@ -30,8 +32,6 @@ from orvex.server.project_check import Checked, databases
 from orvex.server.run_metadata import _Outcome, _project_commit, _records
 from orvex.server.run_reads import _committed_snapshot, _count, _since, _table_columns
 from orvex.server.run_steps import _check_tests, _run_step, _StepFailed
-from orvex.store.errors import StoreError
-from orvex.store.lake import Transaction
 from orvex.transform import lineage
 from orvex.transform.graph import Graph, plan_run
 from orvex.transform.incremental import Columns

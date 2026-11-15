@@ -29,7 +29,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import duckdb
-from orvex.store.errors import StoreError
+from orvex.contracts.store.errors import StoreError
 from orvex.store.sql_text import identifier, literal
 
 # Logical Parquet annotations DuckDB v2.0.0 reads correctly without a converted twin (measured,

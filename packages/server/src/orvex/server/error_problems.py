@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from orvex.contracts.model_config.v1 import ModelError
+from orvex.contracts.store.errors import StoreError
 from orvex.server.problems import Problem
 from orvex.server.project import ProjectLoadError
-from orvex.store.errors import StoreError
 
 
 def _from_model_error(error: ModelError) -> Problem:

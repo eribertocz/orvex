@@ -39,6 +39,7 @@ from types import FrameType
 from typing import IO
 from zoneinfo import ZoneInfo
 
+from orvex.contracts.store.errors import StoreError
 from orvex.server import (
     error_problems,
     heartbeat,
@@ -56,7 +57,6 @@ from orvex.server.problems import Problem
 from orvex.server.project import ProjectLoadError
 from orvex.server.project_check import Checked
 from orvex.server.run import Selection
-from orvex.store.errors import StoreError
 from orvex.transform.run_records import last_run_request, model_history_request
 from orvex.transform.schedule import (
     LOOK_AGAIN,

@@ -11,11 +11,11 @@ import base64
 import decimal
 import json
 import math
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 
 import pyarrow as pa
 import pyarrow.compute as pc
-from orvex.store.errors import StoreError
+from orvex.contracts.store.errors import StoreError
 
 type JsonValue = str | int | float | bool | None
 
@@ -206,24 +206,36 @@ def _converter(kind: str, column: str) -> Callable[[pa.Array], list[JsonValue]]:
     )
 
 
-def arrow_to_json(reader: pa.RecordBatchReader) -> Iterator[str]:
-    """The `ResultJson` document as text fragments, one batch of rows at a time.
+def json_head(schema: pa.Schema) -> list[str]:
+    """The `ResultJson` document's fragments before its first row: its columns.
 
-    Unsupported types are reported before any row is produced.
+    Unsupported types are reported here, before any row is produced.
     """
-    schema = reader.schema
     kinds = duckdb_types(schema)
-    converters = [_converter(kind, field.name) for kind, field in zip(kinds, schema, strict=True)]
+    for kind, field in zip(kinds, schema, strict=True):
+        _converter(kind, field.name)
     columns = [
         {"name": field.name, "type": kind} for field, kind in zip(schema, kinds, strict=True)
     ]
-    yield '{"kind":"result_json","columns":' + json.dumps(columns, ensure_ascii=False)
-    yield ',"rows":['
-    first = True
-    for batch in reader:
-        encoded = [convert(batch.column(index)) for index, convert in enumerate(converters)]
-        for row in zip(*encoded, strict=True):
-            prefix = "" if first else ","
-            first = False
-            yield prefix + json.dumps(list(row), ensure_ascii=False, allow_nan=False)
-    yield "]}"
+    return [
+        '{"kind":"result_json","columns":' + json.dumps(columns, ensure_ascii=False),
+        ',"rows":[',
+    ]
+
+
+def json_rows(batch: pa.RecordBatch, first: bool) -> list[str]:
+    """The fragments of one batch's rows; `first` when no row of the document came before."""
+    kinds = duckdb_types(batch.schema)
+    converters = [
+        _converter(kind, field.name) for kind, field in zip(kinds, batch.schema, strict=True)
+    ]
+    encoded = [convert(batch.column(index)) for index, convert in enumerate(converters)]
+    fragments = []
+    for row in zip(*encoded, strict=True):
+        prefix = "" if first else ","
+        first = False
+        fragments.append(prefix + json.dumps(list(row), ensure_ascii=False, allow_nan=False))
+    return fragments
+
+
+JSON_TAIL = "]}"  # closes the rows and the document `json_head` opened

@@ -45,6 +45,8 @@ from xml.etree import ElementTree
 
 import duckdb
 import pyarrow as pa
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     ChangesRequest,
     FileSourceAttachment,
@@ -59,8 +61,8 @@ from orvex.contracts.store.v1 import (
     StatisticsRequest,
     TablesRequest,
 )
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake, Limits, open_lake
+from orvex.contracts.store.values import Limits
+from orvex.server.store_access import store
 
 SEED = 42
 LIMITS = Limits(
@@ -587,14 +589,16 @@ def scenario(folder: Path, work: Path, out: Path) -> None:
     try:
         for name, location, files in locations(work, endpoint):
             observe = Observer()
-            lake = observe.step("open", partial(open_lake, location, LIMITS, sources(folder)))
+            lake = observe.step(
+                "open", partial(store().open_lake, location, LIMITS, sources(folder))
+            )
             if isinstance(lake, Lake):
                 try:
                     operations(observe, lake, folder, work)
                     observe.step("state", partial(state, lake, files))
                 finally:
                     lake.close()
-                reopened = observe.step("reopen", partial(open_lake, location, LIMITS))
+                reopened = observe.step("reopen", partial(store().open_lake, location, LIMITS))
                 if isinstance(reopened, Lake):
                     try:
                         observe.step("state after reopen", partial(state, reopened, files))
@@ -604,7 +608,7 @@ def scenario(folder: Path, work: Path, out: Path) -> None:
         refusal = Observer()
         refusal.step(
             "a reserved source name",
-            lambda: open_lake(
+            lambda: store().open_lake(
                 LocalLakeLocation(
                     kind="lake_location", catalog="local", path=(work / "r").as_posix()
                 ),
@@ -621,7 +625,7 @@ def scenario(folder: Path, work: Path, out: Path) -> None:
         )
         refusal.step(
             "limits missing",
-            lambda: open_lake(
+            lambda: store().open_lake(
                 LocalLakeLocation(
                     kind="lake_location", catalog="local", path=(work / "l").as_posix()
                 ),

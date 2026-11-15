@@ -10,8 +10,8 @@ machine, and reports the wall time of the operation alone and the peak resident 
 process. The report gives the medians of `--runs` runs and the candidate's difference to the
 baseline. Operations, each on a fresh local lake:
 
-- `open`: `open_lake` with no source;
-- `attach`: `open_lake` with a Parquet, a CSV, a DuckDB and a SQLite source;
+- `open`: `store().open_lake` with no source;
+- `attach`: `store().open_lake` with a Parquet, a CSV, a DuckDB and a SQLite source;
 - `read`: a guarded aggregate read with typed parameters over 240,720 readings;
 - `transaction`: one transaction creating a table from a source, landing a DuckDB source,
   updating and deleting rows.
@@ -33,6 +33,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from orvex.contracts.store.client import Lake
 from orvex.contracts.store.v1 import (
     FileSourceAttachment,
     LocalLakeLocation,
@@ -41,7 +42,8 @@ from orvex.contracts.store.v1 import (
     SqliteSourceAttachment,
     StatementRequest,
 )
-from orvex.store.lake import Lake, Limits, open_lake
+from orvex.contracts.store.values import Limits
+from orvex.server.store_access import store
 
 OPERATIONS = ("open", "attach", "read", "transaction")
 LIMITS = Limits(
@@ -74,14 +76,14 @@ def measure(operation: str, sources: list[Any], work: Path) -> dict[str, float]:
     started = time.perf_counter()
     if operation == "open":
         started = time.perf_counter()
-        lake = open_lake(location, LIMITS)
+        lake = store().open_lake(location, LIMITS)
         seconds = time.perf_counter() - started
     elif operation == "attach":
         started = time.perf_counter()
-        lake = open_lake(location, LIMITS, sources)
+        lake = store().open_lake(location, LIMITS, sources)
         seconds = time.perf_counter() - started
     elif operation == "read":
-        lake = open_lake(location, LIMITS, sources)
+        lake = store().open_lake(location, LIMITS, sources)
         with lake.transaction() as transaction:
             transaction.execute(
                 _statement("CREATE TABLE readings AS SELECT * FROM readings_source.data")
@@ -104,7 +106,7 @@ def measure(operation: str, sources: list[Any], work: Path) -> dict[str, float]:
         if rows.num_rows != 1:
             raise SystemExit("the aggregate read returned no row")
     elif operation == "transaction":
-        lake = open_lake(location, LIMITS, sources)
+        lake = store().open_lake(location, LIMITS, sources)
         started = time.perf_counter()
         with lake.transaction() as transaction:
             transaction.execute(

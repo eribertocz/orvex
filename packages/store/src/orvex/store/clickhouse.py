@@ -27,7 +27,6 @@ import ssl
 import time
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -38,8 +37,10 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.ipc
 from duckdb.sqltypes import DuckDBPyType
+from orvex.contracts.store.errors import StoreError, register_secret
+from orvex.contracts.store.interface import REQUIRED_SETTINGS
 from orvex.contracts.store.v1 import Parameter
-from orvex.store.errors import StoreError, register_secret
+from orvex.contracts.store.values import Budget, ClickHouseTarget, SourceColumn
 from orvex.store.nested_types import refuse_nested_uhugeint
 
 # Server versions tested (major.minor): the current LTS and the latest stable (ADR-0022).
@@ -47,15 +48,6 @@ TESTED_VERSIONS = ("26.8", "26.10")
 
 # Settings that decide what a statement means; each must have exactly this value. `readonly` is
 # checked first, with its own code. The adapter relies on every one of them.
-REQUIRED_SETTINGS: Mapping[str, str] = {
-    "join_use_nulls": "1",  # an outer join gives NULL, never a type's default value
-    "group_by_use_nulls": "1",  # a subtotal's key is NULL, never a default value
-    "transform_null_in": "0",  # NULL membership is written out by the adapter
-    "count_distinct_implementation": "uniqExact",  # an exact distinct count
-    "cast_keep_nullable": "1",  # CAST keeps NULL
-    "aggregate_functions_null_for_empty": "0",  # empty-set results are written out by the adapter
-    "cancel_http_readonly_queries_on_client_close": "1",  # closing the connection cancels
-}
 # No result-rows or rows-read limit (Owner, 2026-11-08): every question reads all the rows it
 # needs, so a profile that sets one is refused as any other changed setting is.
 LIMIT_SETTINGS = ("max_execution_time", "max_memory_usage")
@@ -119,34 +111,6 @@ _ARROW: Mapping[str, pa.DataType] = {
     "DATE": pa.date32(),
     "TIMESTAMPTZ": pa.timestamp("us", tz="UTC"),
 }
-
-
-@dataclass(frozen=True, slots=True)
-class ClickHouseTarget:
-    """Where the server is and who connects; the password only as an environment variable."""
-
-    host: str
-    port: int
-    database: str
-    user: str
-    password_env: str
-    tls: bool = True
-    ca_file: str | None = None  # absent: the operating system's authorities
-
-
-@dataclass(frozen=True, slots=True)
-class Budget:
-    """The most one query may use: the server's limits may be tighter, never looser."""
-
-    timeout_ms: int
-    memory_bytes: int
-
-
-@dataclass(frozen=True, slots=True)
-class SourceColumn:
-    name: str
-    engine_type: str  # as ClickHouse names it
-    type: str  # the DuckDB type it maps to
 
 
 def _local(host: str) -> bool:

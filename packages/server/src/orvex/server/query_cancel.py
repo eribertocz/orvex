@@ -15,9 +15,8 @@ from collections.abc import Callable
 from typing import Any
 
 import pyarrow as pa
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake
-from orvex.store.limits import ReadHandle
+from orvex.contracts.store.client import Lake, ReadHandle
+from orvex.contracts.store.errors import StoreError
 
 
 class Cancel:

@@ -3,9 +3,9 @@ in the run's transaction, and the snapshot that committed the run's records."""
 
 from __future__ import annotations
 
+from orvex.contracts.store.client import Lake, Transaction
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import ReadRequest, StatementRequest
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake, Transaction
 from orvex.transform import incremental
 from orvex.transform.incremental import Columns
 from orvex.transform.models import Model

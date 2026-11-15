@@ -24,6 +24,7 @@ from typing import Any
 
 import duckdb
 import pyarrow as pa
+from orvex.contracts.store.errors import StoreError, source_not_found
 from orvex.contracts.store.v1 import (
     ChangesRequest,
     ChangesResult,
@@ -45,13 +46,13 @@ from orvex.contracts.store.v1 import (
     TablesRequest,
     TablesResult,
 )
+from orvex.contracts.store.values import Limits as Limits
 from orvex.store import source_worker, transaction
 from orvex.store.arrow_exact import exact_select as exact_select
 from orvex.store.catalog_reads import table_changes, table_statistics
 from orvex.store.catalog_tables import tables_at, tables_with_columns
 from orvex.store.catalog_values import _snapshot_of
 from orvex.store.credentials import _source_password
-from orvex.store.errors import StoreError, _source_not_found
 from orvex.store.file_names import FOLDER_COST as FOLDER_COST
 from orvex.store.file_names import PATTERN_BUDGET as PATTERN_BUDGET
 from orvex.store.file_names import STEP_BUDGET as STEP_BUDGET
@@ -66,7 +67,6 @@ from orvex.store.limits import INTERRUPT_REPEAT_SECONDS as INTERRUPT_REPEAT_SECO
 from orvex.store.limits import MAX_TIMEOUT_MS as MAX_TIMEOUT_MS
 from orvex.store.limits import Admission as Admission
 from orvex.store.limits import Guard as Guard
-from orvex.store.limits import Limits as Limits
 from orvex.store.limits import ReadHandle as ReadHandle
 from orvex.store.limits import _bounded, _require_limits
 from orvex.store.locations import (
@@ -208,7 +208,7 @@ class Lake:
                     if not isinstance(source, PostgresSourceAttachment) and not (
                         Path(source.path).is_file()
                     ):
-                        raise _source_not_found(source)
+                        raise source_not_found(source)
                     if isinstance(source, SqliteSourceAttachment):
                         # One consistent copy per open lake, WAL included (#126): every read of
                         # this lake sees the file as it was now. Pages only: no SQL is parsed.

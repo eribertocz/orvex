@@ -8,7 +8,7 @@ from __future__ import annotations
 import itertools
 
 import duckdb
-from orvex.store.errors import StoreError
+from orvex.contracts.store.errors import StoreError
 from orvex.store.file_names import _refuse_file_names
 from orvex.store.lake_names import METADATA_PREFIX
 from orvex.store.sql_parser import _plain, _tokens

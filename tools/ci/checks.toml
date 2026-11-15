@@ -80,6 +80,7 @@ regressions = [
   "tests/properties/test_parser_fuzzing.py",
   "tests/properties/test_policy_broadening.py",
   "tests/properties/test_policy_properties.py",
+  "packages/store/tests/test_clickhouse_scanner_fuzzing.py",
 ]
 
 [[job]]
@@ -754,3 +755,24 @@ setup = ["python -m pip install --quiet pip==26.3"]
 name = "standalone-contracts"
 run = "python -m tools.ci.standalone contracts"
 local = true
+
+[[job]]
+workflow = "interfaces.yml"
+job = "standalone-store"
+kind = "check"
+required = true
+contexts = ["standalone-store"]
+digest = "f3100f3e79efae0a"
+setup = [
+  'dir="$RUNNER_TEMP/postgres-tls"',
+  "python -m pip install --quiet pip==26.3",
+  "python -m tools.ci.duckdb_extensions",
+  "for attempt in $(seq 60); do",
+]
+[[job.check]]
+# The store installs and passes its own tests and its contract's kit alone, outside the
+# repository, with the services its tests need (#486 §5 step 2, G4).
+name = "standalone-store"
+run = "python -m tools.ci.standalone store"
+local = false
+reason = "needs the PostgreSQL, ClickHouse and Azurite services the CI job starts"

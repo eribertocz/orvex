@@ -8,11 +8,13 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
+from orvex.contracts.store.values import Limits
 from orvex.server import lake_place
 from orvex.server.lake_place import Place
 from orvex.server.project import Project, ProjectLoadError
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake, Limits, open_lake
+from orvex.server.store_access import store
 from orvex.transform.sources import Attachment
 
 DEFAULT_MEMORY = "4GB"
@@ -43,7 +45,7 @@ def _open_recorded(home: Path, place: Place, attachments: Sequence[Attachment] =
     _refuse_missing_catalog(home)
     lake_place.begin(home, place)
     try:
-        lake = open_lake(place.location, _limits(), attachments)
+        lake = store().open_lake(place.location, _limits(), attachments)
     except BaseException:
         # Ctrl-C or any error: the record goes only when nothing was created (#181). A record
         # that cannot be removed stays `creating`, which binds nothing that was not created; the
@@ -67,7 +69,7 @@ def open_existing(home: Path, place: Place, memory: str | None = None) -> Lake:
     lake_place.check_unchanged(home, place)
     _refuse_missing_catalog(home)
     lake_place.adopt(home, place)  # a default lake made before #204 gets its record
-    lake = open_lake(place.location, _limits(memory))
+    lake = store().open_lake(place.location, _limits(memory))
     try:
         lake_place.complete(home, place)  # a record written before #147 gets its endpoint
     except BaseException:

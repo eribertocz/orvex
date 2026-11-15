@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import IO
 
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.semantic.ossie import sql
 from orvex.server import evidence_runs, lake_open, lake_place, semantic_model
 from orvex.server.error_problems import _load_problem, _store_problem
@@ -15,8 +17,6 @@ from orvex.server.lake_open import lake_location
 from orvex.server.locking import ProjectLocked, project_lock
 from orvex.server.problems import Problem
 from orvex.server.project import Project, ProjectLoadError, load_project
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake
 
 
 def _evidence_after_run(

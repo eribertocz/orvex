@@ -21,12 +21,12 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 import pyarrow as pa
+from orvex.contracts.store.client_sources import ExistingLakeReads
+from orvex.contracts.store.errors import SNAPSHOT_CHANGED, StoreError
 from orvex.contracts.store.v1 import Parameter, ReadRequest, Snapshot
 from orvex.semantic.adapters.duckdb import PhysicalQuery, PolicyValues, compile_plan
 from orvex.semantic.evidence import EvidenceRecord
 from orvex.server.existing_lake_snapshots import SnapshotSchedule
-from orvex.store.errors import StoreError
-from orvex.store.existing_lake_reads import SNAPSHOT_CHANGED, LakeReads
 
 ENGINE = "ducklake"
 
@@ -38,7 +38,7 @@ class ExistingLakeAdapter:
 
     def __init__(
         self,
-        reads: LakeReads,
+        reads: ExistingLakeReads,
         schedule: SnapshotSchedule,
         engine_version: str,
         version: Mapping[str, object] | None = None,

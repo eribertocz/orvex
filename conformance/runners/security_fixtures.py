@@ -22,11 +22,11 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from orvex.contracts.store.client import Lake
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies import PolicyModel, read_policies
-from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 
