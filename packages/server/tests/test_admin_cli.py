@@ -17,25 +17,23 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from orvex.access.audit import open_audit_log
-from orvex.access.authentication.service import SignIn
-from orvex.access.authentication.settings import Settings
-from orvex.access.directory import Directory
-from orvex.access.directory.attributes import Attributes
-from orvex.access.directory.reads import DirectoryReads
-from orvex.server.access_store import access_store, postgres_variables
+from orvex.contracts.access.client import AccessClient, system
+from orvex.server.access_configuration import access_configuration
+from orvex.server.access_store import postgres_variables
 from orvex.server.admin_cli import remote
 from orvex.server.admin_client import Answer, Transport, checked_server
 from orvex.server.admin_http import Administration
+from orvex.server.assembly import access_bindings
 from orvex.server.audit_settings import audit_settings
 from orvex.server.cli import command_parser, main
 from orvex.server.identity import load_identity
 from orvex.server.instance import home_variable
 from orvex.server.server_app import create_server_app
 from orvex.server.versions import Versions
-from tests.support.access_directory import access_role, postgres_connection
-from tests.support.sign_in import PASSWORD
 
+from tests.support.postgres_roles import postgres_location
+
+from .access_instance import PASSWORD
 from .admin_instance import AdminInstance, admin_instance
 
 IDENTITY = load_identity()
@@ -74,31 +72,23 @@ class Typed:
 
 
 class Instance:
-    def __init__(self, folder: Path) -> None:
+    def __init__(self, folder: Path, admin: str) -> None:
         self.folder = folder
-        assert main(["admin", "create", "--user-name", "root", "--display-name", "Root"]) == 0
+        self.admin = admin
 
     def compose(self) -> None:
-        store = access_store("server", IDENTITY, self.folder, os.environ)
         settings_of = audit_settings(IDENTITY, self.folder, os.environ)
-        audit = open_audit_log(store, settings_of.key, settings_of.anchors)
-        self.store, self.audit = store, audit
-        self.sign_in = SignIn(store, audit)
-        admin = store_admin(store)
-        Settings(store, audit).change(admin, public_origin=ORIGIN)  # #156 will configure this
-        administration = Administration(
-            Directory(store, audit),
-            DirectoryReads(store, audit),
-            self.sign_in,
-            Attributes(store, audit),
-            None,
-            frozenset({"project-1"}),
-            audit,
+        configuration = access_configuration(
+            "server", IDENTITY, self.folder, os.environ, settings_of, with_oidc=False
         )
-        self.app = create_server_app(
-            VERSIONS, self.sign_in, Settings(store, audit), IDENTITY.slug,
-            administration=administration,
-        )  # fmt: skip
+        opened = AccessClient(*access_bindings(IDENTITY), system("t")).open(configuration)
+        self.access = opened
+        opened.as_actor(self.admin).change_sign_in_settings(public_origin=ORIGIN)  # #156
+        administration = Administration(opened, frozenset({"project-1"}))
+        self.app = create_server_app(VERSIONS, opened, IDENTITY.slug, administration=administration)
+
+    def events(self) -> list[dict[str, Any]]:
+        return [json.loads(event) for event in self.access.events()]
 
     def run(self, typed: Typed, *argv: str) -> tuple[int, str, str]:
         command = command_parser(IDENTITY).parse_args(["admin", *argv])
@@ -107,31 +97,28 @@ class Instance:
         return code, out.getvalue(), err.getvalue()
 
 
-def store_admin(store: Any) -> str:  # noqa: ANN401
-    with store.transaction(read_only=True) as transaction:
-        rows = transaction.rows("SELECT id FROM users WHERE administrator = :yes", yes=True)
-    return str(rows[0][0])
-
-
 @pytest.fixture
 def instance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> Iterator[tuple[Instance, str]]:
     monkeypatch.setenv(home_variable(IDENTITY), str(tmp_path))
-    with access_role(*postgres_connection()) as (connection, password):
+    with postgres_location() as location:
         variable, password_variable = postgres_variables(IDENTITY)
-        monkeypatch.setenv(variable, connection)
-        monkeypatch.setenv(password_variable, password)
-        made = Instance(tmp_path)
+        monkeypatch.setenv(variable, location.connection)
+        monkeypatch.setenv(password_variable, location.password)
+        created = ["admin", "create", "--user-name", "root", "--display-name", "Root"]
+        assert main(created) == 0
         out = capsys.readouterr().out
+        admin = out.split("administrator created: ")[1].split()[0]
         temporary = out.split("first sign-in): ")[1].strip()
+        made = Instance(tmp_path, admin)
         made.compose()
         yield made, temporary
-        made.store.close()
+        made.access.close()
 
 
 def kinds(made: Instance) -> list[str]:
-    return [e["kind"] for e in made.instance.events()]
+    return [e["kind"] for e in made.events()]
 
 
 def test_from_admin_create_to_a_builders_group_with_no_ui(
@@ -168,7 +155,7 @@ def test_from_admin_create_to_a_builders_group_with_no_ui(
         assert kind in seen, kind
     assert seen.count("auth.logout") >= 6  # every command signed out
     for secret in (temporary, bea_temporary, NEW):
-        assert secret not in str(made.instance.events())
+        assert secret not in str(made.events())
         assert secret not in caplog.text
 
 
@@ -235,7 +222,7 @@ def test_every_command_runs_its_route(sqlite_instance: AdminInstance, caplog: An
     made = sqlite_instance
     ana = made.person("ana")
     builder = made.person("bob")
-    made.directory.add_membership(made.admin, "project-1", builder, "builder")
+    made.actor(made.admin).set_membership("project-1", builder, "builder")
     app = made.app
 
     def run(signer: str, *argv: str) -> tuple[int, str, str]:
@@ -255,10 +242,10 @@ def test_every_command_runs_its_route(sqlite_instance: AdminInstance, caplog: An
     assert ana in ok("root", "users", "show", ana)
     secret = ok("root", "users", "reset-password", ana).split(": ")[-1].strip()
     assert ok("root", "users", "deactivate", ana).strip() == "done"
-    assert not made.directory.user(ana).active  # type: ignore[union-attr]
+    assert made.actor(made.admin).user(ana).state == "deactivated"
     ok("root", "users", "reactivate", ana)
     ok("root", "users", "administrator", ana, "on")
-    assert made.directory.user(ana).administrator  # type: ignore[union-attr]
+    assert made.actor(made.admin).user(ana).administrator
     ok("root", "users", "administrator", ana, "off")
     assert json.loads(ok("bob", "lookup", "--json", "ANA")) == {"id": ana, "display_name": "Ana"}
     assert run("bob", "lookup", "nobody")[2].startswith("USER_NOT_FOUND")

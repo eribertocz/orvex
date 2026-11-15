@@ -38,10 +38,9 @@ from orvex.contracts.access.errors import (
     AccessError,
     not_found,
 )
+from orvex.contracts.access.values import LOOKUP_BUDGET, USERS_PAGE
 
-LOOKUP_BUDGET = 30
 LOOKUP_WINDOW = timedelta(minutes=1)
-PAGE = 100  # users per page
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,9 +104,9 @@ class DirectoryReads:
     def users(self, actor: str, after: str | None = None) -> Page:
         def read(transaction: Transaction) -> Page:
             refused(rules.read_users(sql.caller(transaction, actor)))
-            rows = sql.users_after(transaction, (after or "").lower(), PAGE + 1)
-            more = len(rows) > PAGE
-            shown = rows[:PAGE]
+            rows = sql.users_after(transaction, (after or "").lower(), USERS_PAGE + 1)
+            more = len(rows) > USERS_PAGE
+            shown = rows[:USERS_PAGE]
             return Page(shown, shown[-1].user_name.lower() if more else None)
 
         return self._read("list_users", actor, None, read)

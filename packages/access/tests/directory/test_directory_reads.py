@@ -63,7 +63,7 @@ def test_an_administrator_lists_the_users_a_page_at_a_time(
 ) -> None:
     for name in ("cid", "Ben", "ana"):
         world.user(name)
-    monkeypatch.setattr(reads, "PAGE", 2)
+    monkeypatch.setattr(reads, "USERS_PAGE", 2)
     first = read.users(world.admin)
     assert [u.user_name for u in first.users] == ["ana", "Ben"]
     second = read.users(world.admin, first.after)

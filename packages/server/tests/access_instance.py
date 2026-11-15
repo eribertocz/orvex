@@ -43,7 +43,8 @@ def local_contexts() -> AccessClient:
 
 
 class AccessInstance:
-    """One opened instance; `admin` acts as its first administrator."""
+    """One opened instance; `admin` acts as its first administrator. Its public origin is
+    `origin` (none: every state change is refused until one is set)."""
 
     def __init__(
         self,
@@ -53,6 +54,7 @@ class AccessInstance:
         clock: Callable[[], datetime] | None = None,
         fetcher: ProviderFetcher | None = None,
         oidc: OidcSetup | None = None,
+        origin: str | None = ORIGIN,
     ) -> None:
         self.configuration = Configuration(
             store=store or SqliteLocation(str(folder / "access.sqlite")),
@@ -68,7 +70,8 @@ class AccessInstance:
         self.admin_id = first.user.id
         self.admin = self.access.as_actor(self.admin_id)
         self.signed_up("root", first.temporary_password)
-        self.admin.change_sign_in_settings(public_origin=ORIGIN)
+        if origin is not None:
+            self.admin.change_sign_in_settings(public_origin=origin)
 
     def actor(self, user: str) -> AccessClient:
         """The instance, for `user`."""

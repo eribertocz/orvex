@@ -125,6 +125,11 @@ class RoleLimit:
     max_run_ms: int
 
 
+# Users per page of `users`, and the lookups by name one caller may make in a minute (#446).
+USERS_PAGE = 100
+LOOKUP_BUDGET = 30
+
+
 # The limits a new instance starts with (#445 Q2 = A), and local mode's one Builder's limits.
 DEFAULT_LIMITS = {
     "builder": RoleLimit(4, 120_000),

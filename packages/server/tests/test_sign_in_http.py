@@ -5,26 +5,24 @@ answer, and which address a request is counted under; on SQLite and on PostgreSQ
 from __future__ import annotations
 
 import logging
-import uuid
 from collections.abc import Iterator
-from ipaddress import ip_network
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from orvex.access.audit import open_audit_log
-from orvex.access.authentication.service import SignIn
-from orvex.access.authentication.settings import Settings
-from orvex.access.directory import Bootstrap, Directory
-from orvex.access.storage import PostgresStore, SqliteStore, read_settings
+from orvex.contracts.access.kit_world import KitClock
+from orvex.contracts.access.values import PostgresLocation, SqliteLocation
 from orvex.server.client_address import client_address
 from orvex.server.identity import load_identity
 from orvex.server.server_app import checked_route_table, create_server_app
 from orvex.server.sign_in_http import cookie_name
 from orvex.server.versions import Versions
-from tests.support.access_directory import access_role, postgres_connection
-from tests.support.sign_in import PASSWORD, Clock
+
+from tests.support.postgres_roles import postgres_location
+
+from .access_instance import PASSWORD, AccessInstance, close_opened
 
 SLUG = load_identity().slug
 COOKIE = cookie_name(SLUG)
@@ -35,49 +33,39 @@ SAME = {"Origin": ORIGIN, "Sec-Fetch-Site": "same-origin"}
 
 
 class Instance:
+    """A server-mode application over an access instance on `store`, with a clock the tests
+    move."""
+
     def __init__(
-        self, store: SqliteStore | PostgresStore, tmp_path: Path, origin: str | None = ORIGIN
+        self, store: SqliteLocation | PostgresLocation, tmp_path: Path, origin: str | None = ORIGIN
     ) -> None:
-        self.clock = Clock()
-        audit = open_audit_log(store, tmp_path / "audit.key", tmp_path / "anchors.log")
-        bootstrap = Bootstrap(store, tmp_path / "recovery.key", audit)
-        self.admin = bootstrap.create_administrator("root", "Root").id
-        self.directory = Directory(store, audit)
-        self.sign_in = SignIn(store, audit, self.clock)
-        self.settings = Settings(store, audit)
-        if origin is not None:
-            self.settings.change(self.admin, public_origin=origin)
-        self.app = create_server_app(VERSIONS, self.sign_in, self.settings, SLUG)
+        self.clock = KitClock()
+        self.access = AccessInstance(tmp_path, store, clock=self.clock, origin=origin)
+        self.admin = self.access.admin
+        self.app = create_server_app(VERSIONS, self.access.access, SLUG)
 
     def client(self, peer: str = PEER) -> TestClient:
         return TestClient(self.app, base_url=ORIGIN, client=(peer, 50000))
 
     def user(self, name: str) -> str:
         """A user with `PASSWORD`, set through their temporary one."""
-        created = self.actor(self.admin).create_user(name, name.title())
-        first = self.sign_in.login(name, created.temporary_password, "192.0.2.250")
-        self.sign_in.change_password(
-            first.session_id, created.temporary_password, PASSWORD, "192.0.2.250"
-        )
-        return created.id
+        return self.access.person(name)
 
 
 @pytest.fixture(params=["sqlite", "postgres"])
-def store(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[SqliteStore | PostgresStore]:
+def store(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> Iterator[SqliteLocation | PostgresLocation]:
     if request.param == "sqlite":
-        made: SqliteStore | PostgresStore = SqliteStore(tmp_path / "access.sqlite")
-        yield made
-        made.close()
+        yield SqliteLocation(str(tmp_path / "access.sqlite"))
         return
-    with access_role(*postgres_connection()) as (connection, password):
-        settings = read_settings(connection, password, schema=f"t_{uuid.uuid4().hex[:16]}")
-        made = PostgresStore(settings)
-        yield made
-        made.close()
+    with postgres_location() as location:
+        yield location
+        close_opened()  # before its role is dropped
 
 
 @pytest.fixture
-def instance(store: SqliteStore | PostgresStore, tmp_path: Path) -> Instance:
+def instance(store: SqliteLocation | PostgresLocation, tmp_path: Path) -> Instance:
     return Instance(store, tmp_path)
 
 
@@ -170,7 +158,7 @@ def test_a_form_encoded_body_is_refused(instance: Instance) -> None:
 
 
 def test_until_the_public_origin_is_set_every_state_change_is_refused(
-    store: SqliteStore | PostgresStore, tmp_path: Path
+    store: SqliteLocation | PostgresLocation, tmp_path: Path
 ) -> None:
     bare = Instance(store, tmp_path, origin=None)
     answer = bare.client().post(
@@ -214,7 +202,7 @@ def test_without_a_live_session_an_api_route_is_session_expired(instance: Instan
 
 
 def test_a_temporary_password_session_may_only_change_it(instance: Instance) -> None:
-    created = instance.actor(instance.admin).create_user("ana", "Ana")
+    created = instance.admin.create_user("ana", "Ana")
 
     @instance.app.get("/api/v1/projects")
     async def projects() -> dict[str, str]:
@@ -297,7 +285,7 @@ def test_a_forwarded_for_from_an_untrusted_peer_is_ignored(instance: Instance) -
 
 def test_a_trusted_proxys_forwarded_for_names_the_client(instance: Instance) -> None:
     instance.user("ana")
-    instance.settings.change(instance.admin, trusted_proxies=[f"{PEER}/32"])
+    instance.admin.change_sign_in_settings(trusted_proxies=(f"{PEER}/32",))
     client = instance.client()
     client.post(
         "/api/v1/auth/login",
@@ -319,7 +307,7 @@ def test_no_password_or_session_id_reaches_the_log(
     client = instance.client()
     with caplog.at_level(logging.DEBUG):
         login(client, "ana", "a wrong password")
-        instance.clock.move(seconds=2)
+        instance.clock.advance(timedelta(seconds=2))
         login(client, "ana")
         client.post(
             "/api/v1/auth/password",
@@ -349,13 +337,12 @@ def test_no_password_or_session_id_reaches_the_log(
 def test_the_client_address(
     peer: str, forwarded: str | None, proxies: list[str], expected: str
 ) -> None:
-    networks = [ip_network(item) for item in proxies]
-    assert client_address(peer, [] if forwarded is None else [forwarded], networks) == expected
+    assert client_address(peer, [] if forwarded is None else [forwarded], proxies) == expected
 
 
 def test_every_forwarded_for_line_counts_in_order() -> None:
     """A proxy that adds its own line: the client's line comes first and is not believed."""
-    networks = [ip_network("203.0.113.0/24")]
+    networks = ["203.0.113.0/24"]
     assert client_address("203.0.113.5", ["9.9.9.9", "198.51.100.20"], networks) == (
         "198.51.100.20"
     )
@@ -363,7 +350,7 @@ def test_every_forwarded_for_line_counts_in_order() -> None:
 
 def test_a_trusted_proxys_added_line_names_the_client_over_http(instance: Instance) -> None:
     instance.user("ana")
-    instance.settings.change(instance.admin, trusted_proxies=[f"{PEER}/32"])
+    instance.admin.change_sign_in_settings(trusted_proxies=(f"{PEER}/32",))
     client = instance.client()
     for spoofed in ("9.9.9.1", "9.9.9.2"):
         client.post(

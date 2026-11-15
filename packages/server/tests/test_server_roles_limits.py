@@ -274,15 +274,14 @@ def test_server_mode_does_not_start_without_its_audit_log(server: Server) -> Non
     with pytest.raises(ValueError, match="audit"):
         create_server_app(
             VERSIONS,
-            server.sign_in,
-            server.settings,
+            server.access,
             IDENTITY.slug,
-            served=ServedProject("project-1", unaudited, server.store),
+            served=ServedProject("project-1", unaudited),
         )
 
 
 def test_server_mode_does_not_start_when_its_audit_log_does_not_verify(server: Server) -> None:
-    anchors = server.audit.anchors
+    anchors = Path(server.instance.configuration.audit_anchors)
     lines = anchors.read_text("ascii").splitlines()
     assert lines  # the bootstrap's checkpoints were anchored
     last = lines[-1]
@@ -291,10 +290,9 @@ def test_server_mode_does_not_start_when_its_audit_log_does_not_verify(server: S
     with pytest.raises(AccessError):
         create_server_app(
             VERSIONS,
-            server.sign_in,
-            server.settings,
+            server.access,
             IDENTITY.slug,
-            served=ServedProject("project-1", server.semantic, server.store),
+            served=ServedProject("project-1", server.semantic),
         )
 
 
@@ -309,8 +307,7 @@ def test_server_mode_does_not_start_with_local_modes_identity_or_limits(
     with pytest.raises(ValueError, match="identity and limits"):
         create_server_app(
             VERSIONS,
-            server.sign_in,
-            server.settings,
+            server.access,
             IDENTITY.slug,
-            served=ServedProject("project-1", composed, server.store),
+            served=ServedProject("project-1", composed),
         )

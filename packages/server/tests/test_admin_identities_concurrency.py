@@ -13,7 +13,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from .admin_instance import ORIGIN, SAME, AdminInstance, admin_instance
+from .access_instance import ORIGIN
+from .admin_instance import SAME, AdminInstance, admin_instance
 
 A = "/api/v1/admin"
 

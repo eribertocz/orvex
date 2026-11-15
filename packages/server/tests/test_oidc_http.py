@@ -4,30 +4,25 @@ PostgreSQL, against the in-process provider."""
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
-from orvex.access.audit import open_audit_log
-from orvex.access.authentication.service import SignIn
-from orvex.access.authentication.settings import Settings
-from orvex.access.directory import Bootstrap, Directory
-from orvex.access.oidc.configuration import parsed
-from orvex.access.oidc.identities import Identities
-from orvex.access.oidc.service import OidcSignIn
-from orvex.access.storage import PostgresStore, SqliteStore, read_settings
+from orvex.contracts.access.kit_world import KitClock
+from orvex.contracts.access.values import PostgresLocation, SqliteLocation
 from orvex.server.identity import load_identity
 from orvex.server.oidc_http import binding_cookie
 from orvex.server.server_app import create_server_app
 from orvex.server.sign_in_http import cookie_name
 from orvex.server.versions import Versions
-from tests.support.access_directory import access_role, postgres_connection
-from tests.support.oidc_provider import FakeFetcher, FakeProvider
-from tests.support.oidc_world import ENVIRONMENT, document
-from tests.support.sign_in import Clock
+
+from tests.support.oidc_provider import FakeFetcher, FakeProvider, oidc_setup
+from tests.support.postgres_roles import postgres_location
+
+from .access_instance import AccessInstance, close_opened
 
 SLUG = load_identity().slug
 SESSION = cookie_name(SLUG)
@@ -37,31 +32,24 @@ VERSIONS = Versions("0.1.0", (("server", "0.1.0"),), (("http-api", "v1"),))
 
 
 class Instance:
-    def __init__(self, store: SqliteStore | PostgresStore, tmp_path: Path) -> None:
-        self.clock = Clock()
-        audit = open_audit_log(store, tmp_path / "audit.key", tmp_path / "anchors.log")
-        self.admin = (
-            Bootstrap(store, tmp_path / "recovery.key", audit)
-            .create_administrator("root", "Root")
-            .id
-        )
-        self.directory = Directory(store, audit)
-        settings = Settings(store, audit)
-        settings.change(self.admin, public_origin=ORIGIN)
+    def __init__(self, store: SqliteLocation | PostgresLocation, tmp_path: Path) -> None:
+        self.clock = KitClock()
         self.provider = FakeProvider(now=lambda: self.clock().timestamp())
-        configuration = parsed(document(), ENVIRONMENT)
-        self.oidc = OidcSignIn(store, audit, configuration, FakeFetcher(self.provider), self.clock)
-        self.oidc.start_up()
-        self.identities = Identities(store, audit, configuration)
-        sign_in = SignIn(store, audit, self.clock)
-        self.app = create_server_app(VERSIONS, sign_in, settings, SLUG, self.oidc)
+        self.access = AccessInstance(
+            tmp_path,
+            store,
+            clock=self.clock,
+            fetcher=FakeFetcher(self.provider),
+            oidc=oidc_setup(),
+        )
+        self.app = create_server_app(VERSIONS, self.access.access, SLUG)
 
     def client(self) -> TestClient:
         return TestClient(self.app, base_url=ORIGIN, follow_redirects=False)
 
     def linked(self, name: str, subject: str) -> str:
-        user = self.actor(self.admin).create_user(name, name.title()).id
-        self.identities.link(self.admin, user, "corp", subject)
+        user = self.access.admin.create_user(name, name.title()).user.id
+        self.access.admin.link_identity(user, "corp", subject)
         return user
 
     def sign_in(self, client: TestClient, subject: str, refresh: bool = False) -> int:
@@ -76,16 +64,11 @@ class Instance:
 @pytest.fixture(params=["sqlite", "postgres"])
 def instance(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Instance]:
     if request.param == "sqlite":
-        store: SqliteStore | PostgresStore = SqliteStore(tmp_path / "access.sqlite")
-        yield Instance(store, tmp_path)
-        store.close()
+        yield Instance(SqliteLocation(str(tmp_path / "access.sqlite")), tmp_path)
         return
-    with access_role(*postgres_connection()) as (connection, password):
-        store = PostgresStore(
-            read_settings(connection, password, schema=f"t_{uuid.uuid4().hex[:16]}")
-        )
-        yield Instance(store, tmp_path)
-        store.close()
+    with postgres_location() as location:
+        yield Instance(location, tmp_path)
+        close_opened()  # before its role is dropped
 
 
 def test_start_redirects_with_the_binding_cookie(instance: Instance) -> None:
@@ -144,9 +127,9 @@ def test_the_gate_asks_for_a_silent_reauthentication_when_groups_are_due(
     instance.linked("ana", "sub-ana")
     client = instance.client()
     assert instance.sign_in(client, "sub-ana") == 200
-    instance.clock.move(minutes=30)
+    instance.clock.advance(timedelta(minutes=30))
     assert client.get("/api/v1/auth/session").status_code == 200  # not idle
-    instance.clock.move(minutes=30)
+    instance.clock.advance(timedelta(minutes=30))
     due = client.get("/api/v1/auth/session")
     assert due.status_code == 401
     assert due.json()["error"]["code"] == "OIDC_REFRESH_REQUIRED"
@@ -162,7 +145,7 @@ def test_a_failed_silent_reauthentication_ends_the_session(instance: Instance) -
     instance.linked("ana", "sub-ana")
     client = instance.client()
     instance.sign_in(client, "sub-ana")
-    instance.clock.move(hours=1)
+    instance.clock.advance(timedelta(hours=1))
     started = client.get("/api/v1/auth/oidc/corp/start", params={"refresh": "true"})
     state = parse_qs(urlsplit(started.headers["location"]).query)["state"][0]
     failed = client.get(

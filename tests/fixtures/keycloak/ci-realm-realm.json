@@ -1,6 +1,7 @@
 {
   "realm": "ci-realm",
   "enabled": true,
+  "accessTokenLifespan": 3600,
   "sslRequired": "external",
   "groups": [{ "name": "finance" }, { "name": "ops" }],
   "users": [
