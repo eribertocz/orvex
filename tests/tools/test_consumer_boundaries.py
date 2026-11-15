@@ -124,3 +124,10 @@ def test_the_repository_report_sees_the_coupling_and_never_more() -> None:
         assert 0 < len(files[area]) <= ceiling, (area, len(files[area]))
     sources = {path for path in files["server"] if path.startswith("packages/server/src/")}
     assert 0 < len(sources) <= 48
+
+
+def test_no_consumer_uses_a_transform_internal() -> None:
+    """#486 step 3: every consumer of transform reaches it through its contract only, so the
+    report keeps no transform finding while the check is still in report mode."""
+    found = [f for f in consumer_scan(REPOSITORY_ROOT) if "an internal of 'transform'" in f.detail]
+    assert found == []

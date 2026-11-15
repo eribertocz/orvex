@@ -79,6 +79,17 @@ def test_a_declared_dependency_not_used_fails() -> None:
     assert codes(found) == ["MODULE_DEPENDENCY_UNUSED"]
 
 
+def test_tzdata_is_used_by_zoneinfo_only_when_declared() -> None:
+    declared = ["duckdb", "orvex-contracts", "tzdata"]
+    zones = imported_modules(SOURCE) | {"zoneinfo"}
+    assert dependency_problems("orvex-store", zones, owner_of, declared, declared) == []
+    found = dependency_problems(
+        "orvex-store", imported_modules(SOURCE), owner_of, declared, declared
+    )
+    assert codes(found) == ["MODULE_DEPENDENCY_UNUSED"]
+    assert "tzdata" in found[0]
+
+
 def test_a_manifest_that_disagrees_with_the_distribution_fails() -> None:
     declared = ["duckdb", "orvex-contracts"]
     found = dependency_problems(

@@ -19,6 +19,7 @@ from orvex.server.assembly import (
     assembly_problems,
     check_assembly,
     check_installed_assembly,
+    implementation_of,
     installed_manifests,
     load_implementations,
 )
@@ -304,3 +305,17 @@ def test_the_server_does_not_start_when_assembly_is_refused(
     monkeypatch.setattr(cli, "check_installed_assembly", refuse)
     assert cli.main([]) == 3
     assert "ASSEMBLY_CAPABILITY_MISSING: planted" in capsys.readouterr().err
+
+
+def test_the_server_calls_the_one_installed_transform_implementation() -> None:
+    found = implementation_of(load_identity(), "transform")
+    assert type(found).__module__ == f"{load_identity().python_namespace}.transform.api"
+    assert implementation_of(load_identity(), "transform") is not found
+
+
+def test_a_contract_no_installed_module_provides_is_refused() -> None:
+    with pytest.raises(AssemblyRefused) as raised:
+        implementation_of(load_identity(), "ledger")
+    assert raised.value.problems == [
+        "ASSEMBLY_NO_IMPLEMENTATION: 0 installed modules provide ledger"
+    ]
