@@ -84,7 +84,7 @@ def envelope_refusal(
     if match is None:
         return invalid("contract_version", f"{envelope.contract_version!r} is not MAJOR.MINOR")
     spoken = Version(int(match[1]), int(match[2]))
-    since = operation.since or Version(contract.version.major, 0)
+    since = contract.since(operation)
     problem = (
         f"the caller speaks {spoken} and the provider serves {provided}"
         if spoken.major != provided.major

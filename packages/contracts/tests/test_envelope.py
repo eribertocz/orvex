@@ -141,6 +141,6 @@ def test_a_binding_never_serves_a_version_the_contract_does_not_describe(
     assert raised.value.code == "CONTRACT_VERSION_UNSUPPORTED"
 
 
-def test_the_envelope_holds_the_required_fields_and_the_key() -> None:
+def test_every_field_of_the_envelope_is_validated() -> None:
     assert dataclasses.fields(CallEnvelope)[-1].name == "idempotency_key"
     assert [f.name for f in dataclasses.fields(CallEnvelope)][:-1] == list(REQUIRED)
