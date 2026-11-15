@@ -2,12 +2,14 @@
 
 Every value becomes tagged JSON: exact types survive (a tuple stays a tuple, `bool` is never an
 `int`), a `Decimal` keeps its scale, an integer of any width stays exact, a `datetime` keeps its
-zone (an IANA zone by its key) and its `fold`. A pydantic model crosses field by field through
-the same tree and is validated again when rebuilt, so nothing inside it is weakened (its own
-JSON would turn an IANA zone into a fixed offset). An Arrow table crosses as Arrow IPC, which
-keeps every type, NULL and time zone of its schema. Only the classes the contract declares
-(`InterfaceContract.value_classes`) are built back, and only of exactly that class. Anything
-else is refused with INTERFACE_VALUE_NOT_SERIALIZABLE: a live object never crosses.
+zone (an IANA zone by its key, or a fixed offset of `datetime.timezone` or pydantic's `TzInfo`,
+each rebuilt as itself) and its `fold`; a naive datetime is refused. A pydantic model crosses
+field by field through the same tree and is validated again when rebuilt, so nothing inside it
+is weakened (its own JSON would turn an IANA zone into a fixed offset). An Arrow table crosses
+as Arrow IPC, which keeps every type, NULL and time zone of its schema. Only the classes the
+contract declares (`InterfaceContract.value_classes`) are built back, and only of exactly that
+class. Anything else is refused with INTERFACE_VALUE_NOT_SERIALIZABLE: a live object never
+crosses.
 """
 
 from __future__ import annotations
@@ -15,18 +17,21 @@ from __future__ import annotations
 import base64
 import dataclasses
 import json
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from decimal import Decimal
 from enum import Enum
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pyarrow as pa
-from pydantic import BaseModel
+from pydantic import BaseModel, RootModel
+from pydantic_core import TzInfo
 
 from .interface_errors import InterfaceContractError
 
 CODE = "INTERFACE_VALUE_NOT_SERIALIZABLE"
+# The fixed-offset zones that cross, by the name their kind is recorded with.
+OFFSET_KINDS: dict[type, str] = {timezone: "timezone", TzInfo: "pydantic"}
 
 
 def qualified(kind: type) -> str:
@@ -142,6 +147,8 @@ class Codec:
             return kind[tree["member"]]
         if tag == "$model" and issubclass(kind, BaseModel):
             fields = {name: self._value(item) for name, item in tree["fields"].items()}
+            if issubclass(kind, RootModel):
+                return kind.model_validate(fields["root"])
             return kind.model_validate(fields, by_alias=False, by_name=True)
         if tag == "$dataclass" and dataclasses.is_dataclass(kind):
             return kind(**{name: self._value(item) for name, item in tree["fields"].items()})
@@ -156,22 +163,34 @@ def _ipc(table: pa.Table) -> bytes:
 
 
 def _zone(value: datetime) -> dict[str, object]:
+    """The zone of an aware datetime: an IANA zone by its key, a fixed offset with the kind of
+    object that holds it (`datetime.timezone`, or the `TzInfo` pydantic parses an offset into).
+    A naive datetime never crosses: time zones are explicit."""
     zone = value.tzinfo
     found: dict[str, object] = {"fold": value.fold} if value.fold else {}
-    if zone is None:
-        return found
+    if zone is None or value.utcoffset() is None:
+        raise _refused("a naive datetime cannot cross a contract: its time zone is explicit")
     if type(zone) is ZoneInfo and zone.key is not None:
         return {**found, "zone": zone.key}
-    if type(zone) is timezone:
+    if type(zone) in OFFSET_KINDS:
         offset = zone.utcoffset(None)
-        return {**found, "offset": [offset.days, offset.seconds, offset.microseconds]}
+        if offset is None or (type(zone) is TzInfo and offset.microseconds):
+            raise _refused(f"a {qualified(type(zone))} without a whole offset cannot cross")
+        return {
+            **found,
+            "offset": [offset.days, offset.seconds, offset.microseconds],
+            "kind": OFFSET_KINDS[type(zone)],
+        }
     raise _refused(f"a {qualified(type(zone))} zone cannot cross a contract")
 
 
-def _tzinfo(tree: dict[str, Any]) -> ZoneInfo | timezone | None:
+def _tzinfo(tree: dict[str, Any]) -> tzinfo:
     if "zone" in tree:
         return ZoneInfo(tree["zone"])
-    if "offset" in tree:
-        days, seconds, microseconds = tree["offset"]
-        return timezone(timedelta(days=days, seconds=seconds, microseconds=microseconds))
-    return None
+    days, seconds, microseconds = tree["offset"]
+    offset = timedelta(days=days, seconds=seconds, microseconds=microseconds)
+    if tree["kind"] == "pydantic":
+        return TzInfo(int(offset.total_seconds()))
+    if tree["kind"] == "timezone":
+        return timezone(offset)
+    raise ValueError(f"unknown offset kind {tree['kind']!r}")

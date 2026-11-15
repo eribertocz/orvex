@@ -16,8 +16,10 @@ import pytest
 from orvex.contracts.envelope import CallEnvelope
 from orvex.contracts.interface import InterfaceContract, Operation
 from orvex.contracts.interface_errors import InterfaceContractError
+from orvex.contracts.serializable import crossing_problem
+from orvex.contracts.store import v1 as store_v1
 from orvex.contracts.version import Version
-from pydantic import BaseModel
+from pydantic import AwareDatetime, BaseModel
 
 from .sample_contract import LEDGER, LedgerError, Reading
 
@@ -237,6 +239,7 @@ class TestEnvelopeParameter:
 
 
 SERIALIZABLE: list[object] = [
+    AwareDatetime,
     int,
     bool,
     float,
@@ -350,3 +353,17 @@ def test_the_format_expresses_the_result_cache_that_g1_substitutes() -> None:
     assert cache.describe()["operations"]["get"]["returns"] == (  # type: ignore[index]
         f"{Stored.__module__}.Stored | None"
     )
+
+
+def test_every_generated_store_type_may_cross() -> None:
+    models = [
+        kind
+        for kind in vars(store_v1).values()
+        if isinstance(kind, type)
+        and issubclass(kind, BaseModel)
+        and kind.__module__ == store_v1.__name__
+    ]
+    assert models
+    assert {kind.__name__: crossing_problem(kind, set()) for kind in models} == {
+        kind.__name__: None for kind in models
+    }

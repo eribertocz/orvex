@@ -177,7 +177,7 @@ class TestEnvelopeCases:
         assert "envelope.names.idempotency_key-missing" not in ids
         assert "envelope.count.correlation_id-blank" in ids
         assert "envelope.readings.major-2" in ids
-        assert len(ids) == 4 * 14 + 1
+        assert len(ids) == 4 * 20 + 1
         older = run_kit(LEDGER_KIT, MemoryLedger, serialized=False, consumer=V10)
         assert not any(r.id.startswith("envelope.count.") for r in older.envelope_results)
 

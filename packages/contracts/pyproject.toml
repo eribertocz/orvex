@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.14"
-dependencies = ["pyarrow==26.0.1", "pydantic==2.14.3"]
+dependencies = ["pyarrow==26.0.1", "pydantic==2.14.3", "pydantic-core==2.50.4"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

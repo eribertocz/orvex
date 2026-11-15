@@ -16,7 +16,9 @@ from orvex.contracts.codec import Codec
 from orvex.contracts.envelope import CallEnvelope
 from orvex.contracts.interface_errors import ContractCallRefused, InterfaceContractError
 from orvex.contracts.kit_run import run_kit, verify_kit
-from pydantic import BaseModel, Field
+from orvex.contracts.store.v1 import Snapshot
+from pydantic import AwareDatetime, BaseModel, Field
+from pydantic_core import TzInfo
 
 from .sample_contract import (
     ENVELOPE,
@@ -35,6 +37,15 @@ class Color(Enum):
 
 class Shape(BaseModel):
     side: Decimal = Field(gt=0)
+
+
+class Stamp(BaseModel):
+    """A generated-style model whose datetime must be aware."""
+
+    at: AwareDatetime
+
+
+OFFSET = TzInfo(-4 * 3600)
 
 
 class Moment(BaseModel):
@@ -69,7 +80,7 @@ class ReadingChild(Reading):
     pass
 
 
-CODEC = Codec(frozenset({Reading, Color, Shape, Moment, CallEnvelope}))
+CODEC = Codec(frozenset({Reading, Color, Shape, Moment, Stamp, Snapshot, CallEnvelope}))
 
 VALUES: list[object] = [
     None,
@@ -89,7 +100,7 @@ VALUES: list[object] = [
     Decimal("123456789012345678901234567890.123456789"),
     datetime(2026, 3, 8, 1, 30, tzinfo=ZoneInfo("America/La_Paz")),
     datetime(2026, 11, 1, 1, 30, fold=1, tzinfo=ZoneInfo("America/New_York")),
-    datetime(2026, 3, 8, 1, 30, 0, 123456),
+    datetime(2026, 3, 8, 1, 30, 0, 123456, tzinfo=OFFSET),
     datetime(2026, 3, 8, tzinfo=UTC),
     datetime(2026, 3, 8, tzinfo=timezone(timedelta(hours=-4))),
     date(2026, 2, 28),
@@ -106,6 +117,10 @@ VALUES: list[object] = [
         color=Color.RED,
         readings=(READING,),
     ),
+    Stamp(at=datetime(2026, 3, 8, 1, 30, tzinfo=ZoneInfo("America/La_Paz"))),
+    Stamp(at=datetime(2026, 3, 8, 1, 30, tzinfo=timezone(timedelta(hours=5, minutes=45)))),
+    Stamp.model_validate({"at": "2026-03-08T01:30:00-04:00"}),
+    Snapshot.model_validate({"kind": "snapshot", "id": 7, "committed_at": "2026-03-08T01:30:00Z"}),
     TABLE,
     TABLE.slice(0, 0),
     READING,
@@ -137,6 +152,7 @@ def same(left: object, right: object) -> bool:
         assert isinstance(right, (datetime, time))
         return (
             left == right
+            and type(left.tzinfo) is type(right.tzinfo)
             and str(left.tzinfo) == str(right.tzinfo)
             and left.fold == right.fold
             and left.isoformat() == right.isoformat()
@@ -170,6 +186,14 @@ class TestCodec:
         assert back.column("huge").to_pylist()[0] == Decimal(2**126)
         assert back.schema.field("at").type == pa.timestamp("us", "America/La_Paz")
 
+    def test_a_parsed_fixed_offset_comes_back_as_pydantic_s_own_zone(self) -> None:
+        stamp = Stamp.model_validate({"at": "2026-03-08T01:30:00-04:00"})
+        assert type(stamp.at.tzinfo) is TzInfo
+        back = CODEC.decode(CODEC.encode(stamp))
+        assert isinstance(back, Stamp)
+        assert type(back.at.tzinfo) is TzInfo
+        assert back.at.utcoffset() == timedelta(hours=-4)
+
     def test_a_zone_comes_back_as_the_same_zone(self) -> None:
         back = CODEC.decode(CODEC.encode(READING.at))
         assert isinstance(back, datetime)
@@ -189,6 +213,9 @@ class TestCodec:
             {1, 2},
             bytearray(b"x"),
             time(1, tzinfo=ZoneInfo("Europe/Madrid")),
+            datetime(2026, 3, 8, 1, 30),
+            (datetime(2026, 3, 8),),
+            Moment.model_construct(at=datetime(2026, 3, 8), color=Color.RED, readings=()),
         ],
         ids=lambda value: type(value).__name__,
     )

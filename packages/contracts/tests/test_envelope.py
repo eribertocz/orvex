@@ -40,7 +40,11 @@ def refused(
 
 @BINDINGS
 @pytest.mark.parametrize("field", REQUIRED)
-@pytest.mark.parametrize("value", [None, "", "  ", 7], ids=["absent", "empty", "blank", "int"])
+@pytest.mark.parametrize(
+    "value",
+    [None, "", "  ", 7, "unknown", " N/A ", "placeholder"],
+    ids=["absent", "empty", "blank", "int", "unknown", "n/a", "placeholder"],
+)
 def test_a_call_missing_a_required_field_is_refused(
     serialized: bool, field: str, value: object
 ) -> None:
