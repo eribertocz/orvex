@@ -192,11 +192,12 @@ Source and Direct Query connections: PostgreSQL, ClickHouse and files.
 |---|---|---|---|---|
 | TM-SOURCES-1 | Spoofing | A source's server is impersonated on the network. | ADR-0027 | packages/store/tests/test_source_tls.py |
 | TM-SOURCES-2 | Tampering | A ClickHouse read changes its own settings or runs a second statement. | ADR-0028 | packages/store/tests/test_clickhouse.py |
-| TM-SOURCES-3 | Repudiation | A source read leaves no record. | security.md §4 | n/a: not applicable, because sources are read only and every read is recorded by the semantic answer or run that made it (TM-HTTP-7, TM-PROJECT-6) |
+| TM-SOURCES-3 | Repudiation | A caller denies a Direct Query read from a source, or the read leaves no record. | security.md §4 | packages/server/tests/test_server_delivery.py |
 | TM-SOURCES-4 | Information disclosure | A Direct Query read bypasses the caller's row or column policies. | ADR-0027 | conformance/security/scenarios/direct-query |
 | TM-SOURCES-5 | Denial of service | A source view that exhausts memory or runs forever stops the server. | laws.md Law 7 | packages/store/tests/test_source_isolation.py |
 | TM-SOURCES-6 | Denial of service | A ClickHouse read over its time budget keeps running on the source. | laws.md Law 7 | packages/store/tests/test_clickhouse.py |
 | TM-SOURCES-7 | Elevation of privilege | A source connection reaches files or networks outside its declared scope. | ADR-0031 | packages/store/tests/test_source_isolation.py |
+| TM-SOURCES-8 | Repudiation | A transformation run reads a source and leaves no record of what it read. | ADR-0015 | packages/server/tests/test_run_records.py |
 
 ## Surface: build
 
@@ -212,5 +213,5 @@ Build and release: dependencies, workflows and release artifacts (supply chain, 
 | TM-BUILD-2 | Tampering | A workflow action changes under the same reference. | security.md §9 | tests/tools/test_ci_alert_workflows.py |
 | TM-BUILD-3 | Repudiation | A release ships without a record of what it contains. | security.md §9 | tests/tools/test_sbom.py |
 | TM-BUILD-4 | Information disclosure | A secret reaches the repository or a log. | security.md §9 | gap: no secret scanner runs on pull requests; the options are a scanner as a required check, which adds a dependency, or GitHub secret scanning with push protection, which depends on the repository's plan |
-| TM-BUILD-5 | Denial of service | An outage of the build stops a release. | security.md §9 | n/a: not applicable, because the build runs on hosted runners the project does not operate, and an outage delays a release without exposing anything |
+| TM-BUILD-5 | Denial of service | An outage of the hosted runners or of the package registries blocks a release, including a security patch. | security.md §9 | gap: no documented way exists to build, verify and publish a release without the hosted runners; the options are a documented local release procedure that produces the same attested artifacts, which needs the signing identity outside CI, or accepting a delay bounded by the provider's outage |
 | TM-BUILD-6 | Elevation of privilege | A pull request's workflow gains write access to the repository or its secrets. | security.md §9 | tests/tools/test_ci_checks.py |
