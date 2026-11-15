@@ -542,7 +542,7 @@ def test_no_http_path_reaches_the_cli_s_builder_grant() -> None:
         source = inspect.getsource(module)
         for name in ("commands.evidence", "_check_semantic", "_evidence_after_run", "validate("):
             assert name not in source, (module.__name__, name)
-    assert "LocalContextProvider" in inspect.getsource(semantic_http)
+    assert "access.local_context(" in inspect.getsource(semantic_http)  # the contract's context
 
 
 def test_the_exchange_never_redirects_to_another_host() -> None:
