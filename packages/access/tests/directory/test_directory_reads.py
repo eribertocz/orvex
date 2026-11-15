@@ -12,12 +12,12 @@ from types import SimpleNamespace
 import pytest
 from orvex.access.directory import reads
 from orvex.access.directory.reads import LOOKUP_BUDGET, DirectoryReads, Found, LookupLimited
-from orvex.access.errors import ACCESS_FORBIDDEN, USER_NOT_FOUND, AccessError
 from orvex.access.storage import PostgresStore, SqliteStore, migrate
 from orvex.access.storage.postgres import migrations_for
 from orvex.access.storage.sqlite import MIGRATIONS
+from orvex.contracts.access.errors import ACCESS_FORBIDDEN, USER_NOT_FOUND, AccessError
 
-from tests.support.access_directory import AnyStore, Backend, Raw, World
+from ..access_directory import AnyStore, Backend, Raw, World
 
 
 class Clock:

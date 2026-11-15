@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import pytest
-from orvex.access.errors import OIDC_NOT_CONFIGURED, AccessError
 from orvex.access.oidc.configuration import parsed
 from orvex.access.oidc.service import OidcSignIn
+from orvex.contracts.access.errors import OIDC_NOT_CONFIGURED, AccessError
 
-from tests.support.access_directory import World
-from tests.support.oidc_provider import SECRET, FakeFetcher, FakeProvider
-from tests.support.oidc_world import ENVIRONMENT, document
+from ..access_directory import World
+from ..oidc_provider import SECRET, FakeFetcher, FakeProvider
+from ..oidc_world import ENVIRONMENT, document
 
 
 def setting(document_: dict[str, object], environment: dict[str, str] = ENVIRONMENT) -> str:

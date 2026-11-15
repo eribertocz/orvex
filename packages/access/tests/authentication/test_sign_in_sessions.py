@@ -11,7 +11,7 @@ import pytest
 from orvex.access.authentication import sessions
 from orvex.access.authentication.service import SignIn
 from orvex.access.authentication.settings import Settings
-from orvex.access.errors import (
+from orvex.contracts.access.errors import (
     ACCESS_FORBIDDEN,
     LOGIN_FAILED,
     PASSWORD_REJECTED,
@@ -19,8 +19,8 @@ from orvex.access.errors import (
     AccessError,
 )
 
-from tests.support.access_directory import World
-from tests.support.sign_in import ADDRESS, PASSWORD, Accounts, Clock
+from ..access_directory import World
+from ..sign_in import ADDRESS, PASSWORD, Accounts, Clock
 
 
 def ended(sign_in: SignIn, session_id: str) -> bool:

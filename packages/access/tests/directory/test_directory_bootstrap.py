@@ -12,9 +12,14 @@ from typing import Any
 import pytest
 from orvex.access.audit import open_audit_log
 from orvex.access.directory import Bootstrap
-from orvex.access.errors import ACCESS_FORBIDDEN, AUDIT_UNAVAILABLE, USER_NAME_TAKEN, AccessError
+from orvex.contracts.access.errors import (
+    ACCESS_FORBIDDEN,
+    AUDIT_UNAVAILABLE,
+    USER_NAME_TAKEN,
+    AccessError,
+)
 
-from tests.support.access_directory import AnyStore, Backend, audit_events
+from ..access_directory import AnyStore, Backend, audit_events
 
 
 class Events:

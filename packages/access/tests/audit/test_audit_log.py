@@ -9,26 +9,27 @@ import logging
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from importlib.resources import files
 
 import pytest
 from jsonschema import Draft202012Validator
 from orvex.access.audit import AuditLog
 from orvex.access.directory import Directory
-from orvex.access.errors import (
+from orvex.access.storage import PostgresStore
+from orvex.contracts.access.errors import (
     ACCESS_FORBIDDEN,
     AUDIT_EVENT_INVALID,
     AUDIT_KEY_UNSAFE,
     AUDIT_UNAVAILABLE,
     AccessError,
 )
-from orvex.access.storage import PostgresStore
 from pg8000.exceptions import DatabaseError
 
-from tests.support.access_directory import Raw, World
-from tools.repository import REPOSITORY_ROOT
+from ..access_directory import Raw, World
 
 WRITERS, EACH = 8, 1000
-CONTRACT = REPOSITORY_ROOT / "contracts/audit-event/v1/schema.json"
+# The contract's own schema, as the package ships it (`tests/contracts/test_audit_event_v1.py`).
+CONTRACT = files("orvex.access").joinpath("audit-event-v1.json")
 
 
 def kinds(world: World) -> list[str]:

@@ -8,9 +8,9 @@ from ipaddress import ip_network
 import pytest
 from orvex.access.authentication import settings as sign_in_settings
 from orvex.access.authentication.settings import Settings
-from orvex.access.errors import ACCESS_FORBIDDEN, VALIDATION_FAILED, AccessError
+from orvex.contracts.access.errors import ACCESS_FORBIDDEN, VALIDATION_FAILED, AccessError
 
-from tests.support.access_directory import World
+from ..access_directory import World
 
 
 def test_the_defaults_are_twelve_hours_one_hour_no_origin_no_proxies(settings: Settings) -> None:

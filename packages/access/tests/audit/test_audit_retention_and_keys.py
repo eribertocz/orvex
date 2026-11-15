@@ -13,10 +13,10 @@ from pathlib import Path
 import pytest
 from orvex.access.audit import AuditLog, open_audit_log
 from orvex.access.audit import signing_key as keys
-from orvex.access.errors import AUDIT_KEY_UNSAFE, AUDIT_RETENTION_INVALID, AccessError
 from orvex.access.storage import migrate
+from orvex.contracts.access.errors import AUDIT_KEY_UNSAFE, AUDIT_RETENTION_INVALID, AccessError
 
-from tests.support.access_directory import Backend, World
+from ..access_directory import Backend, World
 
 LONG_AGO = datetime(2024, 1, 1, tzinfo=UTC)
 NOW = datetime(2026, 11, 10, tzinfo=UTC)

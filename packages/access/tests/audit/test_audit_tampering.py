@@ -14,11 +14,11 @@ from pathlib import Path
 
 import pytest
 from orvex.access.audit import AuditLog, chain
-from orvex.access.errors import AUDIT_CHAIN_BROKEN, AUDIT_CHECKPOINT_INVALID, AccessError
 from orvex.access.storage import PostgresStore
+from orvex.contracts.access.errors import AUDIT_CHAIN_BROKEN, AUDIT_CHECKPOINT_INVALID, AccessError
 from pg8000.exceptions import DatabaseError
 
-from tests.support.access_directory import Raw, World
+from ..access_directory import Raw, World
 
 EVENTS = 10
 

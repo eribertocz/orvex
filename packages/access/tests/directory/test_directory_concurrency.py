@@ -10,13 +10,13 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
 import pytest
-from orvex.access.errors import (
+from orvex.contracts.access.errors import (
     ACCESS_FORBIDDEN,
     LAST_BUILDER,
     AccessError,
 )
 
-from tests.support.access_directory import World
+from ..access_directory import World
 
 ROUNDS = 200
 

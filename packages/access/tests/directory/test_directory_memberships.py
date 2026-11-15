@@ -6,7 +6,7 @@ from __future__ import annotations
 from functools import partial
 
 import pytest
-from orvex.access.errors import (
+from orvex.contracts.access.errors import (
     ACCESS_FORBIDDEN,
     LAST_BUILDER,
     USER_NOT_FOUND,
@@ -14,7 +14,7 @@ from orvex.access.errors import (
     AccessError,
 )
 
-from tests.support.access_directory import World
+from ..access_directory import World
 
 
 def version(world: World, user_id: str) -> int:

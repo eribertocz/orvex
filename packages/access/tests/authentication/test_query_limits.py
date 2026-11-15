@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import pytest
 from orvex.access.authentication.query_limits import DEFAULT_LIMITS, QueryLimits, RoleLimit
-from orvex.access.errors import ACCESS_FORBIDDEN, VALIDATION_FAILED, AccessError
+from orvex.contracts.access.errors import ACCESS_FORBIDDEN, VALIDATION_FAILED, AccessError
 
-from tests.support.access_directory import World
+from ..access_directory import World
 
 
 @pytest.fixture

@@ -13,13 +13,13 @@ from typing import Any
 import pytest
 from joserfc import jwt
 from joserfc.jwk import RSAKey
-from orvex.access.errors import OIDC_FAILED, AccessError
 from orvex.access.oidc.configuration import parsed
 from orvex.access.oidc.identities import Identities
 from orvex.access.oidc.service import OidcSignIn
+from orvex.contracts.access.errors import OIDC_FAILED, AccessError
 
-from tests.support.access_directory import World
-from tests.support.oidc_provider import (
+from ..access_directory import World
+from ..oidc_provider import (
     FakeFetcher,
     FakeProvider,
     Signer,
@@ -27,7 +27,7 @@ from tests.support.oidc_provider import (
     signed_by_stranger,
     unsigned,
 )
-from tests.support.oidc_world import ENVIRONMENT, Oidc, document
+from ..oidc_world import ENVIRONMENT, Oidc, document
 
 
 def linked(oidc: Oidc, name: str = "ana", subject: str = "sub-ana") -> str:

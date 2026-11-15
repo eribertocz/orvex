@@ -7,9 +7,14 @@ import unicodedata
 from functools import partial
 
 import pytest
-from orvex.access.errors import ACCESS_FORBIDDEN, USER_NOT_FOUND, VALIDATION_FAILED, AccessError
+from orvex.contracts.access.errors import (
+    ACCESS_FORBIDDEN,
+    USER_NOT_FOUND,
+    VALIDATION_FAILED,
+    AccessError,
+)
 
-from tests.support.access_directory import World
+from ..access_directory import World
 
 
 @pytest.fixture

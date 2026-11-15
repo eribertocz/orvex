@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from orvex.access.audit import chain
 from orvex.access.audit import signing_key as keys
-from orvex.access.errors import AUDIT_CHAIN_BROKEN, AUDIT_CHECKPOINT_INVALID, AccessError
+from orvex.contracts.access.errors import AUDIT_CHAIN_BROKEN, AUDIT_CHECKPOINT_INVALID, AccessError
 
 AT = "2026-11-10T00:00:00.000000Z"
 

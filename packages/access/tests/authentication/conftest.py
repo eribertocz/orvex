@@ -7,8 +7,8 @@ import pytest
 from orvex.access.authentication.service import SignIn
 from orvex.access.authentication.settings import Settings
 
-from tests.support.access_directory import World
-from tests.support.sign_in import Accounts, Clock
+from ..access_directory import World
+from ..sign_in import Accounts, Clock
 
 
 @pytest.fixture
