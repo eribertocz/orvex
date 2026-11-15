@@ -21,7 +21,7 @@ from typing import Literal
 from .binding import Bound
 from .envelope import IDEMPOTENCY_KEY, REQUIRED
 from .interface import InterfaceContract, Operation
-from .interface_errors import InterfaceContractError
+from .interface_errors import ContractCallRefused, InterfaceContractError
 from .kit import Idempotent, Kit, KitCase
 from .kit_client import KitClient
 from .version import Version
@@ -68,13 +68,10 @@ def binding_name(report: KitReport) -> str:
     return f"{binding}, consumer {report.consumer}, provider {report.provided}"
 
 
-def _code(error: BaseException) -> str | None:
-    found: BaseException | None = error
-    while found is not None:
-        if isinstance(found, InterfaceContractError):
-            return found.code
-        found = found.__cause__
-    return None
+def _refused(error: BaseException) -> bool:
+    """A refusal by the binding itself: never one found down a `__cause__` chain, and never one
+    an implementation raised, which the binding turns into INTERFACE_ERROR_UNDECLARED."""
+    return type(error) is ContractCallRefused and error.code == UNSUPPORTED
 
 
 def _idempotent(client: KitClient, case: KitCase, check: Idempotent) -> None:
@@ -103,7 +100,7 @@ def _outcome(run: Callable[[], None]) -> tuple[Outcome, str]:
     except KeyboardInterrupt, SystemExit:
         raise
     except BaseException as error:  # noqa: BLE001 - a failure or a skip: the kit has no skips
-        outcome: Outcome = "refused" if _code(error) == UNSUPPORTED else "failed"
+        outcome: Outcome = "refused" if _refused(error) else "failed"
         return outcome, f"{type(error).__name__}: {error}"
     return "passed", ""
 

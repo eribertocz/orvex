@@ -37,6 +37,8 @@ class Cache(Protocol):
 
     def size(self, envelope: CallEnvelope) -> int: ...
 
+    def purge(self, envelope: CallEnvelope) -> None: ...
+
 
 CACHE = InterfaceContract(
     name="cache",
@@ -49,29 +51,75 @@ CACHE = InterfaceContract(
         Operation("get", "read"),
         Operation("size", "read"),
         Operation("put", "write", changes_state=True),
+        Operation("purge", "write", changes_state=True, since=Version(1, 1)),
     ),
 )
 
 
 class Whole:
-    def get(self, key: str) -> bytes | None:
+    """A complete implementation at 1.1, with the contract's exact signatures."""
+
+    def get(self, envelope: CallEnvelope, key: str) -> bytes | None:
         return None
 
-    def put(self, key: str, value: bytes) -> None:
+    def put(self, envelope: CallEnvelope, key: str, value: bytes) -> None:
         return None
 
-    def size(self) -> int:
+    def size(self, envelope: CallEnvelope) -> int:
+        return 0
+
+    def purge(self, envelope: CallEnvelope) -> None:
+        return None
+
+
+class AtOneZero:
+    """A complete implementation at 1.0: `purge` exists only from 1.1."""
+
+    def __init__(self, *, max_bytes: int = 1) -> None:
+        self.max_bytes = max_bytes
+
+    def get(self, envelope: CallEnvelope, key: str) -> bytes | None:
+        return None
+
+    def put(self, envelope: CallEnvelope, key: str, value: bytes) -> None:
+        return None
+
+    def size(self, envelope: CallEnvelope) -> int:
         return 0
 
 
 class WithoutPut:
     """A planted alternative that omits one operation."""
 
-    def get(self, key: str) -> bytes | None:
+    def get(self, envelope: CallEnvelope, key: str) -> bytes | None:
         return None
 
-    def size(self) -> int:
+    def size(self, envelope: CallEnvelope) -> int:
         return 0
+
+    def purge(self, envelope: CallEnvelope) -> None:
+        return None
+
+
+class WithoutEnvelope(Whole):
+    """A planted alternative whose `get` drops the envelope."""
+
+    def get(self, key: str) -> bytes | None:  # type: ignore[override]
+        return None
+
+
+class Retyped(Whole):
+    """A planted alternative whose `size` answers a float."""
+
+    def size(self, envelope: CallEnvelope) -> float:  # type: ignore[override]
+        return 0.0
+
+
+class Positional(Whole):
+    """A planted alternative that cannot be built from configuration by keyword."""
+
+    def __init__(self, path: str, /) -> None:
+        self.path = path
 
 
 def provider(
@@ -86,13 +134,11 @@ def consumer(version: str = "1.0", capabilities: tuple[str, ...] = ("read", "wri
     return Manifest("server", (), (required,), (), ())
 
 
-def problems(*manifests: Manifest, implementation: object = None) -> list[str]:
-    chosen = {
-        (m.module, p.contract): Whole() if implementation is None else implementation
-        for m in manifests
-        for p in m.provides
-    }
-    return assembly_problems(manifests, {"cache": CACHE}, chosen)
+def problems(
+    *manifests: Manifest, implementation: object = Whole, chosen: dict[str, str] | None = None
+) -> list[str]:
+    loaded = {(m.module, p.contract): implementation for m in manifests for p in m.provides}
+    return assembly_problems(manifests, {"cache": CACHE}, loaded, chosen)
 
 
 def codes(found: list[str]) -> list[str]:
@@ -102,7 +148,44 @@ def codes(found: list[str]) -> list[str]:
 def test_a_complete_implementation_at_a_compatible_version_assembles() -> None:
     assert problems(provider(), consumer()) == []
     assert problems(provider("1.1"), consumer("1.1", ("read",))) == []
-    check_assembly((provider(), consumer()), {"cache": CACHE}, {("alpha", "cache"): Whole()})
+    check_assembly((provider(), consumer()), {"cache": CACHE}, {("alpha", "cache"): Whole})
+
+
+def test_an_implementation_needs_only_the_operations_of_its_version() -> None:
+    assert problems(provider("1.0"), consumer("1.0"), implementation=AtOneZero) == []
+    found = problems(provider("1.1"), consumer("1.0"), implementation=AtOneZero)
+    assert codes(found) == ["ASSEMBLY_OPERATION_MISSING"]
+    assert "purge" in found[0]
+
+
+@pytest.mark.parametrize(
+    ("implementation", "text"),
+    [
+        (WithoutEnvelope, "get(key: str) -> bytes | None is not get(envelope: "),
+        (Retyped, "size(envelope: orvex.contracts.envelope.CallEnvelope) -> float is not"),
+    ],
+    ids=["envelope dropped", "result retyped"],
+)
+def test_a_planted_signature_mismatch_is_refused(implementation: type, text: str) -> None:
+    found = problems(provider(), consumer(), implementation=implementation)
+    assert codes(found) == ["ASSEMBLY_SIGNATURE_MISMATCH"]
+    assert text in found[0]
+
+
+@pytest.mark.parametrize("implementation", [Whole(), Positional], ids=["instance", "positional"])
+def test_an_implementation_that_cannot_be_built_from_configuration_is_refused(
+    implementation: object,
+) -> None:
+    found = problems(provider(), consumer(), implementation=implementation)
+    assert codes(found) == ["ASSEMBLY_CONSTRUCTION_INVALID"]
+
+
+def test_the_configuration_chooses_one_of_several_implementations() -> None:
+    both = (provider(), provider(module="alternatives.cache_ipc"), consumer())
+    assert codes(problems(*both)) == ["ASSEMBLY_AMBIGUOUS_IMPLEMENTATION"]
+    assert problems(*both, chosen={"cache": "alternatives.cache_ipc"}) == []
+    assert problems(*both, chosen={"cache": "alpha"}) == []
+    assert codes(problems(*both, chosen={"cache": "beta"})) == ["ASSEMBLY_CHOICE_UNKNOWN"]
 
 
 def test_a_planted_implementation_missing_a_required_capability_is_refused() -> None:
@@ -112,13 +195,13 @@ def test_a_planted_implementation_missing_a_required_capability_is_refused() -> 
 
 
 def test_a_planted_implementation_omitting_an_operation_is_refused() -> None:
-    found = problems(provider(), consumer(), implementation=WithoutPut())
+    found = problems(provider(), consumer(), implementation=WithoutPut)
     assert codes(found) == ["ASSEMBLY_OPERATION_MISSING"]
     assert "put" in found[0]
 
 
 def test_an_operation_that_is_not_callable_is_refused() -> None:
-    hollow = types.SimpleNamespace(get=None, put=Whole().put, size=Whole().size)
+    hollow = type("Hollow", (Whole,), {"get": None})
     assert codes(problems(provider(), consumer(), implementation=hollow)) == [
         "ASSEMBLY_OPERATION_MISSING"
     ]
@@ -158,13 +241,14 @@ def test_every_problem_is_reported_together() -> None:
         check_assembly(
             (provider(capabilities=("read",)), consumer("1.2")),
             {"cache": CACHE},
-            {("alpha", "cache"): WithoutPut()},
+            {("alpha", "cache"): WithoutPut},
         )
     assert raised.value.code == "ASSEMBLY_REFUSED"
     assert codes(raised.value.problems) == [
         "ASSEMBLY_VERSION_INCOMPATIBLE",
         "ASSEMBLY_CAPABILITY_MISSING",
     ]
+    assert "ASSEMBLY_OPERATION_MISSING" not in codes(raised.value.problems)
     assert str(raised.value).startswith("ASSEMBLY_REFUSED: ")
 
 

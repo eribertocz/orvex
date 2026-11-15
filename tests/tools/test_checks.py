@@ -87,6 +87,18 @@ class TestBoundaries:
         findings = boundary_findings(parse("from orvex import semantic\n"), "store", "orvex", "f")
         assert len(findings) == 1
 
+    @pytest.mark.parametrize(
+        "source",
+        [
+            'import importlib\nimportlib.import_module("orvex.access.errors")\n',
+            'from importlib import import_module\nimport_module("orvex.semantic")\n',
+            '__import__("orvex.transform.incremental")\n',
+        ],
+    )
+    def test_a_constant_dynamic_import_is_reported(self, source: str) -> None:
+        findings = boundary_findings(parse(source), "store", "orvex", "f.py")
+        assert [f.code for f in findings] == ["MODULE_BOUNDARY_VIOLATION"]
+
     def test_server_may_import_every_module(self) -> None:
         tree = parse("import orvex.semantic\nfrom orvex.store import x\n")
         assert boundary_findings(tree, "server", "orvex", "packages/server/src/a.py") == []

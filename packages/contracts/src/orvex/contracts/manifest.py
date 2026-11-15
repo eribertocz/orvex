@@ -1,7 +1,7 @@
 """The module manifest `module.toml` (#486 §2.5): the interface contracts a module provides and
 requires, each at a version with its capabilities, and the distributions it depends on.
 
-    module = "store"
+    module = "store"                  # its package path under the namespace
 
     [dependencies]
     runtime = ["duckdb", "pyarrow"]   # what its code imports, equal to its distribution's
@@ -32,7 +32,8 @@ from .interface import NAME
 from .interface_errors import InterfaceContractError
 from .version import Version
 
-MODULE = re.compile(r"[a-z]+")
+# A module, or an alternative implementation, by its package path under the namespace.
+MODULE = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*")
 DISTRIBUTION = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?")
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 

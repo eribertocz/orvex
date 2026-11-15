@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from tools.checks.boundaries import run
-from tools.checks.consumers import consumer_findings, consumer_scan, consumer_summary
+from tools.checks.consumers import AREAS, consumer_findings, consumer_scan, consumer_summary
 from tools.repository import REPOSITORY_ROOT, identity
 
 from .test_checks import make_repository
@@ -108,8 +108,19 @@ def test_a_module_boundary_violation_still_fails(tmp_path: Path) -> None:
     assert run(make_repository(tmp_path / "r", files), empty, empty) == 1
 
 
-def test_the_repository_report_lists_what_remains() -> None:
+# The files per area that still use module internals, measured on 2026-11-15 (#486 §1 counts
+# 48 `server` source files; the `server` area here also holds its 32 test files). Report mode
+# never lets a count grow, and each later step of #486 lowers it, to zero at step 7.
+CEILINGS = {"server": 80, "runners": 10, "tools": 7, "tests": 66}
+
+
+def test_the_repository_report_sees_the_coupling_and_never_more() -> None:
     found = consumer_scan(REPOSITORY_ROOT)
-    areas = consumer_summary(found)
-    assert all(f.code == "CONSUMER_BOUNDARY_VIOLATION" for f in found)
-    assert "server" in areas
+    files: dict[str, set[str]] = {area: set() for area in CEILINGS}
+    for finding in found:
+        area = next(a for a, start in AREAS.items() if finding.path.startswith(start))
+        files[area].add(finding.path)
+    for area, ceiling in CEILINGS.items():
+        assert 0 < len(files[area]) <= ceiling, (area, len(files[area]))
+    sources = {path for path in files["server"] if path.startswith("packages/server/src/")}
+    assert 0 < len(sources) <= 48

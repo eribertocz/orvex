@@ -3,10 +3,12 @@ as an independent process would reach it.
 
 Through either binding only the contract's operations are callable, each with its call
 envelope first (`orvex.contracts.envelope`), validated before the implementation runs: a
-refused call never reaches it (ContractCallRefused). The binding serves the implementation at
-the version it provides (`provided`, the contract's version by default). An error crosses only
-when it is the contract's error type with a code the operation declares, or the machinery's own
-`InterfaceContractError`; anything else raised is INTERFACE_ERROR_UNDECLARED. Serialized, the
+refused call never reaches it (ContractCallRefused, which only a binding creates). The binding
+serves the implementation at the version it provides (`provided`, the contract's version by
+default). An error crosses only when it is the contract's error type with a code the operation
+declares; anything else the implementation raises, a refusal or another machinery error
+included, is INTERFACE_ERROR_UNDECLARED: a nested call's refusal crosses only as a code the
+operation declares. Serialized, the
 envelope, the arguments, the result and the error's code, message and details each pass
 through the codec, so a live object is refused (INTERFACE_VALUE_NOT_SERIALIZABLE) and nothing
 is shared with the caller.
@@ -93,10 +95,6 @@ class Bound:
             if codec is None:
                 raise
             raise self._rebuilt(codec, error) from None
-        except InterfaceContractError as error:
-            if codec is None:
-                raise
-            raise _copied(codec, error) from None
         except Exception as error:  # noqa: BLE001 - fail closed: nothing undeclared crosses
             raise self._undeclared(operation, type(error).__name__) from (None if codec else error)
         return result if codec is None else _crossed(codec, result)
@@ -117,13 +115,6 @@ class Bound:
                 f"a {type(error).__name__} needs a message and details to cross the contract",
             ) from None
         return self._contract.error_type(code, message, details)
-
-
-def _copied(codec: Codec, error: InterfaceContractError) -> InterfaceContractError:
-    """The machinery's own error, crossed as values: its class, code, message and details."""
-    code, message, details = _crossed(codec, (error.code, error.message, error.details))
-    kind = ContractCallRefused if type(error) is ContractCallRefused else InterfaceContractError
-    return kind(code, message, details)
 
 
 def _crossed(codec: Codec, value: object) -> Any:  # noqa: ANN401 - the value decoded back

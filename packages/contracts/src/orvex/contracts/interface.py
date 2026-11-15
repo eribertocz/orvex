@@ -85,6 +85,21 @@ class InterfaceContract:
         """The operation's signature without `self`, its annotations resolved."""
         return _signature(self.protocol, self.operation(name).name)
 
+    def mismatch(self, name: str, implementation: type) -> str | None:
+        """Why the method `name` of `implementation` does not have the operation's signature
+        (parameters with their kinds, types and defaults, and the result), or None."""
+        expected = self.signature(name)
+        method = inspect.getattr_static(implementation, name, None)
+        if not inspect.isfunction(method):
+            return f"{name} is not a plain method"
+        try:
+            actual = _function_signature(method)
+        except (NameError, TypeError) as error:
+            return f"{name}: its annotations cannot be resolved: {error}"
+        if _shape(actual) != _shape(expected):
+            return f"{name}{_text(actual)} is not {name}{_text(expected)}"
+        return None
+
     def value_classes(self) -> frozenset[type]:
         """The enums, models and dataclasses that may cross this contract."""
         classes: set[type] = set()
@@ -108,7 +123,7 @@ class InterfaceContract:
                         "name": parameter.name,
                         "kind": KINDS[parameter.kind],
                         "type": type_name(parameter.annotation),
-                        "default": parameter.default is not inspect.Parameter.empty,
+                        "default": _default(parameter),
                     }
                     for parameter in signature.parameters.values()
                 ],
@@ -227,7 +242,11 @@ def _check_operations(contract: InterfaceContract) -> None:
 
 
 def _signature(protocol: type, name: str) -> inspect.Signature:
-    method = vars(protocol)[name]
+    return _function_signature(vars(protocol)[name])
+
+
+def _function_signature(method: typing.Callable[..., object]) -> inspect.Signature:
+    """A method's signature without `self`, its annotations resolved."""
     hints = typing.get_type_hints(method)
     signature = inspect.signature(method)
     parameters = [
@@ -241,3 +260,31 @@ def _signature(protocol: type, name: str) -> inspect.Signature:
 def _annotations(signature: inspect.Signature) -> list[object]:
     found: list[object] = [parameter.annotation for parameter in signature.parameters.values()]
     return [*found, signature.return_annotation]
+
+
+def _default(parameter: inspect.Parameter) -> str | None:
+    """A parameter's default value as recorded text, or None when it has none."""
+    return None if parameter.default is inspect.Parameter.empty else repr(parameter.default)
+
+
+def _shape(signature: inspect.Signature) -> tuple[object, ...]:
+    """What a signature promises: each parameter's name, kind, type and default, and the result."""
+    return (
+        tuple(
+            (
+                p.name,
+                p.kind,
+                type_name(p.annotation),
+                _default(p),
+            )
+            for p in signature.parameters.values()
+        ),
+        type_name(signature.return_annotation),
+    )
+
+
+def _text(signature: inspect.Signature) -> str:
+    parameters = ", ".join(
+        f"{p.name}: {type_name(p.annotation)}" for p in signature.parameters.values()
+    )
+    return f"({parameters}) -> {type_name(signature.return_annotation)}"

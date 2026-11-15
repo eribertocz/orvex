@@ -36,6 +36,11 @@ def required_adapters(
         adapter = adapters.get(required.contract)
         if adapter is None:
             missing.append(f"{required.contract} {required.version}: no public test adapter")
+        elif adapter.contract.name != required.contract:
+            missing.append(
+                f"{required.contract} {required.version}: the adapter found implements "
+                f"{adapter.contract.name}"
+            )
         elif not adapter.contract.version.provides(required.version):
             missing.append(
                 f"{required.contract} {required.version}: the adapter is at "

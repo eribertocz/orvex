@@ -100,6 +100,18 @@ class MoreRequired(Protocol):
     def reset(self, envelope: CallEnvelope, meter: str) -> None: ...
 
 
+class WithDefault(Protocol):
+    def read(self, envelope: CallEnvelope, meter: str = "main") -> int: ...
+
+    def reset(self, envelope: CallEnvelope, meter: str) -> None: ...
+
+
+class OtherDefault(Protocol):
+    def read(self, envelope: CallEnvelope, meter: str = "spare") -> int: ...
+
+    def reset(self, envelope: CallEnvelope, meter: str) -> None: ...
+
+
 class MoreOptional(Protocol):
     def read(self, envelope: CallEnvelope, meter: str, at: int | None = None) -> int: ...
 
@@ -152,8 +164,36 @@ class TestPlantedViolations:
 
     def test_a_renamed_error_code_fails(self) -> None:
         assert codes(incompatibilities(RELEASED, renamed_error())) == [
-            "INTERFACE_ERROR_CODE_REMOVED"
+            "INTERFACE_OPERATION_ERRORS_CHANGED",
+            "INTERFACE_OPERATION_ERRORS_CHANGED",
+            "INTERFACE_ERROR_CODE_REMOVED",
         ]
+
+    @pytest.mark.parametrize(
+        ("read_errors", "text"),
+        [
+            (("METER_UNKNOWN", "METER_LOCKED"), "raises ['METER_LOCKED'] more and [] fewer"),
+            ((), "raises [] more and ['METER_UNKNOWN'] fewer"),
+        ],
+        ids=["added", "removed"],
+    )
+    def test_an_error_code_added_to_or_removed_from_an_operation_fails(
+        self, read_errors: tuple[str, ...], text: str
+    ) -> None:
+        changed = contract(
+            operations=(
+                Operation("read", "read", read_errors),
+                Operation("reset", "write", ("METER_UNKNOWN", "METER_LOCKED")),
+            )
+        )
+        found = incompatibilities(RELEASED, recorded(changed))
+        assert codes(found) == ["INTERFACE_OPERATION_ERRORS_CHANGED"]
+        assert f"meter.read {text}" in found[0]
+
+    def test_a_changed_default_value_fails(self) -> None:
+        released = recorded(contract(protocol=WithDefault))
+        changed = recorded(contract(protocol=OtherDefault))
+        assert codes(incompatibilities(released, changed)) == ["INTERFACE_SIGNATURE_CHANGED"]
 
     def test_a_changed_kit_expectation_fails(self) -> None:
         assert codes(incompatibilities(RELEASED, changed_expectation())) == [

@@ -9,13 +9,14 @@ from decimal import Decimal
 from enum import Enum
 from zoneinfo import ZoneInfo
 
+import pyarrow as pa
 import pytest
 from orvex.contracts.binding import Bound
 from orvex.contracts.codec import Codec
 from orvex.contracts.envelope import CallEnvelope
-from orvex.contracts.interface_errors import InterfaceContractError
+from orvex.contracts.interface_errors import ContractCallRefused, InterfaceContractError
 from orvex.contracts.kit_run import run_kit, verify_kit
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .sample_contract import (
     ENVELOPE,
@@ -33,7 +34,29 @@ class Color(Enum):
 
 
 class Shape(BaseModel):
-    side: Decimal
+    side: Decimal = Field(gt=0)
+
+
+class Moment(BaseModel):
+    """A model holding an IANA zone: its own JSON would turn the zone into a fixed offset."""
+
+    at: datetime
+    color: Color
+    readings: tuple[Reading, ...]
+
+
+TABLE = pa.table(
+    {
+        "amount": pa.array([Decimal("12.50"), None], pa.decimal128(38, 2)),
+        "huge": pa.array([Decimal(2**126), Decimal(-(2**126))], pa.decimal128(38, 0)),
+        "at": pa.array(
+            [datetime(2026, 3, 8, 5, 30, tzinfo=UTC), None], pa.timestamp("us", "America/La_Paz")
+        ),
+        "count": pa.array([None, -(2**63)], pa.int64()),
+        "text": pa.array(["ñandú", None], pa.large_string()),
+    },
+    metadata={"source": "test"},
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +69,7 @@ class ReadingChild(Reading):
     pass
 
 
-CODEC = Codec(frozenset({Reading, Color, Shape, CallEnvelope}))
+CODEC = Codec(frozenset({Reading, Color, Shape, Moment, CallEnvelope}))
 
 VALUES: list[object] = [
     None,
@@ -78,6 +101,13 @@ VALUES: list[object] = [
     {"a": {"b": [Decimal("0.10")]}, "": None},
     Color.RED,
     Shape(side=Decimal("2.50")),
+    Moment(
+        at=datetime(2026, 11, 1, 1, 30, fold=1, tzinfo=ZoneInfo("America/New_York")),
+        color=Color.RED,
+        readings=(READING,),
+    ),
+    TABLE,
+    TABLE.slice(0, 0),
     READING,
     ENVELOPE,
     (),
@@ -96,6 +126,11 @@ def same(left: object, right: object) -> bool:
     if isinstance(left, dict):
         assert isinstance(right, dict)
         return left.keys() == right.keys() and all(same(left[k], right[k]) for k in left)
+    if isinstance(left, pa.Table):
+        assert isinstance(right, pa.Table)
+        return bool(left.equals(right, check_metadata=True))
+    if isinstance(left, BaseModel):
+        return all(same(getattr(left, f), getattr(right, f)) for f in type(left).model_fields)
     if isinstance(left, Decimal):
         return str(left) == str(right)
     if isinstance(left, (datetime, time)):
@@ -114,6 +149,26 @@ class TestCodec:
     def test_every_value_comes_back_exactly(self, value: object) -> None:
         back = CODEC.decode(CODEC.encode(value))
         assert same(value, back), (value, back)
+
+    def test_a_zone_inside_a_model_stays_an_iana_zone(self) -> None:
+        moment = Moment(at=READING.at, color=Color.RED, readings=())
+        back = CODEC.decode(CODEC.encode(moment))
+        assert isinstance(back, Moment)
+        assert back.at.tzinfo == ZoneInfo("America/La_Paz")
+
+    def test_a_model_is_validated_again_when_rebuilt(self) -> None:
+        data = CODEC.encode(Shape(side=Decimal("2.50"))).replace(b"2.50", b"-2.50")
+        with pytest.raises(InterfaceContractError) as raised:
+            CODEC.decode(data)
+        assert raised.value.code == "INTERFACE_VALUE_NOT_SERIALIZABLE"
+
+    def test_an_arrow_table_keeps_its_types_nulls_and_zones(self) -> None:
+        back = CODEC.decode(CODEC.encode(TABLE))
+        assert isinstance(back, pa.Table)
+        assert back.schema == TABLE.schema
+        assert back.column("amount").to_pylist() == [Decimal("12.50"), None]
+        assert back.column("huge").to_pylist()[0] == Decimal(2**126)
+        assert back.schema.field("at").type == pa.timestamp("us", "America/La_Paz")
 
     def test_a_zone_comes_back_as_the_same_zone(self) -> None:
         back = CODEC.decode(CODEC.encode(READING.at))
@@ -144,7 +199,14 @@ class TestCodec:
 
     @pytest.mark.parametrize(
         "data",
-        [b"not json", b'{"$unknown": 1}', b'{"$dataclass": "nowhere.Thing", "fields": {}}', b"{}"],
+        [
+            b"not json",
+            b'{"$decimal": "two"}',
+            b'{"$arrow": "AAAA"}',
+            b'{"$unknown": 1}',
+            b'{"$dataclass": "nowhere.Thing", "fields": {}}',
+            b"{}",
+        ],
     )
     def test_bytes_that_are_not_an_encoded_value_are_refused(self, data: bytes) -> None:
         with pytest.raises(InterfaceContractError) as raised:
@@ -173,6 +235,20 @@ class WrongCode(MemoryLedger):
 class Crashing(MemoryLedger):
     def readings(self, envelope: CallEnvelope, name: str) -> tuple[Reading, ...]:
         raise KeyError(name)
+
+
+class FakeRefusal(MemoryLedger):
+    """A planted violation: the implementation fakes the binding's version refusal."""
+
+    def readings(self, envelope: CallEnvelope, name: str) -> tuple[Reading, ...]:
+        raise ContractCallRefused("CONTRACT_VERSION_UNSUPPORTED", "faked", {})
+
+
+class LeakedMachineryError(MemoryLedger):
+    """A planted violation: a machinery error of a nested call leaks through the operation."""
+
+    def readings(self, envelope: CallEnvelope, name: str) -> tuple[Reading, ...]:
+        raise InterfaceContractError("CONTRACT_ENVELOPE_INVALID", "from a nested call", {})
 
 
 class Seen(MemoryLedger):
@@ -237,12 +313,15 @@ class TestBound:
         assert raised.value.__cause__ is None
 
     @pytest.mark.parametrize("serialized", [False, True])
-    @pytest.mark.parametrize("implementation", [WrongCode, Crashing])
+    @pytest.mark.parametrize(
+        "implementation", [WrongCode, Crashing, FakeRefusal, LeakedMachineryError]
+    )
     def test_an_undeclared_error_is_refused_in_both_bindings(
         self, serialized: bool, implementation: type[MemoryLedger]
     ) -> None:
         with pytest.raises(InterfaceContractError) as raised:
             Bound(LEDGER, implementation(), serialized=serialized).readings(ENVELOPE, "a")
+        assert type(raised.value) is InterfaceContractError
         assert raised.value.code == "INTERFACE_ERROR_UNDECLARED"
         assert (raised.value.__cause__ is None) is serialized
 

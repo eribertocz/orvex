@@ -1,11 +1,15 @@
-"""Inside a module's clean environment (#486 G4): the distributions its code imports equal those
-it declares, and its own tests import no repository helper.
+"""The dependency check of one standalone module (#486 G4): in its clean environment, what the
+module imports equals what it declares, its tests use no repository helper, and every contract
+it requires has a public test adapter.
 
     <environment>/bin/python -I tools/checks/module_dependencies.py NAMESPACE DISTRIBUTION TESTS
 
-Run by `tools/ci/standalone.py` with the environment's interpreter, so it uses the standard
-library and the installed contracts package only. MODULE_DEPENDENCY_UNDECLARED: the code imports
-a distribution it does not declare (or one nothing installed provides);
+Run by `tools/ci/standalone.py` with the environment's interpreter (`python -I`), so it uses
+the standard library and the installed contracts package only; for that reason it reads imports
+with its own small reader instead of `tools/checks/imports.py`, which is not installed there.
+
+MODULE_DEPENDENCY_UNDECLARED: the code imports a distribution it does not declare (or one
+nothing installed provides);
 MODULE_DEPENDENCY_UNUSED: it declares one it never imports; MODULE_MANIFEST_DEPENDENCIES_DIFFER:
 `module.toml` and the distribution disagree; MODULE_MANIFEST_MISSING: no `module.toml`;
 MODULE_TEST_IMPORTS_REPOSITORY: a test imports `tests`, `conformance` or `tools`;

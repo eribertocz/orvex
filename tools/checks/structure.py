@@ -30,6 +30,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from tools.checks.imports import dynamic_import
 from tools.repository import REPOSITORY_ROOT
 
 LIMIT = 800
@@ -315,13 +316,7 @@ def dynamic(root: Path) -> list[Finding]:
     found = []
     for _, path in _sources(root):
         for node in ast.walk(ast.parse(path.read_text("utf-8"))):
-            if isinstance(node, ast.Call) and (
-                (
-                    isinstance(node.func, ast.Name)
-                    and node.func.id in {"__import__", "import_module"}
-                )
-                or (isinstance(node.func, ast.Attribute) and node.func.attr == "import_module")
-            ):
+            if dynamic_import(node):
                 found.append(
                     Finding(
                         "note",
