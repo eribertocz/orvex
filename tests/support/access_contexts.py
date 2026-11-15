@@ -11,13 +11,12 @@ from typing import Any
 from orvex.contracts.access.client import AccessClient, system
 from orvex.contracts.access.values import ContextFixture, ContextMember
 from orvex.server.assembly import access_bindings
-from orvex.server.identity import load_identity
 
 
 @functools.cache
 def contexts() -> AccessClient:
     """The access contract, for contexts that need no instance."""
-    return AccessClient(*access_bindings(load_identity()), system("repository-tests"))
+    return AccessClient(*access_bindings(), system("repository-tests"))
 
 
 def member(

@@ -29,7 +29,7 @@ from orvex.contracts.binding import Bound
 from orvex.contracts.interface import InterfaceContract
 from orvex.contracts.manifest import Manifest, Provided, parse_manifest
 from orvex.contracts.registry import interface_contracts
-from orvex.server.identity import Identity
+from orvex.server.identity import Identity, load_identity
 from orvex.server.versions import module_versions
 
 
@@ -236,7 +236,7 @@ def check_installed_assembly(identity: Identity, chosen: Mapping[str, str] | Non
 
 
 def access_bindings(
-    identity: Identity,
+    identity: Identity | None = None,
     *,
     clock: Callable[[], datetime] | None = None,
     fetcher: ProviderFetcher | None = None,
@@ -247,7 +247,10 @@ def access_bindings(
     the server's provider `fetcher`
     (`orvex.contracts.access.fetcher`), each reached through the in-process binding. Both
     contracts must be provided by the same implementation: the audit log of an instance is the
-    one its directory writes to."""
+    one its directory writes to. Without `identity`, the installed product's (`identity.toml`):
+    the one entry tests and runners reach access through."""
+    if identity is None:
+        identity = load_identity()  # the installed product's
     namespace = identity.python_namespace
     manifests = installed_manifests(identity)
     contracts = interface_contracts(importlib.import_module(f"{namespace}.contracts"))

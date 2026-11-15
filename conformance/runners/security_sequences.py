@@ -27,7 +27,6 @@ from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.result_cache import ResultCache
 from orvex.server.assembly import access_bindings
-from orvex.server.identity import load_identity
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
@@ -116,7 +115,7 @@ def compile_with(found: sf.Fixture, edit: Callable[[dict[str, Any]], object]) ->
 @functools.cache
 def _contexts() -> AccessClient:
     """The access contract, for the permission fingerprint the cases' contexts carry."""
-    return AccessClient(*access_bindings(load_identity()), system("security-sequences"))
+    return AccessClient(*access_bindings(), system("security-sequences"))
 
 
 def context_for(
