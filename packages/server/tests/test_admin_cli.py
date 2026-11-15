@@ -31,9 +31,7 @@ from orvex.server.instance import home_variable
 from orvex.server.server_app import create_server_app
 from orvex.server.versions import Versions
 
-from tests.support.postgres_roles import postgres_location
-
-from .access_instance import PASSWORD
+from .access_instance import PASSWORD, postgres_location
 from .admin_instance import AdminInstance, admin_instance
 
 IDENTITY = load_identity()

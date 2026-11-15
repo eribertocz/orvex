@@ -11,8 +11,9 @@ import pytest
 from orvex.access.audit import open_audit_log
 from orvex.access.directory import Bootstrap, Directory
 from orvex.access.storage import PostgresStore, SqliteStore, read_settings
+from orvex.testing.postgres_roles import access_role, postgres_connection
 
-from .access_directory import Backend, World, access_role, postgres_connection
+from .access_directory import Backend, World
 
 
 @pytest.fixture(params=["sqlite", "postgres"])

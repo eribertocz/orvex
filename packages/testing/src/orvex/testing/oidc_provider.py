@@ -1,6 +1,8 @@
-"""An in-process OIDC provider for the #439 tests: discovery, keys and a token endpoint behind the
-`Fetcher` interface, with ID tokens it signs with keys made per test. Every way of forging a
-token or an answer that a real provider will not produce is a knob here."""
+"""An in-process OIDC provider for the access and server tests (#439): discovery, keys and a token
+endpoint as a provider fetcher (`orvex.contracts.access.fetcher`), with ID tokens it signs with
+keys made per test, and the instance configuration that names it. Every way of forging a token
+or an answer that a real provider will not produce is a knob here. The fetcher never reads the
+provider it is given, so any fetcher interface may call it."""
 
 from __future__ import annotations
 
@@ -14,8 +16,8 @@ from urllib.parse import parse_qs, urlsplit
 
 from joserfc import jwt
 from joserfc.jwk import ECKey, OctKey, RSAKey
-from orvex.access.oidc.configuration import Provider
 from orvex.contracts.access.oidc_failure import failed
+from orvex.contracts.access.values import OidcSetup
 
 ISSUER = "https://idp.example.com/realms/corp"
 CLIENT_ID = "bi-client"
@@ -126,7 +128,7 @@ class FakeFetcher:
             raise failed("network")
         return found
 
-    def get(self, provider: Provider, url: str) -> bytes:
+    def get(self, provider: object, url: str) -> bytes:
         fake = self._of(url)
         fake.gets.append(url)
         path = urlsplit(url).path
@@ -137,7 +139,7 @@ class FakeFetcher:
         raise failed("network")
 
     def post_form(
-        self, provider: Provider, url: str, form: Mapping[str, str], basic: tuple[str, str]
+        self, provider: object, url: str, form: Mapping[str, str], basic: tuple[str, str]
     ) -> bytes:
         import base64
         import hashlib
@@ -156,3 +158,31 @@ class FakeFetcher:
         if grant is None or grant.verifier_challenge != challenge or basic != (CLIENT_ID, SECRET):
             raise failed("token_exchange")
         return json.dumps({"id_token": fake.id_token(grant), "access_token": "opaque"}).encode()
+
+
+CONFIGURATION = f"""\
+[providers.corp]
+issuer = "{ISSUER}"
+client_id = "{CLIENT_ID}"
+client_secret_variable = "CORP_SECRET"
+algorithms = ["RS256", "ES256"]
+
+[[mapping]]
+provider = "corp"
+claim = "groups"
+value = "finance"
+project = "p1"
+group = "finance"
+
+[[mapping]]
+provider = "corp"
+claim = "groups"
+value = "ops"
+project = "p1"
+group = "ops"
+"""
+
+
+def oidc_setup() -> OidcSetup:
+    """The provider `corp` and its group mapping, as an instance's `oidc.toml` holds them."""
+    return OidcSetup(CONFIGURATION, {"CORP_SECRET": SECRET})

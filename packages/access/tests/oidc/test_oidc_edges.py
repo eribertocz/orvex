@@ -22,8 +22,8 @@ from orvex.contracts.access.errors import (
     VALIDATION_FAILED,
     AccessError,
 )
+from orvex.testing.oidc_provider import FakeFetcher, FakeProvider
 
-from ..oidc_provider import FakeFetcher, FakeProvider
 from ..oidc_world import ENVIRONMENT, Oidc, document
 
 
@@ -115,7 +115,7 @@ class KeysAnswer(FakeFetcher):
         super().__init__(FakeProvider())
         self.answer = answer
 
-    def get(self, provider: Provider, url: str) -> bytes:
+    def get(self, provider: object, url: str) -> bytes:
         return self.answer if url.endswith("/certs") else super().get(provider, url)
 
 

@@ -24,7 +24,6 @@ from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.project import load_project
 from orvex.store.lake import Limits, open_lake
-
 from orvex.testing import azurite
 
 SLUG = load_identity().slug

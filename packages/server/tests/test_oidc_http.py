@@ -18,11 +18,9 @@ from orvex.server.oidc_http import binding_cookie
 from orvex.server.server_app import create_server_app
 from orvex.server.sign_in_http import cookie_name
 from orvex.server.versions import Versions
+from orvex.testing.oidc_provider import FakeFetcher, FakeProvider, oidc_setup
 
-from tests.support.oidc_provider import FakeFetcher, FakeProvider, oidc_setup
-from tests.support.postgres_roles import postgres_location
-
-from .access_instance import AccessInstance, close_opened
+from .access_instance import AccessInstance, close_opened, postgres_location
 
 SLUG = load_identity().slug
 SESSION = cookie_name(SLUG)

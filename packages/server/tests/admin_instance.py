@@ -16,11 +16,9 @@ from orvex.server.admin_http import Administration
 from orvex.server.identity import load_identity
 from orvex.server.server_app import create_server_app
 from orvex.server.versions import Versions
+from orvex.testing.oidc_provider import FakeFetcher, FakeProvider, oidc_setup
 
-from tests.support.oidc_provider import FakeFetcher, FakeProvider, oidc_setup
-from tests.support.postgres_roles import postgres_location
-
-from .access_instance import ORIGIN, PASSWORD, AccessInstance, close_opened
+from .access_instance import ORIGIN, PASSWORD, AccessInstance, close_opened, postgres_location
 
 SAME = {"Origin": ORIGIN, "Sec-Fetch-Site": "same-origin"}
 SLUG = load_identity().slug

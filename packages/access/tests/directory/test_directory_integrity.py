@@ -17,17 +17,10 @@ from orvex.access.storage import PostgresStore, SqliteStore, migrate, read_setti
 from orvex.access.storage.postgres import migrations_for
 from orvex.access.storage.sqlite import MIGRATIONS
 from orvex.contracts.access.errors import ACCESS_STORE_NEWER, ACCESS_STORE_UNSAFE, AccessError
+from orvex.testing.postgres_roles import access_role, postgres_connection, superuser
 from pg8000.exceptions import DatabaseError
 
-from ..access_directory import (
-    AnyStore,
-    Backend,
-    Raw,
-    World,
-    access_role,
-    postgres_connection,
-    superuser,
-)
+from ..access_directory import AnyStore, Backend, Raw, World
 
 NOW = "'2026-11-10T12:00:00.000000Z'"
 USER = (

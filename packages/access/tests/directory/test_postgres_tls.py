@@ -18,8 +18,7 @@ from collections.abc import Iterator
 import pytest
 from orvex.access.storage import PostgresStore, migrate, read_settings
 from orvex.access.storage.postgres import migrations_for
-
-from ..access_directory import access_role
+from orvex.testing.postgres_roles import access_role
 
 TLS = "STORE_TEST_POSTGRES_TLS"
 AUTHORITY = "STORE_TEST_POSTGRES_TLS_CA"

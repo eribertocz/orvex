@@ -20,7 +20,7 @@ from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.instance import home_variable
 
-from tests.support.postgres_roles import postgres_location
+from .access_instance import postgres_location
 
 IDENTITY = load_identity()
 PREFIX = IDENTITY.slug.upper().replace("-", "_")

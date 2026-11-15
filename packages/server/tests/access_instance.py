@@ -6,7 +6,9 @@ opens is closed when the test ends (`close_opened`, the suite's autouse fixture)
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+import uuid
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,7 @@ from orvex.contracts.access.values import (
 )
 from orvex.server.assembly import access_bindings
 from orvex.server.identity import load_identity
+from orvex.testing.postgres_roles import access_role, postgres_connection
 
 IDENTITY = load_identity()
 PASSWORD = "a long enough passphrase"
@@ -94,3 +97,11 @@ class AccessInstance:
 
     def close(self) -> None:
         self.access.close()
+
+
+@contextmanager
+def postgres_location() -> Iterator[PostgresLocation]:
+    """An access store location on PostgreSQL: a disposable role of its own and a schema of
+    its own (`orvex.testing.postgres_roles`)."""
+    with access_role(*postgres_connection()) as (connection, password):
+        yield PostgresLocation(connection, password, f"t_{uuid.uuid4().hex[:16]}")

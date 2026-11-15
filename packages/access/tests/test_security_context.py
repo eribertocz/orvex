@@ -12,13 +12,13 @@ from typing import Any
 
 import pytest
 from orvex.access.context import (
-    InvalidContext,
     may_reuse,
     normalize_list,
     permission_fingerprint,
     read_context,
 )
 from orvex.access.fixtures import FixtureContextProvider, Member, Request
+from orvex.contracts.access.errors import InvalidContext
 
 HERE = Path(__file__).resolve().parent
 # The contract's examples, carried here (equal to `contracts/`: tests/contracts).

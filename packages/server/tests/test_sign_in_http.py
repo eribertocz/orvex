@@ -20,9 +20,7 @@ from orvex.server.server_app import checked_route_table, create_server_app
 from orvex.server.sign_in_http import cookie_name
 from orvex.server.versions import Versions
 
-from tests.support.postgres_roles import postgres_location
-
-from .access_instance import PASSWORD, AccessInstance, close_opened
+from .access_instance import PASSWORD, AccessInstance, close_opened, postgres_location
 
 SLUG = load_identity().slug
 COOKIE = cookie_name(SLUG)

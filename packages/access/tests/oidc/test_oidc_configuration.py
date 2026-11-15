@@ -6,9 +6,9 @@ import pytest
 from orvex.access.oidc.configuration import parsed
 from orvex.access.oidc.service import OidcSignIn
 from orvex.contracts.access.errors import OIDC_NOT_CONFIGURED, AccessError
+from orvex.testing.oidc_provider import SECRET, FakeFetcher, FakeProvider
 
 from ..access_directory import World
-from ..oidc_provider import SECRET, FakeFetcher, FakeProvider
 from ..oidc_world import ENVIRONMENT, document
 
 

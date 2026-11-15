@@ -4,7 +4,7 @@ module = "access"
 
 [dependencies]
 runtime = ["argon2-cffi", "cryptography", "joserfc", "jsonschema", "orvex-contracts", "pg8000"]
-tests = ["pytest"]
+tests = ["orvex-testing", "pytest"]
 
 [[provides]]
 contract = "access"

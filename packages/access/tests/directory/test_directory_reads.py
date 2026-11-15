@@ -11,11 +11,12 @@ from types import SimpleNamespace
 
 import pytest
 from orvex.access.directory import reads
-from orvex.access.directory.reads import LOOKUP_BUDGET, DirectoryReads, Found, LookupLimited
+from orvex.access.directory.reads import DirectoryReads, Found, LookupLimited
 from orvex.access.storage import PostgresStore, SqliteStore, migrate
 from orvex.access.storage.postgres import migrations_for
 from orvex.access.storage.sqlite import MIGRATIONS
 from orvex.contracts.access.errors import ACCESS_FORBIDDEN, USER_NOT_FOUND, AccessError
+from orvex.contracts.access.values import LOOKUP_BUDGET
 
 from ..access_directory import AnyStore, Backend, Raw, World
 

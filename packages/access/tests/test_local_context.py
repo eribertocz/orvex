@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from orvex.access.context import InvalidContext
 from orvex.access.local import LocalContextProvider, LocalRequest
+from orvex.contracts.access.errors import InvalidContext
 
 POLICIES = "sha256:" + "0" * 64
 

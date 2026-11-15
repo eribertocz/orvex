@@ -8,9 +8,9 @@ from orvex.access.authentication.settings import Settings
 from orvex.access.oidc.configuration import parsed
 from orvex.access.oidc.identities import Identities
 from orvex.access.oidc.service import OidcSignIn
+from orvex.testing.oidc_provider import FakeFetcher, FakeProvider
 
 from ..access_directory import World
-from ..oidc_provider import FakeFetcher, FakeProvider
 from ..oidc_world import ENVIRONMENT, ORIGIN, Oidc, document
 from ..sign_in import Clock
 
