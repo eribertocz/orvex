@@ -12,7 +12,6 @@ from __future__ import annotations
 import datetime as dt
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, localcontext
 
 from orvex.contracts.model_config.v1 import (
@@ -23,7 +22,9 @@ from orvex.contracts.model_config.v1 import (
     Test,
 )
 from orvex.contracts.store.v1 import Parameter, ParameterType, StatementRequest
-from orvex.transform.models import Model, problem
+from orvex.contracts.transform.models import Model
+from orvex.contracts.transform.steps import ModelTest
+from orvex.transform.models import problem
 
 type Columns = Sequence[tuple[str, str]]
 
@@ -47,14 +48,6 @@ _NUMBER = re.compile(r"[+-]?(0|[1-9][0-9]*)(\.[0-9]+)?")
 MAX_DIGITS = 38
 # Enough digits for any 38-digit bound against any DECIMAL(38,s) limit: no rounding happens.
 _PRECISION = 80
-
-
-@dataclass(frozen=True, slots=True)
-class ModelTest:
-    """One test of a model: `request` counts the failing rows (0 passes)."""
-
-    name: str
-    request: StatementRequest
 
 
 def _identifier(name: str) -> str:

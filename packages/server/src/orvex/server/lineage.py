@@ -11,6 +11,10 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from orvex.contracts.transform.analysis import ColumnsNeeded, LineageRun, LineageScope
+from orvex.contracts.transform.columns import ColumnsExchange
+from orvex.contracts.transform.interface import Known
+from orvex.contracts.transform.models import Columns
 from orvex.server import run_metadata
 from orvex.server.identity import Identity
 from orvex.server.problems import Problem
@@ -18,11 +22,10 @@ from orvex.server.project import Project, ProjectLoadError, resolve_secret
 from orvex.server.project_check import Checked
 from orvex.server.run_metadata import _Outcome
 from orvex.server.run_reads import _table_columns
+from orvex.server.transform_calls import envelope, transform
 from orvex.server.versions import module_versions
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake
-from orvex.transform import lineage
-from orvex.transform.incremental import Columns
 
 LINEAGE_FOLDER = "lineage"
 LINEAGE_TIMEOUT_S = 10  # each request
@@ -36,67 +39,68 @@ def _lineage_events(
     outcomes: list[_Outcome],
     checked: Checked,
     lake: Lake,
-) -> list[lineage.Event]:
+) -> list[dict[str, object]]:
     """OpenLineage events of the models that started (none for those that never did)."""
-    key = lineage.project_key(project.settings.name)
+    key = transform().lineage_project_key(envelope(), project.settings.name)
     versions = dict(module_versions(identity))
-    scope = lineage.Scope(
+    scope = LineageScope(
         producer=f"urn:{identity.slug}:transform:{versions.get('transform', 'unknown')}",
         job_namespace=f"{identity.slug}://{key}",
         lake_namespace=f"ducklake://{key}",
     )
-    by_name = {model.name: model for model in checked.discovery.models}
-    described: dict[tuple[str, ...], list[str] | None] = {}
 
-    def columns_of(path: list[str]) -> list[str] | None:
+    def columns_of(path: tuple[str, ...]) -> list[str] | None:
         """The columns of a relation the model reads, from the binder (None when unknown)."""
-        parts = tuple(path[1:] if len(path) == 3 and path[0] == "lake" else path)
-        if parts not in described:
-            relation = ".".join('"' + part.replace('"', '""') + '"' for part in parts)
-            try:
-                described[parts] = [name for name, _ in lake.describe(f"SELECT * FROM {relation}")]
-            except StoreError:
-                described[parts] = None
-        return described[parts]
+        parts = path[1:] if len(path) == 3 and path[0] == "lake" else path
+        relation = ".".join('"' + part.replace('"', '""') + '"' for part in parts)
+        try:
+            return [name for name, _ in lake.describe(f"SELECT * FROM {relation}")]
+        except StoreError:
+            return None
 
     # Models rolled back by a later failure end when the run did, not when they finished.
     ended = max(
         (item.finished_at for item in outcomes if item.started), default=run_metadata._now()
     )
-    runs: list[lineage.ModelRun] = []
+    runs: list[LineageRun] = []
     for item in outcomes:
         if not item.started:
             continue
         # Column lineage pairs the SELECT's items with its own columns, in its order; the
         # schema facet shows the table as stored (columns added later go to its end).
-        selected: Columns = checked.columns.get(item.model.name, [])
+        selected: Columns = tuple(checked.columns.get(item.model.name, ()))
         output: Columns = selected
         if item.outcome == "success" and item.model.config.materialized != "view":
             # When the table cannot be read, the schema facet keeps the bound columns, if any.
             with contextlib.suppress(StoreError):
                 output = _table_columns(lake, item.model) or output
         runs.append(
-            lineage.ModelRun(
-                model=item.model,
+            LineageRun(
+                model=item.model.name,
                 run_id=item.lineage_run_id,
                 started_at=item.started_at,
                 finished_at=item.finished_at if item.outcome == "success" else ended,
                 outcome="success" if item.outcome == "success" else "failed",
+                selected=selected,
                 output=output,
-                inputs=lineage.inputs(item.model, by_name, project.sources, scope.lake_namespace),
-                column_lineage=lineage.column_lineage(
-                    item.model,
-                    selected or output,
-                    by_name,
-                    project.sources,
-                    scope.lake_namespace,
-                    columns_of,
-                ),
                 rows_written=item.rows_written if item.outcome == "success" else None,
                 error=None if item.error is None else f"{item.error.code}: {item.error.message}",
             )
         )
-    return lineage.events(scope, run_id, runs)
+
+    def events(known: Known) -> tuple[str, ...] | ColumnsNeeded:
+        return transform().lineage_events(
+            envelope(),
+            scope,
+            run_id,
+            tuple(runs),
+            checked.discovery.models,
+            dict(project.sources),
+            known,
+        )
+
+    texts = ColumnsExchange[tuple[str, ...]](columns_of).answer(events)
+    return [json.loads(text) for text in texts]
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -105,7 +109,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _publish_lineage(
-    project: Project, home: Path, run_id: str, events: list[lineage.Event]
+    project: Project, home: Path, run_id: str, events: list[dict[str, object]]
 ) -> Problem | None:
     """Write the run's events to `<home>/lineage/<run_id>.ndjson`, then POST them to the
     project's collector when one is declared; a failure is a warning, never the run's outcome."""

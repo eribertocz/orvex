@@ -35,6 +35,9 @@ from orvex.contracts.manifest import Manifest, canonical, parse_manifest
 from orvex.contracts.registry import adapters
 
 REPOSITORY_HELPERS = frozenset({"tests", "conformance", "tools"})
+# A standard-library module that reads its data from a distribution it never imports: a module
+# importing it uses that distribution when it declares it (`zoneinfo` falls back to `tzdata`).
+STANDARD_DATA = {"zoneinfo": "tzdata"}
 Owner = Callable[[str], "str | None"]
 
 
@@ -73,8 +76,11 @@ def dependency_problems(
     declared: Iterable[str],
     manifest_runtime: Iterable[str],
 ) -> list[str]:
+    imports = set(imports)
     used, unknown = _used(own, imports, owner_of)
     declared_names = {canonical(name) for name in declared}
+    tops = {name.partition(".")[0] for name in imports}
+    used |= {data for module, data in STANDARD_DATA.items() if module in tops} & declared_names
     problems = [
         f"MODULE_DEPENDENCY_UNDECLARED: {own} imports {name}, which nothing installed provides"
         for name in unknown

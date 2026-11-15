@@ -10,16 +10,14 @@ from __future__ import annotations
 import datetime as dt
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from orvex.contracts.model_config.v1 import ModelError
+from orvex.contracts.transform.models import Model
+from orvex.contracts.transform.scheduling import LOOK_AGAIN, MINIMUM_INTERVAL, History, Plan
 from orvex.transform.cron import CronError, next_time, parse
-from orvex.transform.models import Model, problem
+from orvex.transform.models import problem
 
-MINIMUM_INTERVAL = dt.timedelta(minutes=5)
-RETRY_DELAYS = (dt.timedelta(minutes=5), dt.timedelta(minutes=10), dt.timedelta(minutes=20))
-LOOK_AGAIN = dt.timedelta(minutes=1)
 _DURATION = re.compile(r"([0-9]+)([smhd])")
 _UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}
 
@@ -67,27 +65,6 @@ def config_problems(model: Model, project_zone: str) -> list[ModelError]:
                 f"{refresh.time_zone} is not an IANA time zone.",
             )
     return found
-
-
-@dataclass(frozen=True, slots=True)
-class History:
-    """What the run records say about one model (aware instants; None: never)."""
-
-    last_success_start: dt.datetime | None = None
-    last_success_end: dt.datetime | None = None
-    last_full_refresh: dt.datetime | None = None  # start of the last successful full refresh
-
-
-@dataclass(frozen=True, slots=True)
-class Plan:
-    """The models to run now (run order, upstream included), those to fully refresh, why, and
-    when to look again."""
-
-    models: tuple[str, ...]
-    full_refresh: frozenset[str]
-    reasons: tuple[str, ...]
-    wake_at: dt.datetime
-    next_run: dt.datetime | None = None  # when the next model is due, while none runs (#257)
 
 
 def freshness_due(model: Model, history: History, now: dt.datetime) -> dt.datetime | None:
@@ -176,13 +153,13 @@ def plan(
         # Nothing to run yet: look again at the next due time, or within a minute.
         candidates = [earliest] if runnable else [moment for moment in upcoming if moment > now]
         later = min(candidates, default=None)
-        return Plan((), frozenset(), (), min([now + LOOK_AGAIN, *candidates]), later)
+        return Plan((), (), (), min([now + LOOK_AGAIN, *candidates]), later)
     needed: set[str] = set()
     for name in runnable:
         needed |= closure(name, dependencies, known)
     selected = tuple(name for name in order if name in needed)
     reasons = tuple(f"{name}: {runnable[name]}" for name in selected if name in runnable)
-    return Plan(selected, frozenset(refreshed & set(runnable)), reasons, now + LOOK_AGAIN)
+    return Plan(selected, tuple(sorted(refreshed & set(runnable))), reasons, now + LOOK_AGAIN)
 
 
 def next_due(model: Model, now: dt.datetime, project_zone: str) -> dt.datetime:

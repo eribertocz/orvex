@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 
+from orvex.contracts.config_file import ConfigFile, ConfigProblem, token
 from orvex.contracts.project.v1 import (
     ClickhouseConnection,
     CsvConnection,
@@ -32,7 +33,6 @@ from orvex.contracts.project.v1 import (
     SqliteConnection,
 )
 from orvex.server.mounts import NETWORK_FILE_SYSTEMS, file_system
-from orvex.transform.config_file import ConfigFile, ConfigProblem, token
 
 PROJECT_FILE = "project.yaml"
 CONNECTIONS_FILE = "connections.yaml"

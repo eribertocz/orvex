@@ -747,10 +747,15 @@ job = "standalone"
 kind = "check"
 required = false
 contexts = ["standalone"]
-digest = "bcb329418caea5d2"
+digest = "975aefccfc53bbff"
 setup = ["python -m pip install --quiet pip==26.3"]
 [[job.check]]
 # A module installs and passes its own tests alone, outside the repository (#486 G4).
 name = "standalone-contracts"
 run = "python -m tools.ci.standalone contracts"
+local = true
+[[job.check]]
+# Transform installs, passes its own tests and its kit alone, with no consumer (#486 G4).
+name = "standalone-transform"
+run = "python -m tools.ci.standalone transform"
 local = true

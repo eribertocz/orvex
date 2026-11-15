@@ -11,45 +11,20 @@ import os
 import re
 import stat
 from collections.abc import Mapping
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import duckdb
+from orvex.contracts.config_file import ConfigFile, ConfigProblem
 from orvex.contracts.model_config.v1 import ModelConfig, ModelError, ModelErrorDetails
-from orvex.transform.config_file import ConfigFile, ConfigProblem
+from orvex.contracts.transform.models import NAME, Discovery, Model
 from orvex.transform.sources import Connection
 from orvex.transform.sql_parser import parser
 
 MODELS_FOLDER = "models"
 SUPPORTED_VERSION = 1
-NAME = re.compile(r"[a-z][a-z0-9_]{0,62}")
 RESERVED_SCHEMAS = frozenset({"lake"})
 MAX_SQL_BYTES = 1024 * 1024
 _PARSER_LINE = re.compile(r"LINE (\d+):")
-
-
-@dataclass(frozen=True, slots=True)
-class Model:
-    """One model: `schema.table`, its SQL as written, and its configuration (defaults applied)."""
-
-    schema: str
-    table: str
-    sql_file: str  # relative to the project folder
-    sql: str
-    config: ModelConfig
-    config_file: str | None
-    # The sidecar's numbers as written, by JSON pointer (exact text for bounds and tolerances).
-    numbers: Mapping[str, str] = field(default_factory=dict)
-
-    @property
-    def name(self) -> str:
-        return f"{self.schema}.{self.table}"
-
-
-@dataclass(frozen=True, slots=True)
-class Discovery:
-    models: tuple[Model, ...]
-    problems: tuple[ModelError, ...]
 
 
 def problem(

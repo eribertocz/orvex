@@ -7,15 +7,11 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from orvex.contracts.transform.models import Model
+from orvex.contracts.transform.scheduling import MINIMUM_INTERVAL, History, Plan
 from orvex.transform.cron import CronError, next_time, parse
-from orvex.transform.models import Model, discover_models
-from orvex.transform.schedule import (
-    MINIMUM_INTERVAL,
-    History,
-    Plan,
-    config_problems,
-    plan,
-)
+from orvex.transform.models import discover_models
+from orvex.transform.schedule import config_problems, plan
 
 NEW_YORK = ZoneInfo("America/New_York")
 UTC = dt.UTC
@@ -153,7 +149,7 @@ def test_freshness_accounts_for_the_last_run(tmp_path: Path) -> None:
     assert early.wake_at == at("2026-10-28T10:08", UTC)
     due = planned(found, at("2026-10-28T10:08", UTC), histories=histories)
     assert due.models == ("raw.readings", "marts.fresh")
-    assert due.full_refresh == frozenset()
+    assert due.full_refresh == ()
 
 
 def test_never_succeeded_is_due_now_and_idle_models_never(tmp_path: Path) -> None:
@@ -173,7 +169,7 @@ def test_full_refresh_on_its_cron(tmp_path: Path) -> None:
     assert planned(found, at("2026-11-01T07:59", UTC), histories=histories).models == ()
     due = planned(found, at("2026-11-01T08:00", UTC), histories=histories)
     assert due.models == ("raw.readings", "marts.weekly")
-    assert due.full_refresh == frozenset({"marts.weekly"})
+    assert due.full_refresh == ("marts.weekly",)
 
 
 def test_runs_start_at_least_five_minutes_apart(tmp_path: Path) -> None:

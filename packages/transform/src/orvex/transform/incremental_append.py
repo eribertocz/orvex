@@ -7,10 +7,11 @@ from collections.abc import Mapping
 
 import duckdb
 from orvex.contracts.model_config.v1 import ModelError
+from orvex.contracts.transform.models import Model
+from orvex.contracts.transform.steps import SINCE
 from orvex.transform.incremental_functions import SPECIAL_NAMES, UNSTABLE_FUNCTIONS, is_consistent
 from orvex.transform.incremental_since import MAX_DEPTH, tree_depth
-from orvex.transform.incremental_types import SINCE
-from orvex.transform.models import Model, problem
+from orvex.transform.models import problem
 from orvex.transform.sql_parser import parser
 
 

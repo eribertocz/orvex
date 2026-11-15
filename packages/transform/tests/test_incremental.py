@@ -9,11 +9,9 @@ from pathlib import Path
 import duckdb
 import pytest
 from orvex.contracts.store.v1 import Parameter, StatementRequest
+from orvex.contracts.transform.models import Model
+from orvex.contracts.transform.steps import Check, Count, Refuse, Watermark
 from orvex.transform.incremental import (
-    Check,
-    Count,
-    Refuse,
-    Watermark,
     append_rows_problem,
     column_problems,
     config_problems,
@@ -24,7 +22,7 @@ from orvex.transform.incremental import (
     watermark_statements,
     widens,
 )
-from orvex.transform.models import Model, discover_models
+from orvex.transform.models import discover_models
 
 COLUMNS = [("id", "BIGINT"), ("kwh", "DECIMAL(18,4)"), ("read_at", "TIMESTAMP WITH TIME ZONE")]
 

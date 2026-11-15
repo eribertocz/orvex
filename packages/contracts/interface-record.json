@@ -1,3 +1,1311 @@
 {
-  "contracts": {}
+  "contracts": {
+    "transform": {
+      "capabilities": [
+        "compile",
+        "lineage",
+        "models",
+        "records",
+        "run",
+        "schedule"
+      ],
+      "errors": [],
+      "kit": {
+        "cases": {
+          "build-graph.order": {
+            "expectation": "models are ordered with their dependencies first",
+            "idempotency": false,
+            "operation": "build_graph",
+            "since": "1.0"
+          },
+          "build-graph.unknown-reference": {
+            "expectation": "a reference to no model or source is MODEL_REFERENCE_UNKNOWN",
+            "idempotency": false,
+            "operation": "build_graph",
+            "since": "1.0"
+          },
+          "closure.known-upstream": {
+            "expectation": "a model's closure is itself and every known model it reads, sorted",
+            "idempotency": false,
+            "operation": "closure",
+            "since": "1.0"
+          },
+          "column-problems.time-column": {
+            "expectation": "an incremental model whose output lacks its time column has a problem",
+            "idempotency": false,
+            "operation": "column_problems",
+            "since": "1.0"
+          },
+          "committed-request.bound": {
+            "expectation": "the run's commit is read at the snapshot given, its id bound",
+            "idempotency": false,
+            "operation": "committed_request",
+            "since": "1.0"
+          },
+          "compiled-sql.views-inlined": {
+            "expectation": "a view is inlined as a subquery; the SQL given is the one compiled",
+            "idempotency": false,
+            "operation": "compiled_sql",
+            "since": "1.0"
+          },
+          "config-problems.freshness": {
+            "expectation": "a freshness under the minimum is FRESHNESS_TOO_SHORT at /freshness; a valid one is clean",
+            "idempotency": false,
+            "operation": "config_problems",
+            "since": "1.0"
+          },
+          "discover-models.problems": {
+            "expectation": "a refused sidecar is a problem naming its file, and its model is not discovered",
+            "idempotency": false,
+            "operation": "discover_models",
+            "since": "1.0"
+          },
+          "discover-models.sorted-exact": {
+            "expectation": "models come back sorted by name, with their SQL as written and their sidecar applied",
+            "idempotency": false,
+            "operation": "discover_models",
+            "since": "1.0"
+          },
+          "filtered-sql.proven": {
+            "expectation": "the automatic filter asks for the columns it reads, then places `> $since` exactly",
+            "idempotency": false,
+            "operation": "filtered_sql",
+            "since": "1.0"
+          },
+          "filtered-sql.refused": {
+            "expectation": "an aggregated time column refuses the filter, with the reason and its line",
+            "idempotency": false,
+            "operation": "filtered_sql",
+            "since": "1.0"
+          },
+          "history-request.tables": {
+            "expectation": "no record table, no request; otherwise read at the snapshot given",
+            "idempotency": false,
+            "operation": "history_request",
+            "since": "1.0"
+          },
+          "known-output-names.from-text": {
+            "expectation": "the output names a SELECT list decides are known from its text",
+            "idempotency": false,
+            "operation": "known_output_names",
+            "since": "1.0"
+          },
+          "last-run-request.tables": {
+            "expectation": "no record table, no request; otherwise read at the snapshot given",
+            "idempotency": false,
+            "operation": "last_run_request",
+            "since": "1.0"
+          },
+          "leftover-statements.drop-and-forget": {
+            "expectation": "a leftover is dropped and its watermark forgotten, its name bound",
+            "idempotency": false,
+            "operation": "leftover_statements",
+            "since": "1.0"
+          },
+          "leftovers.model-names-only": {
+            "expectation": "tables no model stores are leftovers, never _meta or a stored model's",
+            "idempotency": false,
+            "operation": "leftovers",
+            "since": "1.0"
+          },
+          "lineage-events.start-complete": {
+            "expectation": "a run's events ask for the columns they read, then are START and COMPLETE per model",
+            "idempotency": false,
+            "operation": "lineage_events",
+            "since": "1.0"
+          },
+          "lineage-project-key.slug": {
+            "expectation": "a project's lineage key is its name in lowercase kebab-case",
+            "idempotency": false,
+            "operation": "lineage_project_key",
+            "since": "1.0"
+          },
+          "measure-difference.exact": {
+            "expectation": "exact measures compare in an exact type; a float measure is named, never compared",
+            "idempotency": false,
+            "operation": "measure_difference",
+            "since": "1.0"
+          },
+          "measures-sql.both-sides": {
+            "expectation": "the measures read the model and the source, or the staged table in its place",
+            "idempotency": false,
+            "operation": "measures_sql",
+            "since": "1.0"
+          },
+          "model-history-request.tables": {
+            "expectation": "no record table, no request; otherwise read at the snapshot given",
+            "idempotency": false,
+            "operation": "model_history_request",
+            "since": "1.0"
+          },
+          "next-due.time-zone": {
+            "expectation": "a weekly full refresh falls on its cron in its own time zone, across a DST change",
+            "idempotency": false,
+            "operation": "next_due",
+            "since": "1.0"
+          },
+          "plan-run.steps": {
+            "expectation": "stored models in run order, an incremental one counted and watermarked, tests then reconciliation last",
+            "idempotency": false,
+            "operation": "plan_run",
+            "since": "1.0"
+          },
+          "reconciliation-stage.databases": {
+            "expectation": "only a database source's side is staged, in _stage, from the source's own SQL",
+            "idempotency": false,
+            "operation": "reconciliation_stage",
+            "since": "1.0"
+          },
+          "record-statements.exact": {
+            "expectation": "the record tables exist; a run record is written with its values bound exactly (38-digit counts)",
+            "idempotency": false,
+            "operation": "record_statements",
+            "since": "1.0"
+          },
+          "schedule-plan.fresh-not-due": {
+            "expectation": "a model that just succeeded is not due; the next run is later",
+            "idempotency": false,
+            "operation": "schedule_plan",
+            "since": "1.0"
+          },
+          "schedule-plan.never-run-due": {
+            "expectation": "a model with freshness that never ran is due now, upstream first, waking in its zone",
+            "idempotency": false,
+            "operation": "schedule_plan",
+            "since": "1.0"
+          },
+          "since-bound-problem.columns-needed": {
+            "expectation": "a bound on an alias asks for the columns it reads, then answers with them",
+            "idempotency": false,
+            "operation": "since_bound_problem",
+            "since": "1.0"
+          },
+          "since-value.lookback": {
+            "expectation": "no watermark is -infinity; a lookback moves it back exactly, zone kept",
+            "idempotency": false,
+            "operation": "since_value",
+            "since": "1.0"
+          },
+          "source-attachments.parquet": {
+            "expectation": "a file connection becomes the store's file attachment",
+            "idempotency": false,
+            "operation": "source_attachments",
+            "since": "1.0"
+          },
+          "table-watermark-request.utc": {
+            "expectation": "a table's largest time column is read at the snapshot given, as UTC text",
+            "idempotency": false,
+            "operation": "table_watermark_request",
+            "since": "1.0"
+          },
+          "test-problems.unknown-column": {
+            "expectation": "a test of a column the model does not output is a problem at its pointer",
+            "idempotency": false,
+            "operation": "test_problems",
+            "since": "1.0"
+          },
+          "test-relations.quoted": {
+            "expectation": "a stored model is its quoted table, a view its subquery",
+            "idempotency": false,
+            "operation": "test_relations",
+            "since": "1.0"
+          },
+          "test-steps.count-failing": {
+            "expectation": "each test is one count of failing rows on the model's relation",
+            "idempotency": false,
+            "operation": "test_steps",
+            "since": "1.0"
+          },
+          "uses-since.parameter": {
+            "expectation": "$since is recognized as a parameter, never inside a string",
+            "idempotency": false,
+            "operation": "uses_since",
+            "since": "1.0"
+          },
+          "watermark-request.snapshot": {
+            "expectation": "the stored watermark is read at the snapshot given, the model bound",
+            "idempotency": false,
+            "operation": "watermark_request",
+            "since": "1.0"
+          },
+          "watermark-statements.exact": {
+            "expectation": "a watermark is stored as its exact text; a NULL one is not stored",
+            "idempotency": false,
+            "operation": "watermark_statements",
+            "since": "1.0"
+          }
+        },
+        "recorded": 37
+      },
+      "name": "transform",
+      "operations": {
+        "build_graph": {
+          "capability": "models",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "models",
+              "type": "tuple[orvex.contracts.transform.models.Model, ...]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "sources",
+              "type": "tuple[str, ...]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "databases",
+              "type": "tuple[str, ...]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "direct",
+              "type": "tuple[str, ...]"
+            }
+          ],
+          "returns": "orvex.contracts.transform.models.Graph",
+          "since": "1.0"
+        },
+        "closure": {
+          "capability": "schedule",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "name",
+              "type": "str"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "dependencies",
+              "type": "dict[str, tuple[str, ...]]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "known",
+              "type": "tuple[str, ...]"
+            }
+          ],
+          "returns": "tuple[str, ...]",
+          "since": "1.0"
+        },
+        "column_problems": {
+          "capability": "models",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "models",
+              "type": "tuple[orvex.contracts.transform.models.Model, ...]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "columns",
+              "type": "dict[str, tuple[tuple[str, str], ...]]"
+            }
+          ],
+          "returns": "tuple[orvex.contracts.model_config.v1.ModelError, ...]",
+          "since": "1.0"
+        },
+        "committed_request": {
+          "capability": "records",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "snapshot",
+              "type": "int"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "run_id",
+              "type": "str"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.ReadRequest",
+          "since": "1.0"
+        },
+        "compiled_sql": {
+          "capability": "compile",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "model",
+              "type": "orvex.contracts.transform.models.Model"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "models",
+              "type": "tuple[orvex.contracts.transform.models.Model, ...]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "sql",
+              "type": "str | None"
+            }
+          ],
+          "returns": "str",
+          "since": "1.0"
+        },
+        "config_problems": {
+          "capability": "models",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "model",
+              "type": "orvex.contracts.transform.models.Model"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "project_zone",
+              "type": "str"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "connection_types",
+              "type": "dict[str, str]"
+            }
+          ],
+          "returns": "tuple[orvex.contracts.model_config.v1.ModelError, ...]",
+          "since": "1.0"
+        },
+        "discover_models": {
+          "capability": "models",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "folder",
+              "type": "str"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "connections",
+              "type": "dict[str, orvex.contracts.project.v1.ParquetConnection | orvex.contracts.project.v1.CsvConnection | orvex.contracts.project.v1.DuckdbConnection | orvex.contracts.project.v1.SqliteConnection | orvex.contracts.project.v1.PostgresConnection]"
+            }
+          ],
+          "returns": "orvex.contracts.transform.models.Discovery",
+          "since": "1.0"
+        },
+        "filtered_sql": {
+          "capability": "models",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "sql",
+              "type": "str"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "time_column",
+              "type": "str"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "known",
+              "type": "tuple[orvex.contracts.transform.analysis.RelationColumns, ...]"
+            }
+          ],
+          "returns": "str | orvex.contracts.transform.analysis.Refusal | orvex.contracts.transform.analysis.ColumnsNeeded",
+          "since": "1.0"
+        },
+        "history_request": {
+          "capability": "records",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "snapshot",
+              "type": "int"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "time_zone",
+              "type": "str"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "limit",
+              "type": "int"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "tables",
+              "type": "tuple[tuple[str, str], ...]"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.ReadRequest | None",
+          "since": "1.0"
+        },
+        "known_output_names": {
+          "capability": "models",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "sql",
+              "type": "str"
+            }
+          ],
+          "returns": "tuple[str, ...] | None",
+          "since": "1.0"
+        },
+        "last_run_request": {
+          "capability": "records",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "snapshot",
+              "type": "int"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "tables",
+              "type": "tuple[tuple[str, str], ...]"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.ReadRequest | None",
+          "since": "1.0"
+        },
+        "leftover_statements": {
+          "capability": "run",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "leftovers",
+              "type": "tuple[tuple[str, str], ...]"
+            }
+          ],
+          "returns": "tuple[orvex.contracts.store.v1.StatementRequest, ...]",
+          "since": "1.0"
+        },
+        "leftovers": {
+          "capability": "run",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "tables",
+              "type": "tuple[tuple[str, str], ...]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "models",
+              "type": "tuple[orvex.contracts.transform.models.Model, ...]"
+            }
+          ],
+          "returns": "tuple[tuple[str, str], ...]",
+          "since": "1.0"
+        },
+        "lineage_events": {
+          "capability": "lineage",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "scope",
+              "type": "orvex.contracts.transform.analysis.LineageScope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "parent_run_id",
+              "type": "str"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "runs",
+              "type": "tuple[orvex.contracts.transform.analysis.LineageRun, ...]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "models",
+              "type": "tuple[orvex.contracts.transform.models.Model, ...]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "connections",
+              "type": "dict[str, orvex.contracts.project.v1.ParquetConnection | orvex.contracts.project.v1.CsvConnection | orvex.contracts.project.v1.DuckdbConnection | orvex.contracts.project.v1.SqliteConnection | orvex.contracts.project.v1.PostgresConnection]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "known",
+              "type": "tuple[orvex.contracts.transform.analysis.RelationColumns, ...]"
+            }
+          ],
+          "returns": "tuple[str, ...] | orvex.contracts.transform.analysis.ColumnsNeeded",
+          "since": "1.0"
+        },
+        "lineage_project_key": {
+          "capability": "lineage",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "name",
+              "type": "str"
+            }
+          ],
+          "returns": "str",
+          "since": "1.0"
+        },
+        "measure_difference": {
+          "capability": "compile",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "model_kind",
+              "type": "str"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "source_kind",
+              "type": "str"
+            }
+          ],
+          "returns": "orvex.contracts.transform.analysis.MeasureDifference",
+          "since": "1.0"
+        },
+        "measures_sql": {
+          "capability": "compile",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "model",
+              "type": "orvex.contracts.transform.models.Model"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "index",
+              "type": "int"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "relation",
+              "type": "str"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "staged",
+              "type": "str | None"
+            }
+          ],
+          "returns": "str",
+          "since": "1.0"
+        },
+        "model_history_request": {
+          "capability": "records",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "snapshot",
+              "type": "int"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "tables",
+              "type": "tuple[tuple[str, str], ...]"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.ReadRequest | None",
+          "since": "1.0"
+        },
+        "next_due": {
+          "capability": "schedule",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "model",
+              "type": "orvex.contracts.transform.models.Model"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "now",
+              "type": "datetime.datetime"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "project_zone",
+              "type": "str"
+            }
+          ],
+          "returns": "datetime.datetime",
+          "since": "1.0"
+        },
+        "plan_run": {
+          "capability": "run",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "models",
+              "type": "tuple[orvex.contracts.transform.models.Model, ...]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "graph",
+              "type": "orvex.contracts.transform.models.Graph"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "outputs",
+              "type": "dict[str, tuple[tuple[str, str], ...]]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "existing",
+              "type": "dict[str, tuple[tuple[str, str], ...] | None]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "since",
+              "type": "dict[str, str]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "full_refresh",
+              "type": "tuple[str, ...]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "previous",
+              "type": "dict[str, str | None]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "differences",
+              "type": "dict[str, tuple[orvex.contracts.transform.steps.Comparison, ...]]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "filtered",
+              "type": "dict[str, str]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "databases",
+              "type": "tuple[str, ...]"
+            }
+          ],
+          "returns": "tuple[tuple[orvex.contracts.transform.models.Model, tuple[orvex.contracts.store.v1.StatementRequest | orvex.contracts.transform.steps.Check | orvex.contracts.transform.steps.Count | orvex.contracts.transform.steps.Refuse | orvex.contracts.transform.steps.Watermark | orvex.contracts.transform.steps.Land | orvex.contracts.transform.steps.ModelTest | orvex.contracts.transform.steps.Reconcile, ...]], ...]",
+          "since": "1.0"
+        },
+        "reconciliation_stage": {
+          "capability": "compile",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "model",
+              "type": "orvex.contracts.transform.models.Model"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "index",
+              "type": "int"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "databases",
+              "type": "tuple[str, ...]"
+            }
+          ],
+          "returns": "orvex.contracts.transform.analysis.ReconciliationStage | None",
+          "since": "1.0"
+        },
+        "record_statements": {
+          "capability": "records",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "records",
+              "type": "tuple[orvex.contracts.run_record.v1.RunRecord, ...]"
+            }
+          ],
+          "returns": "tuple[orvex.contracts.store.v1.StatementRequest, ...]",
+          "since": "1.0"
+        },
+        "schedule_plan": {
+          "capability": "schedule",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "models",
+              "type": "tuple[orvex.contracts.transform.models.Model, ...]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "order",
+              "type": "tuple[str, ...]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "dependencies",
+              "type": "dict[str, tuple[str, ...]]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "histories",
+              "type": "dict[str, orvex.contracts.transform.scheduling.History]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "now",
+              "type": "datetime.datetime"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "project_zone",
+              "type": "str"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "started",
+              "type": "datetime.datetime"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "last_run_start",
+              "type": "datetime.datetime | None"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "held",
+              "type": "dict[str, datetime.datetime]"
+            }
+          ],
+          "returns": "orvex.contracts.transform.scheduling.Plan",
+          "since": "1.0"
+        },
+        "since_bound_problem": {
+          "capability": "models",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "model",
+              "type": "orvex.contracts.transform.models.Model"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "known",
+              "type": "tuple[orvex.contracts.transform.analysis.RelationColumns, ...]"
+            }
+          ],
+          "returns": "orvex.contracts.model_config.v1.ModelError | orvex.contracts.transform.analysis.ColumnsNeeded | None",
+          "since": "1.0"
+        },
+        "since_value": {
+          "capability": "run",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "kind",
+              "type": "str"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "watermark",
+              "type": "str | None"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "lookback",
+              "type": "str | None"
+            }
+          ],
+          "returns": "str",
+          "since": "1.0"
+        },
+        "source_attachments": {
+          "capability": "run",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "connections",
+              "type": "dict[str, orvex.contracts.project.v1.ParquetConnection | orvex.contracts.project.v1.CsvConnection | orvex.contracts.project.v1.DuckdbConnection | orvex.contracts.project.v1.SqliteConnection | orvex.contracts.project.v1.PostgresConnection]"
+            }
+          ],
+          "returns": "tuple[orvex.contracts.store.v1.FileSourceAttachment | orvex.contracts.store.v1.SqliteSourceAttachment | orvex.contracts.store.v1.PostgresSourceAttachment, ...]",
+          "since": "1.0"
+        },
+        "table_watermark_request": {
+          "capability": "run",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "snapshot",
+              "type": "int"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "model",
+              "type": "orvex.contracts.transform.models.Model"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "kind",
+              "type": "str"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.ReadRequest",
+          "since": "1.0"
+        },
+        "test_problems": {
+          "capability": "models",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "model",
+              "type": "orvex.contracts.transform.models.Model"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "columns",
+              "type": "dict[str, tuple[tuple[str, str], ...]]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "models",
+              "type": "tuple[orvex.contracts.transform.models.Model, ...]"
+            }
+          ],
+          "returns": "tuple[orvex.contracts.model_config.v1.ModelError, ...]",
+          "since": "1.0"
+        },
+        "test_relations": {
+          "capability": "compile",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "models",
+              "type": "tuple[orvex.contracts.transform.models.Model, ...]"
+            }
+          ],
+          "returns": "dict[str, str]",
+          "since": "1.0"
+        },
+        "test_steps": {
+          "capability": "compile",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "model",
+              "type": "orvex.contracts.transform.models.Model"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "relation",
+              "type": "str"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "columns",
+              "type": "tuple[tuple[str, str], ...]"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "relations",
+              "type": "dict[str, str]"
+            }
+          ],
+          "returns": "tuple[orvex.contracts.transform.steps.ModelTest, ...]",
+          "since": "1.0"
+        },
+        "uses_since": {
+          "capability": "models",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "sql",
+              "type": "str"
+            }
+          ],
+          "returns": "bool",
+          "since": "1.0"
+        },
+        "watermark_request": {
+          "capability": "run",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "snapshot",
+              "type": "int"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "model",
+              "type": "orvex.contracts.transform.models.Model"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.ReadRequest",
+          "since": "1.0"
+        },
+        "watermark_statements": {
+          "capability": "run",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "step",
+              "type": "orvex.contracts.transform.steps.Watermark"
+            },
+            {
+              "default": false,
+              "kind": "positional-or-keyword",
+              "name": "value",
+              "type": "str | None"
+            }
+          ],
+          "returns": "tuple[orvex.contracts.store.v1.StatementRequest, ...]",
+          "since": "1.0"
+        }
+      },
+      "version": "1.0"
+    }
+  }
 }

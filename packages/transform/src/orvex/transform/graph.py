@@ -12,35 +12,21 @@ import copy
 import heapq
 import json
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
 from typing import Any
 
 import duckdb
 from orvex.contracts.model_config.v1 import ModelError, Relationship
 from orvex.contracts.store.v1 import StatementRequest
+from orvex.contracts.transform.models import Graph, Model
+from orvex.contracts.transform.steps import Comparison, Land, ModelTest, Reconcile, Step
 from orvex.transform import incremental, model_tests, reconciliation
-from orvex.transform.incremental import Columns, Land, Step
-from orvex.transform.model_tests import ModelTest
-from orvex.transform.models import Model, problem
-from orvex.transform.reconciliation import Comparison, Reconcile
+from orvex.transform.incremental import Columns
+from orvex.transform.models import problem
 from orvex.transform.sql_parser import parser
 
 LAKE_CATALOG = "lake"
 
 type Tree = dict[str, Any]
-
-
-@dataclass(frozen=True, slots=True)
-class Graph:
-    """Models in run order (dependencies first, ties by name), and their direct dependencies."""
-
-    order: tuple[str, ...]
-    dependencies: Mapping[str, tuple[str, ...]]
-    sources: Mapping[str, tuple[str, ...]]
-    problems: tuple[ModelError, ...]
-    # The database source (DuckDB, SQLite, PostgreSQL) each model reading one reads (#372):
-    # such a model reads that connection alone, and is landed by its worker.
-    lands: Mapping[str, str] = field(default_factory=dict)
 
 
 def _tree(connection: duckdb.DuckDBPyConnection, sql: str) -> Tree:

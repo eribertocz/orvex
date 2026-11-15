@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from orvex.transform.incremental_types import Check, Columns, quote_identifier
-from orvex.transform.models import Model
+from orvex.contracts.transform.models import Model
+from orvex.contracts.transform.steps import Check
+from orvex.transform.incremental_types import Columns, quote_identifier
 
 _CUT_SHOWN = 5  # partitions named in the PARTITION_INCOMPLETE message
 

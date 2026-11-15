@@ -12,7 +12,7 @@ import subprocess
 import sys
 import textwrap
 import zoneinfo
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -26,16 +26,35 @@ from orvex.server import run as run_command
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.project import load_project
+from orvex.server.transform_calls import calling, envelope, transform
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Transaction, open_lake
-from orvex.transform.run_records import (
-    history_request,
-    last_run_request,
-    model_history_request,
-    record_statements,
-)
 
 SLUG = load_identity().slug
+
+
+def record_statements(records: list[RunRecord]) -> list[StatementRequest]:
+    with calling("test"):
+        return list(transform().record_statements(envelope(), tuple(records)))
+
+
+def history_request(
+    snapshot: int, zone: str, limit: int, tables: set[tuple[str, str]]
+) -> ReadRequest | None:
+    with calling("test"):
+        return transform().history_request(envelope(), snapshot, zone, limit, tuple(sorted(tables)))
+
+
+def model_history_request(snapshot: int, tables: set[tuple[str, str]]) -> ReadRequest | None:
+    with calling("test"):
+        return transform().model_history_request(envelope(), snapshot, tuple(sorted(tables)))
+
+
+def last_run_request(snapshot: int, tables: set[tuple[str, str]]) -> ReadRequest | None:
+    with calling("test"):
+        return transform().last_run_request(envelope(), snapshot, tuple(sorted(tables)))
+
+
 PROJECT = "version: 1\nname: Test\ntime_zone: America/La_Paz\n"
 CONNECTIONS = "version: 1\nconnections:\n  archive:\n    type: parquet\n    path: data/r.parquet\n"
 
@@ -157,16 +176,28 @@ def open_project_lake(folder: Path) -> Iterator[Lake]:
         lake.close()
 
 
+class _RecordStatements:
+    """The transform contract as the run reaches it, with its `record_statements` replaced."""
+
+    def __init__(self, replacement: Callable[..., tuple[StatementRequest, ...]]) -> None:
+        self._served = transform()
+        self.record_statements = replacement
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._served, name)
+
+
 def armed_on_records(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
     """A flag set once the run inserts its records: the next commit is the run's own."""
     armed: list[bool] = []
-    real = record_statements
+    served = transform()
 
-    def arming(records: object) -> list[StatementRequest]:
+    def arming(sent: object, records: tuple[RunRecord, ...]) -> tuple[StatementRequest, ...]:
         armed.append(True)
-        return real(records)  # type: ignore[arg-type]
+        return served.record_statements(sent, records)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(run_command, "record_statements", arming)
+    replaced = _RecordStatements(arming)
+    monkeypatch.setattr(run_command, "transform", lambda: replaced)
     return armed
 
 
@@ -533,11 +564,15 @@ CHILD = textwrap.dedent(
 
     folder, mode, token_file = sys.argv[1], sys.argv[2], sys.argv[3]
     armed = []
-    records = run_command.record_statements
+    served = run_command.transform()
 
-    def arming(items):
-        armed.append(True)
-        return records(items)
+    class Armed:
+        def __getattr__(self, name):
+            return getattr(served, name)
+
+        def record_statements(self, sent, items):
+            armed.append(True)
+            return served.record_statements(sent, items)
 
     committed = store_lake.Lake._committed
 
@@ -557,7 +592,8 @@ CHILD = textwrap.dedent(
             other.close()
         commit(cursor)
 
-    run_command.record_statements = arming
+    armed_transform = Armed()
+    run_command.transform = lambda: armed_transform
     if mode == "kill":
         store_lake.Lake._committed = killed
     else:
@@ -922,12 +958,13 @@ def test_a_failed_run_whose_records_cannot_be_written_says_so(
     # R4.
     project(tmp_path, {**MODELS, "models/s/b.sql": "SELECT CAST('x' AS INTEGER) AS n FROM s.a"})
 
-    def broken(*_: object) -> list[StatementRequest]:
-        return [
-            StatementRequest(kind="statement", sql="INSERT INTO nowhere VALUES (1)", parameters=[])
-        ]
+    def broken(*_: object) -> tuple[StatementRequest, ...]:
+        return (
+            StatementRequest(kind="statement", sql="INSERT INTO nowhere VALUES (1)", parameters=[]),
+        )
 
-    monkeypatch.setattr(run_command, "record_statements", broken)
+    replaced = _RecordStatements(broken)
+    monkeypatch.setattr(run_command, "transform", lambda: replaced)
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 1
     lines = out.splitlines()

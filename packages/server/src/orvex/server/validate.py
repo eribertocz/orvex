@@ -13,8 +13,8 @@ from orvex.server.locking import ProjectLocked, project_lock
 from orvex.server.problems import Problem
 from orvex.server.project import ProjectLoadError
 from orvex.server.project_check import Checked
+from orvex.server.transform_calls import calling, envelope, transform
 from orvex.store.errors import StoreError
-from orvex.transform.graph import compiled_sql
 
 
 def _check_semantic(checked: Checked, out: IO[str]) -> bool:
@@ -75,7 +75,11 @@ def validate(folder: Path, out: IO[str], show_sql: str | None = None) -> int:
                 file=out,
             )
             return 1
-        print(compiled_sql(model, by_name, checked.filtered.get(show_sql)), file=out)
+        with calling(checked.project.settings.name if checked.project else folder.name):
+            sql = transform().compiled_sql(
+                envelope(), model, checked.discovery.models, checked.filtered.get(show_sql)
+            )
+        print(sql, file=out)
         return 0
     print(f"{len(checked.discovery.models)} models, no problems.", file=out)
     return 0

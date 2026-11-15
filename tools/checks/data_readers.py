@@ -1,4 +1,5 @@
-"""DATA_READ_OUTSIDE_DUCKDB: in `store` and `transform`, only DuckDB reads the rows of a source.
+"""DATA_READ_OUTSIDE_DUCKDB: in `store`, `transform` and `contracts`, only DuckDB reads the rows
+of a source (`contracts` reads only a project's configuration files, an allowed exception).
 
 Every use of another reader of files or databases is reported (`engineering.md` §2): an
 import, or an attribute reached through an imported package (`pa.parquet.read_table`).
@@ -53,7 +54,7 @@ READER_MODULES = frozenset(
 # Opening calls reached without an import: the built-in and file-reading methods.
 READER_BUILTINS = frozenset({"open"})
 READER_METHODS = frozenset({"read_text", "read_bytes"})
-READER_CHECKED = ("packages/store/src/", "packages/transform/src/")
+READER_CHECKED = ("packages/store/src/", "packages/transform/src/", "packages/contracts/src/")
 READER_ALLOW_LIST = Path(__file__).with_name("data-reader-allowlist.toml")
 
 
@@ -156,7 +157,7 @@ def _uses(tree: ast.AST) -> list[tuple[str, int, str]]:
 def reader_findings(
     tree: ast.AST, relative: str, allowed: set[tuple[str, str, str]]
 ) -> list[Finding]:
-    """Uses of a reader other than DuckDB in `store` and `transform` product code."""
+    """Uses of a reader other than DuckDB in `store`, `transform` and `contracts` product code."""
     if not relative.startswith(READER_CHECKED):
         return []
     excepted = {(reader, function) for file, reader, function in allowed if file == relative}

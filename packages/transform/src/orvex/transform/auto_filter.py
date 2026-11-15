@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import duckdb
+from orvex.contracts.transform.analysis import Refusal
 from orvex.transform.sql_parser import parser
 
 type Tree = dict[str, Any]
@@ -28,15 +29,6 @@ type ColumnsOf = Callable[[list[str]], Collection[str] | None]
 
 SINCE = "since"
 LAKE_CATALOG = "lake"
-
-
-@dataclass(frozen=True, slots=True)
-class Refusal:
-    """Why the filter cannot be proven, and where the time column was found (0-based offset in
-    the SQL), when it was."""
-
-    reason: str
-    location: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

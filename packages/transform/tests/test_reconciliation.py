@@ -6,15 +6,10 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from orvex.transform.models import Model, discover_models
-from orvex.transform.reconciliation import (
-    Comparison,
-    common_type,
-    expression,
-    measures_sql,
-    problems,
-    steps,
-)
+from orvex.contracts.transform.models import Model
+from orvex.contracts.transform.steps import Comparison
+from orvex.transform.models import discover_models
+from orvex.transform.reconciliation import common_type, expression, measures_sql, problems, steps
 
 CONNECTIONS = {"feed": "parquet"}
 RELATION = '"s"."m"'
@@ -94,7 +89,7 @@ def failing(chosen: Model, connection: duckdb.DuckDBPyConnection) -> list[tuple[
     for check in chosen.config.reconciliation or []:
         rows = connection.execute(f"DESCRIBE {measures_sql(check, RELATION)}").fetchall()
         assert all(rows[i][1] == rows[i + 1][1] for i in range(2, len(rows), 2))
-        texts = frozenset(i for i in range(len(rows) // 2 - 1) if rows[2 + 2 * i][1] == "VARCHAR")
+        texts = tuple(i for i in range(len(rows) // 2 - 1) if rows[2 + 2 * i][1] == "VARCHAR")
         differences.append(Comparison(common_type(str(rows[0][1]), str(rows[1][1])), texts))
     found = []
     for planned in steps(chosen, RELATION, differences):

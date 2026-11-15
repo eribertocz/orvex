@@ -3280,7 +3280,7 @@
 "packages/transform/tests/test_auto_filter.py::test_unprovable_filters_are_refused_with_a_reason[fa3fa2129fd3]": 0.017,
 "packages/transform/tests/test_auto_filter.py::test_unprovable_filters_are_refused_with_a_reason[fca71cceee7e]": 0.015,
 "packages/transform/tests/test_auto_filter.py::test_unprovable_filters_are_refused_with_a_reason[fe08a9a3c385]": 0.015,
-"packages/transform/tests/test_config_file.py::test_a_config_file_reader_reads_only_a_bounded_regular_file": 0.003,
+"packages/contracts/tests/test_config_file.py::test_a_config_file_reader_reads_only_a_bounded_regular_file": 0.003,
 "packages/transform/tests/test_graph.py::test_a_database_source_read_with_anything_else_is_refused[1675aedca63b]": 0.02,
 "packages/transform/tests/test_graph.py::test_a_database_source_read_with_anything_else_is_refused[24d9d85f8f28]": 0.018,
 "packages/transform/tests/test_graph.py::test_a_database_source_read_with_anything_else_is_refused[d0b7e9941734]": 0.02,

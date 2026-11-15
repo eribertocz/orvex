@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import IO, Literal
 
 from orvex.contracts.run_record.v1 import RunError, RunRecord
+from orvex.contracts.transform.models import Columns, Graph
 from orvex.server import lake_place, project_check, run_metadata
 from orvex.server.error_problems import _load_problem, _store_message, _store_problem
 from orvex.server.evidence_command import _evidence_after_run
@@ -30,13 +31,9 @@ from orvex.server.project_check import Checked, databases
 from orvex.server.run_metadata import _Outcome, _project_commit, _records
 from orvex.server.run_reads import _committed_snapshot, _count, _since, _table_columns
 from orvex.server.run_steps import _check_tests, _run_step, _StepFailed
+from orvex.server.transform_calls import calling, envelope, transform
 from orvex.store.errors import StoreError
 from orvex.store.lake import Transaction
-from orvex.transform import lineage
-from orvex.transform.graph import Graph, plan_run
-from orvex.transform.incremental import Columns
-from orvex.transform.run_records import record_statements
-from orvex.transform.sources import source_attachments
 
 
 class RunControl:
@@ -130,7 +127,7 @@ def run(
         refreshed = selection.full_refresh & incremental_names
     home = project.folder / f".{identity.slug}"
     try:
-        with project_lock(home):
+        with project_lock(home), calling(project.settings.name):
             return _run_locked(
                 project, graph, checked, home, identity, out, refreshed, selection, drop_leftovers
             )
@@ -190,7 +187,9 @@ def _run_locked(
         print(_load_problem(error), file=out)
         return 1
     try:
-        lake = _open_recorded(home, place, source_attachments(project.sources))
+        lake = _open_recorded(
+            home, place, transform().source_attachments(envelope(), dict(project.sources))
+        )
     except StoreError as error:
         open_error = error
     except ProjectLoadError as error:  # the lake record cannot be written (#192)
@@ -209,27 +208,28 @@ def _run_locked(
                     previous[model.name], since[model.name] = _since(
                         lake,
                         model,
-                        checked.columns.get(model.name, []),
+                        checked.columns.get(model.name, ()),
                         existing[model.name],
                         model.name in refreshed,
                     )
         except StoreError as error:
             lake.close()
             lake, open_error = None, error
-    plan = plan_run(
+    plan = transform().plan_run(
+        envelope(),
         discovery.models,
         graph,
-        checked.columns,
+        dict(checked.columns),
         existing,
         since,
-        refreshed,
+        tuple(sorted(refreshed)),
         previous,
-        checked.differences,
-        checked.filtered,
-        databases(project),
+        {name: tuple(kinds) for name, kinds in checked.differences.items()},
+        dict(checked.filtered),
+        tuple(sorted(databases(project))),
     )
     if selection is not None:
-        plan = [(model, steps) for model, steps in plan if model.name in selection.models]
+        plan = tuple((model, steps) for model, steps in plan if model.name in selection.models)
     outcomes = [
         _Outcome(
             model,
@@ -295,7 +295,7 @@ def _run_locked(
                     if item.model.config.materialized == "incremental":
                         item.total = _count(transaction, item.model)
                     item.outcome = "success"
-                for statement in record_statements(records()):
+                for statement in transform().record_statements(envelope(), tuple(records())):
                     transaction.execute(statement)
                 finished = True
             recorded = True
@@ -327,7 +327,7 @@ def _run_locked(
                     ".",
                     "after the commit",
                 )
-        events: list[lineage.Event] = []
+        events: list[dict[str, object]] = []
         lineage_failure: Problem | None = None
         try:
             events = _lineage_events(project, identity, run_id, outcomes, checked, lake)
@@ -343,7 +343,7 @@ def _run_locked(
             # Nothing of the run committed: it is recorded in a transaction of its own.
             try:
                 with lake.transaction() as transaction:
-                    for statement in record_statements(records()):
+                    for statement in transform().record_statements(envelope(), tuple(records())):
                         transaction.execute(statement)
             except StoreError as error:
                 records_error = error

@@ -7,8 +7,9 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from orvex.contracts.transform.models import Model
 from orvex.transform import auto_filter, graph, incremental, lineage, reconciliation
-from orvex.transform.models import Model, discover_models
+from orvex.transform.models import discover_models
 from orvex.transform.sql_parser import parser
 
 APPEND = (

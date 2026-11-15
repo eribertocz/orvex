@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 import pytest
-from orvex.transform.config_file import MAX_FILE_BYTES, ConfigFile, ConfigProblem
+from orvex.contracts.config_file import MAX_FILE_BYTES, ConfigFile, ConfigProblem
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")

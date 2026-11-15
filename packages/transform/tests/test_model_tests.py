@@ -5,8 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
+from orvex.contracts.transform.models import Model
 from orvex.transform.model_tests import name_of, problems, steps
-from orvex.transform.models import Model, discover_models
+from orvex.transform.models import discover_models
 
 READINGS = [
     ("reading_id", "BIGINT"),

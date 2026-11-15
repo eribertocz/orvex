@@ -7,13 +7,19 @@ from collections.abc import Sequence
 
 from orvex.contracts.run_record.v1 import CheckResult
 from orvex.contracts.store.v1 import StatementRequest
+from orvex.contracts.transform.steps import (
+    Count,
+    Land,
+    ModelTest,
+    PlannedStep,
+    Reconcile,
+    Refuse,
+    Watermark,
+)
 from orvex.server.problems import Problem
 from orvex.server.run_metadata import _Outcome
+from orvex.server.transform_calls import envelope, transform
 from orvex.store.lake import Transaction
-from orvex.transform import incremental
-from orvex.transform.incremental import Count, Land, Refuse, Step, Watermark
-from orvex.transform.model_tests import ModelTest
-from orvex.transform.reconciliation import Reconcile
 
 
 class _StepFailed(Exception):
@@ -45,7 +51,7 @@ def _check_tests(item: _Outcome) -> None:
         )
 
 
-def _run_step(transaction: Transaction, step: Step | ModelTest | Reconcile, item: _Outcome) -> None:
+def _run_step(transaction: Transaction, step: PlannedStep, item: _Outcome) -> None:
     if isinstance(step, Reconcile) and step.land is not None:
         # The database source's groups, landed from its worker, compared, then dropped (#372).
         landing = step.land
@@ -81,7 +87,7 @@ def _run_step(transaction: Transaction, step: Step | ModelTest | Reconcile, item
     elif isinstance(step, Watermark):
         # Stored with the rows, in this transaction: it moves only if they commit.
         value = transaction.value(step.request)
-        for statement in incremental.watermark_statements(step, value):
+        for statement in transform().watermark_statements(envelope(), step, value):
             transaction.execute(statement)
         item.watermark = value
     elif isinstance(step, Count):

@@ -8,7 +8,8 @@ import duckdb
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from orvex.transform.auto_filter import Refusal, filtered_sql, known
+from orvex.contracts.transform.analysis import Refusal
+from orvex.transform.auto_filter import filtered_sql, known
 
 COLUMNS = known(
     {

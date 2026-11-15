@@ -11,45 +11,26 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from typing import Any
 
 import duckdb
 from orvex.contracts.model_config.v1 import ModelError, Reconciliation
 from orvex.contracts.store.v1 import Parameter, ParameterType, StatementRequest
-from orvex.transform.incremental import Land
+from orvex.contracts.transform.models import Model
+from orvex.contracts.transform.steps import Comparison, Land, Reconcile
 from orvex.transform.model_tests import (
     INTEGER_RANGES,
     decimal_bound,
     integer_bound,
     number_text,
 )
-from orvex.transform.models import Model, problem
+from orvex.transform.models import problem
 from orvex.transform.sql_parser import parser
 
 _DECIMAL_TYPE = re.compile(r"DECIMAL\((\d+),(\d+)\)")
 _REFUSED_CLASSES = frozenset({"SUBQUERY", "WINDOW", "PARAMETER", "STAR"})
 _REFUSED_TYPES = frozenset({"BASE_TABLE", "TABLE_FUNCTION", "SUBQUERY", "JOIN"})
-
-
-@dataclass(frozen=True, slots=True)
-class Comparison:
-    """How one check compares, from the binder: the measures' common type, and the positions
-    of its text groups (compared with the binary collation)."""
-
-    kind: str
-    text_groups: frozenset[int] = frozenset()
-
-
-@dataclass(frozen=True, slots=True)
-class Reconcile:
-    """One reconciliation check: `request` counts the failing groups (0 passes). `land`: for a
-    database source, its side landed first from its worker (#372), dropped after the check."""
-
-    name: str
-    request: StatementRequest
-    land: Land | None = None
 
 
 def _walk(node: object) -> Iterator[dict[str, Any]]:
@@ -158,13 +139,13 @@ def staged_name(model: Model, index: int) -> str:
     return f"__reconcile__{model.schema}__{model.table}__{index}"
 
 
-def source_side(check: Reconciliation, text_groups: frozenset[int] = frozenset()) -> str:
+def source_side(check: Reconciliation, text_groups: Collection[int] = ()) -> str:
     """The source's side of a check alone: grouped and measured on the source, so a database
     source computes it in its own worker and only the groups land in the lake (#372)."""
     return _sides(check, "", text_groups)[1]
 
 
-def _sides(check: Reconciliation, relation: str, text_groups: frozenset[int]) -> tuple[str, str]:
+def _sides(check: Reconciliation, relation: str, text_groups: Collection[int]) -> tuple[str, str]:
     groups = [expression(item.root) for item in check.group_by or []]
     measure = expression(check.measure)
     assert measure is not None  # checked at validation
@@ -197,7 +178,7 @@ def _query(
     relation: str,
     select: str,
     where: str = "",
-    text_groups: frozenset[int] = frozenset(),
+    text_groups: Collection[int] = (),
     staged: str | None = None,
 ) -> str:
     """Both sides grouped alike, full-outer-joined on their groups (`NULL` is a group). With

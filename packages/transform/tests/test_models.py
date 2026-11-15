@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 from orvex.contracts.project.v1 import CsvConnection, PostgresConnection
-from orvex.transform.models import Discovery, discover_models
+from orvex.contracts.transform.models import Discovery
+from orvex.transform.models import discover_models
 from orvex.transform.sources import Connection
 
 SIDECAR = """\

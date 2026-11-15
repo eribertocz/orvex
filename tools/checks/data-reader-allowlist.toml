@@ -45,18 +45,18 @@ reason = "The descriptor `os.open` returned in the same function, read with the 
 test = "packages/transform/tests/test_models.py::test_a_pipe_named_sql_does_not_hang"
 
 [[allow]]
-file = "packages/transform/src/orvex/transform/config_file.py"
+file = "packages/contracts/src/orvex/contracts/config_file.py"
 reader = "os.open"
 function = "__init__"
 reason = "Reads one project YAML file (project.yaml, connections.yaml, a model's sidecar), never a data source: a regular file only, at most 1 MiB"
-test = "packages/transform/tests/test_config_file.py::test_a_config_file_reader_reads_only_a_bounded_regular_file"
+test = "packages/contracts/tests/test_config_file.py::test_a_config_file_reader_reads_only_a_bounded_regular_file"
 
 [[allow]]
-file = "packages/transform/src/orvex/transform/config_file.py"
+file = "packages/contracts/src/orvex/contracts/config_file.py"
 reader = "os.fdopen"
 function = "__init__"
 reason = "The descriptor `os.open` returned in the same function, read with the 1 MiB bound"
-test = "packages/transform/tests/test_config_file.py::test_a_config_file_reader_reads_only_a_bounded_regular_file"
+test = "packages/contracts/tests/test_config_file.py::test_a_config_file_reader_reads_only_a_bounded_regular_file"
 
 [[allow]]
 file = "packages/store/src/orvex/store/clickhouse.py"

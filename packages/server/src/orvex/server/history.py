@@ -13,8 +13,8 @@ from orvex.server.lake_open import lake_location
 from orvex.server.locking import LOCK_FILE, ProjectLocked, project_lock
 from orvex.server.problems import Problem
 from orvex.server.project import ProjectLoadError, load_project
+from orvex.server.transform_calls import calling, envelope, transform
 from orvex.store.errors import StoreError
-from orvex.transform.run_records import history_request
 
 
 def runs(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
@@ -39,7 +39,10 @@ def runs(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
                 # listed exists at the snapshot read after them (#394).
                 tables = lake.tables()
                 snapshot = lake.current_snapshot().id
-                request = history_request(snapshot, zone, limit, tables)
+                with calling(project.settings.name):
+                    request = transform().history_request(
+                        envelope(), snapshot, zone, limit, tuple(sorted(tables))
+                    )
                 # No request: the lake has no record table yet.
                 rows = [] if request is None else lake.read(request).read_all().to_pylist()
             finally:

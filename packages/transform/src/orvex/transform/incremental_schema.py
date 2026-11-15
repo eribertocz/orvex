@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import re
 
+from orvex.contracts.transform.models import Model
 from orvex.transform.incremental_types import Columns, quote_identifier, target_table
-from orvex.transform.models import Model
 
 # Type changes that keep every existing value exactly (sync_all_columns); nothing else is applied.
 _SIGNED_INTEGERS = ("TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT")

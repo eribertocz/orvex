@@ -1,0 +1,14 @@
+# The manifest of this module (#486 §2.5, orvex.contracts.manifest): it implements the transform
+# interface contract and requires none, since it never opens the lake: its consumers read the
+# store and give it what they read. `tzdata` gives `zoneinfo` its zones where the system has none.
+module = "transform"
+
+[dependencies]
+runtime = ["duckdb", "orvex-contracts", "tzdata"]
+tests = ["hypothesis", "jsonschema", "pytest", "referencing"]
+
+[[provides]]
+contract = "transform"
+version = "1.0"
+capabilities = ["models", "compile", "run", "records", "schedule", "lineage"]
+implementation = "Transform"

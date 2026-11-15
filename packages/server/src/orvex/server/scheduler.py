@@ -1,10 +1,10 @@
 """`schedule`: keep a project's models as fresh as they declare (P1-19).
 
-The loop asks `transform.schedule.plan` what is due and runs it through the normal `run` — one
-run at a time, under the project lock. It checks the project again only when its files change
-(checking binds the models against the sources), and it keeps the start of its last run in
-memory, on a monotonic clock, as well as in the run records: two runs never start less than five
-minutes apart, whatever the records or the system clock say.
+The loop asks transform's `schedule_plan` (through its contract) what is due and runs it through
+the normal `run` — one run at a time, under the project lock. It checks the project again only
+when its files change (checking binds the models against the sources), and it keeps the start
+of its last run in memory, on a monotonic clock, as well as in the run records: two runs never
+start less than five minutes apart, whatever the records or the system clock say.
 
 A model whose own step failed is held: retried after 5, 10 and 20 minutes, then given up until
 its next due time; due models that do not read it keep running. Every decision is printed.
@@ -39,6 +39,13 @@ from types import FrameType
 from typing import IO
 from zoneinfo import ZoneInfo
 
+from orvex.contracts.transform.scheduling import (
+    LOOK_AGAIN,
+    MINIMUM_INTERVAL,
+    RETRY_DELAYS,
+    History,
+    Plan,
+)
 from orvex.server import (
     error_problems,
     heartbeat,
@@ -56,18 +63,8 @@ from orvex.server.problems import Problem
 from orvex.server.project import ProjectLoadError
 from orvex.server.project_check import Checked
 from orvex.server.run import Selection
+from orvex.server.transform_calls import calling, envelope, transform
 from orvex.store.errors import StoreError
-from orvex.transform.run_records import last_run_request, model_history_request
-from orvex.transform.schedule import (
-    LOOK_AGAIN,
-    MINIMUM_INTERVAL,
-    RETRY_DELAYS,
-    History,
-    Plan,
-    closure,
-    next_due,
-    plan,
-)
 
 type Clock = Callable[[], dt.datetime]
 type Sleep = Callable[[float], None]
@@ -165,8 +162,9 @@ def _read_records(home: Path, place: lake_place.Place) -> _Records:
             # listed exists at the snapshot read after them (#394).
             tables = lake.tables()
             snapshot = lake.current_snapshot().id
-            histories_request = model_history_request(snapshot, tables)
-            last_request = last_run_request(snapshot, tables)
+            listed = tuple(sorted(tables))
+            histories_request = transform().model_history_request(envelope(), snapshot, listed)
+            last_request = transform().last_run_request(envelope(), snapshot, listed)
             if histories_request is None or last_request is None:
                 return _Records({}, None, (), maintained)  # no run records yet
             rows = lake.read(histories_request).read_all().to_pylist()
@@ -531,7 +529,8 @@ def _cycle(
     assert checked.place is not None  # a refused lake location is a problem
     place = checked.place
     try:
-        records = _records(home, place, state.kept)
+        with calling(project.settings.name):
+            records = _records(home, place, state.kept)
     except locking.ProjectLocked:
         return _report(out, state, ("waiting: another process holds the project",), now)
     except ProjectLoadError as error:
@@ -543,17 +542,19 @@ def _cycle(
     last_runs = [moment for moment in (records.last_run_start, state.last_run_wall) if moment]
 
     def decide(held: dict[str, dt.datetime]) -> Plan:
-        return plan(
-            checked.discovery.models,
-            graph.order,
-            graph.dependencies,
-            records.histories,
-            now,
-            zone,
-            state.started,
-            max(last_runs, default=None),
-            held,
-        )
+        with calling(project.settings.name):
+            return transform().schedule_plan(
+                envelope(),
+                checked.discovery.models,
+                graph.order,
+                graph.dependencies,
+                records.histories,
+                now,
+                zone,
+                state.started,
+                max(last_runs, default=None),
+                held,
+            )
 
     decided = decide(state.held)
     due = {reason.split(":")[0] for reason in decided.reasons}
@@ -565,8 +566,14 @@ def _cycle(
         # more than one run.
         if recovering <= state.deferred:
             # The models a retry reads run with it: only the other healthy ones wait.
-            known = {model.name for model in checked.discovery.models}
-            read = set().union(*(closure(n, graph.dependencies, known) for n in recovering))
+            known = tuple(model.name for model in checked.discovery.models)
+            with calling(project.settings.name):
+                read = set().union(
+                    *(
+                        transform().closure(envelope(), n, graph.dependencies, known)
+                        for n in recovering
+                    )
+                )
             waiting = healthy - read
             decided = decide({**state.held, **dict.fromkeys(waiting, now + LOOK_AGAIN)})
             state.deferred -= recovering
@@ -597,7 +604,7 @@ def _cycle(
     for reason in decided.reasons:
         _say(state, out, zone, now, f"due {reason}")
     state.last_run_wall, state.last_run_monotonic = now, monotonic()
-    selection = Selection(decided.models, "freshness", decided.full_refresh, control)
+    selection = Selection(decided.models, "freshness", frozenset(decided.full_refresh), control)
     previous_start = records.last_run_start
     ran = run.run(folder, identity, out, selection=selection)
     state.kept = _Kept()  # the run may have committed: the records are read again
@@ -632,7 +639,8 @@ def _cycle(
             _say(state, out, zone, after, f"{name} failed; retry {count} at {retry:%H:%M}")
         else:
             state.failures.pop(name, None)
-            state.held[name] = next_due(by_name[name], after, zone)
+            with calling(project.settings.name):
+                state.held[name] = transform().next_due(envelope(), by_name[name], after, zone)
             print(f"SCHEDULE_GAVE_UP {name}", file=out, flush=True)
             until = state.held[name].astimezone(ZoneInfo(zone))
             _say(state, out, zone, after, f"{name} waits until {until:%Y-%m-%d %H:%M}")

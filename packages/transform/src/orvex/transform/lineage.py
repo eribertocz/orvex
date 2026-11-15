@@ -21,8 +21,9 @@ from orvex.contracts.project.v1 import (
     PostgresConnection,
     SqliteConnection,
 )
+from orvex.contracts.transform.analysis import LineageScope
+from orvex.contracts.transform.models import Model
 from orvex.transform.graph import LAKE_CATALOG, _cte_names, _path, _tree, _walk
-from orvex.transform.models import Model
 from orvex.transform.sql_parser import parser
 
 type Connection = (
@@ -55,15 +56,6 @@ FACETS = {
 class Dataset:
     namespace: str
     name: str
-
-
-@dataclass(frozen=True, slots=True)
-class Scope:
-    """What every event of a project's runs shares."""
-
-    producer: str  # a URI naming this release of the product's transform module
-    job_namespace: str
-    lake_namespace: str
 
 
 def project_key(name: str) -> str:
@@ -225,7 +217,7 @@ def column_lineage(
     return lineage
 
 
-def _facet(scope: Scope, kind: str, body: Mapping[str, Any]) -> dict[str, Any]:
+def _facet(scope: LineageScope, kind: str, body: Mapping[str, Any]) -> dict[str, Any]:
     return {"_producer": scope.producer, "_schemaURL": FACETS[kind], **body}
 
 
@@ -245,7 +237,7 @@ class ModelRun:
     error: str | None  # "<code>: <message>" of the failing model
 
 
-def events(scope: Scope, parent_run_id: str, runs: Sequence[ModelRun]) -> list[Event]:
+def events(scope: LineageScope, parent_run_id: str, runs: Sequence[ModelRun]) -> list[Event]:
     """START and COMPLETE (or FAIL) for each model that started, in run order."""
     found: list[Event] = []
     for item in runs:

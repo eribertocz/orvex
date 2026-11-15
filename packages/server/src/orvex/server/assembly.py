@@ -12,6 +12,7 @@ class, built from configuration by keyword arguments, so it takes no positional-
 variadic positional parameter. `UNSUPPORTED_OPERATION` cannot stand in for a capability: the
 contract format refuses to declare it, and an operation the implementation lacks refuses the
 assembly. Any problem stops the server before it opens a project or binds a port (exit 3).
+`implementation_of` builds, from that same place, the one implementation the server calls.
 """
 
 from __future__ import annotations
@@ -228,3 +229,30 @@ def check_installed_assembly(identity: Identity, chosen: Mapping[str, str] | Non
         load_implementations(identity.python_namespace, manifests),
         chosen,
     )
+
+
+def implementation_of(
+    identity: Identity, contract: str, chosen: Mapping[str, str] | None = None
+) -> object:
+    """A new instance of the implementation of `contract` the server calls: the chosen module's
+    when the configuration chooses one, otherwise the one installed module's; refused when none
+    or several provide it. It is built with no argument (all of its configuration defaulted)."""
+    manifests = installed_manifests(identity, chosen)
+    choice = (chosen or {}).get(contract)
+    found = [
+        implementation
+        for (module, provided), implementation in load_implementations(
+            identity.python_namespace, manifests
+        ).items()
+        if provided == contract and choice in (None, module)
+    ]
+    if len(found) != 1:
+        raise AssemblyRefused(
+            [f"ASSEMBLY_NO_IMPLEMENTATION: {len(found)} installed modules provide {contract}"]
+        )
+    implementation = found[0]
+    if not isinstance(implementation, type):
+        raise AssemblyRefused(
+            [f"ASSEMBLY_IMPLEMENTATION_MISSING: {contract} is provided by an object, not a class"]
+        )
+    return implementation()

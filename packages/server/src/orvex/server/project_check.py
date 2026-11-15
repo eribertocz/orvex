@@ -2,7 +2,8 @@
 lake; every problem, nothing written.
 
 The server composes the modules: the project loader, model discovery, the dependency graph and
-the run plan (`transform`), and the lake (`store`). Transform never opens the lake.
+the run plan (`transform`, through its contract), and the lake (`store`). Transform never opens
+the lake: what it needs from it, the server describes and gives it.
 """
 
 from __future__ import annotations
@@ -13,13 +14,18 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from orvex.contracts.model_config.v1 import Reconciliation
+from orvex.contracts.model_config.v1 import ModelError, Reconciliation
 from orvex.contracts.store.v1 import (
     LocalLakeLocation,
     Parameter,
     ParameterType,
     StatementRequest,
 )
+from orvex.contracts.transform.analysis import ColumnsNeeded, Refusal
+from orvex.contracts.transform.columns import ColumnsExchange
+from orvex.contracts.transform.interface import Known
+from orvex.contracts.transform.models import Columns, Discovery, Graph, Model
+from orvex.contracts.transform.steps import PARAMETER_TYPES, SINCE, Comparison
 from orvex.server import lake_separation
 from orvex.server.error_problems import (
     _from_model_error,
@@ -32,20 +38,9 @@ from orvex.server.lake_open import _limits, lake_location
 from orvex.server.lake_place import Place
 from orvex.server.problems import Problem
 from orvex.server.project import Project, ProjectLoadError, load_project
+from orvex.server.transform_calls import calling, envelope, transform
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, open_lake
-from orvex.transform import auto_filter, incremental, model_tests, reconciliation, schedule
-from orvex.transform.graph import (
-    Graph,
-    build_graph,
-    compiled_sql,
-    known_output_names,
-    test_relations,
-)
-from orvex.transform.incremental import Columns, since_bound_problem
-from orvex.transform.models import Discovery, Model, discover_models
-from orvex.transform.reconciliation import Comparison
-from orvex.transform.sources import source_attachments
 
 DATABASE_TYPES = frozenset({"duckdb", "sqlite", "postgres"})
 
@@ -84,6 +79,11 @@ def check_project(
         project = load_project(folder)
     except ProjectLoadError as error:
         return Checked(None, Discovery((), ()), None, (_load_problem(error),))
+    with calling(project.settings.name):
+        return _check_loaded(project, identity, instance)
+
+
+def _check_loaded(project: Project, identity: Identity | None, instance: Path | None) -> Checked:
     slug = (identity or load_identity()).slug
     home = project.folder / f".{slug}"
     place: Place | None = None
@@ -96,16 +96,20 @@ def check_project(
         folders = lake_separation.registered(instance, project.folder)
         found = lake_separation.instance(instance, folders, slug)
         problems += lake_separation.problems(found, project.folder)
-    discovery = discover_models(project.folder, project.sources)
-    sources = set(project.sources)
-    graph = build_graph(discovery.models, sources, databases(project), project.direct)
+    discovery = transform().discover_models(envelope(), str(project.folder), dict(project.sources))
+    graph = transform().build_graph(
+        envelope(),
+        discovery.models,
+        tuple(sorted(project.sources)),
+        tuple(sorted(databases(project))),
+        tuple(sorted(project.direct)),
+    )
     problems += [_from_model_error(item) for item in (*discovery.problems, *graph.problems)]
-    kinds = {name: connection.type for name, connection in project.sources.items()}
+    kinds: dict[str, str] = {name: c.type for name, c in project.sources.items()}
     zone = project.settings.time_zone
     for model in discovery.models:
-        problems += [_from_model_error(item) for item in schedule.config_problems(model, zone)]
-        problems += [_from_model_error(item) for item in incremental.config_problems(model)]
-        problems += [_from_model_error(item) for item in reconciliation.problems(model, kinds)]
+        configured = transform().config_problems(envelope(), model, zone, kinds)
+        problems += [_from_model_error(item) for item in configured]
     columns: dict[str, Columns] = {}
     differences: dict[str, list[Comparison]] = {}
     filtered: dict[str, str] = {}
@@ -113,7 +117,7 @@ def check_project(
     # the model is bound, as below.
     unknown_names = False
     for model in discovery.models:
-        names = known_output_names(model.sql)
+        names = transform().known_output_names(envelope(), model.sql)
         if names is None:
             unknown_names = True
         else:
@@ -126,7 +130,8 @@ def check_project(
         columns, differences, filtered, bind_problems = _bind(project, discovery, graph)
         problems += bind_problems
         problems += [
-            _from_model_error(item) for item in incremental.problems_for(discovery.models, columns)
+            _from_model_error(item)
+            for item in transform().column_problems(envelope(), discovery.models, columns)
         ]
     return Checked(
         project,
@@ -154,8 +159,9 @@ def _bind(
     models are stand-in empty tables with the columns found for them, and sources are attached
     as for a run.
     """
-    by_name = {model.name: model for model in discovery.models}
-    relations = test_relations(discovery.models)
+    models = discovery.models
+    by_name = {model.name: model for model in models}
+    relations = transform().test_relations(envelope(), models)
     known = databases(project)
     columns: dict[str, Columns] = {}
     differences: dict[str, list[Comparison]] = {}
@@ -166,7 +172,11 @@ def _bind(
     try:
         location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(scratch))
         try:
-            lake = open_lake(location, _limits(), source_attachments(project.sources))
+            lake = open_lake(
+                location,
+                _limits(),
+                transform().source_attachments(envelope(), dict(project.sources)),
+            )
         except StoreError as error:
             return {}, {}, {}, [_store_problem(error, ".", "")]
         try:
@@ -177,7 +187,10 @@ def _bind(
                     continue
                 try:
                     output = _describe(
-                        lake, model, compiled_sql(model, by_name), graph.lands.get(name)
+                        lake,
+                        model,
+                        transform().compiled_sql(envelope(), model, models, None),
+                        graph.lands.get(name),
                     )
                 except StoreError as error:
                     failed.add(name)
@@ -196,15 +209,13 @@ def _bind(
                     problems += repeated
                     continue
                 columns[name] = output
-                # A computed time column bounded by its alias: only now are the tables'
-                # columns known (#162).
-                bounded = since_bound_problem(model, lambda parts: _columns_of(lake, parts, known))
+                bounded = _since_bound(lake, model, known)
                 if bounded is not None:
                     failed.add(name)
                     problems.append(_from_model_error(bounded))
                     continue
                 if _automatic(model):
-                    proven = _prove_filter(lake, model, output, by_name, graph.lands.get(name))
+                    proven = _prove_filter(lake, model, output, models, graph.lands.get(name))
                     if isinstance(proven, Problem):
                         problems.append(proven)
                     else:
@@ -213,7 +224,7 @@ def _bind(
                     _stand_in(lake, model, output)
                 # Tests and reconciliation check the stored table, whatever produced it.
                 if model.config.tests:
-                    problems += _bind_tests(lake, model, columns, by_name, relations)
+                    problems += _bind_tests(lake, model, columns, models, relations)
                 if model.config.reconciliation:
                     found, kinds = _bind_reconciliation(lake, model, relations[name], known)
                     problems += found
@@ -225,7 +236,7 @@ def _bind(
     return columns, differences, filtered, problems
 
 
-def _repeated_names(model: Model, names: list[str]) -> list[Problem]:
+def _repeated_names(model: Model, names: Sequence[str]) -> list[Problem]:
     """One problem per output column name the model repeats, in output order (#113).
 
     Names are compared as DuckDB does, without letter case: a table cannot hold `a` and `A`,
@@ -246,16 +257,22 @@ def _repeated_names(model: Model, names: list[str]) -> list[Problem]:
     ]
 
 
-def _columns_of(
-    lake: Lake, parts: tuple[str, ...], known: frozenset[str] = frozenset()
-) -> frozenset[str] | None:
-    """The lowercase column names of a table or source table, as the binder sees it in the
-    scratch lake (a database source's in its worker, #372); None when it cannot be described."""
-    found = _relation_columns(lake, list(parts), known)
-    return None if found is None else frozenset(name.lower() for name in found)
+def _since_bound(lake: Lake, model: Model, known: frozenset[str]) -> ModelError | None:
+    """A computed time column bounded by its alias: only once the model is bound are the
+    tables' columns known (#162)."""
+
+    def bound(given: Known) -> ModelError | ColumnsNeeded | None:
+        return transform().since_bound_problem(envelope(), model, given)
+
+    exchange = ColumnsExchange[ModelError | None](
+        lambda parts: _relation_columns(lake, list(parts), known)
+    )
+    return exchange.answer(bound)
 
 
 def _relation_columns(lake: Lake, parts: list[str], known: frozenset[str]) -> list[str] | None:
+    """The column names of a table or source table, as the binder sees it in the scratch lake
+    (a database source's in its worker, #372); None when it cannot be described."""
     quoted = ".".join('"' + part.replace('"', '""') + '"' for part in parts)
     sql = f"SELECT * FROM {quoted}"
     try:
@@ -279,35 +296,35 @@ def _prove_filter(
     lake: Lake,
     model: Model,
     output: Columns,
-    by_name: Mapping[str, Model],
+    models: tuple[Model, ...],
     land: str | None = None,
 ) -> str | Problem:
     """The model's SQL with the proven `> $since` filter, bound once to check it; or why the
     filter cannot be proven (`INCREMENTAL_FILTER_NOT_PROVABLE`, with the time column's line)."""
     incremental_config = model.config.incremental
     assert incremental_config is not None
-    described: dict[tuple[str, ...], list[str] | None] = {}
-
-    def columns_of(path: list[str]) -> list[str] | None:
-        parts = tuple(path)
-        if parts not in described:
-            described[parts] = _relation_columns(
-                lake, list(parts), frozenset({land}) if land else frozenset()
-            )
-        return described[parts]
-
+    databases = frozenset({land}) if land else frozenset()
     time_column = incremental_config.time_column.root
-    result = auto_filter.filtered_sql(model.sql, time_column, columns_of)
-    if isinstance(result, auto_filter.Refusal):
+
+    def filtered(given: Known) -> str | Refusal | ColumnsNeeded:
+        return transform().filtered_sql(envelope(), model.sql, time_column, given)
+
+    exchange = ColumnsExchange[str | Refusal](
+        lambda parts: _relation_columns(lake, list(parts), databases)
+    )
+    result = exchange.answer(filtered)
+    if isinstance(result, Refusal):
         return Problem(
             "INCREMENTAL_FILTER_NOT_PROVABLE",
             model.sql_file,
-            auto_filter.line_of(model.sql, result.location),
+            result.line,
             f"{model.name}: a filter on {time_column} cannot be proven safe "
             f"(reason: {result.reason}); set filter: manual and place $since in the SQL.",
         )
     try:
-        rewritten = _describe(lake, model, compiled_sql(model, by_name, result), land)
+        rewritten = _describe(
+            lake, model, transform().compiled_sql(envelope(), model, models, result), land
+        )
     except StoreError as error:
         return Problem(
             "INCREMENTAL_FILTER_NOT_PROVABLE",
@@ -342,7 +359,9 @@ def _bind_reconciliation(
         pointer = f"/reconciliation/{index}"
         try:
             staged = _stage_reconciliation(lake, model, index, check, known)
-            described = lake.describe(reconciliation.measures_sql(check, relation, staged))
+            described = lake.describe(
+                transform().measures_sql(envelope(), model, index, relation, staged)
+            )
         except StoreError as error:
             problems.append(
                 Problem(
@@ -374,14 +393,14 @@ def _bind_reconciliation(
                 )
             )
             continue
-        text_groups = frozenset(
+        text_groups = tuple(
             position
             for position in range(len(check.group_by or []))
             if described[2 + 2 * position][1] == "VARCHAR"
         )
         described = described[:2]
-        kind = reconciliation.common_type(described[0][1], described[1][1])
-        inexact = [typ for _, typ in described if not reconciliation.exact_difference(typ)]
+        difference = transform().measure_difference(envelope(), described[0][1], described[1][1])
+        inexact = difference.inexact
         if inexact:
             problems.append(
                 Problem(
@@ -394,7 +413,7 @@ def _bind_reconciliation(
                 )
             )
             continue
-        kinds.append(Comparison(kind, text_groups))
+        kinds.append(Comparison(difference.kind, text_groups))
     return problems, kinds
 
 
@@ -403,18 +422,17 @@ def _stage_reconciliation(
 ) -> str | None:
     """For a check against a database source: an empty lake table with the columns its side
     lands with, so the comparison binds as a run will run it; None for any other source."""
-    database = reconciliation.database_of(check, known)
-    if database is None:
+    stage = transform().reconciliation_stage(envelope(), model, index, tuple(sorted(known)))
+    if stage is None:
         return None
-    output = lake.describe_source(database, reconciliation.source_side(check))
-    name = reconciliation.staged_name(model, index)
+    output = lake.describe_source(stage.database, stage.source_sql)
     quoted = ", ".join(
         f'"{column.replace(chr(34), chr(34) * 2)}" {kind}' for column, kind in output
     )
-    staged = f'"{reconciliation.STAGE_SCHEMA}"."{name}"'
+    staged = f'"{stage.schema}"."{stage.table}"'
     with lake.transaction() as transaction:
         for sql in (
-            f'CREATE SCHEMA IF NOT EXISTS "{reconciliation.STAGE_SCHEMA}"',
+            f'CREATE SCHEMA IF NOT EXISTS "{stage.schema}"',
             f"CREATE OR REPLACE TABLE {staged} ({quoted})",
         ):
             transaction.execute(StatementRequest(kind="statement", sql=sql, parameters=[]))
@@ -425,16 +443,18 @@ def _bind_tests(
     lake: Lake,
     model: Model,
     columns: Mapping[str, Columns],
-    by_name: Mapping[str, Model],
+    models: tuple[Model, ...],
     relations: Mapping[str, str],
 ) -> list[Problem]:
     """Problems of a model's tests: the rules on its columns, then each test query bound."""
-    found = model_tests.problems(model, columns[model.name], columns, by_name)
+    found = transform().test_problems(envelope(), model, dict(columns), models)
     if found:
         return [_from_model_error(item) for item in found]
     problems: list[Problem] = []
     file = model.config_file or model.sql_file
-    tests = model_tests.steps(model, relations[model.name], columns[model.name], relations)
+    tests = transform().test_steps(
+        envelope(), model, relations[model.name], columns[model.name], dict(relations)
+    )
     for index, test in enumerate(tests):
         try:
             lake.describe(test.request.sql, test.request.parameters)
@@ -458,19 +478,19 @@ def _describe(lake: Lake, model: Model, sql: str, land: str | None = None) -> Co
 
     def described(text: str, parameters: Sequence[Parameter] = ()) -> Columns:
         if land is not None:
-            return lake.describe_source(land, text, parameters)
-        return lake.describe(text, parameters)
+            return tuple(lake.describe_source(land, text, parameters))
+        return tuple(lake.describe(text, parameters))
 
     incremental_config = model.config.incremental
     if model.config.materialized != "incremental" or incremental_config is None:
         return described(sql)
-    if not incremental.uses_since(sql):
+    if not transform().uses_since(envelope(), sql):
         return described(sql)
     time_column = incremental_config.time_column.root.lower()
     first: Columns | None = None
     error: StoreError | None = None
-    for output_type, parameter_type in incremental.PARAMETER_TYPES.items():
-        since = Parameter(name=incremental.SINCE, type=ParameterType(parameter_type), value=None)
+    for output_type, parameter_type in PARAMETER_TYPES.items():
+        since = Parameter(name=SINCE, type=ParameterType(parameter_type), value=None)
         try:
             output = described(sql, [since])
         except StoreError as failed:

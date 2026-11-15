@@ -8,22 +8,23 @@ from typing import Any
 
 import jsonschema
 from orvex.contracts.project.v1 import ParquetConnection, PostgresConnection
+from orvex.contracts.transform.analysis import LineageScope
+from orvex.contracts.transform.models import Model
 from orvex.transform.lineage import (
     Connection,
     Dataset,
     ModelRun,
-    Scope,
     column_lineage,
     events,
     inputs,
     project_key,
 )
-from orvex.transform.models import Model, discover_models
+from orvex.transform.models import discover_models
 from referencing import Registry, Resource
 
 SPEC = Path(__file__).parent / "openlineage"
 LAKE = "ducklake://test"
-SCOPE = Scope("urn:product:transform:0.0.0", "product://test", LAKE)
+SCOPE = LineageScope("urn:product:transform:0.0.0", "product://test", LAKE)
 
 
 def validator(definition: str, schema_file: Path) -> jsonschema.Draft202012Validator:

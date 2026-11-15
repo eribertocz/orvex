@@ -7,9 +7,10 @@ from pathlib import Path
 import duckdb
 import pytest
 from orvex.contracts.store.v1 import StatementRequest
+from orvex.contracts.transform.models import Discovery
+from orvex.contracts.transform.steps import Land
 from orvex.transform.graph import build_graph, compiled_sql, known_output_names, plan_run
-from orvex.transform.incremental import Land
-from orvex.transform.models import Discovery, discover_models
+from orvex.transform.models import discover_models
 
 
 def project(folder: Path, files: dict[str, str]) -> Discovery:

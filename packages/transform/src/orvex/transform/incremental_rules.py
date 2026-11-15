@@ -5,11 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from orvex.contracts.model_config.v1 import ModelError
+from orvex.contracts.transform.models import Model
 from orvex.transform.incremental_append import append_rows_problem
 from orvex.transform.incremental_since import since_bound_problem, uses_since
 from orvex.transform.incremental_types import KEYED_STRATEGIES, TEMPORAL_TYPES, Columns
 from orvex.transform.incremental_watermarks import UNIT_MICROSECONDS, lookback_microseconds
-from orvex.transform.models import Model, problem
+from orvex.transform.models import problem
 
 
 def config_problems(model: Model) -> list[ModelError]:

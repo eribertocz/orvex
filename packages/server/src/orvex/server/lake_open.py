@@ -8,12 +8,12 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
+from orvex.contracts.transform.interface import Attachment
 from orvex.server import lake_place
 from orvex.server.lake_place import Place
 from orvex.server.project import Project, ProjectLoadError
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, open_lake
-from orvex.transform.sources import Attachment
 
 DEFAULT_MEMORY = "4GB"
 DEFAULT_TIMEOUT_MS = 3_600_000

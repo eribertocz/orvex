@@ -21,9 +21,9 @@ from orvex.contracts.run_record.v1 import (
     RunRecord,
     Versions,
 )
+from orvex.contracts.transform.models import Model
 from orvex.server.identity import Identity
 from orvex.server.versions import module_versions
-from orvex.transform.models import Model
 
 if TYPE_CHECKING:
     from orvex.server.run import Selection

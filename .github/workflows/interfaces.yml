@@ -54,3 +54,5 @@ jobs:
           python -m pip install --quiet -r pylock.toml
       - name: The contracts module alone, outside the repository
         run: python -m tools.ci.standalone contracts
+      - name: The transform module alone, outside the repository
+        run: python -m tools.ci.standalone transform
