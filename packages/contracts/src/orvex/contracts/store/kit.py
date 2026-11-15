@@ -18,7 +18,6 @@ import pyarrow as pa
 from orvex.contracts.envelope import CallEnvelope
 from orvex.contracts.kit import Idempotent, Kit, KitCase
 from orvex.contracts.kit_client import KitClient
-from orvex.contracts.store.arrow_ipc import batch_bytes, one_batch, stream_bytes, stream_schema
 from orvex.contracts.store.interface import STORE
 from orvex.contracts.store.kit_support import (
     EXISTING_LIMITS,
@@ -60,7 +59,7 @@ EXACT = (
     "TIMESTAMPTZ '2026-03-29 01:30:00+00' AS at, NULL::BIGINT AS missing"
 )
 FORGED_LAKE = LakeHandle("lake-forged")
-FORGED_READ = ReadHandle("read-forged", b"")
+FORGED_READ = ReadHandle("read-forged", pa.table({}))
 FORGED_TRANSACTION = TransactionHandle("transaction-forged", None)
 FORGED_EXISTING = ExistingLakeHandle("existing-lake-forged", "forged")
 FORGED_ENGINE = ClickHouseHandle("clickhouse-forged", "db", "")
@@ -237,7 +236,7 @@ def _read_ends(client: KitClient) -> None:
     read = client.start_read(lake, read_request("SELECT a FROM t ORDER BY a", snapshot))
     seen = []
     while (data := client.read_batch(read)) is not None:
-        seen += one_batch(data).column("a").to_pylist()
+        seen += data.column("a").to_pylist()
     check(seen == [0, 1, 2], f"every row, once: {seen}")
     check(client.read_batch(read) is None, "an ended read stays ended")
     client.close_read(read)
@@ -331,7 +330,7 @@ def _load_exact(client: KitClient) -> None:
         transaction,
         "main",
         "loaded",
-        batch_bytes(batch),
+        pa.Table.from_batches([batch]),
         (("amount", "DECIMAL(18,2)"),),
         None,
     )
@@ -506,7 +505,7 @@ def _clickhouse_forged(operation: str, *arguments: object) -> KitCase:
 # --- encoding ------------------------------------------------------------------------------------
 
 
-def _read_schema(client: KitClient) -> tuple[bytes, pa.RecordBatch]:
+def _read_schema(client: KitClient) -> tuple[pa.Table, pa.RecordBatch]:
     lake = open_lake(client)
     write(client, lake, "CREATE TABLE t AS SELECT 1.50::DECIMAL(18,2) AS a, NULL::HUGEINT AS h")
     read = client.start_read(
@@ -526,13 +525,13 @@ def _json_frame(client: KitClient) -> None:
         '{"name": "h", "type": "HUGEINT"}],"rows":['
     )
     check(found == expected, f"the head: {found}")
-    bare = stream_bytes(pa.schema([("x", pa.int64())]))
+    bare = pa.schema([("x", pa.int64())]).empty_table()
     refused("STORE_TYPE_UNSUPPORTED", lambda: client.json_frame(bare))
 
 
 def _json_rows(client: KitClient) -> None:
     schema, batch = _read_schema(client)
-    stream = batch_bytes(batch, stream_schema(schema))
+    stream = pa.Table.from_batches([batch], schema.schema)
     check(client.json_rows(stream, True) == ('["1.50", null]',), "exact text, NULL as null")
     check(client.json_rows(stream, False) == (',["1.50", null]',), "a later row is separated")
 
@@ -751,7 +750,7 @@ CASES = (
                 _loading.of(c),
                 "main",
                 "loaded",
-                batch_bytes(pa.record_batch({"a": pa.array([1, 2], pa.int64())})),
+                pa.table({"a": pa.array([1, 2], pa.int64())}),
                 (("a", "BIGINT"),),
                 None,
             ),

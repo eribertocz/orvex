@@ -14,7 +14,6 @@ from typing import Any
 
 import pyarrow as pa
 from orvex.contracts.kit_client import KitClient
-from orvex.contracts.store.arrow_ipc import one_batch, stream_schema
 from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     CommitResult,
@@ -100,11 +99,11 @@ def commit(client: KitClient, lake: LakeHandle, *sqls: str) -> Snapshot:
 
 def drain(client: KitClient, read: ReadHandle) -> pa.Table:
     """Every batch of a read, then the read let go."""
-    schema = stream_schema(read.schema)
+    schema = read.schema.schema
     batches = []
     try:
         while (data := client.read_batch(read)) is not None:
-            batches.append(one_batch(data))
+            batches += data.to_batches()
     finally:
         client.close_read(read)
     return pa.Table.from_batches(batches, schema=schema)

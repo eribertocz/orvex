@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pyarrow as pa
 from orvex.contracts.store.v1 import Snapshot, StoreError
 
 
@@ -101,11 +102,11 @@ class TransactionHandle:
 
 @dataclass(frozen=True, slots=True)
 class ReadHandle:
-    """A running read: its Arrow schema as an IPC stream with no batch, then its batches one at a
-    time (`read_batch`)."""
+    """A running read: its Arrow schema, as a table with no row, then its batches one at a time
+    (`read_batch`)."""
 
     id: str
-    schema: bytes
+    schema: pa.Table
 
 
 @dataclass(frozen=True, slots=True)

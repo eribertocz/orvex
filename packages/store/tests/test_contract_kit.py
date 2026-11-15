@@ -10,7 +10,6 @@ import pytest
 from orvex.contracts.envelope import CallEnvelope
 from orvex.contracts.kit_run import kit_problems, run_kit, verify_kit
 from orvex.contracts.manifest import parse_manifest
-from orvex.contracts.store.arrow_ipc import batch_bytes, one_batch
 from orvex.contracts.store.interface import STORE
 from orvex.contracts.store.kit import STORE_KIT
 from orvex.contracts.store.v1 import StatementRequest
@@ -52,22 +51,21 @@ class _ExecutesTwice(Store):
 class _DecimalAsFloat(Store):
     """Planted: a read that turns every DECIMAL into a float."""
 
-    def read_batch(self, envelope: CallEnvelope, read: ReadHandle) -> bytes | None:
+    def read_batch(self, envelope: CallEnvelope, read: ReadHandle) -> pa.Table | None:
         found = super().read_batch(envelope, read)
         if found is None:
             return None
-        batch = one_batch(found)
         columns = [
             column.cast(pa.float64()) if pa.types.is_decimal(column.type) else column
-            for column in batch.columns
+            for column in found.columns
         ]
-        return batch_bytes(pa.record_batch(columns, names=batch.schema.names))
+        return pa.table(columns, names=found.column_names)
 
 
 class _ForgedHandleAccepted(Store):
     """Planted: a forged read handle answered as an ended read instead of refused."""
 
-    def read_batch(self, envelope: CallEnvelope, read: ReadHandle) -> bytes | None:
+    def read_batch(self, envelope: CallEnvelope, read: ReadHandle) -> pa.Table | None:
         if read.id == "read-forged":
             return None
         return super().read_batch(envelope, read)

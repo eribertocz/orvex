@@ -1,9 +1,9 @@
 """The store's interface contract (#486 §5 step 2, ADR-0033): every operation its consumers use,
 by capability, with the codes each may raise (`orvex.contracts.store.errors.StoreError`).
 
-Each operation takes the call envelope first. Arrow crosses as IPC streams (`bytes`): a read's
-schema in its handle and then one batch per `read_batch`, never a live reader. What the store
-holds open (lakes, transactions, reads, connections) is named by a handle
+Each operation takes the call envelope first. Arrow crosses as tables (the codec's Arrow type): a
+read's schema in its handle and then one batch per `read_batch`, never a live reader. What the
+store holds open (lakes, transactions, reads, connections) is named by a handle
 (`orvex.contracts.store.values`); the consumer's facade is `orvex.contracts.store.client`.
 
 An operation changes state when it changes a lake, or what later calls see of a lake, a
@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Protocol
 
+import pyarrow as pa
 from orvex.contracts.envelope import CallEnvelope
 from orvex.contracts.interface import InterfaceContract, Operation
 from orvex.contracts.store.errors import StoreError
@@ -121,7 +122,7 @@ class Store(Protocol):
         self, envelope: CallEnvelope, lake: LakeHandle, request: ReadRequest
     ) -> ReadHandle: ...
 
-    def read_batch(self, envelope: CallEnvelope, read: ReadHandle) -> bytes | None: ...
+    def read_batch(self, envelope: CallEnvelope, read: ReadHandle) -> pa.Table | None: ...
 
     def cancel_read(self, envelope: CallEnvelope, read: ReadHandle) -> None: ...
 
@@ -156,7 +157,7 @@ class Store(Protocol):
         transaction: TransactionHandle,
         schema: str,
         table: str,
-        data: bytes,
+        data: pa.Table,
         columns: Columns,
         timeout_ms: int | None,
     ) -> int: ...
@@ -254,9 +255,9 @@ class Store(Protocol):
     ) -> ReadHandle: ...
 
     # --- encoding ------------------------------------------------------------------------------
-    def json_frame(self, envelope: CallEnvelope, schema: bytes) -> JsonFrame: ...
+    def json_frame(self, envelope: CallEnvelope, schema: pa.Table) -> JsonFrame: ...
 
-    def json_rows(self, envelope: CallEnvelope, batch: bytes, first: bool) -> tuple[str, ...]: ...
+    def json_rows(self, envelope: CallEnvelope, rows: pa.Table, first: bool) -> tuple[str, ...]: ...
 
     # --- separation ----------------------------------------------------------------------------
     def is_object_storage(self, envelope: CallEnvelope, location: str) -> bool: ...

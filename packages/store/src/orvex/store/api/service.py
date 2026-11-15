@@ -11,13 +11,6 @@ from typing import Any
 
 import pyarrow as pa
 from orvex.contracts.envelope import CallEnvelope
-from orvex.contracts.store.arrow_ipc import (
-    batch_bytes,
-    one_batch,
-    stream_bytes,
-    stream_reader,
-    stream_schema,
-)
 from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     ChangesRequest,
@@ -183,7 +176,7 @@ class Store:
         running = self._lake(lake).start_read(request)
         return self._reading(running.reader, running.cancel, lake.id)
 
-    def read_batch(self, envelope: CallEnvelope, read: ReadHandle) -> bytes | None:
+    def read_batch(self, envelope: CallEnvelope, read: ReadHandle) -> pa.Table | None:
         entry = self._held.entry(READ, read.id)
         held = entry.value
         assert isinstance(held, _Read)
@@ -193,7 +186,7 @@ class Store:
             batch = held.reader.read_next_batch()
         except StopIteration:
             return None
-        return batch_bytes(batch)
+        return pa.Table.from_batches([batch])
 
     def cancel_read(self, envelope: CallEnvelope, read: ReadHandle) -> None:
         def work() -> None:
@@ -264,7 +257,7 @@ class Store:
         transaction: TransactionHandle,
         schema: str,
         table: str,
-        data: bytes,
+        data: pa.Table,
         columns: tuple[tuple[str, str], ...],
         timeout_ms: int | None,
     ) -> int:
@@ -274,7 +267,7 @@ class Store:
             "load_arrow",
             envelope.idempotency_key,
             lambda: open_.load_arrow(
-                schema, table, stream_reader(data), columns, timeout_ms=timeout_ms
+                schema, table, data.to_reader(), columns, timeout_ms=timeout_ms
             ),
         )
 
@@ -441,11 +434,14 @@ class Store:
 
     # --- encoding ------------------------------------------------------------------------------
 
-    def json_frame(self, envelope: CallEnvelope, schema: bytes) -> JsonFrame:
-        return JsonFrame(tuple(json_head(stream_schema(schema))), JSON_TAIL)
+    def json_frame(self, envelope: CallEnvelope, schema: pa.Table) -> JsonFrame:
+        return JsonFrame(tuple(json_head(schema.schema)), JSON_TAIL)
 
-    def json_rows(self, envelope: CallEnvelope, batch: bytes, first: bool) -> tuple[str, ...]:
-        return tuple(json_rows(one_batch(batch), first))
+    def json_rows(self, envelope: CallEnvelope, rows: pa.Table, first: bool) -> tuple[str, ...]:
+        fragments: list[str] = []
+        for batch in rows.to_batches():
+            fragments += json_rows(batch, first and not fragments)
+        return tuple(fragments)
 
     # --- separation ----------------------------------------------------------------------------
 
@@ -496,5 +492,5 @@ class Store:
     def _reading(
         self, reader: pa.RecordBatchReader, cancel: Callable[[], None] | None, owner: str
     ) -> ReadHandle:
-        schema = stream_bytes(reader.schema)
+        schema = reader.schema.empty_table()
         return ReadHandle(self._held.add(READ, _Read(reader, cancel), owner), schema)

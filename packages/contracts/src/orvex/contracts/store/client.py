@@ -19,7 +19,6 @@ from typing import Any
 import pyarrow as pa
 from orvex.contracts.binding import Bound
 from orvex.contracts.envelope import CallEnvelope
-from orvex.contracts.store.arrow_ipc import batch_bytes, one_batch, stream_bytes, stream_schema
 from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.interface import STORE, Location, Source
 from orvex.contracts.store.v1 import (
@@ -96,17 +95,18 @@ class StoreClient:
 
     def reader(self, ticket: ReadTicket) -> pa.RecordBatchReader:
         """The Arrow stream of a running read; the read is let go when it ends or is dropped."""
-        schema = stream_schema(ticket.schema)
+        schema = ticket.schema.schema
         return pa.RecordBatchReader.from_batches(schema, _Batches(self, ticket))
 
     def arrow_to_json(self, reader: pa.RecordBatchReader) -> Iterator[str]:
         """The `ResultJson` document of `reader` as text fragments, one batch at a time;
         unsupported types are reported before any row is produced."""
-        frame: JsonFrame = self.call("json_frame", stream_bytes(reader.schema))
+        frame: JsonFrame = self.call("json_frame", reader.schema.empty_table())
         yield from frame.head
         first = True
         for batch in reader:
-            fragments = self.call("json_rows", batch_bytes(batch, reader.schema), first)
+            rows = pa.Table.from_batches([batch], reader.schema)
+            fragments = self.call("json_rows", rows, first)
             first = first and not fragments
             yield from fragments
         yield frame.tail
@@ -142,22 +142,25 @@ class _Batches:
         self._client = client
         self._ticket = ticket
         self._open = True
+        self._pending: list[pa.RecordBatch] = []
 
     def __iter__(self) -> _Batches:
         return self
 
     def __next__(self) -> pa.RecordBatch:
-        if not self._open:
-            raise StopIteration
-        try:
-            data = self._client.call("read_batch", self._ticket)
-        except BaseException:
-            self.close()
-            raise
-        if data is None:
-            self.close()
-            raise StopIteration
-        return one_batch(data)
+        while not self._pending:
+            if not self._open:
+                raise StopIteration
+            try:
+                data = self._client.call("read_batch", self._ticket)
+            except BaseException:
+                self.close()
+                raise
+            if data is None:
+                self.close()
+                raise StopIteration
+            self._pending = data.to_batches()
+        return self._pending.pop(0)
 
     def close(self) -> None:
         if self._open:
@@ -305,7 +308,7 @@ class Transaction:
         timeout_ms: int | None = None,
     ) -> int:
         """Create `schema.table` from an Arrow stream, each column cast to its DuckDB type."""
-        data = stream_bytes(reader.schema, reader)
+        data = reader.read_all()
         found: int = self._client.call(
             "load_arrow", self.handle, schema, table, data, tuple(columns), timeout_ms
         )
