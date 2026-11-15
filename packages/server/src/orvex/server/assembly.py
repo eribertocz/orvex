@@ -240,9 +240,11 @@ def access_bindings(
     *,
     clock: Callable[[], datetime] | None = None,
     fetcher: ProviderFetcher | None = None,
+    new_id: Callable[[], str] | None = None,
 ) -> tuple[Bound, Bound]:
     """The `access` and `audit-log` contracts, after the whole assembly is checked, on one new
-    implementation of both, composed with `clock` and the server's provider `fetcher`
+    implementation of both, composed with `clock`, `new_id` (the source of new user ids) and
+    the server's provider `fetcher`
     (`orvex.contracts.access.fetcher`), each reached through the in-process binding. Both
     contracts must be provided by the same implementation: the audit log of an instance is the
     one its directory writes to."""
@@ -264,7 +266,8 @@ def access_bindings(
             ]
         )
     made = chosen[ACCESS.name][0]
-    implementation = made(clock=clock, fetcher=fetcher) if isinstance(made, type) else made
+    composition = {"clock": clock, "fetcher": fetcher, "new_id": new_id}
+    implementation = made(**composition) if isinstance(made, type) else made
     return (
         Bound(ACCESS, implementation, serialized=False),
         Bound(AUDIT_LOG, implementation, serialized=False),

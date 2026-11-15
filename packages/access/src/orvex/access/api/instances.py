@@ -110,6 +110,7 @@ def _composed(
     configuration: Configuration,
     clock: Clock,
     fetcher: ProviderFetcher | None,
+    new_id: Callable[[], str],
 ) -> Opened:
     shared: Store = store
     audit = open_audit_log(
@@ -129,8 +130,8 @@ def _composed(
     return Opened(
         store=store,
         audit=audit,
-        bootstrap=Bootstrap(shared, Path(configuration.recovery_file), audit, clock),
-        directory=Directory(shared, audit, clock),
+        bootstrap=Bootstrap(shared, Path(configuration.recovery_file), audit, clock, new_id),
+        directory=Directory(shared, audit, clock, new_id),
         reads=DirectoryReads(shared, audit, clock),
         attributes=Attributes(shared, audit, clock),
         identities=Identities(shared, audit, providers, clock),
@@ -142,12 +143,15 @@ def _composed(
 
 
 def open_instance(
-    configuration: Configuration, clock: Clock, fetcher: ProviderFetcher | None
+    configuration: Configuration,
+    clock: Clock,
+    fetcher: ProviderFetcher | None,
+    new_id: Callable[[], str],
 ) -> Opened:
     """The instance `configuration` describes, opened; its store is closed if opening fails."""
     store = _store(configuration)
     try:
-        return _composed(store, configuration, clock, fetcher)
+        return _composed(store, configuration, clock, fetcher, new_id)
     except BaseException:
         store.close()
         raise

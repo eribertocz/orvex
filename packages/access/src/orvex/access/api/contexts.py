@@ -54,7 +54,9 @@ def _provider(fixture: ContextFixture) -> fixtures.FixtureContextProvider:
         provider.add(
             member.user,
             member.project,
-            fixtures.Member(member.role, member.groups, dict(member.attributes)),
+            fixtures.Member(
+                member.role, member.groups, dict(member.attributes), member.instance_admin
+            ),
         )
     return provider
 

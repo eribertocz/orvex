@@ -13,17 +13,21 @@ exist only over HTTP (`next-page`, `async-start`, `async-result`) are `security_
 
 from __future__ import annotations
 
+import functools
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any
 
 import yaml
-from orvex.access.context import permission_fingerprint
+from orvex.contracts.access.client import AccessClient, system
+from orvex.contracts.access.values import FingerprintInputs
 from orvex.semantic.compiler.compiled import compile_model
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.result_cache import ResultCache
+from orvex.server.assembly import access_bindings
+from orvex.server.identity import load_identity
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
@@ -109,6 +113,12 @@ def compile_with(found: sf.Fixture, edit: Callable[[dict[str, Any]], object]) ->
     return compile_model(loaded, found.catalog, ce.VENDORS)
 
 
+@functools.cache
+def _contexts() -> AccessClient:
+    """The access contract, for the permission fingerprint the cases' contexts carry."""
+    return AccessClient(*access_bindings(load_identity()), system("security-sequences"))
+
+
 def context_for(
     found: sf.Fixture, place: Served, caller: Mapping[str, Any], removed: dict[str, set[str]]
 ) -> dict[str, Any]:
@@ -117,13 +127,15 @@ def context_for(
     groups = sorted(set(caller["groups"]) - removed.get(str(caller["user"]), set()))
     policies = found.policies(groups)
     snapshot = str(place.lake.current_snapshot().id)
-    fingerprint = permission_fingerprint(
-        user=caller["user"],
-        project=caller["project"],
-        role=caller["role"],
-        groups=groups,
-        attributes=caller["attributes"],
-        policy_fingerprint=policies.fingerprint,
-        mapping_snapshots=dict.fromkeys(sorted(policies.managed_reads), snapshot),
+    fingerprint = _contexts().permission_fingerprint(
+        FingerprintInputs(
+            user=str(caller["user"]),
+            project=str(caller["project"]),
+            role=str(caller["role"]),
+            groups=tuple(groups),
+            attributes_document=json.dumps(caller["attributes"]),
+            policy_fingerprint=policies.fingerprint,
+            mapping_snapshots=dict.fromkeys(sorted(policies.managed_reads), snapshot),
+        )
     )
     return {**caller, "groups": groups, "permission_fingerprint": fingerprint}

@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from orvex.access.server_context import ServerContextProvider, ServerRequest
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
@@ -273,11 +272,15 @@ def test_the_server_computes_the_context_each_revocation_case_describes() -> Non
         groups = {g for caller in callers for g in caller["groups"]}
         with sf.managed_lake(found) as lake, tempfile.TemporaryDirectory() as folder:
             instance = security_http.Instance(found, lake, Path(folder), groups)
-            provider = ServerContextProvider(instance.store, instance.audit, POLICY, {"lake": "0"})
-            for caller in callers:
-                instance.caller(caller)
-                built = provider.context_for(ServerRequest(caller["user"], instance.project))
-                document = built.document()
-                assert (document["user"], document["role"]) == (caller["user"], caller["role"])
-                assert sorted(document["groups"]) == sorted(caller["groups"]), name
-                assert document["attributes"] == caller["attributes"], name
+            try:
+                for caller in callers:
+                    instance.caller(caller)
+                    built = instance.access.server_context(
+                        caller["user"], instance.project, POLICY, {"lake": "0"}
+                    )
+                    document = json.loads(built)
+                    assert (document["user"], document["role"]) == (caller["user"], caller["role"])
+                    assert sorted(document["groups"]) == sorted(caller["groups"]), name
+                    assert document["attributes"] == caller["attributes"], name
+            finally:
+                instance.close()

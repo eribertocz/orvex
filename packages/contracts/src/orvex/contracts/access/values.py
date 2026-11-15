@@ -191,13 +191,15 @@ class OidcStarted:
 
 @dataclass(frozen=True, slots=True)
 class ContextMember:
-    """One user's standing in one project, for the fixture contexts tests use."""
+    """One user's standing in one project, for the fixture contexts tests use. The instance
+    administrator flag grants no data access and never reaches a context."""
 
     user: str
     project: str
     role: str
     groups: tuple[str, ...] = ()
     attributes: tuple[tuple[str, str | bool | int | tuple[str, ...]], ...] = ()
+    instance_admin: bool = False
 
 
 @dataclass(frozen=True, slots=True)

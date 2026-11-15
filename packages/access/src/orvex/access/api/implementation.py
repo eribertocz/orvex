@@ -7,9 +7,9 @@ operation delegates to the module's own services on an opened instance.
   actor may do, exactly as before (one enforcement point).
 - **Idempotency.** Every operation that changes state runs once per idempotency key
   (`idempotency.py`).
-- **Composition.** The composer may give a clock and the server's provider fetcher
-  (`orvex.contracts.access.fetcher`); without a fetcher, an instance with OIDC providers is not
-  opened.
+- **Composition.** The composer may give a clock, the server's provider fetcher
+  (`orvex.contracts.access.fetcher`) and the source of new user ids (conformance runs name
+  their callers); without a fetcher, an instance with OIDC providers is not opened.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from orvex.access.api import contexts, idempotency
 from orvex.access.api import values as convert
 from orvex.access.api.instances import Opened, open_instance
 from orvex.access.audit.rotation import rotate_key
+from orvex.access.directory.service import new_user_id
 from orvex.access.oidc.service import OidcSignIn
 from orvex.contracts.access import values
 from orvex.contracts.access.errors import (
@@ -48,9 +49,11 @@ class Access:
         *,
         clock: Callable[[], datetime] | None = None,
         fetcher: ProviderFetcher | None = None,
+        new_id: Callable[[], str] | None = None,
     ) -> None:
         self._clock = _now if clock is None else clock
         self._fetcher = fetcher
+        self._new_id = new_user_id if new_id is None else new_id
         self._opened: dict[str, tuple[Opened, values.Configuration]] = {}
         self._lock = threading.Lock()
         self._replays = idempotency.Replays()
@@ -88,7 +91,7 @@ class Access:
 
     def open(self, envelope: CallEnvelope, configuration: values.Configuration) -> values.Instance:
         def work() -> values.Instance:
-            opened = open_instance(configuration, self._clock, self._fetcher)
+            opened = open_instance(configuration, self._clock, self._fetcher, self._new_id)
             handle = values.Instance(secrets.token_urlsafe(16))
             with self._lock:
                 self._opened[handle.id] = (opened, configuration)
