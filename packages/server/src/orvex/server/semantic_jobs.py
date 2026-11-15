@@ -41,7 +41,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from orvex.access.errors import AccessError
+from orvex.contracts.access.errors import AccessError
 from orvex.semantic.errors import SemanticError
 from orvex.server import semantic_http
 from orvex.server.query_cancel import Cancel

@@ -10,7 +10,7 @@
 The events are internal: nothing here reaches the caller's response. The one exception to
 "no event, no answer" (Owner precision 5) is a **withheld** answer (a row policy withheld every
 row, `Answer.withheld`): when its events cannot be recorded it is still returned, and each
-failure is counted on the audit log (`AuditLog.unrecorded`) and written once to the process
+failure is counted on the audit log (`count_unrecorded`) and written once to the process
 log, naming only the kind and the project. Any other answer, zero rows included, whose `query`
 event cannot be recorded is refused with `AUDIT_UNAVAILABLE`.
 """
@@ -21,8 +21,8 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from orvex.access.audit.log import AuditLog
-from orvex.access.errors import AccessError
+from orvex.contracts.access.client import AccessClient
+from orvex.contracts.access.errors import AccessError
 from orvex.semantic.execution import Answer
 
 LOG = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ KINDS = {
 
 
 def record_query(
-    audit: AuditLog,
+    audit: AccessClient,
     found: Answer,
     context: Mapping[str, Any],
     stage: str,
@@ -50,28 +50,28 @@ def record_query(
         "stage": stage,
     } | ({"job": job} if job is not None else {})
     try:
-        audit.record_alone(
-            "query", str(context["user"]), details, outcome="allowed", project=project
+        audit.as_actor(str(context["user"])).record(
+            "query", details, outcome="allowed", project=project
         )
     except AccessError:
         if not found.withheld:
             raise
-        audit.unrecorded += 1
+        audit.count_unrecorded()
         LOG.error("audit: a query event of project %s could not be recorded", project)
 
 
-def record_unfinished(audit: AuditLog, user: str, project: str, job: str, end: str) -> None:
+def record_unfinished(audit: AccessClient, user: str, project: str, job: str, end: str) -> None:
     """The `executed` event of a job that ended with no answer (`end`: failed, cancelled).
     Nothing is delivered, so a failure to record it is counted and logged, never raised."""
     details = {"stage": "executed", "job": job, "end": end}
     try:
-        audit.record_alone("query", user, details, outcome="allowed", project=project)
+        audit.as_actor(user).record("query", details, outcome="allowed", project=project)
     except AccessError:
-        audit.unrecorded += 1
+        audit.count_unrecorded()
         LOG.error("audit: a query event of project %s could not be recorded", project)
 
 
-def record_withheld(audit: AuditLog, found: Answer, context: Mapping[str, Any]) -> None:
+def record_withheld(audit: AccessClient, found: Answer, context: Mapping[str, Any]) -> None:
     """Record, before the answer is returned, why each policy gave the caller no row."""
     project = str(context["project"])
     for held in found.withheld:
@@ -82,9 +82,9 @@ def record_withheld(audit: AuditLog, found: Answer, context: Mapping[str, Any]) 
             "receipt": found.receipt.receipt_id,
         }
         try:
-            audit.record_alone(
-                kind, str(context["user"]), details, outcome="refused", project=project
+            audit.as_actor(str(context["user"])).record(
+                kind, details, outcome="refused", project=project
             )
         except AccessError:
-            audit.unrecorded += 1
+            audit.count_unrecorded()
             LOG.error("audit: a %s event of project %s could not be recorded", kind, project)

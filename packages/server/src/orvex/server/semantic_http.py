@@ -34,19 +34,20 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import pyarrow as pa
-from orvex.access.audit.log import AuditLog
-from orvex.access.authentication import query_limits
-from orvex.access.authentication.query_limits import DEFAULT_LIMITS, RoleLimit
-from orvex.access.context import InvalidContext
-from orvex.access.errors import ACCESS_FORBIDDEN, AccessError
-from orvex.access.local import LocalContextProvider, LocalRequest
-from orvex.access.server_context import (
-    Audience,
-    ServerContextProvider,
-    ServerRequest,
-    role_of,
+from orvex.contracts.access.client import AccessClient
+from orvex.contracts.access.errors import (
+    ACCESS_FORBIDDEN,
+    CONTEXT_INVALID,
+    AccessError,
+    InvalidContext,
 )
-from orvex.access.storage.store import Store
+from orvex.contracts.access.values import (
+    DEFAULT_LIMITS,
+    Audience,
+    LocalRequest,
+    RoleLimit,
+    ServerRequest,
+)
 from orvex.semantic.catalog.building import catalog_for_context
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import Answer, Engine, answer
@@ -108,17 +109,29 @@ class LakeSource(Protocol):
     def model(self, lake: Lake, snapshot: int) -> semantic_model.Loaded: ...
 
 
-def local_context(
-    request: object, policy_fingerprint: str, mapping_snapshot: int
-) -> dict[str, Any]:
+def local_context(access: AccessClient) -> ContextSource:
     """Local mode: the one local Builder, for an authenticated request only. The permission
-    fingerprint records the mapping state the policies read (`permission_state`)."""
-    if not isinstance(request, LocalRequest):
-        raise InvalidContext("the request is not an authenticated local request")
-    provider = LocalContextProvider(
-        request.project, policy_fingerprint, {"lake": str(mapping_snapshot)}
-    )
-    return provider.context_for(request).document()
+    fingerprint records the mapping state the policies read (`permission_state`). A request
+    that is not an authenticated local one is `InvalidContext`."""
+
+    def build(request: object, policy_fingerprint: str, mapping_snapshot: int) -> dict[str, Any]:
+        if not isinstance(request, LocalRequest):
+            raise InvalidContext("the request is not an authenticated local request")
+        try:
+            document = access.local_context(
+                request.project,
+                request.authenticated,
+                policy_fingerprint,
+                {"lake": str(mapping_snapshot)},
+            )
+        except AccessError as error:
+            if error.code != CONTEXT_INVALID:
+                raise
+            raise InvalidContext(error.message) from None
+        found: dict[str, Any] = json.loads(document)
+        return found
+
+    return build
 
 
 @dataclass(frozen=True)
@@ -156,7 +169,7 @@ class Semantic:
     source: LakeSource
     context: ContextSource
     settings: Settings
-    audit: AuditLog | None = None
+    audit: AccessClient | None = None
     # Per-role limits (#445): a role's limits now (server mode: the instance settings; local
     # mode's one Builder: the defaults), and this process's running questions.
     limits: Callable[[str], RoleLimit] = local_limits
@@ -166,13 +179,13 @@ class Semantic:
     identity: Callable[[object], tuple[str, str, str]] = local_identity
 
 
-def server_identity(store: Store) -> Callable[[object], tuple[str, str, str]]:
+def server_identity(access: AccessClient) -> Callable[[object], tuple[str, str, str]]:
     """Server mode: the session's user, the project, and their role there now."""
 
     def identity(request: object) -> tuple[str, str, str]:
         if not isinstance(request, ServerRequest):
             raise InvalidContext("the request is not an authenticated server request")
-        role = role_of(store, request)
+        role = access.role_of(request.user, request.project)
         if role is None:
             raise AccessError(ACCESS_FORBIDDEN, "The operation is not allowed.")
         return request.user, request.project, role
@@ -232,24 +245,27 @@ def status_of(error: SemanticError) -> int:
     return _BY_CODE.get(error.code, _BY_CATEGORY.get(error.category, 500))
 
 
-def server_context(store: Store, audit: AuditLog) -> ContextSource:
+def server_context(access: AccessClient) -> ContextSource:
     """Server mode (#440): the session's user as the directory knows them now, on the policy
     model and the mapping state in force now (`permission_state`), which the permission
-    fingerprint records."""
+    fingerprint records. A request that is not an authenticated server one is refused
+    (`ACCESS_FORBIDDEN`), never given a context."""
 
     def build(request: object, policy_fingerprint: str, mapping_snapshot: int) -> dict[str, Any]:
-        provider = ServerContextProvider(
-            store, audit, policy_fingerprint, {"lake": str(mapping_snapshot)}
+        if not isinstance(request, ServerRequest):
+            raise AccessError(ACCESS_FORBIDDEN, "The operation is not allowed.")
+        document = access.server_context(
+            request.user, request.project, policy_fingerprint, {"lake": str(mapping_snapshot)}
         )
-        return provider.context_for(request).document()
+        found: dict[str, Any] = json.loads(document)
+        return found
 
     return build
 
 
-def server_limits(store: Store, audit: AuditLog) -> Callable[[str], RoleLimit]:
+def server_limits(access: AccessClient) -> Callable[[str], RoleLimit]:
     """Server mode (#445): a role's limits as the instance settings hold them now."""
-    limits = query_limits.QueryLimits(store, audit)
-    return lambda role: limits.current()[role]
+    return lambda role: access.query_limits()[role]
 
 
 def semantic_message(error: SemanticError, audience: Audience) -> dict[str, Any]:

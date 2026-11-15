@@ -18,9 +18,14 @@ from __future__ import annotations
 
 import importlib
 import inspect
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from importlib.resources import files
 
+from orvex.contracts.access.fetcher import ProviderFetcher
+from orvex.contracts.access.interface import ACCESS
+from orvex.contracts.audit_log.interface import AUDIT_LOG
+from orvex.contracts.binding import Bound
 from orvex.contracts.interface import InterfaceContract
 from orvex.contracts.manifest import Manifest, Provided, parse_manifest
 from orvex.contracts.registry import interface_contracts
@@ -227,4 +232,40 @@ def check_installed_assembly(identity: Identity, chosen: Mapping[str, str] | Non
         interface_contracts(contracts_package),
         load_implementations(identity.python_namespace, manifests),
         chosen,
+    )
+
+
+def access_bindings(
+    identity: Identity,
+    *,
+    clock: Callable[[], datetime] | None = None,
+    fetcher: ProviderFetcher | None = None,
+) -> tuple[Bound, Bound]:
+    """The `access` and `audit-log` contracts, after the whole assembly is checked, on one new
+    implementation of both, composed with `clock` and the server's provider `fetcher`
+    (`orvex.contracts.access.fetcher`), each reached through the in-process binding. Both
+    contracts must be provided by the same implementation: the audit log of an instance is the
+    one its directory writes to."""
+    namespace = identity.python_namespace
+    manifests = installed_manifests(identity)
+    contracts = interface_contracts(importlib.import_module(f"{namespace}.contracts"))
+    implementations = load_implementations(namespace, manifests)
+    check_assembly(manifests, contracts, implementations)
+    chosen = {
+        contract: [made for key, made in implementations.items() if key[1] == contract]
+        for contract in (ACCESS.name, AUDIT_LOG.name)
+    }
+    found = {id(made) for each in chosen.values() for made in each}
+    if any(len(each) != 1 for each in chosen.values()) or len(found) != 1:
+        raise AssemblyRefused(
+            [
+                "ASSEMBLY_AUDIT_LOG_APART: access and audit-log need one implementation of both, "
+                f"found {sum(len(each) for each in chosen.values())}"
+            ]
+        )
+    made = chosen[ACCESS.name][0]
+    implementation = made(clock=clock, fetcher=fetcher) if isinstance(made, type) else made
+    return (
+        Bound(ACCESS, implementation, serialized=False),
+        Bound(AUDIT_LOG, implementation, serialized=False),
     )

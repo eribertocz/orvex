@@ -99,6 +99,10 @@ class Access(Protocol):
     def reset_password(self, envelope: CallEnvelope, instance: Instance, user: str) -> str: ...
 
     # --- directory reads -----------------------------------------------------------------------
+    def allowed(
+        self, envelope: CallEnvelope, instance: Instance, permission: str, project: str | None
+    ) -> bool: ...
+
     def users(self, envelope: CallEnvelope, instance: Instance, after: str | None) -> UserPage: ...
 
     def user(self, envelope: CallEnvelope, instance: Instance, user: str) -> DirectoryUser: ...
@@ -334,6 +338,7 @@ ACCESS = InterfaceContract(
             changes_state=True,
         ),
         Operation("reset_password", "sign-in", _codes(_WRITE, _USER), changes_state=True),
+        Operation("allowed", "directory", _READ),
         Operation("users", "directory", _codes(_READ, ("VALIDATION_FAILED",))),
         Operation("user", "directory", _codes(_READ, _USER)),
         Operation("find_user", "directory", _codes(_READ, _USER, ("LOOKUP_LIMITED",))),

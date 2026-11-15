@@ -51,11 +51,11 @@ from orvex.contracts.access.errors import (
     AUDIT_UNAVAILABLE,
     AccessError,
 )
+from orvex.contracts.audit_log.interface import MINIMUM_RETENTION_DAYS
 
 SCHEMA_FILE = "audit-event-v1.json"
 CHECKPOINT_EVERY = 1000
 CHECKPOINT_PERIOD = timedelta(days=1)
-MINIMUM_RETENTION_DAYS = 30
 SYSTEM = "system"
 LOG = logging.getLogger(__name__)
 

@@ -9,7 +9,7 @@ A refusal's message and its safe details become the ErrorEnvelope; a delay's len
 from __future__ import annotations
 
 from fastapi.responses import JSONResponse
-from orvex.access.errors import (
+from orvex.contracts.access.errors import (
     ACCESS_FORBIDDEN,
     AUDIT_UNAVAILABLE,
     GROUP_NOT_FOUND,

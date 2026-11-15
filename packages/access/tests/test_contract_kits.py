@@ -40,7 +40,7 @@ def test_the_audit_log_kit_passes_in_process_and_serialized() -> None:
 
 
 def test_the_recorded_case_counts() -> None:
-    assert (ACCESS_KIT.recorded, AUDIT_LOG_KIT.recorded) == (69, 20)
+    assert (ACCESS_KIT.recorded, AUDIT_LOG_KIT.recorded) == (70, 20)
 
 
 def test_the_manifest_provides_both_contracts_from_the_api_package() -> None:

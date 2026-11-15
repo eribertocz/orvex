@@ -33,10 +33,8 @@ from dataclasses import dataclass
 
 from fastapi import FastAPI, Request, Response
 from fastapi.routing import APIRoute
-from orvex.access.audit.log import AuditLog
-from orvex.access.authentication.service import SignIn
-from orvex.access.authentication.settings import Settings
-from orvex.access.errors import (
+from orvex.contracts.access.client import AccessClient, Caller, anonymous
+from orvex.contracts.access.errors import (
     ACCESS_FORBIDDEN,
     OIDC_REFRESH_REQUIRED,
     PASSWORD_CHANGE_REQUIRED,
@@ -45,9 +43,7 @@ from orvex.access.errors import (
     AccessError,
     not_found,
 )
-from orvex.access.oidc.service import OidcSignIn
-from orvex.access.server_context import Audience, ServerRequest, audience_of, role_of
-from orvex.access.storage.store import Store
+from orvex.contracts.access.values import Audience, ServerRequest
 from orvex.contracts.http_api import v1
 from orvex.server import oidc_http, semantic_http, sign_in_http
 from orvex.server.admin_http import Administration, mount_administration
@@ -84,19 +80,22 @@ log = logging.getLogger("orvex.server.http")
 
 def create_server_app(
     versions: Versions,
-    sign_in: SignIn,
-    settings: Settings,
+    access: AccessClient,
     slug: str,
-    oidc: OidcSignIn | None = None,
     served: ServedProject | None = None,
     administration: Administration | None = None,
     run_jobs: Callable[[Callable[[], None]], None] | None = None,
 ) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    def instance(request: Request) -> AccessClient:
+        """The access instance, for the request's caller before authentication: anonymous."""
+        return access.acting_for(anonymous(request.state.request_id))
+
     if administration is not None:
         if served is not None and served.project not in administration.projects:
             raise ValueError("the served project is not one of the instance's projects")
-        administration.audit.verify_at_start()  # a key or an anchor that fails: no server
+        administration.access.verify_at_start()  # a key or an anchor that fails: no server
     cookie = sign_in_http.cookie_name(slug)
 
     @app.middleware("http")
@@ -129,7 +128,7 @@ def create_server_app(
     async def origin(request: Request) -> Response | None:
         if not changes_state(request.method):
             return None
-        current = await run_in_threadpool(settings.current)
+        current = await run_in_threadpool(instance(request).sign_in_settings)
         return _origin_refused(
             origin_refusal(request.method, request.headers, current.public_origin),
             request.state.request_id,
@@ -168,25 +167,24 @@ def create_server_app(
             project = project_of(request.url.path)
             if project is not None and project not in administration.projects:
                 return access_error_response(not_found(PROJECT_NOT_SERVED), request_id)
-            reads = administration.reads
-            if await run_in_threadpool(reads.allowed, user, permission, project):
+            asking = administration.access.acting_for(Caller(user, request_id))
+            if await run_in_threadpool(asking.allowed, permission, project):
                 return None
-            refusal = administration.audit.refusal
-            await run_in_threadpool(refusal, "route", user, ACCESS_FORBIDDEN, project=project)
+            await run_in_threadpool(
+                lambda: asking.refusal("route", ACCESS_FORBIDDEN, project=project)
+            )
             return error_response(
                 403, ACCESS_FORBIDDEN, "The operation is not allowed.", request_id
             )
         if served is None:
             return None
-        caller = ServerRequest(user, served.project)
-        role = await run_in_threadpool(role_of, served.store, caller)
+        asking = access.acting_for(Caller(user, request_id))
+        role = await run_in_threadpool(asking.role_of, user, served.project)
         if allows(permission, role):
             return None
-        audit = served.semantic.audit
-        if audit is not None:
-            await run_in_threadpool(
-                audit.refusal, "route", user, ACCESS_FORBIDDEN, project=served.project
-            )
+        await run_in_threadpool(
+            lambda: asking.refusal("route", ACCESS_FORBIDDEN, project=served.project)
+        )
         return error_response(403, ACCESS_FORBIDDEN, "The operation is not allowed.", request_id)
 
     async def authenticated(request: Request) -> Response | None:
@@ -198,7 +196,7 @@ def create_server_app(
                 AccessError(SESSION_EXPIRED, "The session has ended: sign in again."), request_id
             )
         try:
-            live = await run_in_threadpool(sign_in.session, session_id)
+            live = await run_in_threadpool(instance(request).session, session_id)
         except AccessError as error:
             return access_error_response(error, request_id)
         if live.password_change_only and path not in CHANGE_ONLY:
@@ -206,7 +204,7 @@ def create_server_app(
                 AccessError(PASSWORD_CHANGE_REQUIRED, "Change the temporary password first."),
                 request_id,
             )
-        due = None if oidc is None else await run_in_threadpool(oidc.refresh_due, session_id)
+        due = await run_in_threadpool(instance(request).oidc_refresh_due, session_id)
         if due is not None and path != sign_in_http.LOGOUT:
             return access_error_response(
                 AccessError(
@@ -222,12 +220,12 @@ def create_server_app(
 
     install_error_handlers(app, lambda path: None)
     mount_status(app, versions)
-    sign_in_http.mount_sign_in(app, sign_in, settings, cookie)
-    oidc_http.mount_oidc(app, oidc, settings, cookie, slug)
+    sign_in_http.mount_sign_in(app, access, cookie)
+    oidc_http.mount_oidc(app, access, cookie, slug)
     if administration is not None:
         mount_administration(app, administration)
     if served is not None:
-        if not isinstance(served.semantic.audit, AuditLog):  # #445: no audit log, no server
+        if not isinstance(served.semantic.audit, AccessClient):  # #445: no audit log, no server
             raise ValueError("server mode needs its audit log: the server does not start")
         if served.semantic.identity is local_identity or served.semantic.limits is local_limits:
             raise ValueError("server mode needs its own identity and limits: no server")
@@ -240,10 +238,10 @@ def create_server_app(
         def audience(caller: object) -> Audience:
             if not isinstance(caller, ServerRequest):
                 return "other"
-            return audience_of(served.store, caller)
+            return access.audience_of(caller.user, caller.project)
 
         def recheck(request: Request) -> None:
-            sign_in.session(request.state.session_id)  # ended since the request: refused
+            instance(request).session(request.state.session_id)  # ended since: refused
 
         mount_semantic(
             app,
@@ -274,13 +272,12 @@ def _origin_refused(found: tuple[str, str] | None, request_id: str) -> Response 
 
 @dataclass(frozen=True)
 class ServedProject:
-    """The project whose semantic routes this application serves (#440): its id, the semantic
-    composition (whose context source is `semantic_http.server_context`) and the access store
-    the caller's audience is read from."""
+    """The project whose semantic routes this application serves (#440): its id and the semantic
+    composition (whose context source is `semantic_http.server_context`, on the same access
+    instance as the application)."""
 
     project: str
     semantic: semantic_http.Semantic
-    store: Store
 
 
 def checked_route_table(app: FastAPI) -> None:

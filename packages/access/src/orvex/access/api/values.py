@@ -6,7 +6,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from orvex.access.authentication.query_limits import RoleLimit
 from orvex.access.authentication.service import SignedIn
 from orvex.access.authentication.sessions import Session
 from orvex.access.authentication.settings import SignInSettings
@@ -49,19 +48,6 @@ def settings(current: SignInSettings) -> values.SignInSettings:
         public_origin=current.public_origin,
         trusted_proxies=tuple(str(network) for network in current.trusted_proxies),
     )
-
-
-def limits(current: Mapping[str, RoleLimit]) -> dict[str, values.RoleLimit]:
-    return {
-        role: values.RoleLimit(limit.max_concurrent, limit.max_run_ms)
-        for role, limit in current.items()
-    }
-
-
-def role_limits(asked: Mapping[str, values.RoleLimit]) -> dict[str, RoleLimit]:
-    return {
-        role: RoleLimit(limit.max_concurrent, limit.max_run_ms) for role, limit in asked.items()
-    }
 
 
 def page(found: Page) -> values.UserPage:

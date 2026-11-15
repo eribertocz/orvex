@@ -17,10 +17,9 @@ from __future__ import annotations
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
-from orvex.access.authentication.settings import Settings
-from orvex.access.errors import OIDC_FAILED, OIDC_NOT_CONFIGURED, AccessError
-from orvex.access.oidc.bindings import LIFETIME
-from orvex.access.oidc.service import OidcSignIn
+from orvex.contracts.access.client import AccessClient, anonymous
+from orvex.contracts.access.errors import OIDC_FAILED, OIDC_NOT_CONFIGURED, AccessError
+from orvex.contracts.access.values import OIDC_BINDING_LIFETIME
 from orvex.server.sign_in_errors import access_error_response
 from orvex.server.sign_in_http import set_session_cookie
 from starlette.concurrency import run_in_threadpool
@@ -44,10 +43,10 @@ def binding_cookie(slug: str) -> str:
     return f"__Secure-{slug}_oidc"
 
 
-def mount_oidc(
-    app: FastAPI, oidc: OidcSignIn | None, settings: Settings, session_cookie: str, slug: str
-) -> None:
+def mount_oidc(app: FastAPI, access: AccessClient, session_cookie: str, slug: str) -> None:
+    """The OIDC routes, for the providers the access instance `access` serves."""
     binding = binding_cookie(slug)
+    providers = frozenset(access.oidc_providers())
 
     def not_configured(request: Request) -> Response:
         return access_error_response(
@@ -63,17 +62,18 @@ def mount_oidc(
 
     @app.get(PREFIX + "{provider}/start")
     async def start(provider: str, request: Request) -> Response:
-        if oidc is None or provider not in oidc.providers:
+        if provider not in providers:
             return not_configured(request)
+        oidc = access.acting_for(anonymous(request.state.request_id))
         refreshing: str | None = None
         if request.query_params.get("refresh") == "true":
             held = request.cookies.get(session_cookie)
-            due = None if held is None else await run_in_threadpool(oidc.refresh_due, held)
+            due = None if held is None else await run_in_threadpool(oidc.oidc_refresh_due, held)
             if held is None or due != provider:
                 return failed_page()
             refreshing = held
         try:
-            started = await run_in_threadpool(oidc.start, provider, refreshing=refreshing)
+            started = await run_in_threadpool(oidc.oidc_start, provider, refreshing)
         except AccessError as error:
             if error.code == OIDC_NOT_CONFIGURED:
                 return not_configured(request)
@@ -84,7 +84,7 @@ def mount_oidc(
         response.set_cookie(
             binding,
             started.reference,
-            max_age=int(LIFETIME.total_seconds()),
+            max_age=int(OIDC_BINDING_LIFETIME.total_seconds()),
             path=_PATH,
             secure=True,
             httponly=True,
@@ -95,8 +95,9 @@ def mount_oidc(
 
     @app.get(PREFIX + "{provider}/callback")
     async def callback(provider: str, request: Request) -> Response:
-        if oidc is None or provider not in oidc.providers:
+        if provider not in providers:
             return not_configured(request)
+        oidc = access.acting_for(anonymous(request.state.request_id))
         parameters = {
             name: value
             for name in _PARAMETERS
@@ -104,13 +105,13 @@ def mount_oidc(
         }
         try:
             signed = await run_in_threadpool(
-                oidc.callback,
+                oidc.oidc_callback,
                 provider,
                 parameters,
                 request.cookies.get(binding),
                 request.cookies.get(session_cookie),
             )
-            current = await run_in_threadpool(settings.current)
+            current = await run_in_threadpool(oidc.sign_in_settings)
         except AccessError as error:
             if error.code == OIDC_NOT_CONFIGURED:
                 return not_configured(request)

@@ -2,10 +2,11 @@
 trusted proxy.
 
 `X-Forwarded-For` is believed only when the peer is in the administrator's `trusted_proxies`
-(none by default), and then only its right-most address that is not itself a trusted proxy:
-every address to the left of that one was written by the client and may be anything. Every
-header line counts, in order, as one list. A header that cannot be read leaves the peer as the
-address (fail closed: the proxy's own counter).
+(networks in CIDR form, as the access contract's `SignInSettings` holds them; none by default),
+and then only its right-most address that is not itself a trusted proxy: every address to the
+left of that one was written by the client and may be anything. Every header line counts, in
+order, as one list. A header that cannot be read leaves the peer as the address (fail closed:
+the proxy's own counter).
 """
 
 from __future__ import annotations
@@ -13,7 +14,6 @@ from __future__ import annotations
 import ipaddress
 from collections.abc import Sequence
 
-type Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 _LONGEST_HEADER = 4096
 
 
@@ -25,14 +25,13 @@ def _address(text: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
 
 
 def _trusted(
-    address: ipaddress.IPv4Address | ipaddress.IPv6Address, proxies: Sequence[Network]
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address, proxies: Sequence[str]
 ) -> bool:
-    return any(address.version == network.version and address in network for network in proxies)
+    networks = (ipaddress.ip_network(proxy) for proxy in proxies)
+    return any(address.version == network.version and address in network for network in networks)
 
 
-def client_address(
-    peer: str | None, lines: Sequence[str], proxies: Sequence[Network]
-) -> str | None:
+def client_address(peer: str | None, lines: Sequence[str], proxies: Sequence[str]) -> str | None:
     """The address the failed-sign-in delay counts this request under. `lines` is every
     `X-Forwarded-For` line, in order: a proxy may add its own line rather than extend one."""
     found = _address(peer or "")

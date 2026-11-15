@@ -9,6 +9,7 @@ import signal
 import socket
 import sys
 import threading
+import uuid
 import webbrowser
 from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
@@ -18,11 +19,12 @@ from pathlib import Path
 from types import FrameType
 
 import uvicorn
+from orvex.contracts.access.client import AccessClient, system
 from orvex.contracts.interface_errors import InterfaceContractError
 from orvex.server import clickhouse_engines, development_switch, existing_lakes
 from orvex.server.admin_command import add_admin_parser, admin
 from orvex.server.app import LocalSemantic, create_app
-from orvex.server.assembly import AssemblyRefused, check_installed_assembly
+from orvex.server.assembly import AssemblyRefused, access_bindings, check_installed_assembly
 from orvex.server.clickhouse_engines import ClickHouseEngines, clickhouse_connections
 from orvex.server.evidence_command import evidence
 from orvex.server.existing_lakes import ExistingLakes, ducklake_connections, memory_share
@@ -366,8 +368,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         url = f"http://{LOCAL_HOST}:{port}/"
         access = new_access(identity.slug, port)
         source = served_project(project.path, identity, lakes, clickhouse)
+        contexts = AccessClient(*access_bindings(identity), system(uuid.uuid4().hex))
         local = LocalSemantic(
-            project.id, access, Semantic(source, local_context, session_settings())
+            project.id, access, Semantic(source, local_context(contexts), session_settings())
         )
         if lakes is not None:
             stack.enter_context(lakes.checking(source))

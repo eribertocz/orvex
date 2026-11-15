@@ -249,6 +249,17 @@ def non_administrator_cannot_list(client: KitClient) -> None:
     _refused(client, "ACCESS_FORBIDDEN", user, "create_user", found.opened, "x-user", "X")
 
 
+def administration_routes_by_rule(client: KitClient) -> None:
+    found = signed_in(client)
+    user, _ = member(client, "routed")
+    ask = (found.opened, "administrator", None)
+    _expect(call(client, found.admin, "allowed", *ask) is True, "the administrator")
+    _expect(call(client, user, "allowed", *ask) is False, "a viewer administers")
+    _expect(call(client, found.builder, "allowed", found.opened, "builder", PROJECT), "builder")
+    _expect(not call(client, user, "allowed", found.opened, "builder", PROJECT), "viewer builds")
+    _expect(not call(client, user, "allowed", found.opened, "no-such-rule", PROJECT), "unknown")
+
+
 def unknown_user_not_found(client: KitClient) -> None:
     found = signed_in(client)
     _refused(client, "USER_NOT_FOUND", found.actor("user"), "user", found.opened, "no-such-user")
@@ -892,6 +903,11 @@ CASES = (
     ),
     _case("users", "an administrator lists the users", users_listed),
     _case("user", "an unknown user is USER_NOT_FOUND", unknown_user_not_found),
+    _case(
+        "allowed",
+        "administration routes follow their read rules; an unknown one is refused",
+        administration_routes_by_rule,
+    ),
     _case("create_user", "a non-administrator manages no users", non_administrator_cannot_list),
     _case("create_user", "user names are unique without regard to case", user_name_taken),
     _case("find_user", "a user is found by name", find_by_name),
@@ -1127,4 +1143,4 @@ CASES = (
 )
 
 
-ACCESS_KIT = Kit(ACCESS, recorded=69, cases=CASES)
+ACCESS_KIT = Kit(ACCESS, recorded=70, cases=CASES)

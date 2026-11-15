@@ -5,8 +5,9 @@ value. There is no limit on rows."""
 from __future__ import annotations
 
 import pytest
-from orvex.access.authentication.query_limits import DEFAULT_LIMITS, QueryLimits, RoleLimit
+from orvex.access.authentication.query_limits import QueryLimits
 from orvex.contracts.access.errors import ACCESS_FORBIDDEN, VALIDATION_FAILED, AccessError
+from orvex.contracts.access.values import DEFAULT_LIMITS, RoleLimit
 
 from ..access_directory import World
 

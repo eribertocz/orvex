@@ -125,6 +125,14 @@ class RoleLimit:
     max_run_ms: int
 
 
+# The limits a new instance starts with (#445 Q2 = A), and local mode's one Builder's limits.
+DEFAULT_LIMITS = {
+    "builder": RoleLimit(4, 120_000),
+    "author": RoleLimit(2, 60_000),
+    "viewer": RoleLimit(2, 30_000),
+}
+
+
 @dataclass(frozen=True, slots=True)
 class UserPage:
     """One page of the instance's users, and the cursor of the next page."""
@@ -167,6 +175,10 @@ class IdentityLink:
     provider: str
     subject: str
     linked_at: str
+
+
+# How long an OIDC binding (the reference `oidc_start` answers) stays valid (#439).
+OIDC_BINDING_LIFETIME = timedelta(minutes=10)
 
 
 @dataclass(frozen=True, slots=True)

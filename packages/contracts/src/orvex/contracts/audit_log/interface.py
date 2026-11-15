@@ -20,6 +20,9 @@ from orvex.contracts.envelope import CallEnvelope
 from orvex.contracts.interface import InterfaceContract, Operation
 from orvex.contracts.version import Version
 
+# Retention keeps at least this many days (#437): a shorter one is AUDIT_RETENTION_INVALID.
+MINIMUM_RETENTION_DAYS = 30
+
 
 class AuditLog(Protocol):
     def open(self, envelope: CallEnvelope, configuration: Configuration) -> Instance: ...

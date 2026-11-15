@@ -222,6 +222,15 @@ class Access:
 
     # --- directory reads -------------------------------------------------------------------
 
+    def allowed(
+        self,
+        envelope: CallEnvelope,
+        instance: values.Instance,
+        permission: str,
+        project: str | None,
+    ) -> bool:
+        return self._of(instance).reads.allowed(envelope.actor, permission, project)
+
     def users(
         self, envelope: CallEnvelope, instance: values.Instance, after: str | None
     ) -> values.UserPage:
@@ -437,7 +446,7 @@ class Access:
     def query_limits(
         self, envelope: CallEnvelope, instance: values.Instance
     ) -> dict[str, values.RoleLimit]:
-        return convert.limits(self._of(instance).limits.current())
+        return self._of(instance).limits.current()
 
     def change_query_limits(
         self, envelope: CallEnvelope, instance: values.Instance, limits: dict[str, values.RoleLimit]
@@ -446,9 +455,7 @@ class Access:
             "change_query_limits",
             envelope,
             (instance, limits),
-            lambda: convert.limits(
-                self._of(instance).limits.change(envelope.actor, convert.role_limits(limits))
-            ),
+            lambda: self._of(instance).limits.change(envelope.actor, limits),
         )
 
     # --- security context ------------------------------------------------------------------

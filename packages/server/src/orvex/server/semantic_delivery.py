@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from orvex.access.errors import ACCESS_FORBIDDEN, AccessError
+from orvex.contracts.access.errors import ACCESS_FORBIDDEN, AccessError
 from orvex.semantic.errors import SemanticError
 from orvex.server import semantic_http
 from orvex.server.route_permissions import allows
@@ -56,7 +56,7 @@ def deliver(
     except (AccessError, SemanticError) as error:
         if semantic.audit is not None:  # never raises: a refusal it cannot record is counted
             user, project = str(asked.context["user"]), str(asked.context["project"])
-            semantic.audit.refusal("delivery", user, error.code, project=project)
+            semantic.audit.as_actor(user).refusal("delivery", error.code, project=project)
         raise
     if semantic.audit is None:
         return  # local mode: no audit log

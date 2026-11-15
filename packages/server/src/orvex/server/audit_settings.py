@@ -18,8 +18,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from orvex.access.audit.log import MINIMUM_RETENTION_DAYS
-from orvex.access.errors import AUDIT_RETENTION_INVALID, AccessError
+from orvex.contracts.access.errors import AUDIT_RETENTION_INVALID, AccessError
+from orvex.contracts.audit_log.interface import MINIMUM_RETENTION_DAYS
 from orvex.server.identity import Identity
 
 KEY_FILE = "audit-signing.key"
