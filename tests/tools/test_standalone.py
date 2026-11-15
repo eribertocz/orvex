@@ -6,14 +6,17 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from orvex.contracts.manifest import Manifest, Required
+from orvex.contracts.version import Version
 
 from tools.checks.module_dependencies import (
+    adapter_problems,
     dependency_problems,
     imported_modules,
     suite_problems,
 )
 from tools.ci.standalone import constraints, outside_repository
-from tools.repository import REPOSITORY_ROOT
+from tools.repository import REPOSITORY_ROOT, identity
 
 OWNERS = {
     "orvex.store": "orvex-store",
@@ -128,3 +131,11 @@ def test_the_environment_is_constrained_to_the_lock() -> None:
     pinned = constraints(REPOSITORY_ROOT / "pylock.toml")
     assert "pydantic==2.14.3" in pinned
     assert all("==" in line for line in pinned)
+
+
+def test_a_required_contract_without_a_public_test_adapter_fails() -> None:
+    needs = Manifest("billing", (), (Required("ledger", Version(1, 0), ("read",)),), (), ())
+    namespace = str(identity(REPOSITORY_ROOT)["python_namespace"])
+    found = adapter_problems(needs, namespace)
+    assert [problem.split(":", 1)[0] for problem in found] == ["MODULE_ADAPTER_MISSING"]
+    assert adapter_problems(Manifest("billing", (), (), (), ()), namespace) == []

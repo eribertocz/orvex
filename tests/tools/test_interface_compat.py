@@ -10,10 +10,12 @@ from typing import Any, Protocol
 
 import orvex.contracts
 import pytest
-from orvex.contracts.binding import Bound
-from orvex.contracts.interface import InterfaceContract, Operation, Version
-from orvex.contracts.kit import Kit, KitCase
+from orvex.contracts.envelope import CallEnvelope
+from orvex.contracts.interface import InterfaceContract, Operation
+from orvex.contracts.kit import Idempotent, Kit, KitCase
+from orvex.contracts.kit_client import KitClient
 from orvex.contracts.registry import interface_contracts, kits
+from orvex.contracts.version import Version
 
 from tools.contracts import interface_compat, interface_record
 from tools.contracts.interface_compat import incompatibilities, last_release, released_record
@@ -27,13 +29,17 @@ class MeterError(Exception):
 
 
 class Meter(Protocol):
-    def read(self, meter: str) -> int: ...
+    def read(self, envelope: CallEnvelope, meter: str) -> int: ...
 
-    def reset(self, meter: str) -> None: ...
+    def reset(self, envelope: CallEnvelope, meter: str) -> None: ...
 
 
-def check(meter: Bound) -> None:
+def check(meter: KitClient) -> None:
     meter.read("m")
+
+
+def sent(meter: KitClient, envelope: CallEnvelope) -> object:
+    return meter.send("reset", envelope, "m")
 
 
 def contract(**changes: Any) -> InterfaceContract:  # noqa: ANN401
@@ -73,33 +79,33 @@ def codes(found: list[str]) -> list[str]:
 
 
 class ReadOnly(Protocol):
-    def read(self, meter: str) -> int: ...
+    def read(self, envelope: CallEnvelope, meter: str) -> int: ...
 
 
 class Renamed(Protocol):
-    def read(self, name: str) -> int: ...
+    def read(self, envelope: CallEnvelope, name: str) -> int: ...
 
-    def reset(self, meter: str) -> None: ...
+    def reset(self, envelope: CallEnvelope, meter: str) -> None: ...
 
 
 class Retyped(Protocol):
-    def read(self, meter: str) -> str: ...
+    def read(self, envelope: CallEnvelope, meter: str) -> str: ...
 
-    def reset(self, meter: str) -> None: ...
+    def reset(self, envelope: CallEnvelope, meter: str) -> None: ...
 
 
 class MoreRequired(Protocol):
-    def read(self, meter: str, at: int) -> int: ...
+    def read(self, envelope: CallEnvelope, meter: str, at: int) -> int: ...
 
-    def reset(self, meter: str) -> None: ...
+    def reset(self, envelope: CallEnvelope, meter: str) -> None: ...
 
 
 class MoreOptional(Protocol):
-    def read(self, meter: str, at: int | None = None) -> int: ...
+    def read(self, envelope: CallEnvelope, meter: str, at: int | None = None) -> int: ...
 
-    def reset(self, meter: str) -> None: ...
+    def reset(self, envelope: CallEnvelope, meter: str) -> None: ...
 
-    def total(self) -> int: ...
+    def total(self, envelope: CallEnvelope) -> int: ...
 
 
 def removed_operation() -> dict[str, Any]:
@@ -192,7 +198,26 @@ class TestCompatibleChanges:
             operations=(
                 Operation("read", "read", ("METER_UNKNOWN",)),
                 Operation("reset", "write", ("METER_UNKNOWN", "METER_LOCKED")),
-                Operation("total", "sum", ("METER_OVERFLOW",)),
+                Operation("total", "sum", ("METER_OVERFLOW",), since=Version(1, 1)),
+            ),
+        )
+        cases = (
+            KitCase("read.known", "read", "a known meter reads its count", check),
+            KitCase("reset.zero", "reset", "a reset meter reads zero", check),
+            KitCase("total.sums", "total", "the total sums every meter", check, Version(1, 1)),
+            KitCase("read.after-reset", "read", "a read after a reset", check, Version(1, 1)),
+        )
+        assert incompatibilities(RELEASED, recorded(grown, kit(grown, *cases))) == []
+        assert incompatibilities({"contracts": {}}, RELEASED) == []
+
+    def test_an_addition_claiming_the_released_version_fails(self) -> None:
+        grown = contract(
+            version=Version(1, 1),
+            protocol=MoreOptional,
+            operations=(
+                Operation("read", "read", ("METER_UNKNOWN",)),
+                Operation("reset", "write", ("METER_UNKNOWN", "METER_LOCKED")),
+                Operation("total", "read"),
             ),
         )
         cases = (
@@ -200,8 +225,24 @@ class TestCompatibleChanges:
             KitCase("reset.zero", "reset", "a reset meter reads zero", check),
             KitCase("total.sums", "total", "the total sums every meter", check),
         )
-        assert incompatibilities(RELEASED, recorded(grown, kit(grown, *cases))) == []
-        assert incompatibilities({"contracts": {}}, RELEASED) == []
+        found = incompatibilities(RELEASED, recorded(grown, kit(grown, *cases)))
+        assert codes(found) == ["INTERFACE_ADDITION_UNVERSIONED"] * 2
+        assert "meter.total is new since 1.0 and claims 1.0" in found[0]
+
+    def test_an_operation_that_starts_changing_state_fails(self) -> None:
+        changed = contract(
+            operations=(
+                Operation("read", "read", ("METER_UNKNOWN",)),
+                Operation("reset", "write", ("METER_UNKNOWN", "METER_LOCKED"), changes_state=True),
+            )
+        )
+        cases = (
+            KitCase("read.known", "read", "a known meter reads its count", check),
+            KitCase("reset.zero", "reset", "a reset meter reads zero", Idempotent(sent, check)),
+        )
+        found = incompatibilities(RELEASED, recorded(changed, kit(changed, *cases)))
+        assert "INTERFACE_SIGNATURE_CHANGED" in codes(found)
+        assert any("reset changes_state is True, was False" in problem for problem in found)
 
     @pytest.mark.parametrize("build", [removed_operation, renamed_error, changed_expectation])
     def test_a_new_major_version_may_break(self, build: Any) -> None:  # noqa: ANN401

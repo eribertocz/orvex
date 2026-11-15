@@ -6,9 +6,9 @@ from importlib.resources import files
 
 import orvex.contracts
 import pytest
-from orvex.contracts.interface import Version
 from orvex.contracts.interface_errors import InterfaceContractError
 from orvex.contracts.manifest import Provided, Required, parse_manifest
+from orvex.contracts.version import Version
 
 FULL = """
 module = "store"

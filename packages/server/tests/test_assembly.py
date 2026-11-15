@@ -9,8 +9,10 @@ from collections.abc import Callable
 from typing import Protocol
 
 import pytest
-from orvex.contracts.interface import InterfaceContract, Operation, Version
+from orvex.contracts.envelope import CallEnvelope
+from orvex.contracts.interface import InterfaceContract, Operation
 from orvex.contracts.manifest import Manifest, Provided, Required
+from orvex.contracts.version import Version
 from orvex.server import cli
 from orvex.server.assembly import (
     AssemblyRefused,
@@ -29,11 +31,11 @@ class CacheError(Exception):
 
 
 class Cache(Protocol):
-    def get(self, key: str) -> bytes | None: ...
+    def get(self, envelope: CallEnvelope, key: str) -> bytes | None: ...
 
-    def put(self, key: str, value: bytes) -> None: ...
+    def put(self, envelope: CallEnvelope, key: str, value: bytes) -> None: ...
 
-    def size(self) -> int: ...
+    def size(self, envelope: CallEnvelope) -> int: ...
 
 
 CACHE = InterfaceContract(
@@ -43,7 +45,11 @@ CACHE = InterfaceContract(
     error_type=CacheError,
     capabilities=("read", "write"),
     errors=(),
-    operations=(Operation("get", "read"), Operation("size", "read"), Operation("put", "write")),
+    operations=(
+        Operation("get", "read"),
+        Operation("size", "read"),
+        Operation("put", "write", changes_state=True),
+    ),
 )
 
 

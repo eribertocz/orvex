@@ -12,11 +12,20 @@ from zoneinfo import ZoneInfo
 import pytest
 from orvex.contracts.binding import Bound
 from orvex.contracts.codec import Codec
+from orvex.contracts.envelope import CallEnvelope
 from orvex.contracts.interface_errors import InterfaceContractError
 from orvex.contracts.kit_run import run_kit, verify_kit
 from pydantic import BaseModel
 
-from .sample_contract import LEDGER, LEDGER_KIT, READING, LedgerError, MemoryLedger, Reading
+from .sample_contract import (
+    ENVELOPE,
+    LEDGER,
+    LEDGER_KIT,
+    READING,
+    LedgerError,
+    MemoryLedger,
+    Reading,
+)
 
 
 class Color(Enum):
@@ -37,7 +46,7 @@ class ReadingChild(Reading):
     pass
 
 
-CODEC = Codec(frozenset({Reading, Color, Shape}))
+CODEC = Codec(frozenset({Reading, Color, Shape, CallEnvelope}))
 
 VALUES: list[object] = [
     None,
@@ -70,6 +79,7 @@ VALUES: list[object] = [
     Color.RED,
     Shape(side=Decimal("2.50")),
     READING,
+    ENVELOPE,
     (),
     [],
     {},
@@ -151,13 +161,30 @@ class LiveNames(tuple[str, ...]):
 class LiveLedger(MemoryLedger):
     """A planted violation: `names` hands out a live object instead of a value."""
 
-    def names(self) -> tuple[str, ...]:
-        return LiveNames(sorted(self._readings))
+    def names(self, envelope: CallEnvelope) -> tuple[str, ...]:
+        return LiveNames(super().names(envelope))
 
 
 class WrongCode(MemoryLedger):
-    def get(self, name: str) -> Reading | None:
-        raise LedgerError("LEDGER_GONE", "not declared for get", {})
+    def readings(self, envelope: CallEnvelope, name: str) -> tuple[Reading, ...]:
+        raise LedgerError("LEDGER_GONE", "not declared for readings", {})
+
+
+class Crashing(MemoryLedger):
+    def readings(self, envelope: CallEnvelope, name: str) -> tuple[Reading, ...]:
+        raise KeyError(name)
+
+
+class Seen(MemoryLedger):
+    """Keeps every envelope it is called with."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.envelopes: list[CallEnvelope] = []
+
+    def names(self, envelope: CallEnvelope) -> tuple[str, ...]:
+        self.envelopes.append(envelope)
+        return super().names(envelope)
 
 
 class TestBound:
@@ -173,44 +200,57 @@ class TestBound:
     @pytest.mark.parametrize("serialized", [False, True])
     def test_an_implementation_without_the_operation_is_refused(self, serialized: bool) -> None:
         class Partial:
-            def get(self, name: str) -> None:
-                return None
+            def readings(self, envelope: CallEnvelope, name: str) -> tuple[Reading, ...]:
+                return ()
 
         bound = Bound(LEDGER, Partial(), serialized=serialized)
         with pytest.raises(InterfaceContractError) as raised:
-            bound.names()
+            bound.names(ENVELOPE)
         assert raised.value.code == "INTERFACE_OPERATION_MISSING"
+
+    @pytest.mark.parametrize("serialized", [False, True])
+    def test_the_implementation_receives_the_envelope(self, serialized: bool) -> None:
+        ledger = Seen()
+        Bound(LEDGER, ledger, serialized=serialized).names(ENVELOPE)
+        assert ledger.envelopes == [ENVELOPE]
+        assert (ledger.envelopes[0] is ENVELOPE) is not serialized
 
     def test_serialized_calls_cross_as_copies(self) -> None:
         ledger = MemoryLedger()
-        Bound(LEDGER, ledger, serialized=True).put(READING)
-        kept = ledger.get(READING.name)
-        assert kept == READING
-        assert kept is not READING
-        assert Bound(LEDGER, ledger, serialized=True).get(READING.name) is not kept
+        Bound(LEDGER, ledger, serialized=True).record(ENVELOPE, READING)
+        kept = ledger.readings(ENVELOPE, READING.name)
+        assert kept == (READING,)
+        assert kept[0] is not READING
+        again = Bound(LEDGER, ledger, serialized=True).readings(ENVELOPE, READING.name)
+        assert again[0] is not kept[0]
         in_process = MemoryLedger()
-        Bound(LEDGER, in_process, serialized=False).put(READING)
-        assert in_process.get(READING.name) is READING
+        Bound(LEDGER, in_process, serialized=False).record(ENVELOPE, READING)
+        assert in_process.readings(ENVELOPE, READING.name)[0] is READING
 
     def test_a_declared_error_crosses_with_its_code_message_and_details(self) -> None:
+        bound = Bound(LEDGER, MemoryLedger(), serialized=True)
         with pytest.raises(LedgerError) as raised:
-            Bound(LEDGER, MemoryLedger(), serialized=True).put(Reading("", Decimal(1), READING.at))
+            bound.record(ENVELOPE, Reading("", Decimal(1), READING.at))
         assert raised.value.code == "LEDGER_NAME_EMPTY"
         assert raised.value.message == "a reading needs a name"
         assert raised.value.details == {"field": "name"}
         assert raised.value.__cause__ is None
 
     @pytest.mark.parametrize("serialized", [False, True])
-    def test_an_undeclared_error_code_is_refused_in_both_bindings(self, serialized: bool) -> None:
+    @pytest.mark.parametrize("implementation", [WrongCode, Crashing])
+    def test_an_undeclared_error_is_refused_in_both_bindings(
+        self, serialized: bool, implementation: type[MemoryLedger]
+    ) -> None:
         with pytest.raises(InterfaceContractError) as raised:
-            Bound(LEDGER, WrongCode(), serialized=serialized).get("a")
+            Bound(LEDGER, implementation(), serialized=serialized).readings(ENVELOPE, "a")
         assert raised.value.code == "INTERFACE_ERROR_UNDECLARED"
+        assert (raised.value.__cause__ is None) is serialized
 
     def test_a_live_result_is_refused_when_serialized(self) -> None:
         ledger = LiveLedger()
-        assert Bound(LEDGER, ledger, serialized=False).names() == ()
+        assert Bound(LEDGER, ledger, serialized=False).names(ENVELOPE) == ()
         with pytest.raises(InterfaceContractError) as raised:
-            Bound(LEDGER, ledger, serialized=True).names()
+            Bound(LEDGER, ledger, serialized=True).names(ENVELOPE)
         assert raised.value.code == "INTERFACE_VALUE_NOT_SERIALIZABLE"
 
 
@@ -221,8 +261,9 @@ class TestPlantedLiveObject:
         serialized = run_kit(LEDGER_KIT, LiveLedger, serialized=True)
         failed = [result.id for result in serialized.results if not result.passed]
         assert failed == ["names.sorted"]
+        assert run_kit(LEDGER_KIT, LiveLedger, serialized=False).results[3].passed
         with pytest.raises(InterfaceContractError) as raised:
             verify_kit(LEDGER_KIT, LiveLedger)
         assert raised.value.code == "KIT_FAILED"
         assert "KIT_BINDINGS_DIFFER" in raised.value.message
-        assert "names.sorted (serialized)" in raised.value.message
+        assert "names.sorted (serialized, consumer 1.1, provider 1.1)" in raised.value.message
