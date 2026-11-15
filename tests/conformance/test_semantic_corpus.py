@@ -18,12 +18,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from orvex.testing.environment import unavailable
 
 from conformance.runners import bi_platform_adapter as adapter
 from conformance.runners import corpus_execution as ce
 from conformance.runners import semantic_corpus
 from conformance.runners.semantic_corpus import CORPUS, OSSIE, ROOT, check_vendored, run
-from tests.support.environment import unavailable
 
 
 def copy_repository(tmp_path: Path) -> Path:

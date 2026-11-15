@@ -7,8 +7,8 @@ import os
 from pathlib import Path
 
 import pytest
+from orvex.testing.fixtures import freeze, frozen, private_copy, thaw
 
-from tests.support.fixtures import freeze, frozen, private_copy, thaw
 from tools.repository import REPOSITORY_ROOT
 
 SHARED = {"class", "module", "package", "session", "unknown"}

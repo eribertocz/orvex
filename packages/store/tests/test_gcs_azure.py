@@ -30,8 +30,7 @@ from orvex.contracts.store.v1 import (
 )
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, open_lake
-
-from tests.support import azurite
+from orvex.testing import azurite
 
 LIMITS = Limits(
     memory_limit="512MB", threads=1, max_concurrent=4, queue_size=16, default_timeout_ms=600_000

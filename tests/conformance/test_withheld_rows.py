@@ -27,11 +27,11 @@ from orvex.semantic.compiler.compiled import compile_model
 from orvex.semantic.execution import answer
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies import read_policies
+from orvex.testing.fixtures import frozen
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
 from conformance.runners.security_engines import ask, served
-from tests.support.fixtures import frozen
 
 BASE = sf.fixture("direct-query", ce.VENDORS[0])
 OWN_ZONE = {"name": "own_zone", "dataset": "outages", "kind": "predicate",

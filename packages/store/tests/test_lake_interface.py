@@ -15,8 +15,7 @@ import json
 from pathlib import Path
 
 import orvex.store.lake as facade
-
-from tests.support.facade_interface import interface, internal
+from orvex.testing.facade_interface import interface, internal
 
 RECORD = Path(__file__).with_name("fixtures") / "lake_interface.json"
 

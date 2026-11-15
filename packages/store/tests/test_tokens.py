@@ -24,8 +24,7 @@ from orvex.store.sql_guard import (
     _single_statement,
 )
 from orvex.store.sql_parser import PARSER_SPACES, _plain, _tokens
-
-from tests.support.bounds import FACTOR, SAFETY_NET, FolderReads, linear
+from orvex.testing.bounds import FACTOR, SAFETY_NET, FolderReads, linear
 
 
 def within_budget(reads: FolderReads) -> None:

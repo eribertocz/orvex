@@ -18,8 +18,7 @@ from orvex.contracts.project.v1 import (
 )
 from orvex.server.cli import main
 from orvex.server.project import ProjectLoadError, load_project, resolve_secret
-
-from tests.support.bounds import linear
+from orvex.testing.bounds import linear
 
 PROJECT = """\
 version: 1

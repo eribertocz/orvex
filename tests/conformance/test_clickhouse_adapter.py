@@ -55,6 +55,7 @@ from orvex.semantic.query.binding import bind_query
 from orvex.semantic.result.descriptors import arrow_type
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake
+from orvex.testing.environment import unavailable
 
 from conformance.runners import bi_platform_adapter
 from conformance.runners import corpus_execution as ce
@@ -63,7 +64,6 @@ from tests.conformance import test_exact_arithmetic as exact_case
 from tests.conformance import test_row_policies as rp
 from tests.conformance.test_execution import no_policies
 from tests.properties import exact as generated_exact
-from tests.support.environment import unavailable
 from tests.support.policies import VENDORS, extension
 
 Document = dict[str, Any]

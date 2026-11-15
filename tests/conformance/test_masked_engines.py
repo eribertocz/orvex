@@ -20,12 +20,12 @@ from typing import Any
 
 import pytest
 import yaml
+from orvex.testing.fixtures import frozen
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf
 from conformance.runners.security_cases import SEPARATOR
 from conformance.runners.security_engines import ask, served
-from tests.support.fixtures import frozen
 
 BASE = sf.fixture("direct-query", ce.VENDORS[0])
 OUTAGES: list[list[str]] = [[str(v) for v in r] for r in BASE.rows["outages"]]
