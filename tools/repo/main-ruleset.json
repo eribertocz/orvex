@@ -106,6 +106,10 @@
           {
             "context": "security-scenarios",
             "integration_id": 15368
+          },
+          {
+            "context": "standalone-access",
+            "integration_id": 15368
           }
         ]
       }
