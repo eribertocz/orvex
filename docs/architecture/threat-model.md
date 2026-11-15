@@ -95,7 +95,8 @@ The HTTP API of `contracts/http-api/v1`, served by `server`, in local mode (loop
 | TM-HTTP-2 | Spoofing | In server mode, a request without a valid session reaches a route. | security.md §2 | packages/server/tests/test_server_roles_limits.py |
 | TM-HTTP-3 | Spoofing | DNS rebinding or a cross-site page reaches the local-mode server on loopback. | security.md §2 | packages/server/tests/test_app.py |
 | TM-HTTP-4 | Tampering | A cross-site request changes state (CSRF). | security.md §2 | packages/server/tests/test_sign_in_http.py |
-| TM-HTTP-5 | Tampering | A semantic query smuggles SQL or an undeclared member through a member name, a parameter or a filter value. | security.md §3.3 | packages/semantic/tests/test_query_binding.py |
+| TM-HTTP-5 | Tampering | A semantic query reaches an undeclared member, or a parameter or value of the wrong type, through a member name, a parameter or a filter. | security.md §3.3 | packages/semantic/tests/test_query_binding.py |
+| TM-HTTP-18 | Tampering | A text filter or parameter value is inlined into the compiled SQL and runs as SQL (injection). | security.md §3.3 | gap: values are bound by design, but no test asserts that a sentinel value is absent from the compiled SQL text and present in its parameters; the option is that test on every engine adapter |
 | TM-HTTP-6 | Tampering | A request for a static file or a client route escapes the web build's folder (path traversal). | security.md §9 | packages/server/tests/test_app.py |
 | TM-HTTP-7 | Repudiation | A caller denies having asked a question, or an answer is sent without a record. | security.md §4 | packages/server/tests/test_server_delivery.py |
 | TM-HTTP-8 | Repudiation | A value written to the server's log forges a second log line. | security.md §9 | gap: the log is JSON lines, but no test asserts that a newline or control character in a logged value stays inside its line; the option is a test on JsonFormatter with such values |
