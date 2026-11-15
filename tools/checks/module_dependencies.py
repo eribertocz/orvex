@@ -10,7 +10,8 @@ MODULE_DEPENDENCY_UNUSED: it declares one it never imports; MODULE_MANIFEST_DEPE
 `module.toml` and the distribution disagree; MODULE_MANIFEST_MISSING: no `module.toml`;
 MODULE_TEST_IMPORTS_REPOSITORY: a test imports `tests`, `conformance` or `tools`;
 MODULE_TEST_DEPENDENCY_UNDECLARED / _UNUSED: the tests' own dependencies against
-`dependencies.tests`.
+`dependencies.tests`; MODULE_ADAPTER_MISSING: a contract the module requires has no public test
+adapter in the installed contracts package, so the module could not run without its providers.
 """
 
 from __future__ import annotations
@@ -24,12 +25,13 @@ import sys
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
+from orvex.contracts.adapter import required_adapters
+from orvex.contracts.interface_errors import InterfaceContractError
+from orvex.contracts.manifest import Manifest, canonical, parse_manifest
+from orvex.contracts.registry import adapters
+
 REPOSITORY_HELPERS = frozenset({"tests", "conformance", "tools"})
 Owner = Callable[[str], "str | None"]
-
-
-def canonical(distribution: str) -> str:
-    return re.sub(r"[-_.]+", "-", distribution).lower()
 
 
 def imported_modules(source: str) -> set[str]:
@@ -124,6 +126,15 @@ def suite_problems(
     return problems
 
 
+def adapter_problems(manifest: Manifest, namespace: str) -> list[str]:
+    """MODULE_ADAPTER_MISSING when a required contract has no public test adapter installed."""
+    try:
+        required_adapters(manifest, adapters(importlib.import_module(f"{namespace}.contracts")))
+    except InterfaceContractError as error:
+        return [str(error)]
+    return []
+
+
 def file_owners() -> dict[Path, str]:
     """Every installed file, with the distribution that installed it."""
     owners: dict[Path, str] = {}
@@ -160,16 +171,13 @@ def owner_finder(owners: Mapping[Path, str]) -> Owner:
 
 def main(argv: list[str]) -> int:
     namespace, name, tests = argv
-    manifest_module = importlib.import_module(f"{namespace}.contracts.manifest")
     distribution = importlib.metadata.distribution(name)
     paths = [Path(str(distribution.locate_file(f))) for f in distribution.files or ()]
     manifests = [p for p in paths if p.name == "module.toml" and p.parent.parent.name == namespace]
     if len(manifests) != 1:
         print(f"MODULE_MANIFEST_MISSING: {name} ships {len(manifests)} module.toml, expected one")
         return 1
-    manifest = manifest_module.parse_manifest(
-        manifests[0].read_text("utf-8"), manifests[0].parent.name
-    )
+    manifest = parse_manifest(manifests[0].read_text("utf-8"), manifests[0].parent.name)
     declared = [
         re.match(r"[A-Za-z0-9._-]+", requirement)[0]  # type: ignore[index]
         for requirement in distribution.requires or ()
@@ -186,6 +194,7 @@ def main(argv: list[str]) -> int:
         for path in sorted(Path(tests).rglob("*.py"))
     }
     problems += suite_problems(name, by_file, owner_of, manifest.runtime, manifest.tests)
+    problems += adapter_problems(manifest, namespace)
     for problem in problems:
         print(problem)
     print(f"module dependencies of {name}: {len(problems)} problem(s)")

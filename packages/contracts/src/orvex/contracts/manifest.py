@@ -28,8 +28,9 @@ import tomllib
 from dataclasses import dataclass
 from typing import Any
 
-from .interface import NAME, Version
+from .interface import NAME
 from .interface_errors import InterfaceContractError
+from .version import Version
 
 MODULE = re.compile(r"[a-z]+")
 DISTRIBUTION = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?")
