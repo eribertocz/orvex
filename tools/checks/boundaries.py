@@ -33,7 +33,7 @@ from tools.checks.materialization import (
     materialization_findings,
     stale_entries,
 )
-from tools.repository import MODULES, REPOSITORY_ROOT, identity
+from tools.repository import MODULES, REPOSITORY_ROOT, TESTING, identity
 
 __all__ = [
     "MATERIALIZING_NAMES",
@@ -58,9 +58,9 @@ COMPOSER = "server"
 
 
 def boundary_findings(tree: ast.AST, owner: str, namespace: str, relative: str) -> list[Finding]:
+    findings = _testing_findings(tree, owner, namespace, relative)
     if owner == COMPOSER:
-        return []
-    findings: list[Finding] = []
+        return findings
     reported: set[tuple[str, int]] = set()
     for name, line in imported_names(tree):
         parts = name.split(".")
@@ -78,6 +78,24 @@ def boundary_findings(tree: ast.AST, owner: str, namespace: str, relative: str) 
                 )
             )
     return findings
+
+
+def _testing_findings(tree: ast.AST, owner: str, namespace: str, relative: str) -> list[Finding]:
+    """Product code (a module's `src`) importing the test helpers, which are never shipped."""
+    if "/src/" not in relative or owner == TESTING:
+        return []
+    lines = sorted(
+        {line for name, line in imported_names(tree) if name.split(".")[:2] == [namespace, TESTING]}
+    )
+    return [
+        Finding(
+            "MODULE_BOUNDARY_VIOLATION",
+            relative,
+            line,
+            f"module '{owner}' imports '{namespace}.{TESTING}', the test helpers",
+        )
+        for line in lines
+    ]
 
 
 def scan(root: Path, allowed: set[tuple[str, str]]) -> list[Finding]:

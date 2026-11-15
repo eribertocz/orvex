@@ -103,6 +103,32 @@ class TestBoundaries:
         tree = parse("import orvex.semantic\nfrom orvex.store import x\n")
         assert boundary_findings(tree, "server", "orvex", "packages/server/src/a.py") == []
 
+    @pytest.mark.parametrize(
+        ("owner", "relative"),
+        [
+            ("store", "packages/store/src/orvex/store/a.py"),
+            ("server", "packages/server/src/orvex/server/a.py"),
+            ("contracts", "packages/contracts/src/orvex/contracts/a.py"),
+        ],
+    )
+    def test_product_code_importing_the_test_helpers_is_reported(
+        self, owner: str, relative: str
+    ) -> None:
+        # #486 §2 item 4: `orvex.testing` is never shipped, so no product code may need it.
+        tree = parse("from orvex.testing.bounds import linear\n")
+        findings = boundary_findings(tree, owner, "orvex", relative)
+        assert [f.code for f in findings] == ["MODULE_BOUNDARY_VIOLATION"]
+
+    def test_a_module_s_tests_may_import_the_test_helpers(self) -> None:
+        tree = parse("from orvex.testing import environment\n")
+        assert boundary_findings(tree, "store", "orvex", "packages/store/tests/t.py") == []
+
+    def test_the_test_helpers_may_import_no_module_but_the_contracts(self) -> None:
+        tree = parse("import orvex.store.lake\nimport orvex.contracts.store\n")
+        relative = "packages/testing/src/orvex/testing/a.py"
+        findings = boundary_findings(tree, "testing", "orvex", relative)
+        assert [f.detail for f in findings] == ["module 'testing' imports 'orvex.store'"]
+
     def test_own_module_contracts_and_third_party_are_allowed(self) -> None:
         tree = parse("import orvex.store.core\nimport orvex.contracts.x\nimport duckdb\n")
         assert boundary_findings(tree, "store", "orvex", "f.py") == []

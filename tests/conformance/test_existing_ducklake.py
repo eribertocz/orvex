@@ -41,12 +41,12 @@ from orvex.server.existing_lake_snapshots import SnapshotSchedule
 from orvex.store.errors import StoreError
 from orvex.store.existing_lake import ExistingLake
 from orvex.store.existing_lake_reads import LakeReads
+from orvex.testing.environment import unavailable
 
 from conformance.runners import corpus_execution as ce
 from tests.conformance import test_row_policies as rp
 from tests.conformance.test_direct_query import CASES, ZONE, routed
 from tests.conformance.test_execution import ask
-from tests.support.environment import unavailable
 from tests.support.policies import VENDORS, extension
 
 ROOT = Path(__file__).resolve().parents[2]

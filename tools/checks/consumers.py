@@ -1,6 +1,7 @@
 """Consumer boundaries (#486 G2): `server`, the conformance runners, `tools/` and the repository
 tests import only `<namespace>.contracts`; `server/assembly.py` may also import the modules'
-`api` packages, and the server's own files the server.
+`api` packages, and the server's own files the server. Tests (`tests/`, a package's `tests/`)
+may also import the shared test helpers, `<namespace>.testing`; nothing else may.
 
 CONSUMER_BOUNDARY_VIOLATION: any other import of a module, as `tools/checks/imports.py` reads
 it (static, or dynamic with a constant name). In report mode until #486 step 7:
@@ -16,7 +17,7 @@ from pathlib import Path
 
 from tools.checks.architecture import Finding
 from tools.checks.imports import imported_names
-from tools.repository import MODULES, identity
+from tools.repository import MODULES, TESTING, identity
 
 CODE = "CONSUMER_BOUNDARY_VIOLATION"
 # Each consumer area, by the start of its paths.
@@ -34,6 +35,10 @@ def assembly(namespace: str) -> str:
     return f"packages/server/src/{namespace}/server/assembly.py"
 
 
+def _is_test(relative: str) -> bool:
+    return relative.startswith("tests/") or "/tests/" in relative
+
+
 def _area(relative: str) -> str | None:
     return next((area for area, start in AREAS.items() if relative.startswith(start)), None)
 
@@ -47,11 +52,12 @@ def consumer_findings(tree: ast.AST, namespace: str, relative: str) -> list[Find
     reported: set[tuple[str, int]] = set()
     for name, line in imported_names(tree):
         parts = name.split(".")
-        if len(parts) < 2 or parts[0] != namespace or parts[1] not in MODULES:
+        if len(parts) < 2 or parts[0] != namespace or parts[1] not in (*MODULES, TESTING):
             continue
         target = parts[1]
         allowed = (
             target == SHARED
+            or (target == TESTING and _is_test(relative))
             or (area == "server" and target == "server")
             or (relative == assembly(namespace) and len(parts) > 2 and parts[2] == PUBLIC)
         )

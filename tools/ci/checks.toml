@@ -318,7 +318,7 @@ job = "python-tests-windows"
 kind = "check"
 required = false
 contexts = ["python-tests-windows"]
-digest = "cbdaa0231351793f"
+digest = "86ab710fa187856e"
 setup = ["python -m pip install --quiet pip==26.3"]
 [[job.check]]
 name = "python-tests-windows"

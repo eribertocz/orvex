@@ -25,7 +25,7 @@ from orvex.server.identity import load_identity
 from orvex.server.project import load_project
 from orvex.store.lake import Limits, open_lake
 
-from tests.support import azurite
+from orvex.testing import azurite
 
 SLUG = load_identity().slug
 PROJECT = "version: 1\nname: Test\ntime_zone: UTC\n"

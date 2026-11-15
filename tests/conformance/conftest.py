@@ -8,8 +8,7 @@ its first conftest files, its modules would be read before coverage starts measu
 from __future__ import annotations
 
 import pytest
-
-from tests.support.environment import unavailable
+from orvex.testing.environment import unavailable
 
 
 @pytest.fixture(autouse=True)

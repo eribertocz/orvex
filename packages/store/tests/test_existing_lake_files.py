@@ -33,8 +33,7 @@ from orvex.contracts.store.v1 import (
 from orvex.store import separation
 from orvex.store.errors import StoreError
 from orvex.store.existing_lake import ExistingLake
-
-from tests.support.environment import unavailable
+from orvex.testing.environment import unavailable
 
 MEMORY = "512MB"
 

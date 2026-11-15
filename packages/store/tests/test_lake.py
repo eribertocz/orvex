@@ -16,8 +16,7 @@ from orvex.contracts.store.v1 import LocalLakeLocation, Parameter, ReadRequest, 
 from orvex.store.errors import StoreError
 from orvex.store.json_encoding import arrow_to_json
 from orvex.store.lake import FOLDER_COST, PATTERN_BUDGET, Lake, Limits, open_lake
-
-from tests.support.bounds import SAFETY_NET, FolderReads
+from orvex.testing.bounds import SAFETY_NET, FolderReads
 
 # The shared contract tests run on every catalog, SQLite included (#120).
 EVERY_CATALOG = True

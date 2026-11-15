@@ -10,8 +10,8 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from orvex.testing.environment import unavailable
 
-from tests.support.environment import unavailable
 from tools.ci import duckdb_extensions as tool
 from tools.repository import REPOSITORY_ROOT
 

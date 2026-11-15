@@ -382,6 +382,8 @@ jobs:
           python -m pip install --quiet pip==26.3
           pins=$(python -m tools.ci.pins pylock.toml pytest pluggy iniconfig packaging pygments duckdb)
           python -m pip install --quiet --only-binary=:all: --no-deps $pins colorama==0.4.6
+          # The shared test helpers these tests use (#486), from the checkout.
+          python -m pip install --quiet --no-deps -e packages/testing
       - run: python -m pytest -p tools.ci.order tests/tools/test_fixtures.py tests/tools/test_order.py tests/tools/test_shard.py tests/tools/test_pins.py tests/tools/test_synthetic.py
         env:
           PYTEST_RANDOM_ORDER: ${{ github.run_id }}

@@ -14,7 +14,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.repository import MODULES, REPOSITORY_ROOT, identity, read_text, tracked_files
+from tools.repository import MODULES, REPOSITORY_ROOT, TESTING, identity, read_text, tracked_files
 
 EXEMPT = (
     "*.md",
@@ -48,7 +48,7 @@ def is_exempt(relative: str) -> bool:
 
 def occurrence_pattern(name: str, slug: str) -> re.Pattern[str]:
     words = "|".join(re.escape(word) for word in {name, slug})
-    modules = "|".join(MODULES)
+    modules = "|".join((*MODULES, TESTING))  # `orvex-testing`: the test helpers, a package too
     return re.compile(
         rf"(?<![A-Za-z0-9])(?:{words})(?![A-Za-z0-9])"
         rf"(?!\.[a-z_]|-(?:{modules})\b|/(?:{modules})\b)",
