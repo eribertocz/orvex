@@ -492,6 +492,10 @@ def test_a_parameter_that_does_not_fit_its_placeholder_is_refused(
         "SELECT 1;",
         "SELECT $$'$$ AS a SETTINGS max_threads = 1, b = $$'$$",
         "SELECT $x$ unclosed",
+        # Comments ClickHouse nests, or does not read as comments (#448).
+        "SELECT 1 AS v /* /* */ ' */ SETTINGS max_execution_time = 0 -- '",
+        "SELECT 1 AS v /* a /* b */ c */",
+        "SELECT 1 AS v #x",
     ],
 )
 def test_only_one_plain_select_is_run(connect: Connect, sql: str) -> None:

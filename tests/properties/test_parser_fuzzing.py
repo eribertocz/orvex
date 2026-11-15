@@ -106,7 +106,8 @@ PIECES = (
     "{p0:String}", "{p1:Nullable(String)}", "{p2:Int64}", "'a'", "'it''s'", "'\\''",
     "'\\\\'", "$$ raw ; FORMAT $$", "$tag$ x $tag$", "`we``ird`", '"a\\"b"',
     "-- line ; FORMAT\n", "# hash SETTINGS a=1\n", "#! bang ;\n", "#x\n", "// slashes ;\n",
-    "/* c ; */", "/* /* nested */ SETTINGS x = 1 */", "/* open", "'open", "`open", "$x$ open",
+    "/* c ; */", "/* /* nested */ SETTINGS x = 1 */", "/* /* */ '", "' */", "' -- '", "*/",
+    "/* open", "'open", "`open", "$x$ open",
     ";", "FORMAT JSON", "SETTINGS max_threads = 1", "INTO OUTFILE 'f'", "format", "\n", " ",
     "Settings", "formatDateTime(x, '%F')", "settingsx", "FORMAT_x",
 )  # fmt: skip
@@ -184,8 +185,11 @@ def clickhouse_view(text: str) -> str | None:
     return "".join(code)
 
 
+PLACEHOLDER = r"\{([A-Za-z_][A-Za-z0-9_]*):([^{}]+)\}"
+
+
 def runs_as_one_select(code: str) -> bool:
-    plain = re.sub(r"\{[A-Za-z_][A-Za-z0-9_]*:[^{}]+\}", " 0 ", code).strip()
+    plain = re.sub(PLACEHOLDER, " 0 ", code).strip()
     return (
         ";" not in plain
         and re.match(r"(?is)^\(*\s*(SELECT|WITH)\b", plain) is not None
@@ -199,6 +203,8 @@ def runs_as_one_select(code: str) -> bool:
 @example("SELECT 1 #SETTINGS max_threads = 1")
 @example("SELECT 1 $$ ; $$ FORMAT JSON")
 @example("SELECT '\\'' ; SELECT 2")
+# Found by the Reviewer pass on #448: a nested comment made the scanner read code as a string.
+@example("SELECT 1 /* /* */ ' */ SETTINGS max_execution_time = 0 -- '")
 @given(statements())
 def test_what_the_scanner_accepts_runs_on_clickhouse_as_one_plain_select(statement: str) -> None:
     try:
@@ -212,6 +218,9 @@ def test_what_the_scanner_accepts_runs_on_clickhouse_as_one_plain_select(stateme
         return
     code = clickhouse_view(statement)
     assert code is None or runs_as_one_select(code), code
+    if code is not None:  # each placeholder found once, with its written type, where it runs
+        written = [(n, t.strip()) for n, t in re.findall(PLACEHOLDER, code)]
+        assert clickhouse._scan(statement)[1] == written
 
 
 def test_the_reference_lexer_sees_what_clickhouse_documents() -> None:

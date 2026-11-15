@@ -33,6 +33,7 @@ from orvex.semantic.receipt.viewer import CallerViewer
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners.security_cases import SEPARATOR
+from tests.properties import policy_engine as pe
 from tests.properties import policy_oracle as po
 from tests.properties import policy_world as pw
 from tests.properties.world import (
@@ -54,15 +55,15 @@ def answered(
 ) -> tuple[str | None, Rows, list[str], list[str], list[str]]:
     """The engine's answer: its error code (or None), rows over every page, columns, notices,
     and every text the caller receives (result, notices, receipt view, error)."""
-    model = pw.compiled_policies(policies)
+    model = pe.compiled_policies(policies)
     context = caller.context()
-    with pw.lake_with(world, data) as lake:
+    with pe.lake_with(world, data) as lake:
         try:
             if query["mode"] == "detail":
-                rows, columns, notices = pw.every_page(query, lake, model, context)
+                rows, columns, notices = pe.every_page(query, lake, model, context)
                 texts = [json.dumps(rows), json.dumps(notices)]
             else:
-                found = pw.ask(query, lake, model, context)
+                found = pe.ask(query, lake, model, context)
                 envelope = found.result.envelope()
                 rows = ce.rows_of(found)
                 columns = []
@@ -154,6 +155,53 @@ BY_CHANNEL = {
 }  # fmt: skip
 
 
+# A world where policies filter some rows and keep others, for the directed examples below: each
+# makes a property fail on a planted engine defect that the small pull-request profile might
+# not reach (Reviewer pass on #448): a mask skipped, orphans always visible, a policy on
+# `customers` not propagated, an allow-list read as a deny-list.
+MIXED = World(
+    [{"customer_id": "1", "region": "North", "segment": "a"},
+     {"customer_id": "2", "region": "South", "segment": "b"},
+     {"customer_id": "3", "region": None, "segment": "a"}],
+    [{"sale_id": str(i), "customer_id": c, "amount": a, "qty": "1.00", "sold_on": "2026-01-31",
+      "sold_at": "2026-02-01 03:01:00+00", "channel": ch}
+     for i, (c, a, ch) in enumerate((("1", "1.00", "web"), ("2", "2.00", "shop"),
+                                     ("3", "3.00", "web"), (None, "4.00", "web"),
+                                     ("9", "5.00", "shop"), ("1", "6.00", None)), 1)],
+)  # fmt: skip
+DETAIL = {
+    "kind": "semantic_query", "version": 1, "mode": "detail",
+    "fields": [{"member": "sales.sale_id"}, {"member": "sales.channel"},
+               {"member": "customers.region"}],
+    "order": [{"by": "sales.sale_id", "direction": "asc"}], "page": {"size": "4"},
+}  # fmt: skip
+NORTH = pw.Caller(attributes={"regions": {"type": "list", "values": ["North"]},
+                              "channel": {"type": "text", "value": "web"},
+                              "max_customer": {"type": "integer", "value": "2"}})  # fmt: skip
+MASKED_REGION = pw.Policies(columns=({"member": "customers.region", "default": "masked"},))
+NORTH_ONLY = pw.Policies(({"name": "own_regions", "orphans": "hidden"},))
+NORTH_AND_ORPHANS = pw.Policies(({"name": "own_regions", "orphans": "visible"},))
+WEB_ALLOWED = pw.Mappings(allow=((pw.USER, "web"),))
+NORTH_DENIED = pw.Mappings(deny=((pw.USER, "North"),), registered=(pw.USER,))
+DIRECTED = [
+    (MIXED, pw.Mappings(), MASKED_REGION, NORTH, DETAIL),
+    (MIXED, pw.Mappings(), NORTH_ONLY, NORTH, DETAIL),
+    (MIXED, pw.Mappings(), NORTH_AND_ORPHANS, NORTH, DETAIL),
+    (MIXED, WEB_ALLOWED, pw.Policies(({"name": "allowed_channels"},)), NORTH, DETAIL),
+    (MIXED, NORTH_DENIED, pw.Policies(({"name": "denied_regions"},)), NORTH, DETAIL),
+    (MIXED, pw.Mappings(),
+     pw.Policies(({"name": "customer_bound"}, {"name": "own_channel"})), NORTH, BY_CHANNEL),
+]  # fmt: skip
+
+
+def directed(test: Any) -> Any:  # noqa: ANN401
+    """The directed worlds as examples of a property taking (world, data, policies, caller,
+    query)."""
+    for world, data, policies, caller, query in reversed(DIRECTED):
+        test = example(world, data, policies, caller, query)(test)
+    return test
+
+
 @PROFILE
 # Found nightly (#448): an unregistered caller saw a sale without a customer under a deny-list
 # with `orphans: visible`; a missing registration now refuses every row the policy reaches.
@@ -164,6 +212,7 @@ BY_CHANNEL = {
     pw.Caller(attributes={"channel": {"type": "text", "value": "web"}}),
     BY_CHANNEL,
 )
+@directed
 @given(worlds(), pw.mappings(), pw.policy_models(), pw.callers(), QUESTIONS)
 def test_every_answer_is_the_oracles_and_leaks_nothing_protected(
     world: World,
@@ -180,6 +229,7 @@ def test_every_answer_is_the_oracles_and_leaks_nothing_protected(
 
 
 @PROFILE
+@directed
 @given(worlds(), pw.mappings(), pw.policy_models(), pw.callers(), detail_queries())
 def test_a_detail_answer_is_a_subset_by_identity_with_masks_apart(
     world: World,
@@ -189,6 +239,8 @@ def test_a_detail_answer_is_a_subset_by_identity_with_masks_apart(
     query: pw.Document,
 ) -> None:
     """P1."""
+    if query["mode"] != "detail":  # a directed aggregate example: P2's alone
+        return
     rules = po.column_rules(policies, caller)
     code, policed, _, _, _ = answered(world, data, policies, caller, query)
     if code is not None:  # a refusal shows no row (P2 checks its code)
@@ -265,21 +317,43 @@ def test_a_restrictive_change_never_widens_and_a_permissive_one_is_exact(
     draws: st.DataObject,
 ) -> None:
     """P3. The oracle first confirms the change's class on this data."""
-    name, restrictive, policies2, caller2, data2 = draws.draw(
-        st.sampled_from(changes(policies, caller, data)), label="change"
-    )
+    change = draws.draw(st.sampled_from(changes(policies, caller, data)), label="change")
+    assert monotonic_problems(world, data, policies, caller, query, change) == []
+
+
+def monotonic_problems(
+    world: World,
+    data: pw.Mappings,
+    policies: pw.Policies,
+    caller: pw.Caller,
+    query: pw.Document,
+    change: tuple[str, bool, pw.Policies, pw.Caller, pw.Mappings],
+) -> list[str]:
+    """P3 for one change: restrictive never widens (and the oracle agrees it does not), and
+    permissive gives the oracle's new answer exactly."""
+    name, restrictive, policies2, caller2, data2 = change
     before = po.expected(world, data, policies, caller, query)
     after = po.expected(world, data2, policies2, caller2, query)
-    seen_before = set() if before.error else {r[0] for r in before.rows}
-    seen_after = set() if after.error else {r[0] for r in after.rows}
     if restrictive:
-        assert seen_after <= seen_before, f"the oracle widens on {name}: misclassified"
+        seen_before = set() if before.error else {r[0] for r in before.rows}
+        seen_after = set() if after.error else {r[0] for r in after.rows}
+        if not seen_after <= seen_before:
+            return [f"the oracle widens on {name}: misclassified"]
     code, rows, _, _, _ = answered(world, data, policies, caller, query)
     code2, rows2, _, notices2, _ = answered(world, data2, policies2, caller2, query)
     if restrictive:
-        assert identities(code2, rows2) <= identities(code, rows), name
-    else:
-        assert oracle_problems(code2, rows2, notices2, after) == [], name
+        widened = identities(code2, rows2) - identities(code, rows)
+        return [f"{name} widens to {sorted(map(str, widened))}"] if widened else []
+    return [f"{name}: {p}" for p in oracle_problems(code2, rows2, notices2, after)]
+
+
+def test_every_change_of_the_directed_worlds_is_monotonic() -> None:
+    """P3 on worlds where policies keep some rows: every one-step change of each."""
+    for world, data, policies, caller, query in DIRECTED:
+        if query["mode"] != "detail":
+            continue
+        for change in changes(policies, caller, data):
+            assert monotonic_problems(world, data, policies, caller, query, change) == [], change[0]
 
 
 def test_a_change_is_classified_by_the_policies_meaning() -> None:
@@ -355,11 +429,11 @@ def test_a_null_in_the_data_never_matches_and_a_null_deny_entry_blocks_every_row
 def test_an_invalid_context_is_refused_before_any_answer(context: pw.Document) -> None:
     """P4c: a context that breaks `security-context` v1 is never answered."""
     world = World([], [])
-    model = pw.compiled_policies(pw.Policies(({"name": "own_channel"},)))
+    model = pe.compiled_policies(pw.Policies(({"name": "own_channel"},)))
     query = {"kind": "semantic_query", "version": 1, "mode": "aggregate",
              "metrics": [{"metric": "revenue"}]}  # fmt: skip
-    with pw.lake_with(world, pw.Mappings()) as lake, pytest.raises(InvalidContext):
-        pw.ask(query, lake, model, context)
+    with pe.lake_with(world, pw.Mappings()) as lake, pytest.raises(InvalidContext):
+        pe.ask(query, lake, model, context)
 
 
 # --- P5, hidden as absent ----------------------------------------------------------------------
@@ -373,8 +447,8 @@ def test_a_hidden_member_is_refused_as_one_that_does_not_exist() -> None:
     def refused(member: str) -> SemanticError:
         query = {"kind": "semantic_query", "version": 1, "mode": "aggregate",
                  "metrics": [{"metric": "revenue"}], "group_by": [{"member": member}]}  # fmt: skip
-        with pw.lake_with(world, pw.Mappings()) as lake, pytest.raises(SemanticError) as caught:
-            pw.ask(query, lake, pw.compiled_policies(policies), pw.Caller().context())
+        with pe.lake_with(world, pw.Mappings()) as lake, pytest.raises(SemanticError) as caught:
+            pe.ask(query, lake, pe.compiled_policies(policies), pw.Caller().context())
         return caught.value
 
     hidden, absent = refused("customers.segment"), refused("customers.nickname")

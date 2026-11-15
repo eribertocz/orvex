@@ -698,7 +698,8 @@ def _bound(sql: str, parameters: Sequence[Parameter]) -> dict[str, str]:
 
 def _scan(sql: str) -> tuple[str, list[tuple[str, str]]]:
     """The statement with every comment, string, quoted name and placeholder blanked, and its
-    placeholders in order. An unclosed comment or quote is refused."""
+    placeholders in order. An unclosed comment or quote is refused, and so is a nested comment
+    or a `#` that ClickHouse does not read as one."""
     plain: list[str] = []
     placeholders: list[tuple[str, str]] = []
     last = 0
@@ -706,6 +707,16 @@ def _scan(sql: str) -> tuple[str, list[tuple[str, str]]]:
         if found.group("open"):
             raise StoreError(
                 "STORE_STATEMENT_INVALID", "A ClickHouse read has an unclosed quote or comment.", {}
+            )
+        comment = found.group("comment") or ""
+        if "/*" in comment[2:] or (comment.startswith("#") and comment[1:2] not in {" ", "!"}):
+            # ClickHouse nests `/* … */` and reads `#` as a comment only before a space or `!`:
+            # this scanner would end the comment, or start one, where ClickHouse does not, so
+            # what it reads as a string or a comment could run as code (#448). Refused.
+            raise StoreError(
+                "STORE_STATEMENT_INVALID",
+                "A ClickHouse read cannot nest comments or start one with a bare #.",
+                {},
             )
         plain.append(sql[last : found.start()])
         if found.group("parameter"):
