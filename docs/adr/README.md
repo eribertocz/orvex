@@ -9,7 +9,7 @@ Records 0001–0026 were approved by the Owner during the design session of 2026
 | [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted |
 | [0002](0002-dependency-selection-policy.md) | Open standards first; dependency selection policy | Accepted |
 | [0003](0003-python-backend-and-svelte-web.md) | Python backend with FastAPI; SvelteKit web | Accepted |
-| [0004](0004-modules-contracts-and-independent-versions.md) | Modules with contracts, own state and independent versions | Accepted |
+| [0004](0004-modules-contracts-and-independent-versions.md) | Modules with contracts, own state and independent versions | Accepted; rules 2–4 amended by 0033 once accepted |
 | [0005](0005-local-and-server-runtime-modes.md) | Local zero-configuration mode and opt-in server mode | Accepted; amended in part by 0027 |
 | [0006](0006-duckdb-and-ducklake.md) | DuckDB as the only analytical engine; DuckLake as the warehouse | Accepted; superseded in part by 0027 and 0028 |
 | [0007](0007-projects-as-files.md) | Projects as files in Git; module state separate | Accepted |
@@ -38,3 +38,4 @@ Records 0001–0026 were approved by the Owner during the design session of 2026
 | [0030](0030-ossie-version-evolution.md) | Evolving with Apache Ossie: version registry, staged reading, three identities and the Ossie-first policy (amends 0009 and 0012) | Accepted |
 | [0031](0031-source-isolation-boundary.md) | Source isolation boundary: every external database read in a worker without the lake (makes 0025 precise) | Accepted |
 | [0032](0032-security-cases-follow-adr-0027.md) | Security cases follow ADR-0027 §3 for views, macros and overlapping locations (ratifies 0027) | Proposed |
+| [0033](0033-interface-contracts-kits-and-manifests.md) | Interface contracts, conformance kits and module manifests (amends 0004 rules 2–4) | Proposed |

@@ -25,6 +25,7 @@ on:
       - property-nightly
       - ossie-upstream
       - ci-alerts-selftest
+      - interfaces
     types: [completed]
   schedule:
     - cron: "41 */6 * * *"

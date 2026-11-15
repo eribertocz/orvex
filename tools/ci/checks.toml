@@ -721,3 +721,36 @@ name = "semantic-corpus-clickhouse-26.8"
 run = "python -m conformance.runners.semantic_corpus --through clickhouse --switch-on"
 local = false
 reason = "needs a ClickHouse 26.8 LTS server (CORPUS_CLICKHOUSE), started by the job from its release archive"
+
+[[job]]
+workflow = "interfaces.yml"
+job = "interface-contracts"
+kind = "check"
+required = true
+contexts = ["interface-contracts"]
+digest = "db80658d940be1da"
+setup = ["python -m pip install --quiet pip==26.3"]
+[[job.check]]
+# The record of the interface contracts is current (#486 G3).
+name = "interface-record"
+run = "python -m tools.contracts.interface_record --check"
+local = true
+[[job.check]]
+# Within a major version an interface contract only grows since the last release (#486 G3).
+name = "interface-compat"
+run = "python -m tools.contracts.interface_compat"
+local = true
+
+[[job]]
+workflow = "interfaces.yml"
+job = "standalone"
+kind = "check"
+required = true
+contexts = ["standalone"]
+digest = "bcb329418caea5d2"
+setup = ["python -m pip install --quiet pip==26.3"]
+[[job.check]]
+# A module installs and passes its own tests alone, outside the repository (#486 G4).
+name = "standalone-contracts"
+run = "python -m tools.ci.standalone contracts"
+local = true
