@@ -12,7 +12,7 @@ import pyarrow as pa
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from orvex.semantic.errors import SemanticError
+from orvex.contracts.semantic.errors import SemanticError
 
 from conformance.runners.semantic_corpus import ROOT
 from tests.properties.world import (

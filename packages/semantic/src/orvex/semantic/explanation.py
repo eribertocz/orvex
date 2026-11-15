@@ -29,8 +29,8 @@ from importlib.resources import files
 from typing import Any
 
 from jsonschema import Draft202012Validator
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.compiler.compiled import CompiledModel
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.estimates import estimate
 from orvex.semantic.evidence import CONSISTENT, relied
 from orvex.semantic.execution import Engine, Progress, prepare, question_of

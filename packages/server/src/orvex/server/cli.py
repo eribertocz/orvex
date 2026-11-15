@@ -28,6 +28,7 @@ from orvex.server.evidence_command import evidence
 from orvex.server.existing_lakes import ExistingLakes, ducklake_connections, memory_share
 from orvex.server.history import runs
 from orvex.server.identity import Identity, load_identity
+from orvex.server.implementations import configured_choices
 from orvex.server.instance import (
     Project,
     ProjectPathError,
@@ -334,7 +335,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(error, file=sys.stderr)
         return 3
     try:
-        check_installed_assembly(identity)
+        check_installed_assembly(identity, configured_choices(identity, os.environ))
     except (AssemblyRefused, InterfaceContractError) as error:
         print(error, file=sys.stderr)
         return 3

@@ -30,7 +30,7 @@ from typing import Protocol
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from orvex.semantic.errors import SemanticError
+from orvex.contracts.semantic.errors import SemanticError
 
 CURSOR = re.compile(r"[A-Za-z0-9_-]{1,1024}")
 FINGERPRINT = re.compile(r"sha256:[0-9a-f]{64}")

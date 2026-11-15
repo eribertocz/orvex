@@ -13,11 +13,11 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import pytest
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.contracts.store.v1 import ChangesRequest, StatementRequest
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.correctness import analyze
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.evidence import EvidenceRecord, Ledger, declarations, relied, verify
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.planning import plan

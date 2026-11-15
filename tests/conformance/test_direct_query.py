@@ -18,6 +18,7 @@ import jsonschema
 import pyarrow as pa
 import pytest
 import yaml
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.contracts.store.v1 import Parameter, ReadRequest, StatementRequest
 from orvex.semantic.adapters.duckdb import PhysicalQuery, PolicyValues, compile_plan
 from orvex.semantic.compiler.compiled import compile_model
@@ -28,7 +29,6 @@ from orvex.semantic.engines import (
     Routing,
     route_model,
 )
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import Answer, Progress, answer, prepare
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies import PolicyModel, read_policies

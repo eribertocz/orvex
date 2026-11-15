@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tools.ci import durations, trends
+from tools.ci import checks, durations, trends
 from tools.repository import REPOSITORY_ROOT
 
 
@@ -173,6 +173,16 @@ def test_no_test_file_is_in_no_profile(tmp_path: Path) -> None:
     assert trends.unprofiled(tmp_path, discovered=".github/workflows/scripts") == [
         "stray/test_b.py"
     ]
+
+
+def test_an_alternative_s_tests_are_profiled_by_its_standalone_check_only() -> None:
+    folders = trends.standalone_tests(checks.load(REPOSITORY_ROOT))
+    assert "conformance/alternatives/result_cache_ipc/tests/" in folders
+    assert "packages/contracts/tests/" in folders
+    unlisted = [c for c in checks.load(REPOSITORY_ROOT) if "alternative-result-cache" not in c.run]
+    assert "conformance/alternatives/result_cache_ipc/tests/" not in trends.standalone_tests(
+        unlisted
+    )
 
 
 def test_only_main_s_own_builds_enter_the_history() -> None:

@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import secrets
 import threading
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
@@ -47,8 +48,9 @@ from orvex.access.server_context import (
     role_of,
 )
 from orvex.access.storage.store import Store
+from orvex.contracts.semantic.errors import SemanticError
+from orvex.contracts.semantic.interface import ResultCache
 from orvex.semantic.catalog.building import catalog_for_context
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import Answer, Engine, answer
 from orvex.semantic.explanation import explain
 from orvex.semantic.policies import PolicyModel, read_policies
@@ -57,9 +59,9 @@ from orvex.semantic.receipt import Key
 from orvex.semantic.receipt.viewer import CallerViewer
 from orvex.semantic.result import SemanticResult
 from orvex.semantic.result.cursors import SealedForm
-from orvex.semantic.result_cache import ResultCache
 from orvex.server import evidence_records, lake_place, semantic_model
-from orvex.server.identity import Identity
+from orvex.server.identity import Identity, load_identity
+from orvex.server.implementations import implementation_of
 from orvex.server.permission_state import permission_state
 from orvex.server.project import Project, ProjectLoadError, load_project
 from orvex.server.query_cancel import Cancel
@@ -201,8 +203,17 @@ def session_settings() -> Settings:
         cursors=SealedForm(secrets.token_bytes(32)),
         limits=QueryLimits(detail_page_size=DETAIL_PAGE_CAP),
         timeout_ms=QUERY_TIMEOUT_MS,
-        cache=ResultCache(RESULT_CACHE_BYTES),
+        cache=result_cache(),
     )
+
+
+def result_cache() -> ResultCache:
+    """This process's result cache, of the implementation the server is assembled with
+    (`assembly`, chosen by configuration only), bounded and on the monotonic clock."""
+    implementation = implementation_of(load_identity(), "result-cache")
+    built = implementation(max_bytes=RESULT_CACHE_BYTES, clock=time.monotonic)  # type: ignore[operator]
+    cache: ResultCache = built
+    return cache
 
 
 # --- statuses -----------------------------------------------------------------------------------

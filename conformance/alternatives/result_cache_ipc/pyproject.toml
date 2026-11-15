@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools==84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orvex-alternative-result-cache-ipc"
+version = "0.1.0"
+description = "An independent result cache written from its contract alone, for the real substitution test of #486 G1. Never shipped."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.14"
+dependencies = ["orvex-contracts==0.3.0", "pyarrow==26.0.1"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true
+
+[tool.setuptools.package-data]
+"orvex.alternative_result_cache_ipc" = ["module.toml"]

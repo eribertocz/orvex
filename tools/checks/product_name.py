@@ -22,6 +22,7 @@ EXEMPT = (
     "identity.toml",
     "packages/server/src/*/server/identity.toml",
     "packages/*/pyproject.toml",
+    "conformance/alternatives/*/pyproject.toml",
     ".gitignore",
     ".github/labels.yml",
     ".github/ISSUE_TEMPLATE/*",

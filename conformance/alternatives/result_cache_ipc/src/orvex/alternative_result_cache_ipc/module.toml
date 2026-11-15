@@ -1,0 +1,13 @@
+# The manifest of this alternative (#486 §2.5, G1): it provides the result-cache contract and
+# requires nothing.
+module = "alternative_result_cache_ipc"
+
+[dependencies]
+runtime = ["orvex-contracts", "pyarrow"]
+tests = ["pytest"]
+
+[[provides]]
+contract = "result-cache"
+version = "1.0"
+capabilities = ["lookup", "store", "measure"]
+implementation = "IpcResultCache"

@@ -54,3 +54,7 @@ jobs:
           python -m pip install --quiet -r pylock.toml
       - name: The contracts module alone, outside the repository
         run: python -m tools.ci.standalone contracts
+      - name: The alternative result cache alone, outside the repository
+        run: python -m tools.ci.standalone alternative-result-cache-ipc
+      - name: The alternative result cache is independent of semantic
+        run: python -m tools.checks.alternative_independence

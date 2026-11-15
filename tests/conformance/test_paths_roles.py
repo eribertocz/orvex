@@ -14,11 +14,11 @@ import pytest
 import yaml
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.correctness import analyze
 from orvex.semantic.correctness.graph import Graph
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies import read_policies
 from orvex.semantic.query.binding import Limits, bind_query

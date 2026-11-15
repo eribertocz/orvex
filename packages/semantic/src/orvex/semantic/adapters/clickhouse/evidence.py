@@ -16,13 +16,13 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from orvex.contracts.semantic.errors import PlanError
 from orvex.semantic.adapters.clickhouse.allowlist import check_statement
 from orvex.semantic.adapters.clickhouse.writer import _ClickHouse
 from orvex.semantic.adapters.dialect import quote
 from orvex.semantic.adapters.duckdb import EvidenceCheck
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
-from orvex.semantic.errors import PlanError
 
 Pair = tuple[MemberId, MemberId]
 COUNT = "toInt64(count(*))"

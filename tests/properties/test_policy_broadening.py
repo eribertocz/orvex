@@ -27,7 +27,7 @@ from typing import Any
 import pytest
 from hypothesis import example, given
 from hypothesis import strategies as st
-from orvex.semantic.errors import SemanticError
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.policies import InvalidContext
 from orvex.semantic.receipt.viewer import CallerViewer
 

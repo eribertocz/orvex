@@ -18,14 +18,14 @@ values were already read on the managed lake at the same snapshot (`resolve`) an
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
 
 import pyarrow as pa
 import pyarrow.compute as pc
+from orvex.contracts.semantic.errors import SemanticError
+from orvex.contracts.semantic.interface import Withheld
 from orvex.semantic.adapters.dialect import quote
 from orvex.semantic.adapters.duckdb import MappingQuery, PolicyValues, mapping_queries
 from orvex.semantic.engines import dataset_label
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.planning import SemanticPlan
 from orvex.semantic.policies import predicate as grammar
 from orvex.semantic.policies.placement import Restriction
@@ -34,16 +34,6 @@ type Run = Callable[[str, Sequence[Mapping[str, str | None]]], pa.RecordBatchRea
 
 ATTRIBUTE_MISSING = "POLICY_ATTRIBUTE_MISSING"
 MAPPING_MISSING = "POLICY_MAPPING_MISSING"
-
-
-@dataclass(frozen=True, slots=True)
-class Withheld:
-    """One policy that gives the caller no row: the notice's code, and the policy's dataset (as
-    the model writes it) and name. Internal: only the notice's own audience reaches a caller."""
-
-    code: str
-    dataset: str
-    policy: str
 
 
 def withheld(

@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 from orvex.access.authentication.query_limits import RoleLimit
-from orvex.semantic.errors import SemanticError
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.server import semantic_http, semantic_jobs
 from orvex.server.query_cancel import Cancel
 from orvex.server.query_slots import QuerySlots

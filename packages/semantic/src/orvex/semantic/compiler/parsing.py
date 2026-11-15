@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal
 
-from orvex.semantic.errors import SemanticError
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.ossie.model import Advisory, OssieModel
 

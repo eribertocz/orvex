@@ -22,8 +22,11 @@ import yaml
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from orvex.access.context import permission_fingerprint
+from orvex.contracts.binding import Bound
+from orvex.contracts.envelope import CallEnvelope
+from orvex.contracts.semantic.errors import SemanticError
+from orvex.contracts.semantic.interface import RESULT_CACHE
 from orvex.contracts.store.v1 import StatementRequest
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import Answer, answer
 from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.semantic.receipt import verify_receipt
@@ -38,6 +41,18 @@ from conformance.runners.security_sequences import compile_with
 from tests.conformance.test_detail_rows import FORM
 
 FOUND = sf.fixture("utility", ce.VENDORS[0])
+# How these tests measure a cache: through its contract, as any consumer does.
+MEASURE = CallEnvelope("result-cache", "1.0", "test", "test", "project-1", "test")
+
+
+def entries(cache: ResultCache) -> int:
+    return int(Bound(RESULT_CACHE, cache, serialized=False).entries(MEASURE))
+
+
+def held(cache: ResultCache) -> int:
+    return int(Bound(RESULT_CACHE, cache, serialized=False).size_bytes(MEASURE))
+
+
 UTILITY = yaml.safe_load((FOUND.folder / "security.yaml").read_text("utf-8"))
 BY_ZONE = {"kind": "semantic_query", "version": 1, "mode": "aggregate",
            "metrics": [{"metric": "total_kwh"}], "group_by": [{"member": "readings.zone_id"}],
@@ -310,7 +325,7 @@ def test_a_dataset_with_the_cache_off_is_bypassed_and_others_still_cached() -> N
             assert origin(ask(opened, cache, BY_ZONE, context, model, compiled)) == "bypass"
         assert [origin(ask(opened, cache, other, context, model, compiled)) for _ in range(2)] == [
             "miss", "hit"]  # fmt: skip
-    assert len(cache) == 1
+    assert entries(cache) == 1
 
 
 def test_an_entry_older_than_its_ttl_misses() -> None:
@@ -338,7 +353,7 @@ def test_a_ttl_of_zero_bypasses_the_cache() -> None:
         context = caller(opened, model, "u-exempt", ("management",))
         seen = [origin(ask(opened, cache, BY_ZONE, context, model, compiled)) for _ in range(2)]
     assert seen == ["bypass", "bypass"]
-    assert len(cache) == 0
+    assert entries(cache) == 0
 
 
 def test_refusals_and_errors_are_never_stored() -> None:
@@ -353,7 +368,7 @@ def test_refusals_and_errors_are_never_stored() -> None:
                 ask(opened, cache, refused, caller(opened, model, "u-exempt", ("management",)),
                     model)  # fmt: skip
             assert caught.value.code == "MEMBER_NOT_FOUND"
-    assert len(cache) == 1
+    assert entries(cache) == 1
 
 
 # --- AC8: bounds and concurrency ------------------------------------------------------------
@@ -368,15 +383,15 @@ def test_the_cache_holds_no_more_than_its_bound_and_skips_an_oversize_answer() -
         sizes = []
         for page in pages * 2:  # more distinct answers than fit: the oldest are evicted
             ask(opened, cache, page, context, model)
-            sizes.append(cache.size_bytes)
-            assert cache.size_bytes <= cache.max_bytes
-        assert len(cache) < len(pages)  # some were evicted
+            sizes.append(held(cache))
+            assert held(cache) <= cache.max_bytes
+        assert entries(cache) < len(pages)  # some were evicted
         recent = origin(ask(opened, cache, pages[-1], context, model))
         oldest = origin(ask(opened, cache, pages[0], context, model))
         assert (recent, oldest) == ("hit", "miss")  # the least recently used went first
         tiny = ResultCache(max_bytes=16 * 1024)  # a sixteenth: 1 KiB, less than any entry
         ask(opened, tiny, BY_ZONE, context, model)
-        assert len(tiny) == 0
+        assert entries(tiny) == 0
         assert max(sizes) <= cache.max_bytes
 
 
@@ -390,7 +405,7 @@ def test_a_read_that_fails_is_never_stored() -> None:
         context = caller(opened, model, "u-exempt", ("management",))
         with pytest.raises(StoreError):
             ask(opened, cache, BY_ZONE, context, model, read=failing)
-        assert len(cache) == 0
+        assert entries(cache) == 0
         assert origin(ask(opened, cache, BY_ZONE, context, model)) == "miss"
 
 

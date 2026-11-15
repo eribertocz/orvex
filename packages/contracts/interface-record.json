@@ -1,3 +1,171 @@
 {
-  "contracts": {}
+  "contracts": {
+    "result-cache": {
+      "capabilities": [
+        "lookup",
+        "measure",
+        "store"
+      ],
+      "errors": [],
+      "kit": {
+        "cases": {
+          "entries.counts-keys": {
+            "expectation": "the number of entries is the number of keys kept",
+            "idempotency": false,
+            "operation": "entries",
+            "since": "1.0"
+          },
+          "get.bypass-without-key": {
+            "expectation": "a use without a key finds and keeps nothing",
+            "idempotency": false,
+            "operation": "get",
+            "since": "1.0"
+          },
+          "get.equal-key-only": {
+            "expectation": "a hit needs an equal key: no prefix, extension, case or space variant",
+            "idempotency": false,
+            "operation": "get",
+            "since": "1.0"
+          },
+          "get.exact-hit": {
+            "expectation": "a hit returns the table with every value, type, NULL, zone, scale and metadata exact, its withheld policies and its estimate unchanged",
+            "idempotency": false,
+            "operation": "get",
+            "since": "1.0"
+          },
+          "get.expires-by-ttl": {
+            "expectation": "an entry is found before its ttl on the injected clock, never at or after it, and an entry without a ttl never expires",
+            "idempotency": false,
+            "operation": "get",
+            "since": "1.0"
+          },
+          "get.least-recently-used-first": {
+            "expectation": "when an entry does not fit, the least recently put or hit leaves first",
+            "idempotency": false,
+            "operation": "get",
+            "since": "1.0"
+          },
+          "get.thread-safe": {
+            "expectation": "concurrent get and put never raise, mix entries or break the byte count",
+            "idempotency": false,
+            "operation": "get",
+            "since": "1.0"
+          },
+          "put.bounded-never-raises": {
+            "expectation": "a full cache evicts and never raises, and never holds more than its bound",
+            "idempotency": false,
+            "operation": "put",
+            "since": "1.0"
+          },
+          "put.idempotent": {
+            "expectation": "a put sent twice with one idempotency key has one effect",
+            "idempotency": true,
+            "operation": "put",
+            "since": "1.0"
+          },
+          "put.largest-share": {
+            "expectation": "an entry over a sixteenth of the bound is never kept; one of exactly a sixteenth is",
+            "idempotency": false,
+            "operation": "put",
+            "since": "1.0"
+          },
+          "put.replaces-equal-key": {
+            "expectation": "a put under a kept key replaces its entry and its bytes",
+            "idempotency": false,
+            "operation": "put",
+            "since": "1.0"
+          },
+          "size-bytes.counts-entries": {
+            "expectation": "the bytes are the sum of entry_bytes of the entries kept",
+            "idempotency": false,
+            "operation": "size_bytes",
+            "since": "1.0"
+          }
+        },
+        "recorded": 12
+      },
+      "name": "result-cache",
+      "operations": {
+        "entries": {
+          "capability": "measure",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            }
+          ],
+          "returns": "int",
+          "since": "1.0"
+        },
+        "get": {
+          "capability": "lookup",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "use",
+              "type": "orvex.contracts.semantic.interface.Use"
+            }
+          ],
+          "returns": "orvex.contracts.semantic.interface.Stored | None",
+          "since": "1.0"
+        },
+        "put": {
+          "capability": "store",
+          "changes_state": true,
+          "errors": [],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "use",
+              "type": "orvex.contracts.semantic.interface.Use"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "stored",
+              "type": "orvex.contracts.semantic.interface.Stored"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "size_bytes": {
+          "capability": "measure",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            }
+          ],
+          "returns": "int",
+          "since": "1.0"
+        }
+      },
+      "version": "1.0"
+    }
+  }
 }

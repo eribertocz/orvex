@@ -33,6 +33,7 @@ from dataclasses import dataclass, replace
 from typing import Any, NoReturn
 
 import duckdb
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.contracts.store.v1 import (
     StatementRequest,
 )
@@ -40,7 +41,6 @@ from orvex.semantic.adapters import clickhouse as ch
 from orvex.semantic.adapters.clickhouse import CAPABILITIES as CLICKHOUSE_CAPABILITIES
 from orvex.semantic.catalog.building import catalog_for_context
 from orvex.semantic.engines import EngineEntry, Routing
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import Answer, answer
 from orvex.semantic.explanation import explain
 from orvex.semantic.receipt.viewer import CallerViewer

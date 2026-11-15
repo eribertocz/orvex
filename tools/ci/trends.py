@@ -31,6 +31,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from tools.ci import checks, durations
+from tools.ci.standalone import located
 from tools.repository import REPOSITORY_ROOT
 
 PROFILES = {"python": "full", "property-nightly": "nightly"}
@@ -41,6 +42,7 @@ MINIMUM = 5
 THRESHOLD = 0.2
 KEPT = 400  # entries kept in the history: months of builds
 DISCOVERED = "governance-scripts"  # the check whose unittest discovery runs the scripts' tests
+STANDALONE = "python -m tools.ci.standalone "  # a check that runs a distribution's own tests
 
 
 @dataclass(frozen=True)
@@ -129,14 +131,27 @@ def rises(history: Sequence[Entry]) -> list[Rise]:
     return found
 
 
+def standalone_tests(loaded: Sequence[checks.Check]) -> list[str]:
+    """The test folders the local standalone checks run, each as `folder/`."""
+    found = []
+    for check in loaded:
+        if check.local and check.run.startswith(STANDALONE):
+            folder, _ = located(check.run.removeprefix(STANDALONE).strip())
+            found.append(f"{(folder / 'tests').relative_to(REPOSITORY_ROOT).as_posix()}/")
+    return found
+
+
 def unprofiled(root: Path, discovered: str | None = None) -> list[str]:
-    """The tracked test files no profile runs: outside pytest's `testpaths` and the scripts'
-    unittest discovery. Must be none (#373 §2)."""
+    """The tracked test files no profile runs: outside pytest's `testpaths`, the scripts'
+    unittest discovery and the tests a local standalone check runs (an alternative's, which
+    the product's environment never installs, #486 G1). Must be none (#373 §2)."""
     configuration = tomllib.loads((root / "pyproject.toml").read_text("utf-8"))
     roots = [f"{p}/" for p in configuration["tool"]["pytest"]["ini_options"]["testpaths"]]
     if discovered is None:
-        scripts = next(c for c in checks.load(root) if c.name == DISCOVERED)
+        loaded = checks.load(root)
+        scripts = next(c for c in loaded if c.name == DISCOVERED)
         discovered = scripts.directory or ""
+        roots += standalone_tests(loaded)
     tracked = subprocess.run(
         ["git", "ls-files", "*test_*.py"], cwd=root, check=True, capture_output=True, text=True
     ).stdout.splitlines()

@@ -31,7 +31,7 @@ from orvex.semantic.result.descriptors import (
 )
 
 if TYPE_CHECKING:
-    from orvex.semantic.errors import SemanticError
+    from orvex.contracts.semantic.errors import SemanticError
 
 SCHEMA_FILE = "semantic-result-v1.json"
 DUCKDB_TYPE = b"duckdb_type"

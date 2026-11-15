@@ -30,7 +30,7 @@ import pytest
 import yaml
 from hypothesis import given
 from hypothesis import strategies as st
-from orvex.semantic.errors import SemanticError
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.execution import Answer, answer
 from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.semantic.receipt.viewer import CallerViewer

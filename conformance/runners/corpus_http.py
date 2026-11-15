@@ -18,8 +18,8 @@ from typing import Any
 
 import pyarrow as pa
 from fastapi.testclient import TestClient
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.compiler.compiled import CompiledModel
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.policies import PolicyModel
 from orvex.server import semantic_http, semantic_model
 from orvex.server.app import LocalSemantic, create_app
