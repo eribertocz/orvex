@@ -41,7 +41,7 @@ def runs(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
                 snapshot = lake.current_snapshot().id
                 with calling(project.folder):
                     request = transform().history_request(
-                        envelope(), snapshot, zone, limit, tuple(sorted(tables))
+                        envelope("history_request"), snapshot, zone, limit, tuple(sorted(tables))
                     )
                 # No request: the lake has no record table yet.
                 rows = [] if request is None else lake.read(request).read_all().to_pylist()

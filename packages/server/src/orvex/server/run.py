@@ -188,7 +188,9 @@ def _run_locked(
         return 1
     try:
         lake = _open_recorded(
-            home, place, transform().source_attachments(envelope(), dict(project.sources))
+            home,
+            place,
+            transform().source_attachments(envelope("source_attachments"), dict(project.sources)),
         )
     except StoreError as error:
         open_error = error
@@ -216,7 +218,7 @@ def _run_locked(
             lake.close()
             lake, open_error = None, error
     plan = transform().plan_run(
-        envelope(),
+        envelope("plan_run"),
         discovery.models,
         graph,
         dict(checked.columns),
@@ -295,7 +297,9 @@ def _run_locked(
                     if item.model.config.materialized == "incremental":
                         item.total = _count(transaction, item.model)
                     item.outcome = "success"
-                for statement in transform().record_statements(envelope(), tuple(records())):
+                for statement in transform().record_statements(
+                    envelope("record_statements"), tuple(records())
+                ):
                     transaction.execute(statement)
                 finished = True
             recorded = True
@@ -343,7 +347,9 @@ def _run_locked(
             # Nothing of the run committed: it is recorded in a transaction of its own.
             try:
                 with lake.transaction() as transaction:
-                    for statement in transform().record_statements(envelope(), tuple(records())):
+                    for statement in transform().record_statements(
+                        envelope("record_statements"), tuple(records())
+                    ):
                         transaction.execute(statement)
             except StoreError as error:
                 records_error = error

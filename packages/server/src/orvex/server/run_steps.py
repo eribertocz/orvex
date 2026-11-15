@@ -87,7 +87,9 @@ def _run_step(transaction: Transaction, step: PlannedStep, item: _Outcome) -> No
     elif isinstance(step, Watermark):
         # Stored with the rows, in this transaction: it moves only if they commit.
         value = transaction.value(step.request)
-        for statement in transform().watermark_statements(envelope(), step, value):
+        for statement in transform().watermark_statements(
+            envelope("watermark_statements"), step, value
+        ):
             transaction.execute(statement)
         item.watermark = value
     elif isinstance(step, Count):

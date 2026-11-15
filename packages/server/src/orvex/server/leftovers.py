@@ -13,9 +13,11 @@ from orvex.store.lake import Lake
 
 def _leftovers(lake: Lake, models: Sequence[Model]) -> list[tuple[str, str]]:
     """Tables of the lake that no model stores now, in schemas a model could use (#88)."""
-    return list(transform().leftovers(envelope(), tuple(sorted(lake.tables())), tuple(models)))
+    return list(
+        transform().leftovers(envelope("leftovers"), tuple(sorted(lake.tables())), tuple(models))
+    )
 
 
 def _drop_statements(leftovers: Sequence[tuple[str, str]]) -> list[StatementRequest]:
     """Drop each leftover and forget its watermark (a model added back later starts over)."""
-    return list(transform().leftover_statements(envelope(), tuple(leftovers)))
+    return list(transform().leftover_statements(envelope("leftover_statements"), tuple(leftovers)))

@@ -96,9 +96,11 @@ def _check_loaded(project: Project, identity: Identity | None, instance: Path | 
         folders = lake_separation.registered(instance, project.folder)
         found = lake_separation.instance(instance, folders, slug)
         problems += lake_separation.problems(found, project.folder)
-    discovery = transform().discover_models(envelope(), str(project.folder), dict(project.sources))
+    discovery = transform().discover_models(
+        envelope("discover_models"), str(project.folder), dict(project.sources)
+    )
     graph = transform().build_graph(
-        envelope(),
+        envelope("build_graph"),
         discovery.models,
         tuple(sorted(project.sources)),
         tuple(sorted(databases(project))),
@@ -108,7 +110,7 @@ def _check_loaded(project: Project, identity: Identity | None, instance: Path | 
     kinds: dict[str, str] = {name: c.type for name, c in project.sources.items()}
     zone = project.settings.time_zone
     for model in discovery.models:
-        configured = transform().config_problems(envelope(), model, zone, kinds)
+        configured = transform().config_problems(envelope("config_problems"), model, zone, kinds)
         problems += [_from_model_error(item) for item in configured]
     columns: dict[str, Columns] = {}
     differences: dict[str, list[Comparison]] = {}
@@ -117,7 +119,7 @@ def _check_loaded(project: Project, identity: Identity | None, instance: Path | 
     # the model is bound, as below.
     unknown_names = False
     for model in discovery.models:
-        names = transform().known_output_names(envelope(), model.sql)
+        names = transform().known_output_names(envelope("known_output_names"), model.sql)
         if names is None:
             unknown_names = True
         else:
@@ -131,7 +133,9 @@ def _check_loaded(project: Project, identity: Identity | None, instance: Path | 
         problems += bind_problems
         problems += [
             _from_model_error(item)
-            for item in transform().column_problems(envelope(), discovery.models, columns)
+            for item in transform().column_problems(
+                envelope("column_problems"), discovery.models, columns
+            )
         ]
     return Checked(
         project,
@@ -161,7 +165,7 @@ def _bind(
     """
     models = discovery.models
     by_name = {model.name: model for model in models}
-    relations = transform().test_relations(envelope(), models)
+    relations = transform().test_relations(envelope("test_relations"), models)
     known = databases(project)
     columns: dict[str, Columns] = {}
     differences: dict[str, list[Comparison]] = {}
@@ -175,7 +179,9 @@ def _bind(
             lake = open_lake(
                 location,
                 _limits(),
-                transform().source_attachments(envelope(), dict(project.sources)),
+                transform().source_attachments(
+                    envelope("source_attachments"), dict(project.sources)
+                ),
             )
         except StoreError as error:
             return {}, {}, {}, [_store_problem(error, ".", "")]
@@ -189,7 +195,7 @@ def _bind(
                     output = _describe(
                         lake,
                         model,
-                        transform().compiled_sql(envelope(), model, models, None),
+                        transform().compiled_sql(envelope("compiled_sql"), model, models, None),
                         graph.lands.get(name),
                     )
                 except StoreError as error:
@@ -262,7 +268,7 @@ def _since_bound(lake: Lake, model: Model, known: frozenset[str]) -> ModelError 
     tables' columns known (#162)."""
 
     def bound(given: Known) -> ModelError | ColumnsNeeded | None:
-        return transform().since_bound_problem(envelope(), model, given)
+        return transform().since_bound_problem(envelope("since_bound_problem"), model, given)
 
     exchange = ColumnsExchange[ModelError | None](
         lambda parts: _relation_columns(lake, list(parts), known)
@@ -307,7 +313,7 @@ def _prove_filter(
     time_column = incremental_config.time_column.root
 
     def filtered(given: Known) -> str | Refusal | ColumnsNeeded:
-        return transform().filtered_sql(envelope(), model.sql, time_column, given)
+        return transform().filtered_sql(envelope("filtered_sql"), model.sql, time_column, given)
 
     exchange = ColumnsExchange[str | Refusal](
         lambda parts: _relation_columns(lake, list(parts), databases)
@@ -323,7 +329,10 @@ def _prove_filter(
         )
     try:
         rewritten = _describe(
-            lake, model, transform().compiled_sql(envelope(), model, models, result), land
+            lake,
+            model,
+            transform().compiled_sql(envelope("compiled_sql"), model, models, result),
+            land,
         )
     except StoreError as error:
         return Problem(
@@ -360,7 +369,7 @@ def _bind_reconciliation(
         try:
             staged = _stage_reconciliation(lake, model, index, check, known)
             described = lake.describe(
-                transform().measures_sql(envelope(), model, index, relation, staged)
+                transform().measures_sql(envelope("measures_sql"), model, index, relation, staged)
             )
         except StoreError as error:
             problems.append(
@@ -399,7 +408,9 @@ def _bind_reconciliation(
             if described[2 + 2 * position][1] == "VARCHAR"
         )
         described = described[:2]
-        difference = transform().measure_difference(envelope(), described[0][1], described[1][1])
+        difference = transform().measure_difference(
+            envelope("measure_difference"), described[0][1], described[1][1]
+        )
         inexact = difference.inexact
         if inexact:
             problems.append(
@@ -422,7 +433,9 @@ def _stage_reconciliation(
 ) -> str | None:
     """For a check against a database source: an empty lake table with the columns its side
     lands with, so the comparison binds as a run will run it; None for any other source."""
-    stage = transform().reconciliation_stage(envelope(), model, index, tuple(sorted(known)))
+    stage = transform().reconciliation_stage(
+        envelope("reconciliation_stage"), model, index, tuple(sorted(known))
+    )
     if stage is None:
         return None
     output = lake.describe_source(stage.database, stage.source_sql)
@@ -447,13 +460,13 @@ def _bind_tests(
     relations: Mapping[str, str],
 ) -> list[Problem]:
     """Problems of a model's tests: the rules on its columns, then each test query bound."""
-    found = transform().test_problems(envelope(), model, dict(columns), models)
+    found = transform().test_problems(envelope("test_problems"), model, dict(columns), models)
     if found:
         return [_from_model_error(item) for item in found]
     problems: list[Problem] = []
     file = model.config_file or model.sql_file
     tests = transform().test_steps(
-        envelope(), model, relations[model.name], columns[model.name], dict(relations)
+        envelope("test_steps"), model, relations[model.name], columns[model.name], dict(relations)
     )
     for index, test in enumerate(tests):
         try:
@@ -484,7 +497,7 @@ def _describe(lake: Lake, model: Model, sql: str, land: str | None = None) -> Co
     incremental_config = model.config.incremental
     if model.config.materialized != "incremental" or incremental_config is None:
         return described(sql)
-    if not transform().uses_since(envelope(), sql):
+    if not transform().uses_since(envelope("uses_since"), sql):
         return described(sql)
     time_column = incremental_config.time_column.root.lower()
     first: Columns | None = None

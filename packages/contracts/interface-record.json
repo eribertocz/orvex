@@ -13,222 +13,259 @@
       "kit": {
         "cases": {
           "build-graph.order": {
+            "environment": null,
             "expectation": "models are ordered with their dependencies first",
             "idempotency": false,
             "operation": "build_graph",
             "since": "1.0"
           },
           "build-graph.unknown-reference": {
+            "environment": null,
             "expectation": "a reference to no model or source is MODEL_REFERENCE_UNKNOWN",
             "idempotency": false,
             "operation": "build_graph",
             "since": "1.0"
           },
           "closure.known-upstream": {
+            "environment": null,
             "expectation": "a model's closure is itself and every known model it reads, sorted",
             "idempotency": false,
             "operation": "closure",
             "since": "1.0"
           },
           "column-problems.time-column": {
+            "environment": null,
             "expectation": "an incremental model whose output lacks its time column has a problem",
             "idempotency": false,
             "operation": "column_problems",
             "since": "1.0"
           },
           "committed-request.bound": {
+            "environment": null,
             "expectation": "the run's commit is read at the snapshot given, its id bound",
             "idempotency": false,
             "operation": "committed_request",
             "since": "1.0"
           },
           "compiled-sql.views-inlined": {
+            "environment": null,
             "expectation": "a view is inlined as a subquery; the SQL given is the one compiled",
             "idempotency": false,
             "operation": "compiled_sql",
             "since": "1.0"
           },
           "config-problems.freshness": {
+            "environment": null,
             "expectation": "a freshness under the minimum is FRESHNESS_TOO_SHORT at /freshness; a valid one is clean",
             "idempotency": false,
             "operation": "config_problems",
             "since": "1.0"
           },
           "discover-models.problems": {
+            "environment": null,
             "expectation": "a refused sidecar is a problem naming its file, and its model is not discovered",
             "idempotency": false,
             "operation": "discover_models",
             "since": "1.0"
           },
           "discover-models.sorted-exact": {
+            "environment": null,
             "expectation": "models come back sorted by name, with their SQL as written and their sidecar applied",
             "idempotency": false,
             "operation": "discover_models",
             "since": "1.0"
           },
           "filtered-sql.proven": {
+            "environment": null,
             "expectation": "the automatic filter asks for the columns it reads, then places `> $since` exactly",
             "idempotency": false,
             "operation": "filtered_sql",
             "since": "1.0"
           },
           "filtered-sql.refused": {
+            "environment": null,
             "expectation": "an aggregated time column refuses the filter, with the reason and its line",
             "idempotency": false,
             "operation": "filtered_sql",
             "since": "1.0"
           },
           "history-request.tables": {
+            "environment": null,
             "expectation": "no record table, no request; otherwise read at the snapshot given",
             "idempotency": false,
             "operation": "history_request",
             "since": "1.0"
           },
           "known-output-names.from-text": {
+            "environment": null,
             "expectation": "the output names a SELECT list decides are known from its text",
             "idempotency": false,
             "operation": "known_output_names",
             "since": "1.0"
           },
           "last-run-request.tables": {
+            "environment": null,
             "expectation": "no record table, no request; otherwise read at the snapshot given",
             "idempotency": false,
             "operation": "last_run_request",
             "since": "1.0"
           },
           "leftover-statements.drop-and-forget": {
+            "environment": null,
             "expectation": "a leftover is dropped and its watermark forgotten, its name bound",
             "idempotency": false,
             "operation": "leftover_statements",
             "since": "1.0"
           },
           "leftovers.model-names-only": {
+            "environment": null,
             "expectation": "tables no model stores are leftovers, never _meta or a stored model's",
             "idempotency": false,
             "operation": "leftovers",
             "since": "1.0"
           },
           "lineage-events.start-complete": {
+            "environment": null,
             "expectation": "a run's events ask for the columns they read, then are START and COMPLETE per model",
             "idempotency": false,
             "operation": "lineage_events",
             "since": "1.0"
           },
           "lineage-project-key.slug": {
+            "environment": null,
             "expectation": "a project's lineage key is its name in lowercase kebab-case",
             "idempotency": false,
             "operation": "lineage_project_key",
             "since": "1.0"
           },
           "measure-difference.exact": {
+            "environment": null,
             "expectation": "exact measures compare in an exact type; a float measure is named, never compared",
             "idempotency": false,
             "operation": "measure_difference",
             "since": "1.0"
           },
           "measures-sql.both-sides": {
+            "environment": null,
             "expectation": "the measures read the model and the source, or the staged table in its place",
             "idempotency": false,
             "operation": "measures_sql",
             "since": "1.0"
           },
           "model-history-request.tables": {
+            "environment": null,
             "expectation": "no record table, no request; otherwise read at the snapshot given",
             "idempotency": false,
             "operation": "model_history_request",
             "since": "1.0"
           },
           "next-due.time-zone": {
+            "environment": null,
             "expectation": "a weekly full refresh falls on its cron in its own time zone, across a DST change",
             "idempotency": false,
             "operation": "next_due",
             "since": "1.0"
           },
           "plan-run.steps": {
+            "environment": null,
             "expectation": "stored models in run order, an incremental one counted and watermarked, tests then reconciliation last",
             "idempotency": false,
             "operation": "plan_run",
             "since": "1.0"
           },
           "reconciliation-stage.databases": {
+            "environment": null,
             "expectation": "only a database source's side is staged, in _stage, from the source's own SQL",
             "idempotency": false,
             "operation": "reconciliation_stage",
             "since": "1.0"
           },
           "record-statements.exact": {
+            "environment": null,
             "expectation": "the record tables exist; a run record is written with its values bound exactly (38-digit counts)",
             "idempotency": false,
             "operation": "record_statements",
             "since": "1.0"
           },
           "schedule-plan.fresh-not-due": {
+            "environment": null,
             "expectation": "a model that just succeeded is not due; the next run is later",
             "idempotency": false,
             "operation": "schedule_plan",
             "since": "1.0"
           },
           "schedule-plan.never-run-due": {
+            "environment": null,
             "expectation": "a model with freshness that never ran is due now, upstream first, waking in its zone",
             "idempotency": false,
             "operation": "schedule_plan",
             "since": "1.0"
           },
           "since-bound-problem.columns-needed": {
+            "environment": null,
             "expectation": "a bound on an alias asks for the columns it reads, then answers with them",
             "idempotency": false,
             "operation": "since_bound_problem",
             "since": "1.0"
           },
           "since-value.lookback": {
+            "environment": null,
             "expectation": "no watermark is -infinity; a lookback moves it back exactly, zone kept",
             "idempotency": false,
             "operation": "since_value",
             "since": "1.0"
           },
           "source-attachments.parquet": {
+            "environment": null,
             "expectation": "a file connection becomes the store's file attachment",
             "idempotency": false,
             "operation": "source_attachments",
             "since": "1.0"
           },
           "table-watermark-request.utc": {
+            "environment": null,
             "expectation": "a table's largest time column is read at the snapshot given, as UTC text",
             "idempotency": false,
             "operation": "table_watermark_request",
             "since": "1.0"
           },
           "test-problems.unknown-column": {
+            "environment": null,
             "expectation": "a test of a column the model does not output is a problem at its pointer",
             "idempotency": false,
             "operation": "test_problems",
             "since": "1.0"
           },
           "test-relations.quoted": {
+            "environment": null,
             "expectation": "a stored model is its quoted table, a view its subquery",
             "idempotency": false,
             "operation": "test_relations",
             "since": "1.0"
           },
           "test-steps.count-failing": {
+            "environment": null,
             "expectation": "each test is one count of failing rows on the model's relation",
             "idempotency": false,
             "operation": "test_steps",
             "since": "1.0"
           },
           "uses-since.parameter": {
+            "environment": null,
             "expectation": "$since is recognized as a parameter, never inside a string",
             "idempotency": false,
             "operation": "uses_since",
             "since": "1.0"
           },
           "watermark-request.snapshot": {
+            "environment": null,
             "expectation": "the stored watermark is read at the snapshot given, the model bound",
             "idempotency": false,
             "operation": "watermark_request",
             "since": "1.0"
           },
           "watermark-statements.exact": {
+            "environment": null,
             "expectation": "a watermark is stored as its exact text; a NULL one is not stored",
             "idempotency": false,
             "operation": "watermark_statements",

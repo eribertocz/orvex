@@ -77,7 +77,10 @@ def validate(folder: Path, out: IO[str], show_sql: str | None = None) -> int:
             return 1
         with calling(folder):
             sql = transform().compiled_sql(
-                envelope(), model, checked.discovery.models, checked.filtered.get(show_sql)
+                envelope("compiled_sql"),
+                model,
+                checked.discovery.models,
+                checked.filtered.get(show_sql),
             )
         print(sql, file=out)
         return 0

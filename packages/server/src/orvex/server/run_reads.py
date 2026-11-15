@@ -28,18 +28,23 @@ def _since(
     if table is not None and not full_refresh:
         snapshot = lake.current_snapshot().id
         try:
-            rows = _column(lake, transform().watermark_request(envelope(), snapshot, model))
+            rows = _column(
+                lake, transform().watermark_request(envelope("watermark_request"), snapshot, model)
+            )
         except StoreError as error:
             if error.code != "STORE_STATEMENT_INVALID":
                 raise
             rows = []  # no watermarks table yet
         if not rows and kind in PARAMETER_TYPES:
             rows = _column(
-                lake, transform().table_watermark_request(envelope(), snapshot, model, kind)
+                lake,
+                transform().table_watermark_request(
+                    envelope("table_watermark_request"), snapshot, model, kind
+                ),
             )
         watermark = rows[0] if rows else None
     return watermark, transform().since_value(
-        envelope(), kind, watermark, incremental_config.lookback
+        envelope("since_value"), kind, watermark, incremental_config.lookback
     )
 
 
@@ -87,7 +92,9 @@ def _committed_snapshot(lake: Lake, run_id: str) -> int | None:
         tables = lake.tables()  # before the snapshot: record tables are never dropped
         if ("_meta", "run_records_v2") not in tables:
             return None
-        request = transform().committed_request(envelope(), lake.current_snapshot().id, run_id)
+        request = transform().committed_request(
+            envelope("committed_request"), lake.current_snapshot().id, run_id
+        )
         found: int | None = lake.read(request).read_all().column("snapshot")[0].as_py()
     except StoreError:
         return None

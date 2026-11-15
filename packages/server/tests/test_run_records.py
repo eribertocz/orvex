@@ -37,24 +37,30 @@ SLUG = load_identity().slug
 
 def record_statements(records: list[RunRecord]) -> list[StatementRequest]:
     with calling(Path("project")):
-        return list(transform().record_statements(envelope(), tuple(records)))
+        return list(transform().record_statements(envelope("record_statements"), tuple(records)))
 
 
 def history_request(
     snapshot: int, zone: str, limit: int, tables: set[tuple[str, str]]
 ) -> ReadRequest | None:
     with calling(Path("project")):
-        return transform().history_request(envelope(), snapshot, zone, limit, tuple(sorted(tables)))
+        return transform().history_request(
+            envelope("history_request"), snapshot, zone, limit, tuple(sorted(tables))
+        )
 
 
 def model_history_request(snapshot: int, tables: set[tuple[str, str]]) -> ReadRequest | None:
     with calling(Path("project")):
-        return transform().model_history_request(envelope(), snapshot, tuple(sorted(tables)))
+        return transform().model_history_request(
+            envelope("model_history_request"), snapshot, tuple(sorted(tables))
+        )
 
 
 def last_run_request(snapshot: int, tables: set[tuple[str, str]]) -> ReadRequest | None:
     with calling(Path("project")):
-        return transform().last_run_request(envelope(), snapshot, tuple(sorted(tables)))
+        return transform().last_run_request(
+            envelope("last_run_request"), snapshot, tuple(sorted(tables))
+        )
 
 
 PROJECT = "version: 1\nname: Test\ntime_zone: America/La_Paz\n"

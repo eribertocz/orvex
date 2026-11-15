@@ -62,6 +62,7 @@ from orvex.server.locking import project_lock
 from orvex.server.problems import Problem
 from orvex.server.project import ProjectLoadError
 from orvex.server.project_check import Checked
+from orvex.server.project_files import project_files
 from orvex.server.run import Selection
 from orvex.server.transform_calls import calling, envelope, transform
 from orvex.store.errors import StoreError
@@ -70,7 +71,6 @@ type Clock = Callable[[], dt.datetime]
 type Sleep = Callable[[float], None]
 type Monotonic = Callable[[], float]
 
-PROJECT_FILES = ("project.yaml", "connections.yaml")
 SCHEDULER_LOCK = "scheduler.lock"  # held for the scheduler's lifetime: one per project (#69)
 STOP_GRACE_SECONDS = 60.0  # how long a run may finish after a stop before it is cancelled
 HEARTBEAT_EVERY = dt.timedelta(minutes=1)
@@ -163,8 +163,12 @@ def _read_records(home: Path, place: lake_place.Place) -> _Records:
             tables = lake.tables()
             snapshot = lake.current_snapshot().id
             listed = tuple(sorted(tables))
-            histories_request = transform().model_history_request(envelope(), snapshot, listed)
-            last_request = transform().last_run_request(envelope(), snapshot, listed)
+            histories_request = transform().model_history_request(
+                envelope("model_history_request"), snapshot, listed
+            )
+            last_request = transform().last_run_request(
+                envelope("last_run_request"), snapshot, listed
+            )
             if histories_request is None or last_request is None:
                 return _Records({}, None, (), maintained)  # no run records yet
             rows = lake.read(histories_request).read_all().to_pylist()
@@ -185,12 +189,8 @@ def _read_records(home: Path, place: lake_place.Place) -> _Records:
 
 def _fingerprint(folder: Path) -> tuple[tuple[str, int, int], ...]:
     """Name, size and modification time of every project file a check reads."""
-    paths = [folder / name for name in PROJECT_FILES]
-    models = folder / "models"
-    if models.is_dir():
-        paths += sorted(path for path in models.rglob("*") if path.is_file())
     found = []
-    for path in paths:
+    for path in project_files(folder):
         try:
             stat = path.stat()
         except OSError:
@@ -542,7 +542,7 @@ def _cycle(
 
     def decide(held: dict[str, dt.datetime]) -> Plan:
         return transform().schedule_plan(
-            envelope(),
+            envelope("schedule_plan"),
             checked.discovery.models,
             graph.order,
             graph.dependencies,
@@ -566,7 +566,10 @@ def _cycle(
             # The models a retry reads run with it: only the other healthy ones wait.
             known = tuple(model.name for model in checked.discovery.models)
             read = set().union(
-                *(transform().closure(envelope(), n, graph.dependencies, known) for n in recovering)
+                *(
+                    transform().closure(envelope("closure"), n, graph.dependencies, known)
+                    for n in recovering
+                )
             )
             waiting = healthy - read
             decided = decide({**state.held, **dict.fromkeys(waiting, now + LOOK_AGAIN)})
@@ -633,7 +636,9 @@ def _cycle(
             _say(state, out, zone, after, f"{name} failed; retry {count} at {retry:%H:%M}")
         else:
             state.failures.pop(name, None)
-            state.held[name] = transform().next_due(envelope(), by_name[name], after, zone)
+            state.held[name] = transform().next_due(
+                envelope("next_due"), by_name[name], after, zone
+            )
             print(f"SCHEDULE_GAVE_UP {name}", file=out, flush=True)
             until = state.held[name].astimezone(ZoneInfo(zone))
             _say(state, out, zone, after, f"{name} waits until {until:%Y-%m-%d %H:%M}")

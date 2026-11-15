@@ -41,7 +41,7 @@ def _lineage_events(
     lake: Lake,
 ) -> list[dict[str, object]]:
     """OpenLineage events of the models that started (none for those that never did)."""
-    key = transform().lineage_project_key(envelope(), project.settings.name)
+    key = transform().lineage_project_key(envelope("lineage_project_key"), project.settings.name)
     versions = dict(module_versions(identity))
     scope = LineageScope(
         producer=f"urn:{identity.slug}:transform:{versions.get('transform', 'unknown')}",
@@ -90,7 +90,7 @@ def _lineage_events(
 
     def events(known: Known) -> tuple[str, ...] | ColumnsNeeded:
         return transform().lineage_events(
-            envelope(),
+            envelope("lineage_events"),
             scope,
             run_id,
             tuple(runs),
