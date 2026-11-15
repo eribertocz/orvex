@@ -31,6 +31,7 @@
 - **During the phase:** keep the next three issues fully specified (`process/issues.md` §3); implement in the listed order unless dependencies allow otherwise; issues whose title starts with **"Normative cases"** define expected semantics, touch governed paths and are merged by the Owner — they always come **before** the code they test.
 - **Endpoints:** every issue that adds a capability reachable over HTTP also adds its endpoint to the `http-api` contract and its generated client.
 - **Phase end (Agent):** open the release issue with the exit checklist and follow [`process/git-workflow.md`](process/git-workflow.md) §6.
+- **Threat model at phase end:** `architecture/threat-model.md` covers every surface the phase added, the `threat-model` check is green, and every `gap:` row is listed in the release issue (`architecture/security.md` §7).
 - **Owner demos** at the end of P1, P2, P6, P7, P8 and P9, on synthetic data and on real data locally.
 - **Independent review** of the phase's documents and code by a Reviewer pass before tagging each alpha.
 - **Patch releases** (`v0.N.1-alpha.1`, …) only for defects.

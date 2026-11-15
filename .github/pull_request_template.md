@@ -32,6 +32,7 @@ Closes #<!-- n -->
 
 ## Security (if applicable)
 <!-- Threat model: what is protected, from whom, how it is tested. -->
+Threat-model rows added or changed (`docs/architecture/threat-model.md`), or "none":
 
 ## Risks
 

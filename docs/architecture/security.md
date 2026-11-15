@@ -137,3 +137,32 @@ column_policies:
 ## 6. Security conformance suite
 
 `conformance/security/` contains negative tests that must always fail to access data: page access bypass, row-policy removal through filters, LOD and context modifiers, cache reuse across users with different permissions, export of hidden columns, possible-values leakage, MCP queries outside permissions, missing-attribute fail-closed, and the Direct Query cases of ADR-0027 §6 on every enabled engine. It runs on every pull request that touches `semantic`, `access`, `dashboards`, `mcp` or `server`.
+
+## 7. Threat model
+
+[`threat-model.md`](threat-model.md) is the STRIDE model of every reachable surface. Each threat there is tied to a rule in this document, an ADR or a law, and to the test that proves it, or it is declared as a `gap:`.
+
+**The rule.** The model changes in the same pull request that changes a surface:
+- **New surfaces:** a new HTTP path, package or contract directory gets an `inventory` line, and a new surface gets its section.
+- **CI:** the `threat-model` check fails when the inventory and the repository disagree.
+- **Phase end:** at each phase end, the model covers every surface the phase added and every `gap:` row is listed in the release issue.
+
+## 8. Trust model: the instance administrator
+
+The instance administrator is trusted with identities, not with data (§3.1). Even so, three paths let an administrator come to act as a user who has data access:
+- resetting that user's password and signing in with the temporary password;
+- linking an OIDC identity the administrator controls to that user;
+- creating a user they control and making it a project's first Builder.
+
+Each path is audited (`user.password_reset`, `user.oidc_linked`, `user.created`, `membership.added`), and none is refused. Their evaluation before production is in `threat-model.md` (`TM-ACCESS-14` to `TM-ACCESS-16`).
+
+## 9. Secrets, files and supply chain
+
+- **Secrets** come only from the environment, named by `connections.yaml`. A literal password in a project file is refused without being echoed. No secret reaches an error, a run record or a log.
+- **Files the server reads** from a project are regular files, never symbolic links, and bounded in size and nesting. The static files it serves stay inside the web build.
+- **Logs** are JSON lines, one event per line.
+- **Supply chain.**
+  - Every workflow action is pinned by commit SHA.
+  - A workflow is read-only unless its job lists its write permissions.
+  - Every build makes and checks an SBOM.
+  - A release publishes its wheels and SBOM with attestations, and only the publish job signs.

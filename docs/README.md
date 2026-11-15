@@ -10,7 +10,7 @@ When two documents contradict each other, the higher item wins. A contradiction 
 |---|---|---|
 | 1 | Product laws — [`product/laws.md`](product/laws.md) §1 (laws 1, 2, 3, 5 rank above the other laws) | Owner |
 | 2 | Anti-patterns — [`product/laws.md`](product/laws.md) §2 | Owner |
-| 3 | Security model — [`architecture/security.md`](architecture/security.md) | Owner |
+| 3 | Security model — [`architecture/security.md`](architecture/security.md), with its threat model [`architecture/threat-model.md`](architecture/threat-model.md) | Owner |
 | 4 | Accepted ADRs — [`adr/`](adr/README.md) (a later ADR supersedes an earlier one only if it says so explicitly) | Owner |
 | 5 | Design principles — [`product/laws.md`](product/laws.md) §3 | Owner |
 | 6 | Architecture, process and module documents — [`architecture/`](architecture/), [`process/`](process/), [`modules/`](modules/README.md), [`roadmap.md`](roadmap.md) | Owner |
@@ -32,6 +32,7 @@ When two documents contradict each other, the higher item wins. A contradiction 
 | Architecture | [`architecture/semantic-engine.md`](architecture/semantic-engine.md) | The core: pipeline, correctness, parity with SEF, capabilities S1–S6, conformance corpus |
 | Architecture | [`architecture/transformation.md`](architecture/transformation.md) | Sources, SQL models, incremental loading, freshness, audits, DuckLake |
 | Architecture | [`architecture/security.md`](architecture/security.md) | Identity, roles, groups, page/row/column security, audit, AI access |
+| Architecture | [`architecture/threat-model.md`](architecture/threat-model.md) | STRIDE threat model of every reachable surface, its inventory and its gaps |
 | Architecture | [`architecture/frontend.md`](architecture/frontend.md) | Components, the matrix, dashboards, design direction |
 | Architecture | [`architecture/traceability.md`](architecture/traceability.md) | Receipts, lineage, run records, reproducibility, caching |
 | Modules | [`modules/README.md`](modules/README.md) | **Context packs**: what to read for each module and phase |
