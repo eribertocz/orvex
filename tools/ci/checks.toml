@@ -721,3 +721,45 @@ name = "semantic-corpus-clickhouse-26.8"
 run = "python -m conformance.runners.semantic_corpus --through clickhouse --switch-on"
 local = false
 reason = "needs a ClickHouse 26.8 LTS server (CORPUS_CLICKHOUSE), started by the job from its release archive"
+
+[[job]]
+workflow = "threat-model.yml"
+job = "changes"
+kind = "check"
+digest = "3426e21cce9cb74c"
+required = false
+contexts = ["threat-model-changes"]
+setup = []
+[[job.check]]
+name = "changes-threat-model"
+run = "python3 .github/workflows/scripts/changes.py"
+local = false
+reason = "reads the pull request's base and head commits in CI; its rules are tested by governance-scripts"
+
+[[job]]
+workflow = "threat-model.yml"
+job = "model"
+kind = "scoped"
+reason = "runs only when the model, what its inventory lists or what its rows cite changes; the check itself runs locally (threat-model)"
+digest = "5fa23f40f2a05776"
+paths = [".github/workflows/threat-model.yml", ".github/workflows/scripts/threat_model.py", "docs/**", "contracts/**", "packages/**", "conformance/**", "tests/**"]
+setup = []
+[[job.check]]
+name = "threat-model"
+run = "python3 .github/workflows/scripts/threat_model.py"
+local = true
+
+[[job]]
+workflow = "threat-model.yml"
+job = "threat-model"
+kind = "check"
+digest = "980758626838ff5c"
+# Required from #244 (engineering.md §8): the threat model stays current with every surface.
+required = true
+contexts = ["threat-model"]
+setup = []
+[[job.check]]
+name = "threat-model-aggregate"
+run = "python3 .github/workflows/scripts/aggregate.py"
+local = false
+reason = "reports the result of this run's CI jobs; its rules are tested by governance-scripts"

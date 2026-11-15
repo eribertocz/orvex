@@ -114,6 +114,7 @@ A check becomes **required** (blocks merging) from the issue that creates it; fr
 | Contracts | JSON Schema and OpenAPI validation; generated types current | P0-05 | P0 |
 | Semantic corpus | corpus runner, reporting per case; from P2-27a the `semantic-corpus` job runs `python -m conformance.runners.semantic_corpus --through both` (library and HTTP API, JSON and Arrow), failing on any failed case, any difference between the two ways, or any finding | P0-11 | Reported from P0; **gate 21/21 from P2-27** |
 | Security conformance | scenarios runner; from P3-13 the `security-scenarios` check (scoped, whole on `main`) runs `python -m conformance.runners.security_scenarios` on the managed lake, an existing DuckLake on SQLite and PostgreSQL catalogs, and ClickHouse 26.10 and 26.8 LTS (`--require-clickhouse 26.10,26.8`), failing on any failed, stale or missing execution and uploading its JSON report | P3-13 | **Required from P3-13** |
+| Threat model | `threat-model` check (scoped, whole on `main`): `python3 .github/workflows/scripts/threat_model.py` checks that `docs/architecture/threat-model.md` lists every HTTP path, package and contract directory, covers every STRIDE category per surface, and gives every row an existing rule and an allowed verification | #244 | P3 |
 | End-to-end | browser tests on main flows, both runtime modes on Linux | P6-21 | P6 |
 | Accessibility | automated checks on every route | P6-21 | P6 |
 | Operating-system matrix | local mode on Linux, Windows, macOS | P9-10 | P9 |

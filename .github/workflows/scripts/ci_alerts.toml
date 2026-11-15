@@ -96,3 +96,10 @@ workflow = "ci-alerts-selftest.yml"
 events = ["workflow_dispatch"]
 required_jobs = ["selftest"]
 cadence = "none"
+
+[[watch]]
+# Whole on every push to main (#244): the threat model stays current with every surface.
+workflow = "threat-model.yml"
+events = ["push"]
+required_jobs = ["threat-model-changes", "model", "threat-model"]
+cadence = "push"

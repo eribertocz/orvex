@@ -1,0 +1,79 @@
+# The threat-model check (#244): `docs/architecture/threat-model.md` lists every HTTP path,
+# package and contract directory, covers every STRIDE category per surface, and every row names a
+# rule that exists and a verification of an allowed form (`scripts/threat_model.py`, standard
+# library only). Scoped (#267): it applies when the model, what it inventories or what its rows
+# cite changes, and always on main.
+name: threat-model
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer commit on a pull request cancels the pull request's older runs (#386). Pushes to one
+# branch (main) share a group: a running one is never cancelled, and only the newest waiting
+# one is kept, since it tests everything the older ones would (#391).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # The paths that make this check apply (#267), read by changes.py and aggregate.py: the model
+  # and the check; what the inventory lists (the HTTP contract, packages, contracts); and what
+  # rows cite (rule documents, tests and scenarios).
+  RELEVANT_PATHS: |
+    .github/workflows/threat-model.yml
+    .github/workflows/scripts/threat_model.py
+    docs/**
+    contracts/**
+    packages/**
+    conformance/**
+    tests/**
+
+jobs:
+  # Whether this run changes a relevant path (#267): `changes.py` fails closed.
+  changes:
+    name: threat-model-changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.changes.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/workflows/scripts/changes.py
+
+  model:
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 .github/workflows/scripts/threat_model.py
+
+  threat-model:
+    needs: [changes, model]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 .github/workflows/scripts/aggregate.py
+        env:
+          CHECK: threat-model
+          CHANGES: ${{ needs.changes.result }}
+          RELEVANT: ${{ needs.changes.outputs.relevant }}
+          RESULT: ${{ needs.model.result }}
