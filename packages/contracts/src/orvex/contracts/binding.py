@@ -64,7 +64,7 @@ class Bound:
         return self._codec is not None
 
     def __getattr__(self, name: str) -> Callable[..., Any]:
-        if name.startswith("_") or name not in {o.name for o in self._contract.operations}:
+        if not self._contract.offers(name):
             raise AttributeError(f"contract {self._contract.name} has no operation {name!r}")
         return functools.partial(self.call, name)
 

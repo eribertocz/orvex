@@ -57,7 +57,7 @@ class KitClient:
         return self._bound.call(operation, envelope, *arguments, **keywords)
 
     def __getattr__(self, name: str) -> Callable[..., Any]:
-        if name.startswith("_") or name not in {o.name for o in self._bound.contract.operations}:
+        if not self._bound.contract.offers(name):
             raise AttributeError(f"contract {self._bound.contract.name} has no operation {name!r}")
         return functools.partial(self._new, name)
 

@@ -70,6 +70,10 @@ class InterfaceContract:
             "INTERFACE_OPERATION_UNKNOWN", f"contract {self.name} has no operation {name!r}"
         )
 
+    def offers(self, name: str) -> bool:
+        """Whether `name` is one of the contract's operations (a public attribute of a binding)."""
+        return not name.startswith("_") and any(o.name == name for o in self.operations)
+
     def since(self, operation: Operation) -> Version:
         """The version `operation` exists from."""
         return operation.since or Version(self.version.major, 0)
