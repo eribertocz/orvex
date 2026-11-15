@@ -89,9 +89,15 @@ class Jobs:
         self._lock = threading.Lock()
         self._run = run or (lambda work: threading.Thread(target=work, daemon=True).start())
 
-    def start(self, body: bytes, request: object, owner: tuple[str, str]) -> str:
+    def start(
+        self,
+        body: bytes,
+        request: object,
+        owner: tuple[str, str],
+        correlation_id: str | None = None,
+    ) -> str:
         """Start a job for `request`; the caller's slot is taken now, or this refuses and no
-        job exists."""
+        job exists. Its contract calls carry the starting request's `correlation_id`."""
         semantic = self._semantic
         slot = semantic_http.take_slot(semantic, request)
         job_id = secrets.token_hex(16)
@@ -99,7 +105,7 @@ class Jobs:
 
         def work() -> None:
             try:
-                asked = semantic_http.ask(semantic, body, request, job.stop)
+                asked = semantic_http.ask(semantic, body, request, job.stop, correlation_id)
             except Exception as error:  # noqa: BLE001 - kept as the job's outcome
                 self._end(job, job_id, "failed", error=error)
                 return

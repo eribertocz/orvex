@@ -48,6 +48,7 @@ from orvex.access.server_context import (
     role_of,
 )
 from orvex.access.storage.store import Store
+from orvex.contracts.context import CallContext
 from orvex.contracts.semantic.errors import SemanticError
 from orvex.contracts.semantic.interface import ResultCache
 from orvex.semantic.catalog.building import catalog_for_context
@@ -60,6 +61,7 @@ from orvex.semantic.receipt.viewer import CallerViewer
 from orvex.semantic.result import SemanticResult
 from orvex.semantic.result.cursors import SealedForm
 from orvex.server import evidence_records, lake_place, semantic_model
+from orvex.server.call_context import new_correlation_id
 from orvex.server.identity import Identity, load_identity
 from orvex.server.implementations import implementation_of
 from orvex.server.permission_state import permission_state
@@ -391,9 +393,11 @@ def _question(
     body: bytes,
     request: object,
     read: Callable[[Any], pa.RecordBatchReader],
+    correlation_id: str,
 ) -> _Question:
     """Everything a question needs on the one snapshot it uses: the current one, or the one
-    a next page's cursor pins (Owner precision 2)."""
+    a next page's cursor pins (Owner precision 2); its contract calls carry `correlation_id`,
+    the caller and the project, acting on that snapshot."""
     settings = semantic.settings
     snapshot = _read_snapshot(lake, settings, _after(body))
     model = _loaded(semantic, lake, snapshot)
@@ -430,17 +434,28 @@ def _question(
         # The existing lakes the model was compiled on, read at those same snapshots (#399).
         adapters=model.adapters,
         cache=settings.cache,  # keyed by this request's identity, at `pinned` (#444)
+        call=CallContext(
+            correlation_id, str(context["user"]), str(context["project"]), f"snapshot-{snapshot}"
+        ),
     )
     return _Question(model, policies, context, engine)
 
 
-def ask(semantic: Semantic, body: bytes, request: object, cancel: Cancel | None = None) -> Asked:
+def ask(
+    semantic: Semantic,
+    body: bytes,
+    request: object,
+    cancel: Cancel | None = None,
+    correlation_id: str | None = None,
+) -> Asked:
     """The answer to the `semantic-query` v1 document `body` for the caller of `request`, run
     within the role's run time (#445); `cancel` interrupts its managed-lake reads. The caller's
-    slot is taken before (`take_slot`)."""
+    slot is taken before (`take_slot`). `correlation_id` is the entry point's (an HTTP request's
+    id); a call without one is an entry point of its own, with a new id."""
+    correlation = new_correlation_id() if correlation_id is None else correlation_id
     with semantic.source.session() as lake:
         read = lake.read if cancel is None else cancel.reading(lake)
-        question = _question(semantic, lake, body, request, read)
+        question = _question(semantic, lake, body, request, read, correlation)
         if cancel is not None:  # only the managed lake's reads are interruptible
             cancel.known(not question.engine.adapters)
         compiled = question.model.compiled
@@ -470,7 +485,7 @@ def explanation(semantic: Semantic, body: bytes, request: object) -> dict[str, A
     """The `semantic-explain` v1 document of `body` for the caller of `request` (#364): the
     same snapshot, model, policies and caller as `ask`, and a read that is never called."""
     with semantic.source.session() as lake:
-        question = _question(semantic, lake, body, request, _no_read)
+        question = _question(semantic, lake, body, request, _no_read, new_correlation_id())
         compiled = question.model.compiled
         viewer = CallerViewer(compiled, question.policies, question.context)
         return explain(body, compiled, question.policies, question.context, question.engine, viewer)

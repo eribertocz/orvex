@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
@@ -23,6 +24,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from orvex.access.context import permission_fingerprint
 from orvex.contracts.binding import Bound
+from orvex.contracts.context import CallContext
 from orvex.contracts.envelope import CallEnvelope
 from orvex.contracts.semantic.errors import SemanticError
 from orvex.contracts.semantic.interface import RESULT_CACHE
@@ -112,7 +114,10 @@ def engine(opened: Lake, cache: ResultCache | None, **more: Any) -> Any:  # noqa
     def kept(version: str) -> Mapping[str, object] | None:
         return pinned if version == str(snapshot.id) else None
 
-    return replace(ce.engine_for(opened, cursors=FORM, pinned=kept, **more), cache=cache)
+    # This test is its own entry point: one correlation id per question, on this snapshot.
+    call = CallContext(uuid.uuid4().hex, "result-cache-tests", "utility", f"snapshot-{snapshot.id}")
+    built = ce.engine_for(opened, cursors=FORM, pinned=kept, **more)
+    return replace(built, cache=cache, call=call)
 
 
 def ask(

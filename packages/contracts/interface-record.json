@@ -10,72 +10,84 @@
       "kit": {
         "cases": {
           "entries.counts-keys": {
+            "environment": null,
             "expectation": "the number of entries is the number of keys kept",
             "idempotency": false,
             "operation": "entries",
             "since": "1.0"
           },
           "get.bypass-without-key": {
+            "environment": null,
             "expectation": "a use without a key finds and keeps nothing",
             "idempotency": false,
             "operation": "get",
             "since": "1.0"
           },
           "get.equal-key-only": {
+            "environment": null,
             "expectation": "a hit needs an equal key: no prefix, extension, case or space variant",
             "idempotency": false,
             "operation": "get",
             "since": "1.0"
           },
           "get.exact-hit": {
+            "environment": null,
             "expectation": "a hit returns the table with every value, type, NULL, zone, scale and metadata exact, its withheld policies and its estimate unchanged",
             "idempotency": false,
             "operation": "get",
             "since": "1.0"
           },
           "get.expires-by-ttl": {
+            "environment": null,
             "expectation": "an entry is found before its ttl on the injected clock, never at or after it, and an entry without a ttl never expires",
             "idempotency": false,
             "operation": "get",
             "since": "1.0"
           },
           "get.least-recently-used-first": {
+            "environment": null,
             "expectation": "when an entry does not fit, the least recently put or hit leaves first",
             "idempotency": false,
             "operation": "get",
             "since": "1.0"
           },
           "get.thread-safe": {
+            "environment": null,
             "expectation": "concurrent get and put never raise, mix entries or break the byte count",
             "idempotency": false,
             "operation": "get",
             "since": "1.0"
           },
           "put.bounded-never-raises": {
+            "environment": null,
             "expectation": "a full cache evicts and never raises, and never holds more than its bound",
             "idempotency": false,
             "operation": "put",
             "since": "1.0"
           },
           "put.idempotent": {
+            "environment": null,
             "expectation": "a put sent twice with one idempotency key has one effect",
             "idempotency": true,
             "operation": "put",
             "since": "1.0"
           },
           "put.largest-share": {
+            "environment": null,
             "expectation": "an entry over a sixteenth of the bound is never kept; one of exactly a sixteenth is",
             "idempotency": false,
             "operation": "put",
             "since": "1.0"
           },
           "put.replaces-equal-key": {
+            "environment": null,
             "expectation": "a put under a kept key replaces its entry and its bytes",
             "idempotency": false,
             "operation": "put",
             "since": "1.0"
           },
           "size-bytes.counts-entries": {
+            "environment": null,
             "expectation": "the bytes are the sum of entry_bytes of the entries kept",
             "idempotency": false,
             "operation": "size_bytes",

@@ -71,11 +71,13 @@ def answered[R](
     request: object,
     respond: Callable[[semantic_http.Asked], R],
     revalidate: Callable[[], None] | None = None,
+    correlation_id: str | None = None,
 ) -> R:
-    """A synchronous question, its slot held from before its turn until it is delivered."""
+    """A synchronous question, its slot held from before its turn until it is delivered; its
+    contract calls carry the entry point's `correlation_id`."""
     slot = semantic_http.take_slot(semantic, request)
     try:
-        asked = semantic_http.ask(semantic, body, request)
+        asked = semantic_http.ask(semantic, body, request, correlation_id=correlation_id)
         response = respond(asked)  # the whole response, before anything is decided
         deliver(semantic, request, asked, "synchronous", revalidate)
         return response

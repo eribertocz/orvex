@@ -83,13 +83,23 @@ class Asked:
         return Found()
 
 
+correlations: list[str | None] = []  # the correlation id each stubbed `ask` received
+
+
 def answered_with(
     monkeypatch: pytest.MonkeyPatch, outcome: Callable[[], Any], interruptible: bool = True
 ) -> None:
     """`ask` as the engine would: it learns its engine (`known`), then answers."""
 
-    def ask(semantic: Any, body: bytes, request: object, cancel: Cancel) -> Any:  # noqa: ANN401
+    def ask(
+        semantic: Any,  # noqa: ANN401
+        body: bytes,
+        request: object,
+        cancel: Cancel,
+        correlation_id: str | None,
+    ) -> Any:  # noqa: ANN401
         cancel.known(interruptible)
+        correlations.append(correlation_id)
         return outcome()
 
     monkeypatch.setattr(semantic_http, "ask", ask)
@@ -453,3 +463,12 @@ def test_an_unexpected_failure_at_the_end_still_ends_the_job_and_frees_its_slot(
     assert found.status == "failed"
     assert isinstance(found.error, RuntimeError)
     assert stub.slots.running(*OWNER) == 0
+
+
+def test_a_job_s_calls_carry_the_starting_request_s_correlation_id(
+    monkeypatch: pytest.MonkeyPatch, stub: Stub, clock: Clock
+) -> None:
+    correlations.clear()
+    answered_with(monkeypatch, lambda: None)
+    jobs_of(stub, clock, now).start(b"{}", object(), OWNER, "request-0123456789")
+    assert correlations == ["request-0123456789"]

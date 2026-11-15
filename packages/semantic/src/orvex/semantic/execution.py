@@ -30,6 +30,7 @@ from typing import Any, cast
 
 import pyarrow as pa
 import pyarrow.compute as pc
+from orvex.contracts.context import CallContext
 from orvex.contracts.semantic.errors import PlanError, SemanticError
 from orvex.contracts.semantic.interface import ResultCache, Stored, Withheld
 from orvex.contracts.store.v1 import StatisticsRequest, StatisticsResult
@@ -122,6 +123,8 @@ class Engine:
     adapters: Mapping[str, ExternalAdapter] = field(default_factory=dict)
     # The process's result cache (#444), composed by `server`; none: every question reads.
     cache: ResultCache | None = None
+    # The entry point's call context, which every contract call of the question carries.
+    call: CallContext | None = None
 
 
 @dataclass(frozen=True)
@@ -450,11 +453,7 @@ def _execute(
         physical.parameters,
         data,
     )
-    cache = (
-        None
-        if engine.cache is None
-        else CacheCalls(engine.cache, context, compiled.model_fingerprint)
-    )
+    cache = None if engine.cache is None else CacheCalls(engine.cache, engine.call)
     stored = cache.get(use) if cache is not None else None
     if stored is None:
         stored = _read_once(physical, engine, plan_, report, external, values, run)

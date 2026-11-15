@@ -453,10 +453,18 @@ def mount_semantic(
 
         try:
             if asynchronous(request):
-                job = await run_in_threadpool(jobs.start, body, caller, owner_of(request))
+                job = await run_in_threadpool(
+                    jobs.start, body, caller, owner_of(request), request.state.request_id
+                )
                 return job_response(job, "running", 202)
             return await run_in_threadpool(
-                semantic_delivery.answered, semantic, body, caller, respond, again(request)
+                semantic_delivery.answered,
+                semantic,
+                body,
+                caller,
+                respond,
+                again(request),
+                request.state.request_id,
             )
         except FAILURES as error:
             return refusal(error, request_id, caller)

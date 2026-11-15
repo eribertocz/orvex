@@ -33,6 +33,7 @@ from dataclasses import dataclass, replace
 from typing import Any, NoReturn
 
 import duckdb
+from orvex.contracts.context import CallContext
 from orvex.contracts.semantic.errors import SemanticError
 from orvex.contracts.store.v1 import (
     StatementRequest,
@@ -163,7 +164,10 @@ class Served:
         more: dict[str, Any] = {}
         if self.routing is not None:
             more = {"routing": self.routing, "adapters": dict(self.adapters or {})}
-        return replace(ce.engine_for(self.lake, **more), cache=self.cache)
+        # Each question of a sequence is its own entry point, on the lake's current snapshot.
+        snapshot = f"snapshot-{self.lake.current_snapshot().id}"
+        call = CallContext(uuid.uuid4().hex, "security-sequences", "utility", snapshot)
+        return replace(ce.engine_for(self.lake, **more), cache=self.cache, call=call)
 
 
 def _datasets(found: sf.Fixture) -> list[str]:

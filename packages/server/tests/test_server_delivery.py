@@ -63,8 +63,14 @@ def revoked_after_asking(monkeypatch: pytest.MonkeyPatch, revoke: Callable[[], N
     """The revocation commits after the answer is computed, before the delivery step."""
     original = semantic_http.ask
 
-    def asked_then_revoked(semantic: Any, body: bytes, request: object) -> Any:  # noqa: ANN401
-        found = original(semantic, body, request)
+    def asked_then_revoked(
+        semantic: Any,  # noqa: ANN401
+        body: bytes,
+        request: object,
+        cancel: Any = None,  # noqa: ANN401
+        correlation_id: str | None = None,
+    ) -> Any:  # noqa: ANN401
+        found = original(semantic, body, request, cancel, correlation_id)
         revoke()
         return found
 
