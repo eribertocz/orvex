@@ -1,0 +1,56 @@
+# Interface contracts (#486): their record is current and compatible with the last release
+# (G3), and a module installs and passes its own tests alone, outside the repository (G4).
+name: interfaces
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer commit on a pull request cancels the pull request's older runs (#386). Pushes to one
+# branch (main) share a group: a running one is never cancelled, and only the newest waiting
+# one is kept, since it tests everything the older ones would (#391).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  interface-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The whole history and its tags: the check reads the record of the last release.
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Install from the lock file and the contracts package
+        run: |
+          python -m pip install --quiet pip==26.3
+          python -m pip install --quiet -r pylock.toml
+          python -m pip install --quiet --no-deps --no-build-isolation -e packages/contracts
+      - name: The interface record is current
+        run: python -m tools.contracts.interface_record --check
+      - name: Compatible with the last release
+        run: python -m tools.contracts.interface_compat
+
+  standalone:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Install the build tools from the lock file
+        run: |
+          python -m pip install --quiet pip==26.3
+          python -m pip install --quiet -r pylock.toml
+      - name: The contracts module alone, outside the repository
+        run: python -m tools.ci.standalone contracts
