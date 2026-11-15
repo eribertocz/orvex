@@ -5,6 +5,8 @@ with the materialization and data-reader checks.
    `<namespace>.contracts`, the standard library and third-party packages; `server` composes all.
 2. MATERIALIZATION_IN_PYTHON: `tools/checks/materialization.py`.
 3. DATA_READ_OUTSIDE_DUCKDB: `tools/checks/data_readers.py`.
+4. CONSUMER_BOUNDARY_VIOLATION: `tools/checks/consumers.py`, reported without failing until
+   #486 step 7 makes it blocking and removes the `server` exemption of rule 1.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import sys
 from pathlib import Path
 
 from tools.checks.architecture import AllowListError, Finding, product_files
+from tools.checks.consumers import consumer_scan, consumer_summary
 from tools.checks.data_readers import (
     READER_ALLOW_LIST,
     load_reader_allow_list,
@@ -117,6 +120,10 @@ def run(root: Path, materialization_list: Path, reader_list: Path) -> int:
     for finding in findings:
         print(finding)
     print(f"boundaries: {len(findings)} finding(s)")
+    consumers = consumer_scan(root)
+    for finding in consumers:
+        print(finding)
+    print(consumer_summary(consumers))
     return 1 if findings else 0
 
 

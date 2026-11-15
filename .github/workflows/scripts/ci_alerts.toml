@@ -96,3 +96,10 @@ workflow = "ci-alerts-selftest.yml"
 events = ["workflow_dispatch"]
 required_jobs = ["selftest"]
 cadence = "none"
+
+[[watch]]
+# Interface contracts (#486): the record and its compatibility, and the standalone module.
+workflow = "interfaces.yml"
+events = ["push"]
+required_jobs = ["interface-contracts", "standalone"]
+cadence = "push"
