@@ -13,7 +13,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from orvex.contracts.store.errors import StoreError
+from orvex.contracts.store.errors import FILE_REFUSED, SNAPSHOT_CHANGED, StoreError
 from orvex.contracts.store.v1 import (
     AzureStorage,
     ExistingLakeAttachment,
@@ -28,7 +28,7 @@ from orvex.contracts.store.v1 import (
     StatementRequest,
 )
 from orvex.store.existing_lake import ExistingLake
-from orvex.store.existing_lake_reads import FILE_REFUSED, SNAPSHOT_CHANGED, LakeReads
+from orvex.store.existing_lake_reads import LakeReads
 from orvex.store.lake import Limits, open_lake
 
 from .test_existing_lake import MEMORY, Catalog

@@ -7,7 +7,7 @@ from importlib.resources import files
 import orvex.contracts
 import pytest
 from orvex.contracts.interface_errors import InterfaceContractError
-from orvex.contracts.manifest import Provided, Required, parse_manifest
+from orvex.contracts.manifest import Provided, Required, canonical, parse_manifest
 from orvex.contracts.version import Version
 
 FULL = """
@@ -53,6 +53,13 @@ def test_provides_and_requires_may_be_absent() -> None:
     assert (manifest.provides, manifest.requires, manifest.runtime) == ((), (), ())
 
 
+def test_a_test_dependency_keeps_its_extras_and_is_compared_by_name() -> None:
+    text = FULL.replace('tests = ["pytest"]', 'tests = ["pytest", "Moto[server]"]')
+    manifest = parse_manifest(text, "store")
+    assert manifest.tests == ("moto[server]", "pytest")
+    assert canonical("Moto[server]") == "moto"
+
+
 INVALID = {
     "not toml": "module = ",
     "no module": "[dependencies]\nruntime = []\ntests = []\n",
@@ -78,6 +85,11 @@ INVALID = {
     + '[[requires]]\ncontract = "security-context"\nversion = "1.0"\ncapabilities = ["read"]\n',
     "bad contract": FULL.replace('contract = "store"', 'contract = "Store"'),
     "not a string list": FULL.replace('tests = ["pytest"]', "tests = [1]"),
+    "extras of a runtime dependency": FULL.replace('"duckdb"', '"duckdb[all]"'),
+    "malformed extras": FULL.replace('tests = ["pytest"]', 'tests = ["moto[server"]'),
+    "a test dependency twice, once with extras": FULL.replace(
+        'tests = ["pytest"]', 'tests = ["moto", "moto[server]"]'
+    ),
 }
 
 

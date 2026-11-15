@@ -19,6 +19,7 @@ from typing import Any
 import duckdb
 import pytest
 from orvex.access.local import LocalRequest
+from orvex.contracts.store.client_sources import open_existing_lake
 from orvex.contracts.store.errors import StoreError
 from orvex.server import cli, existing_lakes, semantic_http
 from orvex.server.commands import project_lock
@@ -154,7 +155,7 @@ def test_the_managed_lake_and_each_existing_lake_share_the_budget(
     monkeypatch.setattr(cli, "memory_limit", lambda: "900MB")
     monkeypatch.setattr(cli, "instance_directory", lambda identity: served.instance)
     given: list[str] = []
-    real = existing_lakes.open_existing_lake
+    real = open_existing_lake
 
     def recorded(client: Any, attachment: Any, limits: Any) -> Any:  # noqa: ANN401
         given.append(limits.memory_limit)

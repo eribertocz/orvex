@@ -3,6 +3,7 @@ serialized, and the kit catches an implementation that breaks one of its guarant
 
 from __future__ import annotations
 
+import dataclasses
 from importlib.resources import files
 
 import pyarrow as pa
@@ -43,9 +44,7 @@ class _ExecutesTwice(Store):
         self, envelope: CallEnvelope, transaction: TransactionHandle, request: StatementRequest
     ) -> None:
         super().execute(envelope, transaction, request)
-        super().execute(
-            CallEnvelope(**{**_fields(envelope), "idempotency_key": None}), transaction, request
-        )
+        super().execute(dataclasses.replace(envelope, idempotency_key=None), transaction, request)
 
 
 class _DecimalAsFloat(Store):
@@ -69,10 +68,6 @@ class _ForgedHandleAccepted(Store):
         if read.id == "read-forged":
             return None
         return super().read_batch(envelope, read)
-
-
-def _fields(envelope: CallEnvelope) -> dict[str, object]:
-    return {name: getattr(envelope, name) for name in CallEnvelope.__slots__}
 
 
 @pytest.mark.parametrize(
