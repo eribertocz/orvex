@@ -417,12 +417,12 @@ class _Writer(DuckDBDialect):
 
     def restriction(self, restriction: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
         """One policy on one dataset's row `alias`: its predicate on its own dataset, or, along
-        its propagation path, on the related row, which must exist unless `orphans: visible`."""
+        its propagation path, on the related row, which must exist unless `orphans: visible`.
+        A deny-list holds for registered callers only: an unregistered one sees no row the
+        policy reaches, an orphan included (#448), as for a missing attribute."""
         rule = restriction.rule
         if restriction.no_rows or rule.predicate is None:  # an attribute is missing: no rows
             return "FALSE"
-        if not restriction.path:
-            return self.policy_condition(rule, dataset, alias)
         current, at, tables, links = dataset, alias, [], []
         for depth, name in enumerate(reversed(restriction.path), 1):
             related = self.relationships[name]
@@ -440,27 +440,25 @@ class _Writer(DuckDBDialect):
                 for a, b in zip(own, other, strict=True)
             ]
             current, at = target, here
-        chain = f"SELECT 1 FROM {', '.join(tables)} WHERE {' AND '.join(links)}"
-        passes = f"EXISTS ({chain} AND ({self.policy_condition(rule, current, at)}))"
-        if rule.orphans == "visible":
-            return f"(NOT EXISTS ({chain}) OR {passes})"
-        return passes
-
-    def policy_condition(self, rule: Any, dataset: str, alias: str) -> str:  # noqa: ANN401
-        found = self.predicate_sql(rule.predicate, dataset, alias)
+        found = self.predicate_sql(rule.predicate, current, at)
+        if restriction.path:
+            chain = f"SELECT 1 FROM {', '.join(tables)} WHERE {' AND '.join(links)}"
+            found = f"EXISTS ({chain} AND ({found}))"
+            found = f"(NOT EXISTS ({chain}) OR {found})" if rule.orphans == "visible" else found
         registration = rule.registration
-        if registration is not None and self.values is not None:  # checked on the managed lake
+        if registration is None:
+            return found
+        if self.values is not None:  # checked on the managed lake, bound for another engine
             return f"({self.flag(bool(self.resolved(rule).values))} AND {found})"
-        if registration is not None:  # a deny-list holds only for registered callers
-            key = str(registration.get("attribute", "user_id"))
-            value = self.attribute_value(key, ("text", "integer"), "String")
-            column = f"{quote('#g')}.{quote(str(registration['key']))}"
-            registered = (
-                f"EXISTS (SELECT 1 FROM {self.mapping(str(registration['table']))} AS "
-                f"{quote('#g')} WHERE CAST({column} AS VARCHAR) = {value})"
-            )
-            found = f"({registered} AND {found})"
-        return found
+        value = self.attribute_value(
+            str(registration.get("attribute", "user_id")), ("text", "integer"), "String"
+        )
+        column = f"{quote('#g')}.{quote(str(registration['key']))}"
+        registered = (
+            f"EXISTS (SELECT 1 FROM {self.mapping(str(registration['table']))} AS "
+            f"{quote('#g')} WHERE CAST({column} AS VARCHAR) = {value})"
+        )
+        return f"({registered} AND {found})"
 
     def resolved(self, key: object) -> PolicyValues:
         found = self.values.get(id(key)) if self.values is not None else None

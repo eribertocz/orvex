@@ -173,12 +173,24 @@ def expected(
     channel: str | None = None,
 ) -> list[list[str | None]]:
     """The exact rows of `query`, as `store/v1` JSON text, unordered (sort both sides)."""
-    rows = [
-        row for row in visible(customers, sales, channel) if _passes(row, query.get("filters", ()))
-    ]
+    return expected_over(visible(customers, sales, channel), query)
+
+
+def joined(customers: list[dict[str, str | None]], sales: list[dict[str, str | None]]) -> list[Row]:
+    """Every sale with its customer's fields (`visible` without a policy)."""
+    return visible(customers, sales, None)
+
+
+def expected_over(
+    seen: list[Row], query: Mapping[str, Any], masks: Mapping[str, str] | None = None
+) -> list[list[str | None]]:
+    """The exact rows of `query` over the joined rows a caller may see, as `store/v1` JSON
+    text, unordered; a member in `masks` shows its mask text in every detail row."""
+    shown = dict(masks or {})
+    rows = [row for row in seen if _passes(row, query.get("filters", ()))]
     if query["mode"] == "detail":
         members = [entry["member"] for entry in query["fields"]]
-        return [[_text(row[member]) for member in members] for row in rows]
+        return [[shown[m] if m in shown else _text(row[m]) for m in members] for row in rows]
     entries = query.get("group_by", [])
     groups: dict[tuple[object, ...], list[Row]] = {}
     for row in rows:

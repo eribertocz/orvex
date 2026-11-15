@@ -118,6 +118,7 @@ column_policies:
   - a masked member may appear only in detail-row queries and exports, always masked;
   - a `hidden` member does not exist for the caller: it is absent from the catalog, and referencing it fails with `MEMBER_NOT_FOUND` (never a different error that confirms it exists).
 - Policies apply before aggregation on every level: details, subtotals, totals, distinct counts, possible values, pre-aggregations, exports and MCP.
+- **Authorized aggregates do not guarantee anonymity** (Owner decision on #448, Q1 = A). Non-broadening means a caller never sees more than the rows they may see allow. A cell that holds one entity shows that entity's aggregate, even when the entity's key is hidden or masked; no minimum group size is applied (`aggregate_thresholds` stay representable, refused until they are executed). A hidden or masked key is never shown, and no answer depends on its values (P3-14).
 
 ## 4. Audit log
 

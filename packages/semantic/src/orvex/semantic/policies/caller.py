@@ -43,7 +43,10 @@ def read_caller(context: Mapping[str, Any]) -> Caller:
         value = dict(typed.model_dump(mode="json")) if hasattr(typed, "model_dump") else dict(typed)
         kind = str(value["type"])
         if kind == "list":
-            attributes[str(name)] = ("list", tuple(str(v) for v in value["values"]))
+            values = tuple(str(v) for v in value["values"])
+            if len(set(values)) != len(values):  # `uniqueItems`, which the types do not check
+                raise InvalidContext("an attribute's list repeats a value")
+            attributes[str(name)] = ("list", values)
         elif kind == "boolean":
             attributes[str(name)] = ("boolean", bool(value["value"]))
         elif kind in ("text", "integer"):
