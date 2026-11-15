@@ -20,10 +20,10 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 import pyarrow as pa
+from orvex.contracts.semantic.errors import PlanError
 from orvex.contracts.store.v1 import Parameter
 from orvex.semantic.adapters import clickhouse as ch
 from orvex.semantic.adapters.duckdb import PhysicalQuery, PolicyValues
-from orvex.semantic.errors import PlanError
 from orvex.semantic.evidence import EvidenceRecord
 from orvex.store.clickhouse import ClickHouse
 

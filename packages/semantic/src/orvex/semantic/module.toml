@@ -1,0 +1,18 @@
+# The manifest of this module (#486 §2.5, orvex.contracts.manifest): it provides the semantic
+# result cache, and its engine calls the result cache the server composes.
+module = "semantic"
+
+[dependencies]
+runtime = ["cryptography", "jsonschema", "orvex-contracts", "pyarrow", "pyyaml", "tzdata"]
+tests = ["hypothesis", "pytest"]
+
+[[provides]]
+contract = "result-cache"
+version = "1.0"
+capabilities = ["lookup", "store", "measure"]
+implementation = "ResultCache"
+
+[[requires]]
+contract = "result-cache"
+version = "1.0"
+capabilities = ["lookup", "store", "measure"]

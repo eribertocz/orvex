@@ -38,7 +38,7 @@ from types import MappingProxyType
 from typing import Any, cast
 
 from jsonschema import Draft202012Validator
-from orvex.semantic.errors import SemanticError
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.ossie import extensions, identifiers, sql
 from orvex.semantic.ossie.documents import MAX_BYTES, Format, ParseProblem, Path, parse
 from orvex.semantic.ossie.identifiers import normalize

@@ -13,7 +13,7 @@ from __future__ import annotations
 import threading
 from collections import Counter
 
-from orvex.semantic.errors import SemanticError
+from orvex.contracts.semantic.errors import SemanticError
 
 
 class Slot:

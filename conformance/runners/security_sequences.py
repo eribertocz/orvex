@@ -20,8 +20,8 @@ from typing import Any
 
 import yaml
 from orvex.access.context import permission_fingerprint
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.compiler.compiled import compile_model
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.result_cache import ResultCache
 

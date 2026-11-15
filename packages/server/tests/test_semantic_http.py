@@ -708,6 +708,6 @@ def test_each_code_with_its_own_status_is_answered_with_it(
     code: str, details: dict[str, object], status: int
 ) -> None:
     # #241: every error code the server maps is tested, the codes P7 and P9 raise included.
-    from orvex.semantic.errors import SemanticError
+    from orvex.contracts.semantic.errors import SemanticError
 
     assert semantic_http.status_of(SemanticError(code, details)) == status

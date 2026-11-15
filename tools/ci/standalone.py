@@ -2,6 +2,7 @@
 repository, with only the contracts distribution beside it.
 
     python -m tools.ci.standalone <module>
+    python -m tools.ci.standalone alternative-result-cache-ipc   # an alternative (#486 G1)
 
 In a temporary directory outside the checkout: copy the module's package, build its sdist and,
 from that sdist, its wheel (and the contracts wheel for any other module); create a clean
@@ -23,6 +24,7 @@ import xml.etree.ElementTree as ElementTree
 from collections.abc import Sequence
 from pathlib import Path
 
+from tools.checks.alternative_independence import ALTERNATIVES
 from tools.ci.pins import pins
 from tools.repository import MODULES, REPOSITORY_ROOT, identity
 
@@ -89,13 +91,21 @@ def build(package: Path, work: Path) -> Path:
     return dist / wheel.strip().splitlines()[-1]
 
 
-def run(module: str) -> int:
+def located(module: str) -> tuple[Path, str]:
+    """The folder of a module's distribution (or of an alternative's) and its package's name."""
+    for alternative in ALTERNATIVES:
+        if alternative.package.replace("_", "-") == module:
+            return REPOSITORY_ROOT / alternative.folder, alternative.package
     if module not in MODULES or module == "server":
         raise SystemExit(f"STANDALONE_UNKNOWN_MODULE: {module}")
+    return REPOSITORY_ROOT / "packages" / module, module
+
+
+def run(module: str) -> int:
+    package, name = located(module)
     namespace = str(identity(REPOSITORY_ROOT)["python_namespace"])
     slug = str(identity(REPOSITORY_ROOT)["slug"])
     distribution = f"{slug}-{module}"
-    package = REPOSITORY_ROOT / "packages" / module
     with tempfile.TemporaryDirectory(prefix="standalone-") as directory:
         work = outside_repository(Path(directory))
         wheels = [build(package, work)]
@@ -107,7 +117,7 @@ def run(module: str) -> int:
         _step("pip", [python, "-m", "pip", "install", "--quiet", PIP], work)
         pinned = work / "constraints.txt"
         pinned.write_text("\n".join(constraints(lock_file())) + "\n", encoding="utf-8")
-        manifest = (package / "src" / namespace / module / "module.toml").read_text("utf-8")
+        manifest = (package / "src" / namespace / name / "module.toml").read_text("utf-8")
         tests = tomllib.loads(manifest)["dependencies"]["tests"]
         _step(
             f"install {distribution}"

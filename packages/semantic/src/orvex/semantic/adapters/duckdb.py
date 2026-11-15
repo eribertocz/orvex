@@ -23,6 +23,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from orvex.contracts.semantic.errors import PlanError, SemanticError
 from orvex.semantic.adapters import cells
 from orvex.semantic.adapters.dialect import DuckDBDialect, _unsupported, quote
 from orvex.semantic.catalog.building import _logical
@@ -30,7 +31,6 @@ from orvex.semantic.compiler.catalog import LogicalType
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.engines import dataset_label
-from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.planning import ISSUED_PLAN, SemanticPlan
 from orvex.semantic.policies import predicate as policy_grammar

@@ -34,6 +34,7 @@ import pyarrow.compute as pc
 import pyarrow.ipc
 import pytest
 from hypothesis import HealthCheck, given, settings
+from orvex.contracts.semantic.errors import PlanError, SemanticError
 from orvex.contracts.store.v1 import Parameter, ParameterType, StatementRequest
 from orvex.semantic import execution, external
 from orvex.semantic.adapters import clickhouse as ch
@@ -45,7 +46,6 @@ from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.correctness import analyze
 from orvex.semantic.engines import CAPABILITIES, EngineEntry, Routing
-from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.execution import answer
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.planning import SemanticPlan, plan

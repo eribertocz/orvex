@@ -19,7 +19,7 @@ from orvex.access.errors import ACCESS_FORBIDDEN, AUDIT_UNAVAILABLE, SESSION_EXP
 from orvex.access.local import LocalRequest
 from orvex.access.server_context import Audience
 from orvex.contracts.http_api import v1
-from orvex.semantic.errors import SemanticError
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.server import lake_refusals, semantic_delivery, semantic_http, semantic_jobs
 from orvex.server.local_access import CODE_PARAMETER, LocalAccess
 from orvex.server.route_permissions import checked_permissions

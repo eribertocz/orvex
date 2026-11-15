@@ -18,6 +18,7 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
+from orvex.contracts.semantic.errors import PlanError, SemanticError
 from orvex.contracts.store.v1 import Parameter, ReadRequest
 from orvex.semantic import zonedata
 from orvex.semantic.adapters import clickhouse as ch
@@ -26,7 +27,6 @@ from orvex.semantic.adapters.duckdb import compile_plan as duckdb_compile
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.correctness import analyze
-from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.planning import plan
 from orvex.semantic.query.binding import Limits as QueryLimits
 from orvex.semantic.query.binding import bind_query

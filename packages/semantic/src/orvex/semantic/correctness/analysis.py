@@ -71,12 +71,12 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.compiler.compiled import CompiledMember, CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.correctness.graph import Graph, Path
 from orvex.semantic.correctness.materialization import Candidate, candidates
 from orvex.semantic.correctness.report import CorrectnessReport, Obligation, make_report
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.policies import PolicyModel, read_caller, unseen
 from orvex.semantic.policies.caller import Caller

@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from hypothesis import example, given
 from hypothesis import strategies as st
-from orvex.semantic.errors import SemanticError
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.query.binding import BoundQuery, Limits, bind_query
 
 from tests.properties.test_engine_oracle import EVERYTHING

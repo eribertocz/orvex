@@ -747,10 +747,20 @@ job = "standalone"
 kind = "check"
 required = false
 contexts = ["standalone"]
-digest = "bcb329418caea5d2"
+digest = "e8d1766350638eb1"
 setup = ["python -m pip install --quiet pip==26.3"]
 [[job.check]]
 # A module installs and passes its own tests alone, outside the repository (#486 G4).
 name = "standalone-contracts"
 run = "python -m tools.ci.standalone contracts"
+local = true
+[[job.check]]
+# The alternative result cache installs and passes its own tests alone (#486 G1, G4).
+name = "standalone-alternative-result-cache-ipc"
+run = "python -m tools.ci.standalone alternative-result-cache-ipc"
+local = true
+[[job.check]]
+# The alternative imports nothing of semantic and shares no block of its code (#486 G1).
+name = "alternative-independence"
+run = "python -m tools.checks.alternative_independence"
 local = true

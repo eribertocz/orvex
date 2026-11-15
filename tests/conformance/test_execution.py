@@ -13,12 +13,12 @@ from typing import Any
 import pyarrow as pa
 import pytest
 import yaml
+from orvex.contracts.semantic.errors import PlanError, SemanticError
 from orvex.contracts.store.v1 import StatementRequest
 from orvex.semantic.adapters import clickhouse
 from orvex.semantic.adapters import duckdb as adapter_module
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
-from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.execution import Answer, answer
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.planning import SemanticPlan, plan

@@ -19,8 +19,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.contracts.store.v1 import ChangesRequest
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.policies import PolicyModel
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake

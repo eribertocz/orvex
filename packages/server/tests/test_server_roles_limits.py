@@ -15,7 +15,7 @@ import pytest
 from fastapi import FastAPI
 from orvex.access.authentication.query_limits import QueryLimits, RoleLimit
 from orvex.access.errors import AccessError
-from orvex.semantic.errors import SemanticError
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.execution import answer
 from orvex.server import semantic_delivery, semantic_http
 from orvex.server.route_permissions import PERMISSIONS, checked_permissions

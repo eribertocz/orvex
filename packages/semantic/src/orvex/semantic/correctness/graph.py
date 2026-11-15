@@ -12,8 +12,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.compiler.compiled import CompiledModel
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 
 MAX_PATHS = 256

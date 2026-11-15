@@ -1,4 +1,5 @@
-"""Errors of the semantic engine (`contracts/semantic-error/v1`).
+"""The errors of the semantic engine (`contracts/semantic-error/v1`), the contract types every
+consumer catches, moved out of `semantic` with the same codes and details (#486 §2.3).
 
 A `SemanticError` carries a stable code and its complete details. It is validated when it is
 raised, so an unknown code or a missing or extra detail fails before anything is rendered.

@@ -44,6 +44,7 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from decimal import Decimal
 from types import MappingProxyType
 
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.canonical import fingerprint
 from orvex.semantic.compiler.catalog import SourceCatalog
 from orvex.semantic.compiler.parsing import MemberId, ParsedMember, ParsedModel, parse_model
@@ -54,7 +55,6 @@ from orvex.semantic.compiler.typecheck import (
     TypedNode,
     type_model,
 )
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.ossie.model import Advisory, ForeignExtension, OssieModel
 

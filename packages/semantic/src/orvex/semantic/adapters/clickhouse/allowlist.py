@@ -8,8 +8,8 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Sequence
 
+from orvex.contracts.semantic.errors import PlanError
 from orvex.semantic.adapters.clickhouse.names import unquote_name
-from orvex.semantic.errors import PlanError
 
 # Every function a statement may call; a name before `(` that is neither one of these nor a
 # keyword is refused, and so is every table function.

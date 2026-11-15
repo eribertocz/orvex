@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.contracts.store.v1 import ChangesRequest, ChangesResult
-from orvex.semantic.errors import SemanticError
 from orvex.server.permission_state import PermissionState, permission_state
 from orvex.store.errors import StoreError
 

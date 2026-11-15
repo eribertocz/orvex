@@ -52,6 +52,7 @@ import re
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from orvex.contracts.semantic.errors import PlanError, SemanticError
 from orvex.semantic.adapters.clickhouse import zones
 from orvex.semantic.adapters.clickhouse.allowlist import check_statement
 from orvex.semantic.adapters.clickhouse.exact import (
@@ -82,7 +83,6 @@ from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.compiler.typecheck import NodeType
 from orvex.semantic.engines import CAPABILITIES as ENGINE_CAPABILITIES
 from orvex.semantic.engines import required
-from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.planning import ISSUED_PLAN, SemanticPlan
 from orvex.semantic.policies import predicate as policy_grammar
