@@ -27,7 +27,7 @@ import dataclasses
 import datetime as dt
 import hashlib
 import os
-import select
+import selectors
 import signal
 import socket
 import threading
@@ -437,17 +437,19 @@ def _watch_signals(stop: Callable[[int, FrameType | None], None]) -> Callable[[]
     earlier = signal.set_wakeup_fd(sender.fileno(), warn_on_full_buffer=False)
 
     def watch() -> None:
-        while not finished.is_set():
-            ready, _, _ = select.select([receiver], [], [], 0.2)
-            if not ready:
-                continue
-            with contextlib.suppress(OSError):
-                received = receiver.recv(256)
-                if earlier != -1:
-                    os.write(earlier, received)
-                for number in numbers:
-                    if number in received:
-                        stop(number, None)
+        # A selector, not `select.select`: a process with 1,024 open files or more is fine.
+        with selectors.DefaultSelector() as selector:
+            selector.register(receiver, selectors.EVENT_READ)
+            while not finished.is_set():
+                if not selector.select(0.2):
+                    continue
+                with contextlib.suppress(OSError):
+                    received = receiver.recv(256)
+                    if earlier != -1:
+                        os.write(earlier, received)
+                    for number in numbers:
+                        if number in received:
+                            stop(number, None)
 
     watcher = threading.Thread(target=watch, name="schedule-stop", daemon=True)
     watcher.start()
