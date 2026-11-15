@@ -27,6 +27,7 @@ import pyarrow as pa
 from pydantic import BaseModel, RootModel
 from pydantic_core import TzInfo
 
+from .aware import aware
 from .interface_errors import InterfaceContractError
 
 CODE = "INTERFACE_VALUE_NOT_SERIALIZABLE"
@@ -168,7 +169,7 @@ def _zone(value: datetime) -> dict[str, object]:
     A naive datetime never crosses: time zones are explicit."""
     zone = value.tzinfo
     found: dict[str, object] = {"fold": value.fold} if value.fold else {}
-    if zone is None or value.utcoffset() is None:
+    if zone is None or not aware(value):
         raise _refused("a naive datetime cannot cross a contract: its time zone is explicit")
     if type(zone) is ZoneInfo and zone.key is not None:
         return {**found, "zone": zone.key}

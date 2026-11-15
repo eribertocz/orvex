@@ -1,7 +1,8 @@
 """Which annotated types may cross an interface contract (#486 G5): plain values, never live
 objects, so every operation can later run in another process (#156).
 
-A value type is one of `SCALARS` (an aware datetime and an Arrow table among them), a
+A value type is one of `SCALARS` (`AwareDatetime`, never a plain `datetime`, and an Arrow
+table among them), a
 `Literal` of booleans, integers, strings or `None`, a union of value types, a value type with
 constraints (`Annotated`), a parameterized `tuple`, `list` or `dict` with `str` keys, an `Enum`,
 or a pydantic model (the generated contract types) or frozen dataclass whose fields are all
@@ -29,7 +30,6 @@ SCALARS: tuple[type, ...] = (
     str,
     bytes,
     Decimal,
-    datetime,
     AwareDatetime,
     date,
     time,
@@ -67,6 +67,8 @@ def crossing_problem(annotation: object, classes: set[type]) -> str | None:
     models, dataclasses) are added to `classes`."""
     if annotation in SCALARS or annotation is None:
         return None
+    if annotation is datetime:
+        return "a plain datetime may be naive: declare pydantic.AwareDatetime"
     origin = typing.get_origin(annotation)
     arguments = typing.get_args(annotation)
     if origin is typing.Annotated:  # constraints narrow a value type; they never widen it

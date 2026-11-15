@@ -3,15 +3,17 @@ as an independent process would reach it.
 
 Through either binding only the contract's operations are callable, each with its call
 envelope first (`orvex.contracts.envelope`), validated before the implementation runs: a
-refused call never reaches it (ContractCallRefused, which only a binding creates). The binding
-serves the implementation at the version it provides (`provided`, the contract's version by
-default). An error crosses only when it is the contract's error type with a code the operation
-declares; anything else the implementation raises, a refusal or another machinery error
-included, is INTERFACE_ERROR_UNDECLARED: a nested call's refusal crosses only as a code the
-operation declares. Serialized, the
-envelope, the arguments, the result and the error's code, message and details each pass
-through the codec, so a live object is refused (INTERFACE_VALUE_NOT_SERIALIZABLE) and nothing
-is shared with the caller.
+refused call never reaches it. `ContractCallRefused` is raised by two places only: a binding,
+for a call it refuses, and `CallContext` (`orvex.contracts.context`), for a context or an
+envelope it cannot make. An implementation's refusal never crosses as one: an error crosses
+only when it is the contract's error type with a code the operation declares, and anything else
+the implementation raises, a refusal or another machinery error included, is
+INTERFACE_ERROR_UNDECLARED (a nested call's refusal crosses only as a code the operation
+declares). The binding serves the implementation at the version it provides (`provided`, the
+contract's version by default). Serialized, the envelope, the arguments, the result and the
+error's code, message and details each pass through the codec, so a live object is refused
+(INTERFACE_VALUE_NOT_SERIALIZABLE) and nothing is shared with the caller; in process, a naive
+datetime in an argument or the result is refused the same way (`orvex.contracts.aware`).
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import functools
 from collections.abc import Callable
 from typing import Any
 
+from .aware import naive_problem
 from .codec import Codec
 from .envelope import envelope_refusal
 from .interface import InterfaceContract
@@ -84,7 +87,9 @@ class Bound:
                 f"the implementation of {self._contract.name} has no operation {operation}",
             )
         codec = self._codec
-        if codec is not None:
+        if codec is None:
+            _aware_only(operation, "an argument", (arguments, keywords))
+        else:
             envelope, arguments, keywords = _crossed(codec, (envelope, arguments, keywords))
         try:
             result = method(envelope, *arguments, **keywords)
@@ -97,7 +102,10 @@ class Bound:
             raise self._rebuilt(codec, error) from None
         except Exception as error:  # noqa: BLE001 - fail closed: nothing undeclared crosses
             raise self._undeclared(operation, type(error).__name__) from (None if codec else error)
-        return result if codec is None else _crossed(codec, result)
+        if codec is None:
+            _aware_only(operation, "the result", result)
+            return result
+        return _crossed(codec, result)
 
     def _undeclared(self, operation: str, what: str) -> InterfaceContractError:
         return InterfaceContractError(
@@ -115,6 +123,15 @@ class Bound:
                 f"a {type(error).__name__} needs a message and details to cross the contract",
             ) from None
         return self._contract.error_type(code, message, details)
+
+
+def _aware_only(operation: str, what: str, value: object) -> None:
+    """In process, as serialized: a naive datetime never crosses."""
+    problem = naive_problem(value)
+    if problem is not None:
+        raise InterfaceContractError(
+            "INTERFACE_VALUE_NOT_SERIALIZABLE", f"{operation}: {what} holds {problem}"
+        )
 
 
 def _crossed(codec: Codec, value: object) -> Any:  # noqa: ANN401 - the value decoded back

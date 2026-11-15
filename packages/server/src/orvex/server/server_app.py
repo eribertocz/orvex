@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -52,12 +53,12 @@ from orvex.contracts.http_api import v1
 from orvex.server import oidc_http, semantic_http, sign_in_http
 from orvex.server.admin_http import Administration, mount_administration
 from orvex.server.app import (
+    REQUEST_ID_HEADER,
     error_response,
     install_error_handlers,
     mount_semantic,
     mount_status,
 )
-from orvex.server.call_context import REQUEST_ID_HEADER, request_correlation_id
 from orvex.server.route_permissions import (
     ADMINISTRATION,
     allows,
@@ -103,7 +104,7 @@ def create_server_app(
     async def request_rules(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        request.state.request_id = request_correlation_id(request.headers)
+        request.state.request_id = uuid.uuid4().hex
         started = time.perf_counter()
         try:
             refused = await rules(request)

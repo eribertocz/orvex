@@ -11,6 +11,7 @@ from orvex.contracts import kit_run
 from orvex.contracts.interface_errors import InterfaceContractError
 from orvex.contracts.kit import CaseEnvironment, Kit
 from orvex.contracts.kit_case import run_case
+from orvex.contracts.kit_client import KitClient
 from orvex.contracts.kit_process import run_case_in_its_own_process
 from orvex.contracts.kit_run import run_kit, verify_kit
 from orvex.contracts.version import Version
@@ -54,6 +55,36 @@ def test_a_factory_the_process_cannot_import_fails_the_case() -> None:
     report = run_kit(STATION_KIT, lambda: EnvironmentStation(), serialized=False)
     assert all(not r.passed for r in report.results)
     assert "KIT_CASE_NOT_IMPORTABLE" in report.results[0].detail
+
+
+def wrong_engine(station: KitClient) -> None:
+    if station.setting("STATION_ENGINE_VERSION") != "8.0":
+        raise AssertionError("not the engine this derived case expects")
+
+
+# A planted kit derived from the station's: the same contract and case id, a failing check.
+DERIVED_KIT = dataclasses.replace(
+    STATION_KIT,
+    cases=(
+        dataclasses.replace(STATION_KIT.cases[0], check=wrong_engine),
+        *STATION_KIT.cases[1:],
+    ),
+)
+
+
+def test_a_derived_kit_s_failing_case_fails_in_its_own_process_too() -> None:
+    case = DERIVED_KIT.cases[0]
+    here = run_case(DERIVED_KIT, case, EnvironmentStation, True, V10, V10)
+    own = run_case_in_its_own_process(DERIVED_KIT, case, EnvironmentStation, True, V10, V10)
+    assert here.outcome == own.outcome == "failed"
+    assert "not the engine this derived case expects" in own.detail
+
+
+def test_a_kit_that_is_not_a_top_level_name_cannot_run_in_its_own_process() -> None:
+    local = dataclasses.replace(STATION_KIT)
+    result = run_case_in_its_own_process(local, local.cases[0], EnvironmentStation, True, V10, V10)
+    assert result.outcome == "failed"
+    assert "KIT_CASE_NOT_IMPORTABLE" in result.detail
 
 
 class Broken:

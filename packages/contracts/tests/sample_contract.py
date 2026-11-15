@@ -14,6 +14,7 @@ from orvex.contracts.interface import InterfaceContract, Operation
 from orvex.contracts.kit import Idempotent, Kit, KitCase
 from orvex.contracts.kit_client import KitClient
 from orvex.contracts.version import Version
+from pydantic import AwareDatetime
 
 
 class LedgerError(Exception):
@@ -30,7 +31,7 @@ class LedgerError(Exception):
 class Reading:
     name: str
     amount: Decimal
-    at: datetime
+    at: AwareDatetime
 
 
 class Ledger(Protocol):

@@ -4,13 +4,16 @@ correlation id; built once at each entry point and carried, per call, into the e
 A context holds real values only: a field that is absent, not a string, blank or a placeholder
 (`envelope.PLACEHOLDERS`) is refused when the context is built (CONTRACT_CONTEXT_INVALID), and
 the binding refuses the same in every envelope, so a placeholder never reaches an
-implementation either way. `CallContext.envelope` is the one way a consumer makes an envelope.
+implementation either way. This file is the only one that builds a `CallEnvelope`
+(`tools/checks/envelopes.py`): `CallContext.envelope` for every call, and `planted_envelope` for
+a kit's envelope cases, which prove that a binding refuses a broken one.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, fields
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .envelope import CallEnvelope, real_value
 from .interface_errors import ContractCallRefused
@@ -63,3 +66,9 @@ class CallContext:
             revision=self.revision,
             idempotency_key=idempotency_key,
         )
+
+
+def planted_envelope(envelope: CallEnvelope, **changes: Any) -> CallEnvelope:  # noqa: ANN401
+    """`envelope` with fields changed to any value, a missing or placeholder one included: what
+    a kit sends to prove that a binding refuses it before the implementation runs."""
+    return dataclasses.replace(envelope, **changes)

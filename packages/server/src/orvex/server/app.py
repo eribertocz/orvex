@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,7 +21,6 @@ from orvex.access.server_context import Audience
 from orvex.contracts.http_api import v1
 from orvex.semantic.errors import SemanticError
 from orvex.server import lake_refusals, semantic_delivery, semantic_http, semantic_jobs
-from orvex.server.call_context import REQUEST_ID_HEADER, request_correlation_id
 from orvex.server.local_access import CODE_PARAMETER, LocalAccess
 from orvex.server.route_permissions import checked_permissions
 from orvex.server.versions import Versions
@@ -28,6 +28,7 @@ from orvex.store.errors import StoreError
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
+REQUEST_ID_HEADER = "X-Request-Id"
 API_PREFIX = "/api/"
 # Local mode answers only requests addressed to itself by one of these names (DNS rebinding).
 LOCAL_NAMES = ("127.0.0.1", "localhost")
@@ -300,7 +301,7 @@ def create_app(
     async def request_context(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
-        request.state.request_id = request_correlation_id(request.headers)
+        request.state.request_id = uuid.uuid4().hex
         started = time.perf_counter()
         try:
             # Before any route, the web build or the 404 handling. A semantic request is

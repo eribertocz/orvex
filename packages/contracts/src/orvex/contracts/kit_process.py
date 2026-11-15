@@ -4,12 +4,13 @@ process, so no case patches an implementation's internals to reach a condition.
 
     python -m orvex.contracts.kit_process   # reads one request on stdin
 
-The case and its kit are found again in the child by the module that declares the case's check,
-and the implementation by its factory's module and name, so both must be defined at module
-level (KIT_CASE_NOT_IMPORTABLE otherwise). The child runs the case through the binding it is
-asked for and sends its `CaseResult` back through the serializing codec, in a file of the case's
-own directory; a child that fails, answers anything else or takes longer than `TIMEOUT` fails
-the case (KIT_CASE_PROCESS_FAILED).
+The child finds the kit by its `module:NAME` reference and the implementation by its factory's,
+so both are defined at module level; it then checks that the kit it found describes itself as
+the parent's does and that the case's check is the same function, so it can never run another
+case in its place (KIT_CASE_NOT_IMPORTABLE otherwise). The child runs the case through the
+binding it is asked for and sends its `CaseResult` back through the serializing codec, in a file
+of the case's own directory; a child that fails, answers anything else or takes longer than
+`TIMEOUT` fails the case (KIT_CASE_PROCESS_FAILED).
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from .codec import Codec
 from .interface_errors import InterfaceContractError
@@ -58,10 +60,17 @@ def _root(module: str) -> str:
     return str(path.parents[module.count(".") + (path.name == "__init__.py")])
 
 
-def _declaring_module(case: KitCase) -> str:
+def _check_reference(case: KitCase) -> str:
     check = case.check
-    function = check.call if isinstance(check, Idempotent) else check
-    return str(function.__module__)
+    return _reference(check.call if isinstance(check, Idempotent) else check)
+
+
+def _kit_reference(kit: Kit, module: str) -> str:
+    """`module:NAME` of the kit, which the module must hold at its top level."""
+    for name, value in vars(sys.modules[module]).items():
+        if value is kit:
+            return f"{module}:{name}"
+    raise ValueError(f"kit {kit.contract.name} is not a top-level name of {module}")
 
 
 def _variables(environment: CaseEnvironment, directory: Path) -> dict[str, str]:
@@ -106,13 +115,15 @@ def run_case_in_its_own_process(
     """One case, in a process built from its declared environment."""
     environment = case.environment or CaseEnvironment()
     try:
-        module, factory = _declaring_module(case), _reference(make)
+        check, factory = _check_reference(case), _reference(make)
+        module = check.partition(":")[0]
         roots = [_root(module), _root(factory.partition(":")[0])]
         request = {
             "path": [*roots, *(entry for entry in sys.path if entry)],
-            "module": module,
-            "contract": kit.contract.name,
+            "kit": _kit_reference(kit, module),
+            "description": kit.describe(),
             "case": case.id,
+            "check": check,
             "factory": factory,
             "serialized": serialized,
             "consumer": str(consumer),
@@ -151,27 +162,35 @@ def run_case_in_its_own_process(
     return result
 
 
+def _the_parent_s_case(request: dict[str, Any]) -> tuple[Kit, KitCase] | None:
+    """The kit and case the parent named, or None when the reference holds anything else."""
+    kit = _resolve(request["kit"])
+    if not isinstance(kit, Kit) or json.loads(json.dumps(kit.describe())) != request["description"]:
+        return None
+    for case in kit.cases:
+        if case.id == request["case"] and _check_reference(case) == request["check"]:
+            return kit, case
+    return None
+
+
 def main() -> int:
     request = json.loads(sys.stdin.read())
     sys.path[:0] = [entry for entry in request["path"] if entry not in sys.path]
-    module = importlib.import_module(request["module"])
-    kit = next(
-        value
-        for value in vars(module).values()
-        if isinstance(value, Kit) and value.contract.name == request["contract"]
-    )
-    case = next(case for case in kit.cases if case.id == request["case"])
+    found = _the_parent_s_case(request)
     make = _resolve(request["factory"])
-    if not callable(make):
-        raise TypeError(f"{request['factory']} is not a factory")
-    result = run_case(
-        kit,
-        case,
-        make,
-        bool(request["serialized"]),
-        Version.parse(request["consumer"]),
-        Version.parse(request["provided"]),
-    )
+    if found is None or not callable(make):
+        detail = f"KIT_CASE_NOT_IMPORTABLE: {request['kit']} does not hold the parent's case"
+        result = CaseResult(request["case"], "failed", detail)
+    else:
+        kit, case = found
+        result = run_case(
+            kit,
+            case,
+            make,
+            bool(request["serialized"]),
+            Version.parse(request["consumer"]),
+            Version.parse(request["provided"]),
+        )
     Path(request["result"]).write_bytes(CODEC.encode(result))
     return 0
 

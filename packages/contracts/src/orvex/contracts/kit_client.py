@@ -8,13 +8,12 @@ case send one envelope twice (the idempotency check) or a changed one.
 
 from __future__ import annotations
 
-import dataclasses
 import functools
 from collections.abc import Callable
 from typing import Any
 
 from .binding import Bound
-from .context import CallContext
+from .context import CallContext, planted_envelope
 from .envelope import CallEnvelope
 from .version import Version
 
@@ -48,7 +47,7 @@ class KitClient:
             self._keys += 1
             key = f"kit-{self._case}-{self._keys}"
         envelope = self._context.envelope(self._bound.contract, operation, key, self._consumer)
-        return dataclasses.replace(envelope, **changes)
+        return planted_envelope(envelope, **changes) if changes else envelope
 
     def send(
         self, operation: str, envelope: object, /, *arguments: object, **keywords: object

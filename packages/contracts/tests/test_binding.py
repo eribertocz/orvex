@@ -51,7 +51,7 @@ OFFSET = TzInfo(-4 * 3600)
 class Moment(BaseModel):
     """A model holding an IANA zone: its own JSON would turn the zone into a fixed offset."""
 
-    at: datetime
+    at: AwareDatetime
     color: Color
     readings: tuple[Reading, ...]
 
@@ -310,6 +310,23 @@ class TestBound:
         with pytest.raises(InterfaceContractError) as raised:
             bound.names(ENVELOPE)
         assert raised.value.code == "INTERFACE_OPERATION_MISSING"
+
+    @pytest.mark.parametrize("serialized", [False, True])
+    def test_a_naive_datetime_is_refused_in_both_bindings(self, serialized: bool) -> None:
+        naive = Reading("meter-1", Decimal(1), datetime(2026, 3, 8, 1, 30))
+        with pytest.raises(InterfaceContractError) as raised:
+            Bound(LEDGER, MemoryLedger(), serialized=serialized).record(ENVELOPE, naive)
+        assert raised.value.code == "INTERFACE_VALUE_NOT_SERIALIZABLE"
+
+    def test_a_naive_datetime_in_a_result_is_refused_in_process(self) -> None:
+        class Naive(MemoryLedger):
+            def readings(self, envelope: CallEnvelope, name: str) -> tuple[Reading, ...]:
+                return (Reading(name, Decimal(1), datetime(2026, 3, 8)),)
+
+        with pytest.raises(InterfaceContractError) as raised:
+            Bound(LEDGER, Naive(), serialized=False).readings(ENVELOPE, "a")
+        assert raised.value.code == "INTERFACE_VALUE_NOT_SERIALIZABLE"
+        assert "the result holds a naive datetime" in raised.value.message
 
     @pytest.mark.parametrize("serialized", [False, True])
     def test_the_implementation_receives_the_envelope(self, serialized: bool) -> None:

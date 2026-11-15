@@ -36,7 +36,7 @@ class Shape(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class Inner:
-    when: datetime
+    when: AwareDatetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,7 +246,6 @@ SERIALIZABLE: list[object] = [
     str,
     bytes,
     Decimal,
-    datetime,
     date,
     time,
     timedelta,
@@ -263,6 +262,8 @@ SERIALIZABLE: list[object] = [
 ]
 
 LIVE: list[object] = [
+    datetime,
+    tuple[datetime, ...],
     Any,
     object,
     Callable[[], int],
@@ -367,3 +368,10 @@ def test_every_generated_store_type_may_cross() -> None:
     assert {kind.__name__: crossing_problem(kind, set()) for kind in models} == {
         kind.__name__: None for kind in models
     }
+
+
+def test_a_plain_datetime_is_refused_with_the_type_to_declare() -> None:
+    with pytest.raises(InterfaceContractError) as raised:
+        contract_for(_takes(datetime))
+    assert raised.value.code == "INTERFACE_TYPE_NOT_SERIALIZABLE"
+    assert "declare pydantic.AwareDatetime" in raised.value.message

@@ -6,6 +6,7 @@ from __future__ import annotations
 import sys
 import types
 from collections.abc import Callable
+from pathlib import Path
 from typing import Protocol
 
 import pytest
@@ -23,6 +24,7 @@ from orvex.server.assembly import (
     load_implementations,
 )
 from orvex.server.identity import load_identity
+from orvex.server.instance import home_variable
 
 
 class CacheError(Exception):
@@ -296,11 +298,30 @@ def test_the_installed_modules_assemble() -> None:
 
 
 def test_the_server_does_not_start_when_assembly_is_refused(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
-    def refuse(identity: object) -> None:
+    def refuse(identity: object, chosen: object) -> None:
         raise AssemblyRefused(["ASSEMBLY_CAPABILITY_MISSING: planted"])
 
+    monkeypatch.setenv(home_variable(load_identity()), str(tmp_path))
     monkeypatch.setattr(cli, "check_installed_assembly", refuse)
     assert cli.main([]) == 3
     assert "ASSEMBLY_CAPABILITY_MISSING: planted" in capsys.readouterr().err
+
+
+def test_the_server_assembles_with_the_instance_s_configured_choice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    seen: list[object] = []
+
+    def record(identity: object, chosen: object) -> None:
+        seen.append(chosen)
+        raise AssemblyRefused(["ASSEMBLY_CHOICE_UNKNOWN: stop here"])
+
+    (tmp_path / "assembly.toml").write_text(
+        '[implementations]\nresult-cache = "alternatives.result_cache_ipc"\n'
+    )
+    monkeypatch.setenv(home_variable(load_identity()), str(tmp_path))
+    monkeypatch.setattr(cli, "check_installed_assembly", record)
+    assert cli.main([]) == 3
+    assert seen == [{"result-cache": "alternatives.result_cache_ipc"}]

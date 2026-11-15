@@ -6,7 +6,8 @@ with the materialization and data-reader checks.
    constant dynamic import (`tools/checks/imports.py`); `server` composes all.
 2. MATERIALIZATION_IN_PYTHON: `tools/checks/materialization.py`.
 3. DATA_READ_OUTSIDE_DUCKDB: `tools/checks/data_readers.py`.
-4. CONSUMER_BOUNDARY_VIOLATION: `tools/checks/consumers.py`, reported without failing until
+4. ENVELOPE_BUILT_BY_HAND: `tools/checks/envelopes.py`.
+5. CONSUMER_BOUNDARY_VIOLATION: `tools/checks/consumers.py`, reported without failing until
    #486 step 7 makes it blocking and removes the `server` exemption of rule 1.
 """
 
@@ -25,6 +26,7 @@ from tools.checks.data_readers import (
     reader_scan,
     stale_reader_entries,
 )
+from tools.checks.envelopes import envelope_scan
 from tools.checks.imports import imported_names
 from tools.checks.materialization import (
     ALLOW_LIST,
@@ -106,7 +108,7 @@ def run(root: Path, materialization_list: Path, reader_list: Path) -> int:
         print(f"{AllowListError.code}: entry {entry} matches no use; remove it")
     if stale:
         return 1
-    findings = scan(root, allowed) + reader_scan(root, readers)
+    findings = scan(root, allowed) + reader_scan(root, readers) + envelope_scan(root)
     for finding in findings:
         print(finding)
     print(f"boundaries: {len(findings)} finding(s)")
