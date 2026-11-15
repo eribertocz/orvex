@@ -12,6 +12,7 @@
 "tests/contracts" = ["contracts", "semantic"]
 "tests/workspace" = ["access", "contracts", "semantic", "server", "store", "transform", "dashboards", "mcp"]
 "tests/tools" = ["server"]
+"tests/substitution" = ["contracts", "semantic", "server"]
 
 # Paths whose change selects the full suite: shared test support, the runners, the build, the
 # CI itself and everything every test depends on.

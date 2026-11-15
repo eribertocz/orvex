@@ -25,7 +25,7 @@ class HitAfterTtl(IpcResultCache):
 
 class OverBound(IpcResultCache):
     def __init__(self, max_bytes: int, clock: Callable[[], float]) -> None:
-        super().__init__(2 * max_bytes, clock)
+        super().__init__(max_bytes=2 * max_bytes, clock=clock)
 
 
 class PrefixMatch(IpcResultCache):

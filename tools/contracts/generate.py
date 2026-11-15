@@ -59,7 +59,13 @@ def generated_files_on_disk() -> set[Path]:
     python_version = re.compile(r"(__init__|v[1-9][0-9]*)\.py")
     fixture = re.compile(r"[a-z0-9_]+_v[1-9][0-9]*\.py")
     typescript = re.compile(r"v[1-9][0-9]*\.ts")
-    found = {p for p in namespace_contracts().glob("*/*.py") if python_version.fullmatch(p.name)}
+    # A package is generated when it holds a generated version module; a hand-written package
+    # beside them (an interface contract's, ADR-0033) is not.
+    found = {
+        p
+        for p in namespace_contracts().glob("*/*.py")
+        if python_version.fullmatch(p.name) and any(p.parent.glob("v[1-9]*.py"))
+    }
     found |= set(namespace_contracts().glob("*/v*_data/**/*.json"))
     found |= {
         p

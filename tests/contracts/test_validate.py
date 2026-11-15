@@ -344,6 +344,9 @@ def test_generated_files_on_disk_include_orphans_only(
         web / "src/lib/contracts/thing/v1.test.ts",
         web / "src/lib/contracts/contracts.test.ts",
         package / "__init__.py",
+        # An interface contract's hand-written package beside the generated ones (ADR-0033).
+        package / "engine/__init__.py",
+        package / "engine/interface.py",
         tmp_path / "tests/contracts/generated/__init__.py",
     ]
     for path in generated + hand_written:
