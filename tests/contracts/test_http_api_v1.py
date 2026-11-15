@@ -7,7 +7,7 @@ import yaml
 from orvex.contracts.http_api import v1
 from pydantic import BaseModel, ValidationError
 
-EXAMPLES = Path(__file__).resolve().parents[3] / "contracts" / "http-api" / "v1" / "examples"
+EXAMPLES = Path(__file__).resolve().parents[2] / "contracts" / "http-api" / "v1" / "examples"
 
 
 def model_for(example: Path) -> type[BaseModel]:
