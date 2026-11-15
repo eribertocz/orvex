@@ -39,7 +39,7 @@ def runs(folder: Path, identity: Identity, limit: int, out: IO[str]) -> int:
                 # listed exists at the snapshot read after them (#394).
                 tables = lake.tables()
                 snapshot = lake.current_snapshot().id
-                with calling(project.settings.name):
+                with calling(project.folder):
                     request = transform().history_request(
                         envelope(), snapshot, zone, limit, tuple(sorted(tables))
                     )

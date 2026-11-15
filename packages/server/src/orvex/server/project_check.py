@@ -79,7 +79,7 @@ def check_project(
         project = load_project(folder)
     except ProjectLoadError as error:
         return Checked(None, Discovery((), ()), None, (_load_problem(error),))
-    with calling(project.settings.name):
+    with calling(project.folder):
         return _check_loaded(project, identity, instance)
 
 

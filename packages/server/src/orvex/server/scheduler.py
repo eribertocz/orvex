@@ -383,7 +383,7 @@ def _schedule(
         report()
         while not stopped():
             try:
-                with renewing():
+                with renewing(), calling(folder):
                     wait = _cycle(folder, identity, out, clock, monotonic, state, control, stopped)
             except KeyboardInterrupt:
                 # Ctrl+C that reached a run: the run recorded it and rolled back.
@@ -529,8 +529,7 @@ def _cycle(
     assert checked.place is not None  # a refused lake location is a problem
     place = checked.place
     try:
-        with calling(project.settings.name):
-            records = _records(home, place, state.kept)
+        records = _records(home, place, state.kept)
     except locking.ProjectLocked:
         return _report(out, state, ("waiting: another process holds the project",), now)
     except ProjectLoadError as error:
@@ -542,19 +541,18 @@ def _cycle(
     last_runs = [moment for moment in (records.last_run_start, state.last_run_wall) if moment]
 
     def decide(held: dict[str, dt.datetime]) -> Plan:
-        with calling(project.settings.name):
-            return transform().schedule_plan(
-                envelope(),
-                checked.discovery.models,
-                graph.order,
-                graph.dependencies,
-                records.histories,
-                now,
-                zone,
-                state.started,
-                max(last_runs, default=None),
-                held,
-            )
+        return transform().schedule_plan(
+            envelope(),
+            checked.discovery.models,
+            graph.order,
+            graph.dependencies,
+            records.histories,
+            now,
+            zone,
+            state.started,
+            max(last_runs, default=None),
+            held,
+        )
 
     decided = decide(state.held)
     due = {reason.split(":")[0] for reason in decided.reasons}
@@ -567,13 +565,9 @@ def _cycle(
         if recovering <= state.deferred:
             # The models a retry reads run with it: only the other healthy ones wait.
             known = tuple(model.name for model in checked.discovery.models)
-            with calling(project.settings.name):
-                read = set().union(
-                    *(
-                        transform().closure(envelope(), n, graph.dependencies, known)
-                        for n in recovering
-                    )
-                )
+            read = set().union(
+                *(transform().closure(envelope(), n, graph.dependencies, known) for n in recovering)
+            )
             waiting = healthy - read
             decided = decide({**state.held, **dict.fromkeys(waiting, now + LOOK_AGAIN)})
             state.deferred -= recovering
@@ -639,8 +633,7 @@ def _cycle(
             _say(state, out, zone, after, f"{name} failed; retry {count} at {retry:%H:%M}")
         else:
             state.failures.pop(name, None)
-            with calling(project.settings.name):
-                state.held[name] = transform().next_due(envelope(), by_name[name], after, zone)
+            state.held[name] = transform().next_due(envelope(), by_name[name], after, zone)
             print(f"SCHEDULE_GAVE_UP {name}", file=out, flush=True)
             until = state.held[name].astimezone(ZoneInfo(zone))
             _say(state, out, zone, after, f"{name} waits until {until:%Y-%m-%d %H:%M}")

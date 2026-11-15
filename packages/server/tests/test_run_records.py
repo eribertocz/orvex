@@ -12,7 +12,7 @@ import subprocess
 import sys
 import textwrap
 import zoneinfo
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -30,28 +30,30 @@ from orvex.server.transform_calls import calling, envelope, transform
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Transaction, open_lake
 
+from .record_statements import failing_record_statements, replace_record_statements
+
 SLUG = load_identity().slug
 
 
 def record_statements(records: list[RunRecord]) -> list[StatementRequest]:
-    with calling("test"):
+    with calling(Path("project")):
         return list(transform().record_statements(envelope(), tuple(records)))
 
 
 def history_request(
     snapshot: int, zone: str, limit: int, tables: set[tuple[str, str]]
 ) -> ReadRequest | None:
-    with calling("test"):
+    with calling(Path("project")):
         return transform().history_request(envelope(), snapshot, zone, limit, tuple(sorted(tables)))
 
 
 def model_history_request(snapshot: int, tables: set[tuple[str, str]]) -> ReadRequest | None:
-    with calling("test"):
+    with calling(Path("project")):
         return transform().model_history_request(envelope(), snapshot, tuple(sorted(tables)))
 
 
 def last_run_request(snapshot: int, tables: set[tuple[str, str]]) -> ReadRequest | None:
-    with calling("test"):
+    with calling(Path("project")):
         return transform().last_run_request(envelope(), snapshot, tuple(sorted(tables)))
 
 
@@ -176,17 +178,6 @@ def open_project_lake(folder: Path) -> Iterator[Lake]:
         lake.close()
 
 
-class _RecordStatements:
-    """The transform contract as the run reaches it, with its `record_statements` replaced."""
-
-    def __init__(self, replacement: Callable[..., tuple[StatementRequest, ...]]) -> None:
-        self._served = transform()
-        self.record_statements = replacement
-
-    def __getattr__(self, name: str) -> object:
-        return getattr(self._served, name)
-
-
 def armed_on_records(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
     """A flag set once the run inserts its records: the next commit is the run's own."""
     armed: list[bool] = []
@@ -196,8 +187,7 @@ def armed_on_records(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
         armed.append(True)
         return served.record_statements(sent, records)  # type: ignore[arg-type]
 
-    replaced = _RecordStatements(arming)
-    monkeypatch.setattr(run_command, "transform", lambda: replaced)
+    replace_record_statements(monkeypatch, arming)
     return armed
 
 
@@ -958,13 +948,7 @@ def test_a_failed_run_whose_records_cannot_be_written_says_so(
     # R4.
     project(tmp_path, {**MODELS, "models/s/b.sql": "SELECT CAST('x' AS INTEGER) AS n FROM s.a"})
 
-    def broken(*_: object) -> tuple[StatementRequest, ...]:
-        return (
-            StatementRequest(kind="statement", sql="INSERT INTO nowhere VALUES (1)", parameters=[]),
-        )
-
-    replaced = _RecordStatements(broken)
-    monkeypatch.setattr(run_command, "transform", lambda: replaced)
+    replace_record_statements(monkeypatch, failing_record_statements)
     code, out = command(capsys, "run", str(tmp_path))
     assert code == 1
     lines = out.splitlines()

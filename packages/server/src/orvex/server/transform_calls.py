@@ -3,10 +3,13 @@ installed manifests choose, reached through its in-process binding, each call wi
 envelope.
 
 `transform().<operation>(envelope(), ...)` sends one call. The envelope names the project of
-the innermost `calling(project_id)` block, with that block's correlation id; the actor is the
-local Builder who started the command (or the scheduler they started), and the revision is the
-project's files as they are now. Outside a `calling` block the envelope has no project, and the
-binding refuses the call (CONTRACT_ENVELOPE_INVALID) before transform runs: fail closed.
+the `calling(folder)` block it is sent in, by the project folder's absolute path, with that
+block's correlation id: a block inside another for the same project keeps the outer one's, so
+one command (a check, the run after it, its records) is followed end to end under one id. The
+actor is the local Builder who started the command (or the scheduler they started), and the
+revision is the project's files as they are now. Outside a `calling` block the envelope has no
+project, and the binding refuses the call (CONTRACT_ENVELOPE_INVALID) before transform runs:
+fail closed.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 from orvex.contracts.binding import Bound
@@ -39,8 +43,14 @@ _CONTEXT: ContextVar[_Context | None] = ContextVar("transform_calls", default=No
 
 
 @contextmanager
-def calling(project_id: str) -> Iterator[None]:
-    """Calls to transform inside this block act on `project_id`, under one correlation id."""
+def calling(folder: Path) -> Iterator[None]:
+    """Calls to transform inside this block act on the project in `folder`, under one
+    correlation id (the enclosing block's, when it is for the same project)."""
+    project_id = str(Path(folder).expanduser().absolute())
+    current = _CONTEXT.get()
+    if current is not None and current.project_id == project_id:
+        yield
+        return
     token = _CONTEXT.set(_Context(project_id, str(uuid.uuid4())))
     try:
         yield

@@ -21,12 +21,19 @@ from orvex.server import run as run_command
 from orvex.server.cli import main
 from orvex.server.identity import Identity, load_identity
 from orvex.server.scheduler import schedule
+from orvex.server.transform_calls import calling
 from orvex.store.errors import StoreError
 
 SLUG = load_identity().slug
 PROJECT = "version: 1\nname: Test\ntime_zone: UTC\n"
 CONNECTIONS = "version: 1\nconnections:\n  feed:\n    type: parquet\n    path: data/f.parquet\n"
 START = dt.datetime(2026, 10, 28, 9, 50, tzinfo=dt.UTC)
+
+
+def cycle_records(home: Path, place: lake_place.Place, kept: scheduler._Kept) -> scheduler._Records:
+    """The scheduler's records of a project, read as one of its cycles reads them."""
+    with calling(home):
+        return scheduler._records(home, place, kept)
 
 
 def write(folder: Path, files: dict[str, str]) -> None:
@@ -455,15 +462,15 @@ def test_kept_records_are_read_again_once_the_catalog_changes(
     monkeypatch.setattr(scheduler, "_read_records", read)
     kept = scheduler._Kept()
     place = cast(lake_place.Place, None)
-    assert scheduler._records(tmp_path, place, kept).failed == ("1",)
-    assert scheduler._records(tmp_path, place, kept).failed == ("1",)  # unchanged: kept
+    assert cycle_records(tmp_path, place, kept).failed == ("1",)
+    assert cycle_records(tmp_path, place, kept).failed == ("1",)  # unchanged: kept
     wal = catalog.parent / "catalog.ducklake.wal"
     wal.write_bytes(b"commit")  # a commit's journal
     settled(wal)
-    assert scheduler._records(tmp_path, place, kept).failed == ("2",)
+    assert cycle_records(tmp_path, place, kept).failed == ("2",)
     catalog.write_bytes(b"one, then checkpointed")
     settled(catalog)
-    assert scheduler._records(tmp_path, place, kept).failed == ("3",)
+    assert cycle_records(tmp_path, place, kept).failed == ("3",)
     assert len(reads) == 3
 
 
@@ -486,12 +493,12 @@ def test_a_commit_with_the_same_size_and_time_is_still_seen(
     monkeypatch.setattr(scheduler, "_read_records", read)
     kept = scheduler._Kept()
     place = cast(lake_place.Place, None)
-    scheduler._records(tmp_path, place, kept)
-    scheduler._records(tmp_path, place, kept)
+    cycle_records(tmp_path, place, kept)
+    cycle_records(tmp_path, place, kept)
     assert len(reads) == 1  # unchanged: kept
     catalog.write_bytes(b"PAGE")  # the same size
     settled(catalog)  # and the same time
-    scheduler._records(tmp_path, place, kept)
+    cycle_records(tmp_path, place, kept)
     assert len(reads) == 2
 
 
@@ -514,8 +521,8 @@ def test_records_are_not_kept_when_the_catalog_changes_while_they_are_read(
     monkeypatch.setattr(scheduler, "_read_records", read)
     kept = scheduler._Kept()
     place = cast(lake_place.Place, None)
-    scheduler._records(tmp_path, place, kept)
-    scheduler._records(tmp_path, place, kept)
+    cycle_records(tmp_path, place, kept)
+    cycle_records(tmp_path, place, kept)
     assert len(reads) == 2
     assert kept.records is None
 

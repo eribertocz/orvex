@@ -6,12 +6,13 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from orvex.contracts.store.v1 import StatementRequest
 from orvex.server import run as run_command
 from orvex.server import run_metadata
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.store.errors import StoreError
+
+from .record_statements import failing_record_statements, replace_record_statements
 
 SLUG = load_identity().slug
 PROJECT = "version: 1\nname: Test\ntime_zone: America/La_Paz\n"
@@ -244,11 +245,6 @@ def test_since_rules_are_checked_before_anything_runs(
     assert not (tmp_path / f".{SLUG}").exists()
 
 
-def broken_records(*_: object) -> list[StatementRequest]:
-    """Run-record statements that fail: the run's transaction rolls back."""
-    return [StatementRequest(kind="statement", sql="INSERT INTO nowhere VALUES (1)", parameters=[])]
-
-
 def stored_tables(folder: Path) -> list[tuple[object, ...]]:
     return lake_value(
         folder,
@@ -275,7 +271,7 @@ def test_a_failed_record_write_commits_neither_rows_nor_watermark(
             (2, "2.0000", "2024-01-02 10:00:00+00"),
         )
     with monkeypatch.context() as patch:
-        patch.setattr(run_command, "record_statements", broken_records)
+        replace_record_statements(patch, failing_record_statements)
         code, out = command(capsys, "run", str(tmp_path))
     assert code == 1  # rolled back; the failed records could not be written either
     assert "run records were not written" in out

@@ -127,7 +127,7 @@ def run(
         refreshed = selection.full_refresh & incremental_names
     home = project.folder / f".{identity.slug}"
     try:
-        with project_lock(home), calling(project.settings.name):
+        with project_lock(home), calling(project.folder):
             return _run_locked(
                 project, graph, checked, home, identity, out, refreshed, selection, drop_leftovers
             )
