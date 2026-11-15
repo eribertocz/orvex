@@ -16,7 +16,7 @@ from collections.abc import Callable
 import pyarrow as pa
 from orvex.contracts.interface import InterfaceContract
 from orvex.contracts.interface_errors import InterfaceContractError
-from orvex.contracts.kit import KitCase
+from orvex.contracts.kit import CaseEnvironment, KitCase
 from orvex.contracts.kit_client import KitClient
 from orvex.contracts.store.kit_services import CLICKHOUSE_PASSWORD, SAFE, clickhouse
 from orvex.contracts.store.kit_support import (
@@ -731,19 +731,38 @@ PROOFS: dict[tuple[str, str], Provoke] = {
 }
 
 
+def _identifier(operation: str, code: str) -> str:
+    return f"{operation.replace('_', '-')}.raises.{code.lower().replace('_', '-')}"
+
+
 def _case(operation: str, code: str, provoke: Provoke) -> KitCase:
     def check(client: KitClient) -> None:
         refused(code, provoke(client))
 
-    identifier = f"{operation.replace('_', '-')}.raises.{code.lower().replace('_', '-')}"
-    return KitCase(identifier, operation, f"{operation} refuses with {code}", check)
+    return KitCase(
+        _identifier(operation, code), operation, f"{operation} refuses with {code}", check
+    )
 
 
-def code_cases(contract: InterfaceContract) -> tuple[KitCase, ...]:
-    """One case per declared (operation, code); KIT_CODE_UNPROVEN when the two differ."""
+type Isolated = dict[tuple[str, str], tuple[Callable[[KitClient], None], CaseEnvironment]]
+
+
+def _isolated(operation: str, code: str, isolated: Isolated) -> KitCase:
+    check, environment = isolated[operation, code]
+    expectation = f"{operation} refuses with {code}, in the environment the case declares"
+    return KitCase(
+        _identifier(operation, code), operation, expectation, check, environment=environment
+    )
+
+
+def code_cases(contract: InterfaceContract, isolated: Isolated) -> tuple[KitCase, ...]:
+    """One case per declared (operation, code), those of `isolated` each in the environment it
+    declares (their checks live beside the kit, where a case's own process finds it);
+    KIT_CODE_UNPROVEN when the declared and the proven codes differ."""
     declared = {(o.name, code) for o in contract.operations for code in o.errors}
-    unproven = sorted(declared - set(PROOFS))
-    undeclared = sorted(set(PROOFS) - declared)
+    proven = set(PROOFS) | set(isolated)
+    unproven = sorted(declared - proven)
+    undeclared = sorted(proven - declared)
     if unproven or undeclared:
         raise InterfaceContractError(
             "KIT_CODE_UNPROVEN",
@@ -752,5 +771,8 @@ def code_cases(contract: InterfaceContract) -> tuple[KitCase, ...]:
             {"contract": contract.name},
         )
     return tuple(
-        _case(operation, code, PROOFS[operation, code]) for operation, code in sorted(PROOFS)
+        _isolated(operation, code, isolated)
+        if (operation, code) in isolated
+        else _case(operation, code, PROOFS[operation, code])
+        for operation, code in sorted(proven)
     )

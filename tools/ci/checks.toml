@@ -238,7 +238,7 @@ contexts = [
   "python-tests-3.14-part-8",
   "python-tests-3.14-part-9",
 ]
-digest = "f87e8bad813dbf9e"
+digest = "d13ee688e2a5c3bb"
 pythons = ["3.15", "3.14"]
 setup = [
   "python -m pip install --quiet pip==26.3",
@@ -762,7 +762,7 @@ job = "standalone-store"
 kind = "check"
 required = false
 contexts = ["standalone-store"]
-digest = "f3100f3e79efae0a"
+digest = "f94090838840ae0e"
 setup = [
   'dir="$RUNNER_TEMP/postgres-tls"',
   "python -m pip install --quiet pip==26.3",

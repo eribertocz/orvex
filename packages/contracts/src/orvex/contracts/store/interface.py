@@ -330,6 +330,7 @@ STATEMENT = ("STORE_STATEMENT_INVALID", "STORE_QUERY_FAILED")
 ERRORS_OF: dict[str, tuple[str, ...]] = {
     "open_lake": (
         "STORE_LIMITS_REQUIRED",
+        "STORE_EXTENSION_UNAVAILABLE",
         "STORE_LOCATION_INVALID",
         "STORE_SECRET_MISSING",
         "STORE_SECRET_INLINE",
@@ -375,6 +376,7 @@ ERRORS_OF: dict[str, tuple[str, ...]] = {
     "maintain": (HANDLE, *SLOT),
     "open_existing_lake": (
         "STORE_LIMITS_REQUIRED",
+        "STORE_EXTENSION_UNAVAILABLE",
         "STORE_LOCATION_INVALID",
         "STORE_SECRET_MISSING",
         "STORE_TLS_REQUIRED",
@@ -395,6 +397,7 @@ ERRORS_OF: dict[str, tuple[str, ...]] = {
         "STORE_CONNECTION_FAILED",
         "SOURCE_NOT_READ_ONLY",
         "ENGINE_SETTING_REQUIRED",
+        "ENGINE_VERSION_UNTESTED",
     ),
     "close_clickhouse": (),
     "clickhouse_columns": (HANDLE, "SOURCE_NOT_FOUND", "UNSUPPORTED_SOURCE_TYPE"),

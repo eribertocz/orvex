@@ -95,6 +95,19 @@ jobs:
         options: >-
           --health-cmd "clickhouse-client --user ci --password ci-disposable-database --query 'SELECT 1'"
           --health-interval 2s --health-timeout 5s --health-retries 60
+      # A ClickHouse of a version the store does not test, for the store kit's
+      # ENGINE_VERSION_UNTESTED case (#486); a disposable server, not a secret.
+      clickhouse-untested:
+        # clickhouse/clickhouse-server:26.9.25.15 (between the tested 26.8 and 26.10)
+        image: clickhouse/clickhouse-server@sha256:19bfacb135479a892551a8155cfbbc8211aedf2aa888cd91950b9ee7e76cc7e3
+        env:
+          CLICKHOUSE_USER: ci
+          CLICKHOUSE_PASSWORD: ci-disposable-database
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports: ["8124:8123"]
+        options: >-
+          --health-cmd "clickhouse-client --user ci --password ci-disposable-database --query 'SELECT 1'"
+          --health-interval 2s --health-timeout 5s --health-retries 60
     env:
       STORE_TEST_POSTGRES: host=localhost port=5432 dbname=postgres user=postgres
       STORE_TEST_POSTGRES_PASSWORD: ci-disposable-database

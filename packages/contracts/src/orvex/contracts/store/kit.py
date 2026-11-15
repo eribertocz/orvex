@@ -17,7 +17,7 @@ from decimal import Decimal
 
 import pyarrow as pa
 from orvex.contracts.envelope import CallEnvelope
-from orvex.contracts.kit import Idempotent, Kit, KitCase
+from orvex.contracts.kit import CaseEnvironment, ExtensionDirectory, Idempotent, Kit, KitCase
 from orvex.contracts.kit_client import KitClient
 from orvex.contracts.store.interface import STORE
 from orvex.contracts.store.kit_codes import code_cases
@@ -29,6 +29,7 @@ from orvex.contracts.store.kit_support import (
     commit,
     drain,
     existing_lake,
+    folder,
     local_location,
     open_lake,
     read_request,
@@ -40,13 +41,16 @@ from orvex.contracts.store.kit_support import (
 )
 from orvex.contracts.store.v1 import (
     ChangesRequest,
+    ExistingLakeAttachment,
     Parameter,
+    SqliteLakeLocation,
     StatisticsRequest,
     TablesRequest,
 )
 from orvex.contracts.store.values import (
     Budget,
     ClickHouseHandle,
+    ClickHouseTarget,
     ExistingLakeHandle,
     LakeHandle,
     ReadHandle,
@@ -717,5 +721,59 @@ CASES = (
     ),
 )
 
-RECORDED = 153
-STORE_KIT = Kit(contract=STORE, recorded=RECORDED, cases=(*CASES, *code_cases(STORE)))
+# --- the code cases that run in a process of their own (found here by that process) ---------------
+
+# No extension at hand and none to download: DuckDB's extension directory is under an empty
+# home, and every download goes to a proxy nothing answers on.
+DEAD_PROXY = "http://127.0.0.1:1"
+WITHHELD = CaseEnvironment(
+    variables=(("HTTP_PROXY", DEAD_PROXY), ("HTTPS_PROXY", DEAD_PROXY)),
+    extensions=ExtensionDirectory("HOME"),
+)
+# A ClickHouse server of a version the store does not test, the CI job's service on port 8124
+# (a disposable server, its password not a secret).
+UNTESTED_PASSWORD = "STORE_KIT_UNTESTED_PASSWORD"
+UNTESTED = CaseEnvironment(variables=((UNTESTED_PASSWORD, "ci-disposable-database"),))
+
+
+def extension_withheld_lake(client: KitClient) -> None:
+    refused("STORE_EXTENSION_UNAVAILABLE", lambda: client.open_lake(local_location(), LIMITS, ()))
+
+
+def extension_withheld_existing(client: KitClient) -> None:
+    root = folder()
+    location = SqliteLakeLocation(
+        kind="lake_location",
+        catalog="sqlite",
+        path=str(root / "catalog.sqlite"),
+        data_path=(root / "data").as_posix() + "/",
+    )
+    attachment = ExistingLakeAttachment(
+        kind="existing_lake_attachment",
+        name="owner",
+        location=location,
+        roles_in_use=[],
+        protected_files=[],
+        credentials_in_use=[],
+        protected_locations=[],
+    )
+    refused(
+        "STORE_EXTENSION_UNAVAILABLE",
+        lambda: client.open_existing_lake(attachment, EXISTING_LIMITS),
+    )
+
+
+def untested_clickhouse(client: KitClient) -> None:
+    target = ClickHouseTarget("127.0.0.1", 8124, "default", "ci", UNTESTED_PASSWORD, tls=False)
+    refused("ENGINE_VERSION_UNTESTED", lambda: client.connect_clickhouse(target, BUDGET))
+
+
+ISOLATED: dict[tuple[str, str], tuple[Callable[[KitClient], None], CaseEnvironment]] = {
+    ("open_lake", "STORE_EXTENSION_UNAVAILABLE"): (extension_withheld_lake, WITHHELD),
+    ("open_existing_lake", "STORE_EXTENSION_UNAVAILABLE"): (extension_withheld_existing, WITHHELD),
+    ("connect_clickhouse", "ENGINE_VERSION_UNTESTED"): (untested_clickhouse, UNTESTED),
+}
+
+
+RECORDED = 156
+STORE_KIT = Kit(contract=STORE, recorded=RECORDED, cases=(*CASES, *code_cases(STORE, ISOLATED)))
