@@ -13,6 +13,8 @@ from typing import Any
 import pyarrow as pa
 import pytest
 import yaml
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import StatementRequest
 from orvex.semantic.adapters import clickhouse
 from orvex.semantic.adapters import duckdb as adapter_module
@@ -23,9 +25,7 @@ from orvex.semantic.execution import Answer, answer
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.planning import SemanticPlan, plan
 from orvex.semantic.policies import PolicyModel, read_policies
-from orvex.store.errors import StoreError
-from orvex.store.json_encoding import arrow_to_json
-from orvex.store.lake import Lake
+from orvex.server.store_access import store
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners.semantic_corpus import ROOT, run
@@ -391,7 +391,9 @@ def test_two_runs_share_the_execution_identity_but_not_necessarily_the_receipt()
         three = ask(REVENUE_BY_REGION, compiled, lake)
     identity = [a.receipt.document()["execution_fingerprint"] for a in (one, two, three)]
     assert identity[0] == identity[1] != identity[2]
-    assert one.result.canonical(arrow_to_json) == two.result.canonical(arrow_to_json)
+    assert one.result.canonical(store().arrow_to_json) == two.result.canonical(
+        store().arrow_to_json
+    )
     assert one.receipt.receipt_id != two.receipt.receipt_id  # timings differ
     assert one.plan.fingerprint == two.plan.fingerprint
 

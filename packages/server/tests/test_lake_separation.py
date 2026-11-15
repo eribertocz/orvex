@@ -10,12 +10,12 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.server import lake_separation
 from orvex.server.commands import check_project
 from orvex.server.identity import load_identity
 from orvex.server.instance import ProjectRegistry
 from orvex.server.problems import Problem
-from orvex.store.errors import StoreError
 
 SLUG = load_identity().slug
 PROJECT = "version: 1\nname: {name}\ntime_zone: UTC\n"

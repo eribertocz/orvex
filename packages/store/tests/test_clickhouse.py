@@ -18,10 +18,10 @@ from decimal import Decimal
 
 import pyarrow as pa
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import Parameter
 from orvex.store import clickhouse
 from orvex.store.clickhouse import Budget, ClickHouse, ClickHouseTarget, duckdb_type
-from orvex.store.errors import StoreError
 
 BUDGET = Budget(timeout_ms=30_000, memory_bytes=2_000_000_000)
 SAFE = {

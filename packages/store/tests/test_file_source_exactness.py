@@ -21,11 +21,11 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from orvex.store.errors import StoreError
+from orvex.contracts.store.errors import StoreError
 from orvex.store.file_sources import view_query
 from orvex.testing.fixtures import frozen
 
-from tests.support import parquet_footer
+from . import parquet_footer
 
 D = decimal.Decimal
 UTC = dt.UTC

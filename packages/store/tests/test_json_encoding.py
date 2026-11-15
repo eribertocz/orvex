@@ -10,10 +10,11 @@ import pyarrow as pa
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import ResultJson
 from orvex.store.arrow_exact import _with_duckdb_types, exact_select
-from orvex.store.errors import StoreError
-from orvex.store.json_encoding import arrow_to_json
+
+from .contract_client import store_client
 
 CASES = {
     "BOOLEAN": ["true", "false"],
@@ -62,7 +63,7 @@ def encode(sql: str) -> dict[str, object]:
         source = relation.to_arrow_reader(1000)
         schema = _with_duckdb_types(source.schema, types)
         reader = pa.RecordBatchReader.from_batches(schema, (b.cast(schema) for b in source))
-        text = "".join(arrow_to_json(reader))
+        text = "".join(store_client().arrow_to_json(reader))
     finally:
         connection.close()
     document: dict[str, object] = json.loads(text)
@@ -191,7 +192,9 @@ def test_unsupported_type_fails_on_the_first_fragment() -> None:
         relation = connection.sql("SELECT 1 AS ok, [1] AS l")
         source = relation.to_arrow_reader(10)
         schema = _with_duckdb_types(source.schema, [str(kind) for kind in relation.types])
-        fragments = arrow_to_json(pa.RecordBatchReader.from_batches(schema, iter(())))
+        fragments = store_client().arrow_to_json(
+            pa.RecordBatchReader.from_batches(schema, iter(()))
+        )
         with pytest.raises(StoreError):
             next(fragments)
     finally:

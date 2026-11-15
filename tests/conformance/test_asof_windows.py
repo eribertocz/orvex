@@ -19,12 +19,12 @@ import pytest
 import yaml
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from orvex.contracts.store.client import Lake
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies import PolicyModel, read_policies
-from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 from tests.conformance.test_execution import Spy, ask, corpus_case, lake_for

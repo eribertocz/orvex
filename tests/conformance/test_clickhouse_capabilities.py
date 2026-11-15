@@ -18,6 +18,8 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import Parameter, ReadRequest
 from orvex.semantic import zonedata
 from orvex.semantic.adapters import clickhouse as ch
@@ -30,9 +32,7 @@ from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.planning import plan
 from orvex.semantic.query.binding import Limits as QueryLimits
 from orvex.semantic.query.binding import bind_query
-from orvex.store.errors import StoreError
-from orvex.store.json_encoding import arrow_to_json
-from orvex.store.lake import Lake
+from orvex.server.store_access import store
 
 from conformance.runners import corpus_execution as ce
 from tests.conformance import test_asof_windows as asof
@@ -390,7 +390,9 @@ def pages(server: base.Server, document: Document, policy: Any = None) -> list[A
                 return found
             last = reference.select([n for n, _ in duck.sorts]).slice(size - 1, 1)
             text = "".join(
-                arrow_to_json(pa.RecordBatchReader.from_batches(last.schema, last.to_batches()))
+                store().arrow_to_json(
+                    pa.RecordBatchReader.from_batches(last.schema, last.to_batches())
+                )
             )
             start = tuple(json.loads(text)["rows"][0])
 

@@ -13,6 +13,8 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import pytest
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import ChangesRequest, StatementRequest
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
@@ -22,8 +24,6 @@ from orvex.semantic.evidence import EvidenceRecord, Ledger, declarations, relied
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.planning import plan
 from orvex.semantic.query.binding import Limits, bind_query
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 from tests.conformance import test_materialization as rollups

@@ -30,11 +30,11 @@ import pytest
 import yaml
 from hypothesis import given
 from hypothesis import strategies as st
+from orvex.contracts.store.client import Lake
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import Answer, answer
 from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.semantic.receipt.viewer import CallerViewer
-from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 from tests.conformance.test_period_end import snapshots_model

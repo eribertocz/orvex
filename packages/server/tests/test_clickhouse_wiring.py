@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from orvex.contracts.project.v1 import ClickhouseConnection
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import TablesResult
 from orvex.semantic.evidence import EvidenceRecord
 from orvex.server import cli, clickhouse_engines, development_switch
@@ -20,7 +21,6 @@ from orvex.server.engine_catalog import engine_catalog, live_environment
 from orvex.server.identity import load_identity
 from orvex.server.project import load_project
 from orvex.server.semantic_model import ExternalTables, Loaded, load_semantic
-from orvex.store.errors import StoreError
 
 from .test_lake_separation import make_project
 from .test_semantic_model import VENDORS, codes, extension, model, opened, ran

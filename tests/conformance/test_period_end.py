@@ -15,7 +15,7 @@ from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie.reader import read
-from orvex.store.json_encoding import arrow_to_json
+from orvex.server.store_access import store
 
 from conformance.runners import corpus_execution as ce
 from tests.conformance.test_execution import ask, corpus_case, lake_for, tiny_lake
@@ -245,7 +245,9 @@ def test_the_physical_order_of_rows_changes_nothing() -> None:
     one = answer_of(compiled, catalog, data, query("balance", group_by=BY_MONTH))
     two = answer_of(compiled, catalog, shuffled, query("balance", group_by=BY_MONTH))
     assert ce.rows_of(one) == ce.rows_of(two) == [["N", "2026-01-01", "168.00"]]
-    assert one.result.canonical(arrow_to_json) == two.result.canonical(arrow_to_json)
+    assert one.result.canonical(store().arrow_to_json) == two.result.canonical(
+        store().arrow_to_json
+    )
 
 
 def test_a_key_wider_than_entity_and_axis_is_refused_even_without_ties() -> None:

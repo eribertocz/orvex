@@ -21,7 +21,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from orvex.semantic import SemanticError
 from orvex.semantic.result import CellState, SemanticResult, read_result
-from orvex.store.json_encoding import arrow_to_json
+from orvex.server.store_access import store
 
 from tests.support.semantic_results import (
     decimal as decimal_column,
@@ -44,7 +44,7 @@ DECIMAL_38_10 = "12345678901234567890.0123456789"
 
 
 def wire(result: SemanticResult) -> dict[str, Any]:
-    document: dict[str, Any] = json.loads(result.wire(arrow_to_json))
+    document: dict[str, Any] = json.loads(result.wire(store().arrow_to_json))
     return document
 
 
@@ -104,7 +104,7 @@ def test_decimals_of_every_precision_and_scale_stay_exact(
     assert isinstance(cell, str)
     assert decimal.Decimal(cell) == value
     assert len(cell.partition(".")[2]) == scale
-    canonical = json.loads(result.canonical(arrow_to_json))
+    canonical = json.loads(result.canonical(store().arrow_to_json))
     assert canonical["rows"] == [[cell], [None]]
 
 
@@ -168,7 +168,7 @@ def test_the_canonical_form_keeps_every_value_exact() -> None:
     ]
     result = detail(source, columns)
     assert wire(result)["rows"][0] == [-0.0, 0.1, 1]
-    canonical = result.canonical(arrow_to_json)
+    canonical = result.canonical(store().arrow_to_json)
     rows = json.loads(canonical)["rows"]
     assert rows == [
         ["-0.0", "0.1", "1"],
@@ -177,19 +177,18 @@ def test_the_canonical_form_keeps_every_value_exact() -> None:
         ["-Infinity", None, "4"],
         ["0.1", "1.5", "-5"],
     ]
-    exact = detail(exact_table(), EXACT_COLUMNS).canonical(arrow_to_json)
+    exact = detail(exact_table(), EXACT_COLUMNS).canonical(store().arrow_to_json)
     assert json.loads(exact)["rows"] == [[DECIMAL_38_10, HUGEINT_MIN, UBIGINT_MAX, UHUGEINT_MAX]]
 
 
 CANONICAL_SCRIPT = """
 import hashlib, sys
 sys.path.insert(0, {root!r})
-from orvex.store.json_encoding import arrow_to_json
 from tests.conformance.test_semantic_result import detail, exact_table, EXACT_COLUMNS
 from tests.support.semantic_results import top_n_with_others
 parts = [
-    top_n_with_others().canonical(arrow_to_json),
-    detail(exact_table(), EXACT_COLUMNS).canonical(arrow_to_json),
+    top_n_with_others().canonical(store().arrow_to_json),
+    detail(exact_table(), EXACT_COLUMNS).canonical(store().arrow_to_json),
 ]
 print(hashlib.sha256(b"|".join(parts)).hexdigest())
 """
@@ -197,8 +196,8 @@ print(hashlib.sha256(b"|".join(parts)).hexdigest())
 
 def canonical_digest() -> str:
     parts = [
-        top_n_with_others().canonical(arrow_to_json),
-        detail(exact_table(), EXACT_COLUMNS).canonical(arrow_to_json),
+        top_n_with_others().canonical(store().arrow_to_json),
+        detail(exact_table(), EXACT_COLUMNS).canonical(store().arrow_to_json),
     ]
     return hashlib.sha256(b"|".join(parts)).hexdigest()
 
@@ -233,6 +232,9 @@ def test_an_empty_page_with_a_masked_column_and_a_notice_reveals_no_builder_deta
     assert document["rows"] == []
     assert document["row_count"] == 0
     assert [n["code"] for n in document["notices"]] == ["FILTER_INTERSECTION_EMPTY"]
-    for form in (result.wire(arrow_to_json).encode(), result.canonical(arrow_to_json)):
+    for form in (
+        result.wire(store().arrow_to_json).encode(),
+        result.canonical(store().arrow_to_json),
+    ):
         assert b"consumers.region" not in form
     assert read_result(json.dumps(document), result.arrow()).cells == ()

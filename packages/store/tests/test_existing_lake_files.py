@@ -20,6 +20,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     CredentialsInUseItem,
     ExistingLakeAttachment,
@@ -31,7 +32,6 @@ from orvex.contracts.store.v1 import (
     SqliteLakeLocation,
 )
 from orvex.store import separation
-from orvex.store.errors import StoreError
 from orvex.store.existing_lake import ExistingLake
 from orvex.testing.environment import unavailable
 
@@ -233,6 +233,26 @@ def test_a_lake_overlapping_a_protected_location_is_refused_in_both_orders(
     }[where]
     error = refused_at_attach(attachment(catalog, data, [protected]))
     assert "overlaps a protected location" in error.message or "catalog lies" in error.message
+
+
+def test_an_overlapping_declaration_is_refused_before_anything_is_attached(
+    other_device: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # DQ-018, from `conformance/runners/security_engines.py` (#486): the refusal comes before
+    # DuckLake attaches anything; the runner sees through the contract that nothing is held.
+    root = other_device / "lakes"
+    catalog, data = make_lake(root / "owner")
+    attached: list[str] = []
+    real = ExistingLake._attach
+
+    def spied(lake: ExistingLake, target: str, options: list[str]) -> None:
+        attached.append(target)
+        real(lake, target, options)
+
+    monkeypatch.setattr(ExistingLake, "_attach", spied)
+    error = refused_at_attach(attachment(catalog, data, [root / "owner"]))
+    assert "overlaps a protected location" in error.message
+    assert attached == []
 
 
 # --- file systems apart ----------------------------------------------------------------------
@@ -519,7 +539,7 @@ OVERLAY = """
 import json, os, subprocess, sys
 from pathlib import Path
 from orvex.store import separation
-from orvex.store.errors import StoreError
+from orvex.contracts.store.errors import StoreError
 root = Path(sys.argv[1])
 for name in ("lower", "upper", "work", "merged", "project"):
     (root / name).mkdir()

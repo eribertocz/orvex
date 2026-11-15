@@ -113,7 +113,7 @@ def test_a_builder_sees_the_estimate_and_the_materialization(
 def test_an_explanation_never_reads(
     served: tuple[LocalSemantic, TestClient], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from orvex.store.lake import Lake
+    from orvex.contracts.store.client import Lake
 
     semantic, http = served
     original = Lake.read

@@ -18,6 +18,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from moto.server import ThreadedMotoServer
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     LocalLakeLocation,
     ObjectStorage,
@@ -26,7 +27,6 @@ from orvex.contracts.store.v1 import (
     SqliteLakeLocation,
     StatementRequest,
 )
-from orvex.store.errors import StoreError
 from orvex.store.isolation import _sandbox_entries
 from orvex.store.lake import Lake, Limits, open_lake
 from orvex.store.sql_guard import _guarded

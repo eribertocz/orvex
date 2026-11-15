@@ -13,11 +13,11 @@ from typing import Any
 
 import duckdb
 import pytest
+from orvex.contracts.store.client import Lake
 from orvex.server import app, commands, semantic_model
 from orvex.server.identity import load_identity
 from orvex.server.project import load_project
 from orvex.server.semantic_model import Loaded, SemanticModel, load_semantic
-from orvex.store.lake import Lake
 
 IDENTITY = load_identity()
 VENDORS = (IDENTITY.ossie_vendor_name, *IDENTITY.previous_vendor_names)

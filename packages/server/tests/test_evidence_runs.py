@@ -11,12 +11,12 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+from orvex.contracts.store.client import Lake
 from orvex.semantic.evidence import Ledger
 from orvex.server import commands, evidence_runs
 from orvex.server.identity import load_identity
 from orvex.server.project import load_project
 from orvex.server.semantic_model import load_semantic
-from orvex.store.lake import Lake
 
 IDENTITY = load_identity()
 VENDORS = (IDENTITY.ossie_vendor_name, *IDENTITY.previous_vendor_names)

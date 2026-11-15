@@ -14,6 +14,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     FileSourceAttachment,
     LocalLakeLocation,
@@ -21,7 +22,6 @@ from orvex.contracts.store.v1 import (
     ReadRequest,
     StatementRequest,
 )
-from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, open_lake
 
 LIMITS = Limits(

@@ -13,12 +13,12 @@ from pathlib import Path
 import duckdb
 import pytest
 from orvex.contracts.maintenance_record.v1 import MaintenanceRecord
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.server import commands, maintenance, run_metadata
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.scheduler import schedule
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake
 
 IDENTITY = load_identity()
 SLUG = IDENTITY.slug

@@ -13,13 +13,13 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.server import commands
 from orvex.server import run as run_command
 from orvex.server.cli import main
 from orvex.server.commands import project_lock
 from orvex.server.identity import load_identity
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake
 
 REPOSITORY = Path(__file__).resolve().parents[3]
 SLUG = load_identity().slug

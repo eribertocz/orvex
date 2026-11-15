@@ -19,6 +19,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from moto.server import ThreadedMotoServer
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     AzureStorage,
     GcsStorage,
@@ -28,7 +29,6 @@ from orvex.contracts.store.v1 import (
     S3Storage,
     StatementRequest,
 )
-from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, open_lake
 from orvex.testing import azurite
 

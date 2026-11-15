@@ -8,6 +8,7 @@ import time
 from collections.abc import Iterator
 
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     LocalLakeLocation,
     PostgresLakeLocation,
@@ -16,7 +17,6 @@ from orvex.contracts.store.v1 import (
 )
 from orvex.store import lake as lake_module
 from orvex.store import read_stream
-from orvex.store.errors import StoreError
 from orvex.store.lake import Admission, Lake, Limits, open_lake
 
 SLOW = "SELECT sum(hash(a.range + b.range)) AS n FROM range(200000000) AS a, range(1000) AS b"

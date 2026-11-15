@@ -22,6 +22,8 @@ import yaml
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from orvex.access.context import permission_fingerprint
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import StatementRequest
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import Answer, answer
@@ -29,8 +31,6 @@ from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.semantic.receipt import verify_receipt
 from orvex.semantic.receipt.viewer import CallerViewer
 from orvex.semantic.result_cache import ResultCache
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners import security_fixtures as sf

@@ -12,8 +12,8 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import Parameter, ParameterType
-from orvex.store.errors import StoreError
 from orvex.store.file_names import FOLDER_COST, PATTERN_BUDGET
 from orvex.store.parameters import _typed
 from orvex.store.sql_guard import (
