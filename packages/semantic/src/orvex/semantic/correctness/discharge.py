@@ -24,10 +24,10 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any
 
+from orvex.contracts.semantic.errors import PlanError
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.correctness.graph import Graph
 from orvex.semantic.correctness.report import Obligation
-from orvex.semantic.errors import PlanError
 from orvex.semantic.ossie import sql
 
 Evidence = dict[str, str]  # obligation id -> the label of the step that discharges it

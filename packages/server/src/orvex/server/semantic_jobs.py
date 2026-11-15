@@ -42,7 +42,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from orvex.access.errors import AccessError
-from orvex.semantic.errors import SemanticError
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.server import semantic_http
 from orvex.server.query_cancel import Cancel
 from orvex.server.query_slots import Slot

@@ -15,9 +15,9 @@ import json
 from typing import Any
 
 import pytest
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.catalog.building import catalog_for_context
 from orvex.semantic.compiler.compiled import compile_model
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import answer
 from orvex.semantic.explanation import explain
 from orvex.semantic.ossie.reader import read

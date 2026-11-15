@@ -11,6 +11,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from orvex.contracts.binding import Bound
+from orvex.contracts.envelope import CallEnvelope
+from orvex.contracts.semantic.interface import RESULT_CACHE
 from orvex.semantic.receipt import DataRead
 from orvex.semantic.result_cache import ResultCache, use_of
 
@@ -60,7 +63,8 @@ def test_a_live_engine_always_bypasses_and_stores_nothing() -> None:
     with served(FOUND, "clickhouse", "") as place:
         place.cache = ResultCache()
         assert [origin(place, BY_ZONE)[0] for _ in range(2)] == ["bypass", "bypass"]
-        assert len(place.cache) == 0
+        measure = CallEnvelope("result-cache", "1.0", "test", "test", "project-1", "test")
+        assert Bound(RESULT_CACHE, place.cache, serialized=False).entries(measure) == 0
 
 
 def test_a_read_without_a_retained_version_has_no_key() -> None:

@@ -21,8 +21,8 @@ from typing import Any
 
 import pytest
 import yaml
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.correctness import IMPLEMENTED, SHAPES
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import answer
 from orvex.semantic.policies import read_policies
 

@@ -8,10 +8,10 @@ import json
 from collections.abc import Callable
 from typing import Any
 
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.compiler.compiled import CompiledModel, nonzero_literal, zero_literal
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.compiler.typecheck import NodeType, TypedNode
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.result import ColumnSpec
 

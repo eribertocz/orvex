@@ -43,6 +43,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
 import pyarrow as pa
+from orvex.contracts.semantic.errors import PlanError, SemanticError
 from orvex.semantic.adapters.duckdb import (
     EvidenceCheck,
     consistency_check,
@@ -54,7 +55,6 @@ from orvex.semantic.adapters.duckdb import (
 from orvex.semantic.canonical import fingerprint
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
-from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.receipt.building import EvidenceUse
 

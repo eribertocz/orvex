@@ -1,6 +1,7 @@
-"""The result cache (P3-10, #444; ADR-0012 as amended): what a question's one read returned,
-kept in memory, keyed by the execution identity, so the same question with the same identity
-is answered without reading again.
+"""The result cache (P3-10, #444; ADR-0012 as amended): the result-cache contract's
+implementation (#486 G1) and the key of each question's use of it. What a question's one read
+returned is kept in memory, keyed by the execution identity, so the same question with the same
+identity is answered without reading again.
 
 - **Where it sits.** Between planning and the read (`execution`): every question is bound,
   checked and planned with the caller's current context first, so every refusal and policy is
@@ -29,15 +30,14 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any
 
-import pyarrow as pa
+from orvex.contracts.envelope import CallEnvelope
+from orvex.contracts.semantic.interface import LARGEST_SHARE, Stored, Use, entry_bytes
 from orvex.semantic.canonical import fingerprint
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.ossie import sql
 from orvex.semantic.receipt import DataRead
-from orvex.semantic.withheld import Withheld
 
 DEFAULT_BYTES = 256 * 2**20
 DURATION = re.compile(
@@ -47,27 +47,10 @@ DURATION = re.compile(
 SECONDS = {"W": 604800, "D": 86400, "h": 3600, "m": 60, "s": 1}
 
 
-@dataclass(frozen=True, slots=True)
-class Stored:
-    """What one read returned, its checks applied, before any page or row was cut."""
-
-    table: pa.Table
-    withheld: tuple[Withheld, ...]
-    estimated: Any  # the read-cost estimate recorded with it, or None
-    at: float  # when it was read, on the cache's clock
-
-
-@dataclass(frozen=True, slots=True)
-class Use:
-    """How one question uses the cache: its key (None: `bypass`), and its entries' lifetime
-    in seconds (None: no `ttl`)."""
-
-    key: str | None
-    ttl: float | None
-
-
 class ResultCache:
-    """One process's cache. Thread-safe; it never raises on a full cache: it evicts."""
+    """One process's cache, the result-cache contract's implementation
+    (`orvex.contracts.semantic.interface`). Thread-safe; it never raises on a full cache: it
+    evicts."""
 
     def __init__(
         self, max_bytes: int = DEFAULT_BYTES, clock: Callable[[], float] = time.monotonic
@@ -76,46 +59,48 @@ class ResultCache:
             raise ValueError("a result cache holds at least one byte")
         self.max_bytes = max_bytes
         self.clock = clock
-        self._entries: OrderedDict[str, tuple[Stored, int]] = OrderedDict()
+        # Each entry: what was stored, when (on `clock`), and its bytes.
+        self._entries: OrderedDict[str, tuple[Stored, float, int]] = OrderedDict()
         self._bytes = 0
         self._lock = threading.Lock()
 
-    @property
-    def size_bytes(self) -> int:
-        return self._bytes
+    def size_bytes(self, envelope: CallEnvelope) -> int:
+        with self._lock:
+            return self._bytes
 
-    def __len__(self) -> int:
-        return len(self._entries)
+    def entries(self, envelope: CallEnvelope) -> int:
+        with self._lock:
+            return len(self._entries)
 
-    def get(self, use: Use) -> Stored | None:
+    def get(self, envelope: CallEnvelope, use: Use) -> Stored | None:
         if use.key is None:
             return None
         with self._lock:
             found = self._entries.get(use.key)
             if found is None:
                 return None
-            if use.ttl is not None and self.clock() - found[0].at >= use.ttl:
+            if use.ttl is not None and self.clock() - found[1] >= use.ttl:
                 self._drop(use.key)
                 return None
             self._entries.move_to_end(use.key)
             return found[0]
 
-    def put(self, use: Use, stored: Stored) -> None:
+    def put(self, envelope: CallEnvelope, use: Use, stored: Stored) -> None:
         if use.key is None:
             return
-        size = stored.table.nbytes + 1024  # the table, and a fixed allowance for the rest
-        if size > self.max_bytes // 16:
+        size = entry_bytes(stored)
+        if size > self.max_bytes // LARGEST_SHARE:
             return
         with self._lock:
             if use.key in self._entries:
                 self._drop(use.key)
-            self._entries[use.key] = (stored, size)
+            self._entries[use.key] = (stored, self.clock(), size)
             self._bytes += size
             while self._bytes > self.max_bytes:
                 self._drop(next(iter(self._entries)))
 
     def _drop(self, key: str) -> None:
-        _, size = self._entries.pop(key)
+        size = self._entries.pop(key)[2]
         self._bytes -= size
 
 

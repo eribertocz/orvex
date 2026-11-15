@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pyarrow as pa
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.adapters.duckdb import (
     MappingQuery,
     PhysicalQuery,
@@ -37,7 +38,6 @@ from orvex.semantic.engines import (
     refuse_mixed,
     refuse_unable,
 )
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.evidence import EvidenceRecord, Ledger
 from orvex.semantic.policies import PolicyModel
 from orvex.semantic.receipt import DataRead

@@ -29,10 +29,10 @@ from types import MappingProxyType
 from typing import Any, Literal
 
 from jsonschema import Draft202012Validator
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.canonical import fingerprint
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.ossie.extensions import full_match_validator
 from orvex.semantic.policies import predicate as grammar

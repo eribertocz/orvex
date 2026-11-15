@@ -30,6 +30,8 @@ from typing import Any, cast
 
 import pyarrow as pa
 import pyarrow.compute as pc
+from orvex.contracts.semantic.errors import PlanError, SemanticError
+from orvex.contracts.semantic.interface import ResultCache, Stored, Withheld
 from orvex.contracts.store.v1 import StatisticsRequest, StatisticsResult
 from orvex.semantic import zonedata
 from orvex.semantic.adapters.duckdb import (
@@ -38,6 +40,7 @@ from orvex.semantic.adapters.duckdb import (
     PolicyValues,
     compile_plan,
 )
+from orvex.semantic.cache_calls import CacheCalls
 from orvex.semantic.canonical import fingerprint
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
@@ -48,7 +51,6 @@ from orvex.semantic.engines import (
     ExternalAdapter,
     Routing,
 )
-from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.estimates import estimate
 from orvex.semantic.evidence import CONSISTENT, EvidenceRecord, Ledger, relied
 from orvex.semantic.external import External, external_of, resolve
@@ -78,8 +80,8 @@ from orvex.semantic.result.cursors import (
     verify_cursor,
 )
 from orvex.semantic.result.descriptors import arrow_type
-from orvex.semantic.result_cache import ResultCache, Stored, use_of
-from orvex.semantic.withheld import Withheld, withheld
+from orvex.semantic.result_cache import use_of
+from orvex.semantic.withheld import withheld
 
 BATCH_SIZE = 65_536
 
@@ -448,11 +450,16 @@ def _execute(
         physical.parameters,
         data,
     )
-    stored = engine.cache.get(use) if engine.cache is not None else None
+    cache = (
+        None
+        if engine.cache is None
+        else CacheCalls(engine.cache, context, compiled.model_fingerprint)
+    )
+    stored = cache.get(use) if cache is not None else None
     if stored is None:
         stored = _read_once(physical, engine, plan_, report, external, values, run)
-        if engine.cache is not None:
-            engine.cache.put(use, stored)
+        if cache is not None:
+            cache.put(use, stored)
         origin = "miss" if engine.cache is not None and use.key is not None else "bypass"
     else:
         origin = "hit"
@@ -547,8 +554,7 @@ def _read_once(
         else None
     )
     table = _read(physical, engine, budgeted=plan_.mode == "detail", run=run)
-    clock = engine.cache.clock() if engine.cache is not None else 0.0
-    return Stored(table, tuple(held), estimated, clock)
+    return Stored(table, tuple(held), None if estimated is None else dict(estimated))
 
 
 def _data_reads(

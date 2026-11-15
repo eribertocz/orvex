@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 import yaml
+from orvex.contracts.semantic.errors import PlanError, SemanticError
 from orvex.semantic import execution
 from orvex.semantic.adapters import clickhouse as ch
 from orvex.semantic.adapters.clickhouse import CAPABILITIES as CLICKHOUSE_CAPABILITIES
@@ -31,7 +32,6 @@ from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.correctness import analyze
 from orvex.semantic.engines import Routing
-from orvex.semantic.errors import PlanError, SemanticError
 from orvex.semantic.evidence import verify
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.planning import plan

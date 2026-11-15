@@ -30,13 +30,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from orvex.contracts.semantic.errors import PlanError
 from orvex.semantic.canonical import fingerprint
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.correctness import CorrectnessReport
 from orvex.semantic.correctness.graph import Graph
 from orvex.semantic.correctness.report import ISSUED
-from orvex.semantic.errors import PlanError
 from orvex.semantic.ossie import sql
 
 PLAN_FORMAT = 1

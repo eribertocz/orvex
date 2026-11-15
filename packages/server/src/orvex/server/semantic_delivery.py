@@ -28,7 +28,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from orvex.access.errors import ACCESS_FORBIDDEN, AccessError
-from orvex.semantic.errors import SemanticError
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.server import semantic_http
 from orvex.server.route_permissions import allows
 from orvex.server.semantic_audit import record_query, record_withheld

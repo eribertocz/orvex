@@ -15,11 +15,11 @@ import pytest
 import yaml
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.contracts.store.v1 import StatementRequest
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import compile_model
 from orvex.semantic.correctness.discharge import DischargeError, verify_physical, verify_plan
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.semantic.result.cursors import SealedForm

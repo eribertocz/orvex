@@ -13,8 +13,8 @@ from tempfile import TemporaryDirectory
 from typing import Any, cast
 
 import pytest
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.contracts.store.v1 import StatisticsRequest, StatisticsResult
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.evidence import verify
 from orvex.store.errors import StoreError
 from orvex.store.lake import Lake

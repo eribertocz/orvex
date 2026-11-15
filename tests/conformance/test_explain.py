@@ -13,9 +13,9 @@ import pyarrow as pa
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.contracts.store.v1 import ChangesRequest, ReadRequest
 from orvex.semantic.compiler.compiled import CompiledModel
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import Engine
 from orvex.semantic.explanation import explain
 from orvex.semantic.policies import PolicyModel, read_policies

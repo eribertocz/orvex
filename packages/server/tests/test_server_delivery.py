@@ -15,7 +15,7 @@ import pytest
 from orvex.access.errors import ACCESS_FORBIDDEN, AUDIT_UNAVAILABLE, AccessError
 from orvex.access.server_context import ServerRequest
 from orvex.access.storage.store import TransientConflict
-from orvex.semantic.errors import SemanticError
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.server import semantic_delivery, semantic_http
 from orvex.server.semantic_audit import record_query
 

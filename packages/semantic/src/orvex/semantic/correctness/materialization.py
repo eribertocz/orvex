@@ -31,8 +31,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.compiler.parsing import MemberId
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.policies import predicate as grammar
 from orvex.semantic.policies.placement import place

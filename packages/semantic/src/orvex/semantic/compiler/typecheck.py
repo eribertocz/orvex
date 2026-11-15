@@ -52,6 +52,7 @@ from fractions import Fraction
 from types import MappingProxyType
 from typing import Literal, TypedDict
 
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.compiler.catalog import (
     MAX_PRECISION,
     LogicalType,
@@ -66,7 +67,6 @@ from orvex.semantic.compiler.units import ONE, Unit, UnitError, versions
 from orvex.semantic.compiler.units import currency as currency_unit
 from orvex.semantic.compiler.units import parse as parse_unit
 from orvex.semantic.compiler.zones import TZDATA_VERSION, is_zone
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.ossie.model import OssieModel
 

@@ -49,11 +49,11 @@ from zoneinfo import ZoneInfo
 from jsonschema import Draft202012Validator, ValidationError
 from jsonschema.protocols import Validator
 from jsonschema.validators import extend
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.canonical import fingerprint
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
 from orvex.semantic.compiler.zones import is_zone
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie import sql
 from orvex.semantic.ossie.extensions import full_match
 from orvex.semantic.ossie.identifiers import MAX_IDENTIFIER, is_valid_identifier

@@ -18,8 +18,8 @@ from typing import Any
 
 import pytest
 import yaml
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.correctness.discharge import DischargeError, verify_physical
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import answer
 from orvex.semantic.explanation import explain
 from orvex.semantic.policies import read_policies

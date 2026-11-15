@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections import Counter
 
 from hypothesis import example, given
-from orvex.semantic.errors import SemanticError
+from orvex.contracts.semantic.errors import SemanticError
 
 from conformance.runners import corpus_execution as ce
 from tests.properties import oracle

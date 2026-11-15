@@ -21,6 +21,7 @@ from typing import Any
 import duckdb
 import jsonschema
 import pytest
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.contracts.store.v1 import (
     ExistingLakeAttachment,
     ProtectedLocation,
@@ -29,7 +30,6 @@ from orvex.contracts.store.v1 import (
 )
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.engines import EngineEntry, Routing
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import Answer, answer
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.receipt.external import expired

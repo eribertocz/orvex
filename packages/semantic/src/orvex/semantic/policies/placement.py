@@ -25,9 +25,9 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from orvex.contracts.semantic.errors import SemanticError
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.compiler.parsing import MemberId
-from orvex.semantic.errors import SemanticError
 from orvex.semantic.policies import predicate as grammar
 from orvex.semantic.policies.caller import Attribute, Caller
 from orvex.semantic.policies.model import PolicyModel, RowRule
