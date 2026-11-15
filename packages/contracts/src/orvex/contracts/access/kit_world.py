@@ -147,6 +147,7 @@ class World:
     builder: str = ""
     builder_session: str = ""
     answers: list[object] = field(default_factory=list)
+    prepared: bool = False
 
     @property
     def opened(self) -> Instance:

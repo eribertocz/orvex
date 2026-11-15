@@ -646,13 +646,13 @@ def _read(operation: str, *arguments: object) -> Callable[[KitClient], object]:
 
 
 def _with(prepare: Callable[[KitClient], object], observe: Callable[[KitClient], object]) -> Any:  # noqa: ANN401
-    """`observe`, after `prepare` ran once for the case's world."""
-    prepared: set[int] = set()
+    """`observe`, after `prepare` ran once for the case's world (the world records it, so a
+    later run's world is never taken for an earlier one's)."""
 
     def observed(client: KitClient) -> object:
         found = signed_in(client)
-        if id(found) not in prepared:
-            prepared.add(id(found))
+        if not found.prepared:
+            found.prepared = True
             prepare(client)
         return observe(client)
 
