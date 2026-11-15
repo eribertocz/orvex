@@ -12,9 +12,10 @@ from datetime import timedelta
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-from orvex.contracts.access.client import AccessClient, Caller, anonymous
+from orvex.contracts.access.client import AccessClient, signed_in, unauthenticated
 from orvex.contracts.access.errors import AccessError
 from orvex.contracts.access.values import Session, User
+from orvex.contracts.context import CallContext
 from orvex.contracts.http_api import v1
 from orvex.server.client_address import client_address
 from orvex.server.sign_in_errors import access_error_response, validation_response
@@ -58,10 +59,10 @@ def session_view(user: User, password_change_only: bool) -> v1.SessionView:
     )
 
 
-def signed_in_caller(request: Request) -> Caller:
+def signed_in_caller(request: Request) -> CallContext:
     """The caller of a request with a live session: its user, under the request's id."""
     live: Session = request.state.session
-    return Caller(live.user.id, request.state.request_id)
+    return signed_in(live.user.id, request.state.request_id)
 
 
 def mount_sign_in(app: FastAPI, access: AccessClient, cookie: str) -> None:
@@ -79,7 +80,7 @@ def mount_sign_in(app: FastAPI, access: AccessClient, cookie: str) -> None:
             asked = v1.SignIn.model_validate_json(await request.body())
         except ValidationError as error:
             return validation_response(error, request_id)
-        caller = access.acting_for(anonymous(request_id))
+        caller = access.acting_for(unauthenticated(request_id))
         current = await run_in_threadpool(caller.sign_in_settings)
         peer = request.client.host if request.client is not None else None
         address = client_address(

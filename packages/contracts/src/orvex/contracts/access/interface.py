@@ -2,7 +2,7 @@
 security context, the instance settings and OIDC, as every consumer uses them.
 
 Each operation takes the call envelope first; the envelope's `actor` is the effective actor of
-the operation (the signed-in user, `anonymous` before a sign-in, `system` for the instance's
+the operation (the signed-in user, `UNAUTHENTICATED` before a sign-in, `system` for the instance's
 own work). Every operation but `open` acts on an `Instance` the implementation opened. The
 audit log is the `audit-log` contract (`orvex.contracts.audit_log`), served by the same
 implementation on the same instances.
@@ -37,7 +37,8 @@ from orvex.contracts.envelope import CallEnvelope
 from orvex.contracts.interface import InterfaceContract, Operation
 from orvex.contracts.version import Version
 
-ANONYMOUS = "anonymous"
+# The effective actor of a call before any sign-in (a sign-in, an OIDC start or callback).
+UNAUTHENTICATED = "unauthenticated"
 SYSTEM = "system"
 
 

@@ -33,7 +33,7 @@ from dataclasses import dataclass
 
 from fastapi import FastAPI, Request, Response
 from fastapi.routing import APIRoute
-from orvex.contracts.access.client import AccessClient, Caller, anonymous
+from orvex.contracts.access.client import AccessClient, signed_in, unauthenticated
 from orvex.contracts.access.errors import (
     ACCESS_FORBIDDEN,
     OIDC_REFRESH_REQUIRED,
@@ -90,7 +90,7 @@ def create_server_app(
 
     def instance(request: Request) -> AccessClient:
         """The access instance, for the request's caller before authentication: anonymous."""
-        return access.acting_for(anonymous(request.state.request_id))
+        return access.acting_for(unauthenticated(request.state.request_id))
 
     if administration is not None:
         if served is not None and served.project not in administration.projects:
@@ -167,7 +167,7 @@ def create_server_app(
             project = project_of(request.url.path)
             if project is not None and project not in administration.projects:
                 return access_error_response(not_found(PROJECT_NOT_SERVED), request_id)
-            asking = administration.access.acting_for(Caller(user, request_id))
+            asking = administration.access.acting_for(signed_in(user, request_id))
             if await run_in_threadpool(asking.allowed, permission, project):
                 return None
             await run_in_threadpool(
@@ -178,7 +178,7 @@ def create_server_app(
             )
         if served is None:
             return None
-        asking = access.acting_for(Caller(user, request_id))
+        asking = access.acting_for(signed_in(user, request_id))
         role = await run_in_threadpool(asking.role_of, user, served.project)
         if allows(permission, role):
             return None

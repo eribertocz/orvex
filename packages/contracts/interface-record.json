@@ -1,3 +1,2844 @@
 {
-  "contracts": {}
+  "contracts": {
+    "access": {
+      "capabilities": [
+        "context",
+        "directory",
+        "instance",
+        "limits",
+        "oidc",
+        "sign-in"
+      ],
+      "errors": [
+        "ACCESS_FORBIDDEN",
+        "ACCESS_INSTANCE_UNKNOWN",
+        "ACCESS_STORE_NEWER",
+        "ACCESS_STORE_UNSAFE",
+        "AUDIT_CHAIN_BROKEN",
+        "AUDIT_CHECKPOINT_INVALID",
+        "AUDIT_EVENT_INVALID",
+        "AUDIT_KEY_UNSAFE",
+        "AUDIT_RETENTION_INVALID",
+        "AUDIT_UNAVAILABLE",
+        "CONTEXT_INVALID",
+        "GROUP_NOT_FOUND",
+        "IDENTITY_NOT_FOUND",
+        "IDENTITY_TAKEN",
+        "LAST_ADMINISTRATOR",
+        "LAST_BUILDER",
+        "LOGIN_DELAYED",
+        "LOGIN_FAILED",
+        "LOOKUP_LIMITED",
+        "OIDC_FAILED",
+        "OIDC_NOT_CONFIGURED",
+        "OIDC_REFRESH_REQUIRED",
+        "PASSWORD_CHANGE_REQUIRED",
+        "PASSWORD_REJECTED",
+        "PROJECT_NOT_SERVED",
+        "SESSION_EXPIRED",
+        "USER_NAME_TAKEN",
+        "USER_NOT_FOUND",
+        "VALIDATION_FAILED"
+      ],
+      "kit": {
+        "cases": {
+          "add-group-member.idempotent": {
+            "expectation": "one key adds once",
+            "idempotency": true,
+            "operation": "add_group_member",
+            "since": "1.0"
+          },
+          "allowed.administration-routes-by-rule": {
+            "expectation": "administration routes follow their read rules; an unknown one is refused",
+            "idempotency": false,
+            "operation": "allowed",
+            "since": "1.0"
+          },
+          "attributes.attributes-typed": {
+            "expectation": "attributes are typed as security-context v1",
+            "idempotency": false,
+            "operation": "attributes",
+            "since": "1.0"
+          },
+          "audience-of.no-role-no-context": {
+            "expectation": "no role, no context: refused",
+            "idempotency": false,
+            "operation": "audience_of",
+            "since": "1.0"
+          },
+          "change-password.idempotent": {
+            "expectation": "one key changes the password once",
+            "idempotency": true,
+            "operation": "change_password",
+            "since": "1.0"
+          },
+          "change-password.password-change-ends-every-session": {
+            "expectation": "a password change ends every session of the user",
+            "idempotency": false,
+            "operation": "change_password",
+            "since": "1.0"
+          },
+          "change-password.short-password-rejected": {
+            "expectation": "a short password is rejected",
+            "idempotency": false,
+            "operation": "change_password",
+            "since": "1.0"
+          },
+          "change-query-limits.idempotent": {
+            "expectation": "one key changes the limits once",
+            "idempotency": true,
+            "operation": "change_query_limits",
+            "since": "1.0"
+          },
+          "change-query-limits.limits-only-by-administrator": {
+            "expectation": "only an administrator changes the limits",
+            "idempotency": false,
+            "operation": "change_query_limits",
+            "since": "1.0"
+          },
+          "change-sign-in-settings.idempotent": {
+            "expectation": "one key changes the settings once",
+            "idempotency": true,
+            "operation": "change_sign_in_settings",
+            "since": "1.0"
+          },
+          "change-sign-in-settings.settings-only-by-administrator": {
+            "expectation": "only an administrator changes the settings",
+            "idempotency": false,
+            "operation": "change_sign_in_settings",
+            "since": "1.0"
+          },
+          "close.idempotent": {
+            "expectation": "one key closes once",
+            "idempotency": true,
+            "operation": "close",
+            "since": "1.0"
+          },
+          "close.unknown-instance-refused": {
+            "expectation": "a closed or unknown instance is refused",
+            "idempotency": false,
+            "operation": "close",
+            "since": "1.0"
+          },
+          "create-administrator.administrator-needs-recovery": {
+            "expectation": "a second administrator needs recovery",
+            "idempotency": false,
+            "operation": "create_administrator",
+            "since": "1.0"
+          },
+          "create-administrator.idempotent": {
+            "expectation": "one key creates one administrator",
+            "idempotency": true,
+            "operation": "create_administrator",
+            "since": "1.0"
+          },
+          "create-group.idempotent": {
+            "expectation": "one key creates one group",
+            "idempotency": true,
+            "operation": "create_group",
+            "since": "1.0"
+          },
+          "create-user.idempotency-key-bound-to-its-call": {
+            "expectation": "one idempotency key runs one call only",
+            "idempotency": false,
+            "operation": "create_user",
+            "since": "1.0"
+          },
+          "create-user.idempotent": {
+            "expectation": "one key creates one user",
+            "idempotency": true,
+            "operation": "create_user",
+            "since": "1.0"
+          },
+          "create-user.non-administrator-cannot-list": {
+            "expectation": "a non-administrator manages no users",
+            "idempotency": false,
+            "operation": "create_user",
+            "since": "1.0"
+          },
+          "create-user.user-name-taken": {
+            "expectation": "user names are unique without regard to case",
+            "idempotency": false,
+            "operation": "create_user",
+            "since": "1.0"
+          },
+          "deactivate-user.deactivation-revokes": {
+            "expectation": "deactivation ends sessions, sign-ins and roles",
+            "idempotency": false,
+            "operation": "deactivate_user",
+            "since": "1.0"
+          },
+          "deactivate-user.idempotent": {
+            "expectation": "one key deactivates once",
+            "idempotency": true,
+            "operation": "deactivate_user",
+            "since": "1.0"
+          },
+          "deactivate-user.last-builder-kept": {
+            "expectation": "a project keeps its last Builder",
+            "idempotency": false,
+            "operation": "deactivate_user",
+            "since": "1.0"
+          },
+          "delete-group.idempotent": {
+            "expectation": "one key deletes once",
+            "idempotency": true,
+            "operation": "delete_group",
+            "since": "1.0"
+          },
+          "find-user.find-by-name": {
+            "expectation": "a user is found by name",
+            "idempotency": false,
+            "operation": "find_user",
+            "since": "1.0"
+          },
+          "fixture-context.fixture-context-normalized": {
+            "expectation": "fixture lists are normalized; no member, no context",
+            "idempotency": false,
+            "operation": "fixture_context",
+            "since": "1.0"
+          },
+          "fixture-may-reuse.reuse-only-with-current-permissions": {
+            "expectation": "reuse only with the current permissions",
+            "idempotency": false,
+            "operation": "fixture_may_reuse",
+            "since": "1.0"
+          },
+          "groups.groups-listed": {
+            "expectation": "groups list their members",
+            "idempotency": false,
+            "operation": "groups",
+            "since": "1.0"
+          },
+          "identity-links.identity-links-listed": {
+            "expectation": "a linked identity is listed",
+            "idempotency": false,
+            "operation": "identity_links",
+            "since": "1.0"
+          },
+          "initialize.idempotent": {
+            "expectation": "one key initializes once",
+            "idempotency": true,
+            "operation": "initialize",
+            "since": "1.0"
+          },
+          "initialize.initialize-writes-recovery": {
+            "expectation": "the first initialization writes the recovery file",
+            "idempotency": false,
+            "operation": "initialize",
+            "since": "1.0"
+          },
+          "link-identity.idempotent": {
+            "expectation": "one key links once",
+            "idempotency": true,
+            "operation": "link_identity",
+            "since": "1.0"
+          },
+          "link-identity.identity-taken": {
+            "expectation": "a provider identity links to one user only",
+            "idempotency": false,
+            "operation": "link_identity",
+            "since": "1.0"
+          },
+          "local-context.local-context-needs-authentication": {
+            "expectation": "a local context needs an authenticated request",
+            "idempotency": false,
+            "operation": "local_context",
+            "since": "1.0"
+          },
+          "login.idempotent": {
+            "expectation": "one key opens one session",
+            "idempotency": true,
+            "operation": "login",
+            "since": "1.0"
+          },
+          "login.temporary-password-only-changes": {
+            "expectation": "a temporary password opens a session that may only change it",
+            "idempotency": false,
+            "operation": "login",
+            "since": "1.0"
+          },
+          "login.wrong-password-and-unknown-user-alike": {
+            "expectation": "a wrong password and an unknown user get the same refusal",
+            "idempotency": false,
+            "operation": "login",
+            "since": "1.0"
+          },
+          "logout.idempotent": {
+            "expectation": "one key signs out once",
+            "idempotency": true,
+            "operation": "logout",
+            "since": "1.0"
+          },
+          "logout.logout-ends-the-session": {
+            "expectation": "signing out ends the session",
+            "idempotency": false,
+            "operation": "logout",
+            "since": "1.0"
+          },
+          "members.members-and-roles": {
+            "expectation": "members carry their role",
+            "idempotency": false,
+            "operation": "members",
+            "since": "1.0"
+          },
+          "oidc-callback.idempotent": {
+            "expectation": "one key ends one callback",
+            "idempotency": true,
+            "operation": "oidc_callback",
+            "since": "1.0"
+          },
+          "oidc-callback.oidc-unknown-provider": {
+            "expectation": "an unknown provider is not configured",
+            "idempotency": false,
+            "operation": "oidc_callback",
+            "since": "1.0"
+          },
+          "oidc-providers.open-and-close": {
+            "expectation": "an opened instance serves until it is closed",
+            "idempotency": false,
+            "operation": "oidc_providers",
+            "since": "1.0"
+          },
+          "oidc-refresh-due.oidc-password-session-not-due": {
+            "expectation": "a password session is never due for a refresh",
+            "idempotency": false,
+            "operation": "oidc_refresh_due",
+            "since": "1.0"
+          },
+          "oidc-start.idempotent": {
+            "expectation": "one key starts once",
+            "idempotency": true,
+            "operation": "oidc_start",
+            "since": "1.0"
+          },
+          "oidc-start.oidc-start-and-failed-callback": {
+            "expectation": "a start leads to the provider; a forged state fails",
+            "idempotency": false,
+            "operation": "oidc_start",
+            "since": "1.0"
+          },
+          "open.idempotent": {
+            "expectation": "one key opens one instance",
+            "idempotency": true,
+            "operation": "open",
+            "since": "1.0"
+          },
+          "permission-fingerprint.fingerprint-covers-everything": {
+            "expectation": "the fingerprint covers the role and checks its inputs",
+            "idempotency": false,
+            "operation": "permission_fingerprint",
+            "since": "1.0"
+          },
+          "query-limits.limits-per-role": {
+            "expectation": "every role has its limits",
+            "idempotency": false,
+            "operation": "query_limits",
+            "since": "1.0"
+          },
+          "reactivate-user.idempotent": {
+            "expectation": "one key reactivates once",
+            "idempotency": true,
+            "operation": "reactivate_user",
+            "since": "1.0"
+          },
+          "read-context.unnormalized-context-refused": {
+            "expectation": "a context not in its normalized form is refused",
+            "idempotency": false,
+            "operation": "read_context",
+            "since": "1.0"
+          },
+          "remove-attribute.idempotent": {
+            "expectation": "one key removes an attribute once",
+            "idempotency": true,
+            "operation": "remove_attribute",
+            "since": "1.0"
+          },
+          "remove-group-member.idempotent": {
+            "expectation": "one key removes a member once",
+            "idempotency": true,
+            "operation": "remove_group_member",
+            "since": "1.0"
+          },
+          "remove-membership.idempotent": {
+            "expectation": "one key removes once",
+            "idempotency": true,
+            "operation": "remove_membership",
+            "since": "1.0"
+          },
+          "reset-password.idempotent": {
+            "expectation": "one key resets once",
+            "idempotency": true,
+            "operation": "reset_password",
+            "since": "1.0"
+          },
+          "reset-password.reset-ends-sessions": {
+            "expectation": "a reset ends the user's sessions and sets a temporary password",
+            "idempotency": false,
+            "operation": "reset_password",
+            "since": "1.0"
+          },
+          "role-of.fingerprint-follows-permissions": {
+            "expectation": "a permission change changes the fingerprint",
+            "idempotency": false,
+            "operation": "role_of",
+            "since": "1.0"
+          },
+          "server-context.server-context-now": {
+            "expectation": "a context is the directory now",
+            "idempotency": false,
+            "operation": "server_context",
+            "since": "1.0"
+          },
+          "session.idle-session-expires": {
+            "expectation": "a session idle past its lifetime has ended",
+            "idempotency": false,
+            "operation": "session",
+            "since": "1.0"
+          },
+          "session.session-reads-the-user-now": {
+            "expectation": "a session reads its user as the directory knows them now",
+            "idempotency": false,
+            "operation": "session",
+            "since": "1.0"
+          },
+          "session.unknown-session-expired": {
+            "expectation": "an unknown session is SESSION_EXPIRED",
+            "idempotency": false,
+            "operation": "session",
+            "since": "1.0"
+          },
+          "set-administrator.idempotent": {
+            "expectation": "one key grants once",
+            "idempotency": true,
+            "operation": "set_administrator",
+            "since": "1.0"
+          },
+          "set-administrator.last-administrator-kept": {
+            "expectation": "the instance keeps its last administrator",
+            "idempotency": false,
+            "operation": "set_administrator",
+            "since": "1.0"
+          },
+          "set-attribute.attribute-never-coerced": {
+            "expectation": "an attribute value is never coerced",
+            "idempotency": false,
+            "operation": "set_attribute",
+            "since": "1.0"
+          },
+          "set-attribute.idempotent": {
+            "expectation": "one key sets an attribute once",
+            "idempotency": true,
+            "operation": "set_attribute",
+            "since": "1.0"
+          },
+          "set-membership.idempotent": {
+            "expectation": "one key sets a role once",
+            "idempotency": true,
+            "operation": "set_membership",
+            "since": "1.0"
+          },
+          "sign-in-settings.settings-read": {
+            "expectation": "the settings have an absolute and an idle lifetime",
+            "idempotency": false,
+            "operation": "sign_in_settings",
+            "since": "1.0"
+          },
+          "unlink-identity.idempotent": {
+            "expectation": "one key unlinks once",
+            "idempotency": true,
+            "operation": "unlink_identity",
+            "since": "1.0"
+          },
+          "user.unknown-user-not-found": {
+            "expectation": "an unknown user is USER_NOT_FOUND",
+            "idempotency": false,
+            "operation": "user",
+            "since": "1.0"
+          },
+          "users.users-listed": {
+            "expectation": "an administrator lists the users",
+            "idempotency": false,
+            "operation": "users",
+            "since": "1.0"
+          }
+        },
+        "recorded": 70
+      },
+      "name": "access",
+      "operations": {
+        "add_group_member": {
+          "capability": "directory",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "GROUP_NOT_FOUND",
+            "PROJECT_NOT_SERVED",
+            "USER_NAME_TAKEN",
+            "USER_NOT_FOUND",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "group",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "allowed": {
+          "capability": "directory",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "permission",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str | None"
+            }
+          ],
+          "returns": "bool",
+          "since": "1.0"
+        },
+        "attributes": {
+          "capability": "directory",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "PROJECT_NOT_SERVED",
+            "USER_NOT_FOUND"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            }
+          ],
+          "returns": "dict[str, orvex.contracts.access.values.Attribute]",
+          "since": "1.0"
+        },
+        "audience_of": {
+          "capability": "context",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            }
+          ],
+          "returns": "Literal['builder', 'other']",
+          "since": "1.0"
+        },
+        "change_password": {
+          "capability": "sign-in",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "LOGIN_DELAYED",
+            "LOGIN_FAILED",
+            "OIDC_REFRESH_REQUIRED",
+            "PASSWORD_CHANGE_REQUIRED",
+            "PASSWORD_REJECTED",
+            "SESSION_EXPIRED",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "session_id",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "current",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "new",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "address",
+              "type": "str | None"
+            }
+          ],
+          "returns": "str",
+          "since": "1.0"
+        },
+        "change_query_limits": {
+          "capability": "limits",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "limits",
+              "type": "dict[str, orvex.contracts.access.values.RoleLimit]"
+            }
+          ],
+          "returns": "dict[str, orvex.contracts.access.values.RoleLimit]",
+          "since": "1.0"
+        },
+        "change_sign_in_settings": {
+          "capability": "sign-in",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "absolute_seconds",
+              "type": "int | None"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "idle_seconds",
+              "type": "int | None"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "public_origin",
+              "type": "str | None"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "trusted_proxies",
+              "type": "tuple[str, ...] | None"
+            }
+          ],
+          "returns": "orvex.contracts.access.values.SignInSettings",
+          "since": "1.0"
+        },
+        "close": {
+          "capability": "instance",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "create_administrator": {
+          "capability": "instance",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "ACCESS_STORE_NEWER",
+            "ACCESS_STORE_UNSAFE",
+            "AUDIT_CHAIN_BROKEN",
+            "AUDIT_CHECKPOINT_INVALID",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "OIDC_NOT_CONFIGURED",
+            "PASSWORD_REJECTED",
+            "USER_NAME_TAKEN",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user_name",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "display_name",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "recover",
+              "type": "bool"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "recovery_file",
+              "type": "str | None"
+            }
+          ],
+          "returns": "orvex.contracts.access.values.NewUser",
+          "since": "1.0"
+        },
+        "create_group": {
+          "capability": "directory",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "GROUP_NOT_FOUND",
+            "PROJECT_NOT_SERVED",
+            "USER_NAME_TAKEN",
+            "USER_NOT_FOUND",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "name",
+              "type": "str"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "create_user": {
+          "capability": "directory",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "USER_NAME_TAKEN",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user_name",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "display_name",
+              "type": "str"
+            }
+          ],
+          "returns": "orvex.contracts.access.values.NewUser",
+          "since": "1.0"
+        },
+        "deactivate_user": {
+          "capability": "directory",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "LAST_ADMINISTRATOR",
+            "LAST_BUILDER",
+            "USER_NOT_FOUND",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "delete_group": {
+          "capability": "directory",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "GROUP_NOT_FOUND",
+            "PROJECT_NOT_SERVED",
+            "USER_NAME_TAKEN",
+            "USER_NOT_FOUND",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "name",
+              "type": "str"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "find_user": {
+          "capability": "directory",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "LOOKUP_LIMITED",
+            "USER_NOT_FOUND"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user_name",
+              "type": "str"
+            }
+          ],
+          "returns": "orvex.contracts.access.values.FoundUser",
+          "since": "1.0"
+        },
+        "fixture_context": {
+          "capability": "context",
+          "changes_state": false,
+          "errors": [
+            "CONTEXT_INVALID",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "fixture",
+              "type": "orvex.contracts.access.values.ContextFixture"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            }
+          ],
+          "returns": "str",
+          "since": "1.0"
+        },
+        "fixture_may_reuse": {
+          "capability": "context",
+          "changes_state": false,
+          "errors": [
+            "CONTEXT_INVALID",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "stored_fingerprint",
+              "type": "str | None"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "fixture",
+              "type": "orvex.contracts.access.values.ContextFixture"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            }
+          ],
+          "returns": "bool",
+          "since": "1.0"
+        },
+        "groups": {
+          "capability": "directory",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "PROJECT_NOT_SERVED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            }
+          ],
+          "returns": "dict[str, tuple[str, ...]]",
+          "since": "1.0"
+        },
+        "identity_links": {
+          "capability": "directory",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "USER_NOT_FOUND"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            }
+          ],
+          "returns": "tuple[orvex.contracts.access.values.IdentityLink, ...]",
+          "since": "1.0"
+        },
+        "initialize": {
+          "capability": "instance",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN",
+            "ACCESS_STORE_NEWER",
+            "ACCESS_STORE_UNSAFE",
+            "AUDIT_CHAIN_BROKEN",
+            "AUDIT_CHECKPOINT_INVALID",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "OIDC_NOT_CONFIGURED",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            }
+          ],
+          "returns": "bool",
+          "since": "1.0"
+        },
+        "link_identity": {
+          "capability": "directory",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "IDENTITY_TAKEN",
+            "OIDC_NOT_CONFIGURED",
+            "USER_NOT_FOUND",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "provider",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "subject",
+              "type": "str"
+            }
+          ],
+          "returns": "str",
+          "since": "1.0"
+        },
+        "local_context": {
+          "capability": "context",
+          "changes_state": false,
+          "errors": [
+            "CONTEXT_INVALID",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "authenticated",
+              "type": "bool"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "policy_fingerprint",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "mapping_snapshots",
+              "type": "dict[str, str]"
+            }
+          ],
+          "returns": "str",
+          "since": "1.0"
+        },
+        "login": {
+          "capability": "sign-in",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "LOGIN_DELAYED",
+            "LOGIN_FAILED",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user_name",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "password",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "address",
+              "type": "str | None"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "presented",
+              "type": "str | None"
+            }
+          ],
+          "returns": "orvex.contracts.access.values.SignedIn",
+          "since": "1.0"
+        },
+        "logout": {
+          "capability": "sign-in",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "session_id",
+              "type": "str"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "members": {
+          "capability": "directory",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "PROJECT_NOT_SERVED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            }
+          ],
+          "returns": "tuple[orvex.contracts.access.values.Member, ...]",
+          "since": "1.0"
+        },
+        "oidc_callback": {
+          "capability": "oidc",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "OIDC_FAILED",
+            "OIDC_NOT_CONFIGURED",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "provider",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "parameters",
+              "type": "dict[str, str]"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "binding",
+              "type": "str | None"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "presented",
+              "type": "str | None"
+            }
+          ],
+          "returns": "orvex.contracts.access.values.SignedIn",
+          "since": "1.0"
+        },
+        "oidc_providers": {
+          "capability": "oidc",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            }
+          ],
+          "returns": "tuple[str, ...]",
+          "since": "1.0"
+        },
+        "oidc_refresh_due": {
+          "capability": "oidc",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "session_id",
+              "type": "str"
+            }
+          ],
+          "returns": "str | None",
+          "since": "1.0"
+        },
+        "oidc_start": {
+          "capability": "oidc",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "OIDC_FAILED",
+            "OIDC_NOT_CONFIGURED",
+            "OIDC_REFRESH_REQUIRED",
+            "PASSWORD_CHANGE_REQUIRED",
+            "SESSION_EXPIRED",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "provider",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "refreshing",
+              "type": "str | None"
+            }
+          ],
+          "returns": "orvex.contracts.access.values.OidcStarted",
+          "since": "1.0"
+        },
+        "open": {
+          "capability": "instance",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN",
+            "ACCESS_STORE_NEWER",
+            "ACCESS_STORE_UNSAFE",
+            "AUDIT_CHAIN_BROKEN",
+            "AUDIT_CHECKPOINT_INVALID",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "OIDC_NOT_CONFIGURED",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "configuration",
+              "type": "orvex.contracts.access.values.Configuration"
+            }
+          ],
+          "returns": "orvex.contracts.access.values.Instance",
+          "since": "1.0"
+        },
+        "permission_fingerprint": {
+          "capability": "context",
+          "changes_state": false,
+          "errors": [
+            "CONTEXT_INVALID",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "inputs",
+              "type": "orvex.contracts.access.values.FingerprintInputs"
+            }
+          ],
+          "returns": "str",
+          "since": "1.0"
+        },
+        "query_limits": {
+          "capability": "limits",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            }
+          ],
+          "returns": "dict[str, orvex.contracts.access.values.RoleLimit]",
+          "since": "1.0"
+        },
+        "reactivate_user": {
+          "capability": "directory",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "USER_NOT_FOUND",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "read_context": {
+          "capability": "context",
+          "changes_state": false,
+          "errors": [
+            "CONTEXT_INVALID",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "document",
+              "type": "str"
+            }
+          ],
+          "returns": "str",
+          "since": "1.0"
+        },
+        "remove_attribute": {
+          "capability": "directory",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "LAST_BUILDER",
+            "PROJECT_NOT_SERVED",
+            "USER_NOT_FOUND",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "name",
+              "type": "str"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "remove_group_member": {
+          "capability": "directory",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "GROUP_NOT_FOUND",
+            "PROJECT_NOT_SERVED",
+            "USER_NAME_TAKEN",
+            "USER_NOT_FOUND",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "group",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "remove_membership": {
+          "capability": "directory",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "LAST_BUILDER",
+            "PROJECT_NOT_SERVED",
+            "USER_NOT_FOUND",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "reset_password": {
+          "capability": "sign-in",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "USER_NOT_FOUND",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            }
+          ],
+          "returns": "str",
+          "since": "1.0"
+        },
+        "role_of": {
+          "capability": "context",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            }
+          ],
+          "returns": "str | None",
+          "since": "1.0"
+        },
+        "server_context": {
+          "capability": "context",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "CONTEXT_INVALID",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "policy_fingerprint",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "mapping_snapshots",
+              "type": "dict[str, str]"
+            }
+          ],
+          "returns": "str",
+          "since": "1.0"
+        },
+        "session": {
+          "capability": "sign-in",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "OIDC_REFRESH_REQUIRED",
+            "PASSWORD_CHANGE_REQUIRED",
+            "SESSION_EXPIRED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "session_id",
+              "type": "str"
+            }
+          ],
+          "returns": "orvex.contracts.access.values.Session",
+          "since": "1.0"
+        },
+        "set_administrator": {
+          "capability": "directory",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "LAST_ADMINISTRATOR",
+            "USER_NOT_FOUND",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "value",
+              "type": "bool"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "set_attribute": {
+          "capability": "directory",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "LAST_BUILDER",
+            "PROJECT_NOT_SERVED",
+            "USER_NOT_FOUND",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "name",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "kind",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "value",
+              "type": "str | bool | int | float | list[str] | tuple[str, ...] | None"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "set_membership": {
+          "capability": "directory",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "LAST_BUILDER",
+            "PROJECT_NOT_SERVED",
+            "USER_NOT_FOUND",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "role",
+              "type": "str"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "sign_in_settings": {
+          "capability": "sign-in",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            }
+          ],
+          "returns": "orvex.contracts.access.values.SignInSettings",
+          "since": "1.0"
+        },
+        "unlink_identity": {
+          "capability": "directory",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "IDENTITY_NOT_FOUND",
+            "USER_NOT_FOUND",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "link",
+              "type": "str"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "user": {
+          "capability": "directory",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "USER_NOT_FOUND"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "user",
+              "type": "str"
+            }
+          ],
+          "returns": "orvex.contracts.access.values.User",
+          "since": "1.0"
+        },
+        "users": {
+          "capability": "directory",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_FORBIDDEN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "after",
+              "type": "str | None"
+            }
+          ],
+          "returns": "orvex.contracts.access.values.UserPage",
+          "since": "1.0"
+        }
+      },
+      "version": "1.0"
+    },
+    "audit-log": {
+      "capabilities": [
+        "instance",
+        "maintain",
+        "record",
+        "verify"
+      ],
+      "errors": [
+        "ACCESS_INSTANCE_UNKNOWN",
+        "ACCESS_STORE_NEWER",
+        "ACCESS_STORE_UNSAFE",
+        "AUDIT_CHAIN_BROKEN",
+        "AUDIT_CHECKPOINT_INVALID",
+        "AUDIT_EVENT_INVALID",
+        "AUDIT_KEY_UNSAFE",
+        "AUDIT_RETENTION_INVALID",
+        "AUDIT_UNAVAILABLE",
+        "OIDC_NOT_CONFIGURED",
+        "VALIDATION_FAILED"
+      ],
+      "kit": {
+        "cases": {
+          "close.idempotent": {
+            "expectation": "one key closes once",
+            "idempotency": true,
+            "operation": "close",
+            "since": "1.0"
+          },
+          "close.unknown-instance-refused": {
+            "expectation": "a closed instance is refused",
+            "idempotency": false,
+            "operation": "close",
+            "since": "1.0"
+          },
+          "count-unrecorded.idempotent": {
+            "expectation": "one key counts once",
+            "idempotency": true,
+            "operation": "count_unrecorded",
+            "since": "1.0"
+          },
+          "count-unrecorded.unrecorded-counted": {
+            "expectation": "a counted failure is kept",
+            "idempotency": false,
+            "operation": "count_unrecorded",
+            "since": "1.0"
+          },
+          "events.unknown-instance-refused": {
+            "expectation": "a closed instance is refused",
+            "idempotency": false,
+            "operation": "events",
+            "since": "1.0"
+          },
+          "open.idempotent": {
+            "expectation": "one key opens one instance",
+            "idempotency": true,
+            "operation": "open",
+            "since": "1.0"
+          },
+          "open.replaced-key-refused": {
+            "expectation": "a missing signing key is never replaced silently",
+            "idempotency": false,
+            "operation": "open",
+            "since": "1.0"
+          },
+          "record.idempotent": {
+            "expectation": "one key records one event",
+            "idempotency": true,
+            "operation": "record",
+            "since": "1.0"
+          },
+          "record.invalid-event-refused": {
+            "expectation": "an event that breaks audit-event v1 is never written",
+            "idempotency": false,
+            "operation": "record",
+            "since": "1.0"
+          },
+          "record.record-and-read": {
+            "expectation": "recorded events read back in order, with their actor",
+            "idempotency": false,
+            "operation": "record",
+            "since": "1.0"
+          },
+          "refusal.idempotent": {
+            "expectation": "one key records one refusal",
+            "idempotency": true,
+            "operation": "refusal",
+            "since": "1.0"
+          },
+          "refusal.refusal-recorded": {
+            "expectation": "a refusal is recorded with its operation, code and target",
+            "idempotency": false,
+            "operation": "refusal",
+            "since": "1.0"
+          },
+          "retain.idempotent": {
+            "expectation": "one key removes the old events once",
+            "idempotency": true,
+            "operation": "retain",
+            "since": "1.0"
+          },
+          "retain.retention-has-a-minimum": {
+            "expectation": "retention has a minimum and removes nothing too young",
+            "idempotency": false,
+            "operation": "retain",
+            "since": "1.0"
+          },
+          "rotate-key.idempotent": {
+            "expectation": "one key rotates once",
+            "idempotency": true,
+            "operation": "rotate_key",
+            "since": "1.0"
+          },
+          "rotate-key.rotation-keeps-the-chain": {
+            "expectation": "a rotation is recorded and the chain still verifies",
+            "idempotency": false,
+            "operation": "rotate_key",
+            "since": "1.0"
+          },
+          "unrecorded.unrecorded-counted": {
+            "expectation": "events that could not be recorded are counted",
+            "idempotency": false,
+            "operation": "unrecorded",
+            "since": "1.0"
+          },
+          "verify-at-start.tampered-anchor-found": {
+            "expectation": "a tampered anchor file is found",
+            "idempotency": false,
+            "operation": "verify_at_start",
+            "since": "1.0"
+          },
+          "verify.chain-verifies": {
+            "expectation": "the chain verifies, gapless",
+            "idempotency": false,
+            "operation": "verify",
+            "since": "1.0"
+          },
+          "verify.forged-outside-anchor-found": {
+            "expectation": "a forged anchor shipped outside is found",
+            "idempotency": false,
+            "operation": "verify",
+            "since": "1.0"
+          }
+        },
+        "recorded": 20
+      },
+      "name": "audit-log",
+      "operations": {
+        "close": {
+          "capability": "instance",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "count_unrecorded": {
+          "capability": "record",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            }
+          ],
+          "returns": "int",
+          "since": "1.0"
+        },
+        "events": {
+          "capability": "verify",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_CHAIN_BROKEN",
+            "AUDIT_CHECKPOINT_INVALID",
+            "AUDIT_KEY_UNSAFE"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            }
+          ],
+          "returns": "tuple[str, ...]",
+          "since": "1.0"
+        },
+        "open": {
+          "capability": "instance",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN",
+            "ACCESS_STORE_NEWER",
+            "ACCESS_STORE_UNSAFE",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE",
+            "OIDC_NOT_CONFIGURED",
+            "VALIDATION_FAILED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "configuration",
+              "type": "orvex.contracts.access.values.Configuration"
+            }
+          ],
+          "returns": "orvex.contracts.access.values.Instance",
+          "since": "1.0"
+        },
+        "record": {
+          "capability": "record",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "kind",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "details",
+              "type": "dict[str, str]"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "outcome",
+              "type": "Literal['allowed', 'refused']"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str | None"
+            }
+          ],
+          "returns": "str",
+          "since": "1.0"
+        },
+        "refusal": {
+          "capability": "record",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "operation",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "code",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "project",
+              "type": "str | None"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "target",
+              "type": "str | None"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "retain": {
+          "capability": "maintain",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_CHAIN_BROKEN",
+            "AUDIT_CHECKPOINT_INVALID",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_RETENTION_INVALID",
+            "AUDIT_UNAVAILABLE"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "retention_days",
+              "type": "int"
+            }
+          ],
+          "returns": "tuple[int, int] | None",
+          "since": "1.0"
+        },
+        "rotate_key": {
+          "capability": "maintain",
+          "changes_state": true,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN",
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_CHAIN_BROKEN",
+            "AUDIT_CHECKPOINT_INVALID",
+            "AUDIT_EVENT_INVALID",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_KEY_UNSAFE",
+            "AUDIT_UNAVAILABLE"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            }
+          ],
+          "returns": "str",
+          "since": "1.0"
+        },
+        "unrecorded": {
+          "capability": "record",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            }
+          ],
+          "returns": "int",
+          "since": "1.0"
+        },
+        "verify": {
+          "capability": "verify",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_CHAIN_BROKEN",
+            "AUDIT_CHECKPOINT_INVALID",
+            "AUDIT_KEY_UNSAFE"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "anchors",
+              "type": "tuple[str, ...]"
+            }
+          ],
+          "returns": "int",
+          "since": "1.0"
+        },
+        "verify_at_start": {
+          "capability": "verify",
+          "changes_state": false,
+          "errors": [
+            "ACCESS_INSTANCE_UNKNOWN",
+            "AUDIT_CHAIN_BROKEN",
+            "AUDIT_CHECKPOINT_INVALID",
+            "AUDIT_KEY_UNSAFE"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "instance",
+              "type": "orvex.contracts.access.values.Instance"
+            }
+          ],
+          "returns": "int",
+          "since": "1.0"
+        }
+      },
+      "version": "1.0"
+    }
+  }
 }

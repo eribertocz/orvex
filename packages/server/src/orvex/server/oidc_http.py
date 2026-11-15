@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
-from orvex.contracts.access.client import AccessClient, anonymous
+from orvex.contracts.access.client import AccessClient, unauthenticated
 from orvex.contracts.access.errors import OIDC_FAILED, OIDC_NOT_CONFIGURED, AccessError
 from orvex.contracts.access.values import OIDC_BINDING_LIFETIME
 from orvex.server.sign_in_errors import access_error_response
@@ -64,7 +64,7 @@ def mount_oidc(app: FastAPI, access: AccessClient, session_cookie: str, slug: st
     async def start(provider: str, request: Request) -> Response:
         if provider not in providers:
             return not_configured(request)
-        oidc = access.acting_for(anonymous(request.state.request_id))
+        oidc = access.acting_for(unauthenticated(request.state.request_id))
         refreshing: str | None = None
         if request.query_params.get("refresh") == "true":
             held = request.cookies.get(session_cookie)
@@ -97,7 +97,7 @@ def mount_oidc(app: FastAPI, access: AccessClient, session_cookie: str, slug: st
     async def callback(provider: str, request: Request) -> Response:
         if provider not in providers:
             return not_configured(request)
-        oidc = access.acting_for(anonymous(request.state.request_id))
+        oidc = access.acting_for(unauthenticated(request.state.request_id))
         parameters = {
             name: value
             for name in _PARAMETERS

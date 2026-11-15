@@ -15,7 +15,7 @@ from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
-from orvex.contracts.access.interface import ACCESS
+from orvex.contracts.access.interface import ACCESS, UNAUTHENTICATED
 from orvex.contracts.access.kit_world import (
     KIT_CLOCK,
     KIT_PROVIDER,
@@ -108,10 +108,10 @@ def temporary_password_only_changes(client: KitClient) -> None:
     instance = found.opened
     made = call(client, found.actor("create_user"), "create_user", instance, "newcomer", "Newcomer")
     signed = call(
-        client, "anonymous", "login", instance, "newcomer", made.temporary_password, None, None
+        client, UNAUTHENTICATED, "login", instance, "newcomer", made.temporary_password, None, None
     )
     _expect(signed.password_change_only, "a temporary password opens a full session")
-    live = call(client, "anonymous", "session", instance, signed.session_id)
+    live = call(client, UNAUTHENTICATED, "session", instance, signed.session_id)
     _expect(live.password_change_only and live.user.id == made.user.id, "the session's user")
 
 
@@ -119,9 +119,11 @@ def wrong_password_and_unknown_user_alike(client: KitClient) -> None:
     found = signed_in(client)
     instance = found.opened
     wrong = code_of(
-        client, "anonymous", "login", instance, "admin", "not-the-password", "192.0.2.1", None
+        client, UNAUTHENTICATED, "login", instance, "admin", "not-the-password", "192.0.2.1", None
     )
-    unknown = code_of(client, "anonymous", "login", instance, "nobody", PASSWORD, "192.0.2.2", None)
+    unknown = code_of(
+        client, UNAUTHENTICATED, "login", instance, "nobody", PASSWORD, "192.0.2.2", None
+    )
     _expect(wrong == unknown == "LOGIN_FAILED", f"wrong {wrong}, unknown {unknown}")
 
 
@@ -136,24 +138,24 @@ def idle_session_expires(client: KitClient) -> None:
     found = signed_in(client)
     current = call(client, found.admin, "sign_in_settings", found.opened)
     KIT_CLOCK.advance(current.idle + timedelta(seconds=1))
-    _refused(client, "SESSION_EXPIRED", "anonymous", "session", found.opened, found.session)
+    _refused(client, "SESSION_EXPIRED", UNAUTHENTICATED, "session", found.opened, found.session)
 
 
 def unknown_session_expired(client: KitClient) -> None:
     found = signed_in(client)
-    _refused(client, "SESSION_EXPIRED", "anonymous", "session", found.opened, "no-such-session")
+    _refused(client, "SESSION_EXPIRED", UNAUTHENTICATED, "session", found.opened, "no-such-session")
 
 
 def logout_ends_the_session(client: KitClient) -> None:
     found = signed_in(client)
     call(client, found.actor("logout"), "logout", found.opened, found.session)
-    _refused(client, "SESSION_EXPIRED", "anonymous", "session", found.opened, found.session)
+    _refused(client, "SESSION_EXPIRED", UNAUTHENTICATED, "session", found.opened, found.session)
 
 
 def password_change_ends_every_session(client: KitClient) -> None:
     found = signed_in(client)
     instance = found.opened
-    other = call(client, "anonymous", "login", instance, "admin", PASSWORD, None, None)
+    other = call(client, UNAUTHENTICATED, "login", instance, "admin", PASSWORD, None, None)
     renewed = call(
         client,
         found.actor("change_password"),
@@ -164,12 +166,15 @@ def password_change_ends_every_session(client: KitClient) -> None:
         NEW_PASSWORD,
         None,
     )
-    _refused(client, "SESSION_EXPIRED", "anonymous", "session", instance, found.session)
-    _refused(client, "SESSION_EXPIRED", "anonymous", "session", instance, other.session_id)
+    _refused(client, "SESSION_EXPIRED", UNAUTHENTICATED, "session", instance, found.session)
+    _refused(client, "SESSION_EXPIRED", UNAUTHENTICATED, "session", instance, other.session_id)
     _expect(
-        call(client, "anonymous", "session", instance, renewed).user.id == found.actor("new"), "new"
+        call(client, UNAUTHENTICATED, "session", instance, renewed).user.id == found.actor("new"),
+        "new",
     )
-    _refused(client, "LOGIN_FAILED", "anonymous", "login", instance, "admin", PASSWORD, None, None)
+    _refused(
+        client, "LOGIN_FAILED", UNAUTHENTICATED, "login", instance, "admin", PASSWORD, None, None
+    )
 
 
 def short_password_rejected(client: KitClient) -> None:
@@ -191,8 +196,8 @@ def reset_ends_sessions(client: KitClient) -> None:
     found = signed_in(client)
     user, session = member(client, "reader")
     temporary = call(client, found.actor("reset_password"), "reset_password", found.opened, user)
-    _refused(client, "SESSION_EXPIRED", "anonymous", "session", found.opened, session)
-    signed = call(client, "anonymous", "login", found.opened, "reader", temporary, None, None)
+    _refused(client, "SESSION_EXPIRED", UNAUTHENTICATED, "session", found.opened, session)
+    signed = call(client, UNAUTHENTICATED, "login", found.opened, "reader", temporary, None, None)
     _expect(signed.password_change_only, "a reset password is temporary")
 
 
@@ -200,9 +205,17 @@ def deactivation_revokes(client: KitClient) -> None:
     found = signed_in(client)
     user, session = member(client, "leaver")
     call(client, found.actor("deactivate_user"), "deactivate_user", found.opened, user)
-    _refused(client, "SESSION_EXPIRED", "anonymous", "session", found.opened, session)
+    _refused(client, "SESSION_EXPIRED", UNAUTHENTICATED, "session", found.opened, session)
     _refused(
-        client, "LOGIN_FAILED", "anonymous", "login", found.opened, "leaver", PASSWORD, None, None
+        client,
+        "LOGIN_FAILED",
+        UNAUTHENTICATED,
+        "login",
+        found.opened,
+        "leaver",
+        PASSWORD,
+        None,
+        None,
     )
     _expect(call(client, "system", "role_of", found.opened, user, PROJECT) is None, "a role")
 
@@ -572,12 +585,12 @@ def fingerprint_covers_everything(client: KitClient) -> None:
 
 def oidc_start_and_failed_callback(client: KitClient) -> None:
     found = signed_in(client)
-    started = call(client, "anonymous", "oidc_start", found.opened, KIT_PROVIDER, None)
+    started = call(client, UNAUTHENTICATED, "oidc_start", found.opened, KIT_PROVIDER, None)
     _expect(started.location.startswith("https://idp.kit.invalid/auth?"), started.location)
     _refused(
         client,
         "OIDC_FAILED",
-        "anonymous",
+        UNAUTHENTICATED,
         "oidc_callback",
         found.opened,
         KIT_PROVIDER,
@@ -589,13 +602,16 @@ def oidc_start_and_failed_callback(client: KitClient) -> None:
 
 def oidc_unknown_provider(client: KitClient) -> None:
     found = signed_in(client)
-    _refused(client, "OIDC_NOT_CONFIGURED", "anonymous", "oidc_start", found.opened, "other", None)
+    _refused(
+        client, "OIDC_NOT_CONFIGURED", UNAUTHENTICATED, "oidc_start", found.opened, "other", None
+    )
 
 
 def oidc_password_session_not_due(client: KitClient) -> None:
     found = signed_in(client)
     _expect(
-        call(client, "anonymous", "oidc_refresh_due", found.opened, found.session) is None, "due"
+        call(client, UNAUTHENTICATED, "oidc_refresh_due", found.opened, found.session) is None,
+        "due",
     )
 
 
@@ -705,7 +721,7 @@ def _member_read(operation: str, *arguments: object) -> Callable[[KitClient], ob
 
 def _session_live(client: KitClient) -> object:
     found = signed_in(client)
-    return code_of(client, "anonymous", "session", found.opened, _prepared(client, 1))
+    return code_of(client, UNAUTHENTICATED, "session", found.opened, _prepared(client, 1))
 
 
 def _live_answers(client: KitClient) -> int:
@@ -785,7 +801,7 @@ def _callback(client: KitClient, envelope: CallEnvelope) -> object:
     found = signed_in(client)
     if not found.answers:
         found.answers.append(
-            call(client, "anonymous", "oidc_start", found.opened, KIT_PROVIDER, None)
+            call(client, UNAUTHENTICATED, "oidc_start", found.opened, KIT_PROVIDER, None)
         )
     reference = found.answers[0].reference  # type: ignore[attr-defined]
     try:

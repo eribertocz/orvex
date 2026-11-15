@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from orvex.contracts.access.client import AccessClient, anonymous
+from orvex.contracts.access.client import AccessClient, unauthenticated
 from orvex.server.access_configuration import access_configuration
 from orvex.server.access_store import postgres_variables
 from orvex.server.assembly import access_bindings
@@ -119,7 +119,7 @@ def test_the_first_administrator_signs_in_once_with_the_printed_temporary_passwo
     configuration = access_configuration(
         "server", IDENTITY, server_instance, os.environ, settings, with_oidc=False
     )
-    opened = AccessClient(*access_bindings(IDENTITY), anonymous("t")).open(configuration)
+    opened = AccessClient(*access_bindings(IDENTITY), unauthenticated("t")).open(configuration)
     try:
         signed = opened.login("root", temporary, "127.0.0.1")
         assert signed.password_change_only

@@ -132,6 +132,7 @@ packages/contracts/src/orvex/contracts/   generated contract types
 !packages/contracts/src/orvex/contracts/kit_process.py          hand-written: counted (#486, interface contracts)
 !packages/contracts/src/orvex/contracts/version.py              hand-written: counted (#486, interface contracts)
 !packages/contracts/src/orvex/contracts/access/__init__.py      hand-written: counted (#486 step 4)
+!packages/contracts/src/orvex/contracts/access/client.py      hand-written: counted (#486 step 4)
 !packages/contracts/src/orvex/contracts/access/errors.py        hand-written: counted (#486 step 4)
 !packages/contracts/src/orvex/contracts/access/fetcher.py       hand-written: counted (#486 step 4)
 !packages/contracts/src/orvex/contracts/access/interface.py     hand-written: counted (#486 step 4)

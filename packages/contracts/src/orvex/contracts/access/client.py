@@ -2,19 +2,20 @@
 call sent through its binding with a complete call envelope (#486 §2 item 6).
 
 A consumer is given the two bindings of the chosen implementation (`server/assembly.py`) and the
-caller it acts for; it never knows the module behind them. `open` returns the client of the
+call context it acts in (`orvex.contracts.context.CallContext`, built at its entry point); it
+never knows the module behind them. `open` returns the client of the
 instance it opened; every other operation acts on that instance. Each call that changes state
 carries a new idempotency key. The caller's `actor` is the effective actor of the operation:
-the signed-in user, `ANONYMOUS` before a sign-in, `SYSTEM` for the instance's own work.
+the signed-in user, `UNAUTHENTICATED` before a sign-in, `SYSTEM` for the instance's own work.
 """
 
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any
 
-from orvex.contracts.access.interface import ACCESS, ANONYMOUS, SYSTEM
+from orvex.contracts.access.interface import ACCESS, SYSTEM, UNAUTHENTICATED
 from orvex.contracts.access.values import (
     Attribute,
     AttributeInput,
@@ -38,28 +39,27 @@ from orvex.contracts.access.values import (
 )
 from orvex.contracts.audit_log.interface import AUDIT_LOG
 from orvex.contracts.binding import Bound
+from orvex.contracts.context import CallContext
 from orvex.contracts.envelope import CallEnvelope
 
+# The project and revision of a call that acts on the instance itself, not on one project.
 INSTANCE_PROJECT = "instance"
-CURRENT = "current"
+INSTANCE_REVISION = "instance"
 
 
-@dataclass(frozen=True, slots=True)
-class Caller:
-    """Who a consumer's calls act for: the envelope fields besides the contract's own."""
-
-    actor: str
-    correlation_id: str
-    project_id: str = INSTANCE_PROJECT
-    revision: str = CURRENT
+def system(correlation_id: str) -> CallContext:
+    """The instance's own work, under `correlation_id`."""
+    return CallContext(correlation_id, SYSTEM, INSTANCE_PROJECT, INSTANCE_REVISION)
 
 
-def system(correlation_id: str) -> Caller:
-    return Caller(SYSTEM, correlation_id)
+def unauthenticated(correlation_id: str) -> CallContext:
+    """A call before any sign-in, under `correlation_id`."""
+    return CallContext(correlation_id, UNAUTHENTICATED, INSTANCE_PROJECT, INSTANCE_REVISION)
 
 
-def anonymous(correlation_id: str) -> Caller:
-    return Caller(ANONYMOUS, correlation_id)
+def signed_in(user: str, correlation_id: str) -> CallContext:
+    """A signed-in user's call on the instance, under `correlation_id`."""
+    return CallContext(correlation_id, user, INSTANCE_PROJECT, INSTANCE_REVISION)
 
 
 class AccessClient:
@@ -68,7 +68,7 @@ class AccessClient:
     __slots__ = ("_access", "_audit", "_caller", "_instance")
 
     def __init__(
-        self, access: Bound, audit: Bound, caller: Caller, instance: Instance | None = None
+        self, access: Bound, audit: Bound, caller: CallContext, instance: Instance | None = None
     ) -> None:
         if access.contract is not ACCESS or audit.contract is not AUDIT_LOG:
             raise ValueError("an access client needs the access and audit-log contracts")
@@ -78,7 +78,7 @@ class AccessClient:
         self._instance = instance
 
     @property
-    def caller(self) -> Caller:
+    def caller(self) -> CallContext:
         return self._caller
 
     @property
@@ -87,7 +87,7 @@ class AccessClient:
             raise ValueError("the client has no instance: open one first")
         return self._instance
 
-    def acting_for(self, caller: Caller) -> AccessClient:
+    def acting_for(self, caller: CallContext) -> AccessClient:
         """The same instance, for another caller."""
         return AccessClient(self._access, self._audit, caller, self._instance)
 
@@ -98,15 +98,8 @@ class AccessClient:
 
     def _envelope(self, bound: Bound, operation: str) -> CallEnvelope:
         changes = bound.contract.operation(operation).changes_state
-        return CallEnvelope(
-            contract_name=bound.contract.name,
-            contract_version=str(bound.contract.version),
-            correlation_id=self._caller.correlation_id,
-            actor=self._caller.actor,
-            project_id=self._caller.project_id,
-            revision=self._caller.revision,
-            idempotency_key=uuid.uuid4().hex if changes else None,
-        )
+        key = uuid.uuid4().hex if changes else None
+        return self._caller.envelope(bound.contract, operation, key)
 
     def call(self, operation: str, /, *arguments: object) -> Any:  # noqa: ANN401 - its result
         """An `access` operation on this instance."""

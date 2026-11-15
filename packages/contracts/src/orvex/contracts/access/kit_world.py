@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from orvex.contracts.access.interface import UNAUTHENTICATED
 from orvex.contracts.access.oidc_failure import failed
 from orvex.contracts.access.values import (
     Configuration,
@@ -197,7 +198,7 @@ def signed_in(client: KitClient) -> World:
     instance = found.opened
     made = call(client, "system", "create_administrator", instance, "admin", "Admin", False, None)
     first = call(
-        client, "anonymous", "login", instance, "admin", made.temporary_password, None, None
+        client, UNAUTHENTICATED, "login", instance, "admin", made.temporary_password, None, None
     )
     found.admin = made.user.id
     found.session = call(
@@ -221,7 +222,7 @@ def _signed_up(client: KitClient, found: World, user_name: str, role: str) -> tu
     actor = found.admin if not found.builder else found.builder
     call(client, actor, "set_membership", instance, PROJECT, made.user.id, role)
     first = call(
-        client, "anonymous", "login", instance, user_name, made.temporary_password, None, None
+        client, UNAUTHENTICATED, "login", instance, user_name, made.temporary_password, None, None
     )
     session = call(
         client,
