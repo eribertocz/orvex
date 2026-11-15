@@ -14,6 +14,7 @@ runtime = [
   "pg8000==1.31.6",
   "pyarrow==26.0.1",
   "pydantic==2.14.3",
+  "pydantic-core==2.50.4",
   "pyyaml==6.0.3",
   "tzdata==2026.6",
   "uvicorn==0.54.0",
