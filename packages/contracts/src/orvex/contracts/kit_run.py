@@ -5,10 +5,10 @@ A run serves the implementation at the version it provides (`provided`) to a con
 version `consumer`, which runs the cases that exist at its version. A case that exists at the
 provided version must pass. A newer case (a consumer at N against a provider at N-1) must pass
 or be refused with CONTRACT_VERSION_UNSUPPORTED: never a wrong answer. Each run also sends the
-envelope cases the contract implies, which no implementation can pass by itself: a call missing
-each envelope field, or without its idempotency key where it changes state, is refused with
-CONTRACT_ENVELOPE_INVALID, and a call at another major version with
-CONTRACT_VERSION_UNSUPPORTED, both before the implementation is reached.
+envelope cases the contract implies, which no implementation can pass by itself: a call whose
+envelope field is absent, blank or a placeholder, or that lacks its idempotency key where it
+changes state, is refused with CONTRACT_ENVELOPE_INVALID, and a call at another major version
+with CONTRACT_VERSION_UNSUPPORTED, both before the implementation is reached.
 """
 
 from __future__ import annotations
@@ -112,6 +112,7 @@ def _envelope_changes(
     for field in REQUIRED:
         yield f"{field}-missing", "CONTRACT_ENVELOPE_INVALID", {field: None}
         yield f"{field}-blank", "CONTRACT_ENVELOPE_INVALID", {field: " "}
+        yield f"{field}-placeholder", "CONTRACT_ENVELOPE_INVALID", {field: "unknown"}
     if operation.changes_state:
         yield f"{IDEMPOTENCY_KEY}-missing", "CONTRACT_ENVELOPE_INVALID", {IDEMPOTENCY_KEY: None}
     yield "other-contract", "CONTRACT_ENVELOPE_INVALID", {"contract_name": f"{contract.name}-x"}

@@ -125,6 +125,7 @@ packages/contracts/src/orvex/contracts/   generated contract types
 !packages/contracts/src/orvex/contracts/registry.py             hand-written: counted (#486, interface contracts)
 !packages/contracts/src/orvex/contracts/serializable.py         hand-written: counted (#486, interface contracts)
 !packages/contracts/src/orvex/contracts/adapter.py              hand-written: counted (#486, interface contracts)
+!packages/contracts/src/orvex/contracts/context.py              hand-written: counted (#486, interface contracts)
 !packages/contracts/src/orvex/contracts/envelope.py             hand-written: counted (#486, interface contracts)
 !packages/contracts/src/orvex/contracts/kit_client.py           hand-written: counted (#486, interface contracts)
 !packages/contracts/src/orvex/contracts/version.py              hand-written: counted (#486, interface contracts)

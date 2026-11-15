@@ -1,11 +1,12 @@
 """Which annotated types may cross an interface contract (#486 G5): plain values, never live
 objects, so every operation can later run in another process (#156).
 
-A value type is one of `SCALARS` (an Arrow table among them), a `Literal` of booleans,
-integers, strings or `None`, a union of value types, a parameterized `tuple`, `list` or `dict`
-with `str` keys, an `Enum`, or a pydantic model (the generated contract types) or frozen
-dataclass whose fields are all value types. Anything else (`Any`, `object`, callables,
-iterators, locks, connections, a mutable dataclass, a bare `tuple`) is refused.
+A value type is one of `SCALARS` (an aware datetime and an Arrow table among them), a
+`Literal` of booleans, integers, strings or `None`, a union of value types, a value type with
+constraints (`Annotated`), a parameterized `tuple`, `list` or `dict` with `str` keys, an `Enum`,
+or a pydantic model (the generated contract types) or frozen dataclass whose fields are all
+value types. Anything else (`Any`, `object`, callables, iterators, locks, connections, a
+mutable dataclass, a bare `tuple`) is refused.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from decimal import Decimal
 from enum import Enum
 
 import pyarrow as pa
-from pydantic import BaseModel
+from pydantic import AwareDatetime, BaseModel
 
 SCALARS: tuple[type, ...] = (
     type(None),
@@ -29,6 +30,7 @@ SCALARS: tuple[type, ...] = (
     bytes,
     Decimal,
     datetime,
+    AwareDatetime,
     date,
     time,
     timedelta,
@@ -67,6 +69,8 @@ def crossing_problem(annotation: object, classes: set[type]) -> str | None:
         return None
     origin = typing.get_origin(annotation)
     arguments = typing.get_args(annotation)
+    if origin is typing.Annotated:  # constraints narrow a value type; they never widen it
+        return crossing_problem(arguments[0], classes)
     if origin in (typing.Union, types.UnionType):
         return _first(crossing_problem(argument, classes) for argument in arguments)
     if origin is typing.Literal:
@@ -79,7 +83,10 @@ def crossing_problem(annotation: object, classes: set[type]) -> str | None:
             return f"{type_name(annotation)} does not say what it holds"
         return _first(crossing_problem(item, classes) for item in items)
     if origin is dict:
-        if not arguments or arguments[0] is not str:
+        key = arguments[0] if arguments else None
+        if typing.get_origin(key) is typing.Annotated:
+            key = typing.get_args(key)[0]
+        if key is not str:
             return f"{type_name(annotation)}: only `str` keys may cross"
         return crossing_problem(arguments[1], classes)
     if origin is None and isinstance(annotation, type):

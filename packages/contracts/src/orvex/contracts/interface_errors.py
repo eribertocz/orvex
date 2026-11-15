@@ -1,7 +1,8 @@
 """The errors of the interface-contract machinery: a stable code, a message and details.
 
 `ContractCallRefused` is the typed refusal of one call before the implementation runs:
-CONTRACT_ENVELOPE_INVALID and CONTRACT_VERSION_UNSUPPORTED (`orvex.contracts.envelope`).
+CONTRACT_ENVELOPE_INVALID and CONTRACT_VERSION_UNSUPPORTED (`orvex.contracts.envelope`), and
+CONTRACT_CONTEXT_INVALID for a call context that is not real (`orvex.contracts.context`).
 Every other code is an `InterfaceContractError`: INTERFACE_CONTRACT_INVALID,
 INTERFACE_VERSION_INVALID, INTERFACE_TYPE_NOT_SERIALIZABLE,
 INTERFACE_UNSUPPORTED_OPERATION_DECLARED, INTERFACE_OPERATION_UNKNOWN,

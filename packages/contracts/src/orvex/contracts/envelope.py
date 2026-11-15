@@ -10,11 +10,13 @@ Every operation of an interface contract takes a `CallEnvelope` as its first arg
 - `project_id` and `revision`, the project and the revision the call acts on;
 - `idempotency_key`, required on every operation that changes state.
 
-A field that is absent, not a string or blank, a key missing on an operation that changes
-state, or an envelope for another contract is refused with CONTRACT_ENVELOPE_INVALID. A version
-the provider cannot serve is refused with CONTRACT_VERSION_UNSUPPORTED: another major version,
-or an operation the provider's version or the caller's version does not have. A caller at a
-newer minor version is served for the operations the provider has (N against N-1).
+A field that is absent, not a string, blank or a placeholder (`PLACEHOLDERS`), a key missing
+on an operation that changes state, or an envelope for another contract is refused with
+CONTRACT_ENVELOPE_INVALID. A version the provider cannot serve is refused with
+CONTRACT_VERSION_UNSUPPORTED: another major version, or an operation the provider's version or
+the caller's version does not have. A caller at a newer minor version is served for the
+operations the provider has (N against N-1). Consumers make envelopes from a `CallContext`
+(`orvex.contracts.context`).
 """
 
 from __future__ import annotations
@@ -52,8 +54,33 @@ class CallEnvelope:
     idempotency_key: str | None = None
 
 
-def _present(value: object) -> bool:
-    return type(value) is str and bool(value.strip())
+# Values that stand in for a missing one: never accepted as a field of a context or envelope.
+PLACEHOLDERS = frozenset(
+    {
+        "-",
+        "?",
+        "anonymous",
+        "changeme",
+        "default",
+        "dummy",
+        "n/a",
+        "na",
+        "nil",
+        "none",
+        "null",
+        "placeholder",
+        "tbd",
+        "todo",
+        "undefined",
+        "unknown",
+        "xxx",
+    }
+)
+
+
+def real_value(value: object) -> bool:
+    """A string that is neither blank nor a placeholder (compared without case or spaces)."""
+    return type(value) is str and bool(value.strip()) and value.strip().lower() not in PLACEHOLDERS
 
 
 def envelope_refusal(
@@ -72,9 +99,9 @@ def envelope_refusal(
     if type(envelope) is not CallEnvelope:
         return invalid("envelope", "a call carries a CallEnvelope as its first argument")
     for field in REQUIRED:
-        if not _present(getattr(envelope, field, None)):
+        if not real_value(getattr(envelope, field, None)):
             return invalid(field, f"the envelope has no {field}")
-    if operation.changes_state and not _present(envelope.idempotency_key):
+    if operation.changes_state and not real_value(envelope.idempotency_key):
         return invalid(IDEMPOTENCY_KEY, "an operation that changes state needs an idempotency key")
     if envelope.idempotency_key is not None and type(envelope.idempotency_key) is not str:
         return invalid(IDEMPOTENCY_KEY, "an idempotency key is a string")

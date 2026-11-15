@@ -45,7 +45,7 @@ def test_the_shipped_manifest_of_the_contracts_distribution_is_valid() -> None:
     assert manifest.module == "contracts"
     assert manifest.provides == ()
     assert manifest.requires == ()
-    assert manifest.runtime == ("pyarrow", "pydantic")
+    assert manifest.runtime == ("pyarrow", "pydantic", "pydantic-core")
 
 
 def test_provides_and_requires_may_be_absent() -> None:
