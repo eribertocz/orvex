@@ -186,6 +186,7 @@ import hashlib, sys
 sys.path.insert(0, {root!r})
 from tests.conformance.test_semantic_result import detail, exact_table, EXACT_COLUMNS
 from tests.support.semantic_results import top_n_with_others
+from orvex.server.store_access import store
 parts = [
     top_n_with_others().canonical(store().arrow_to_json),
     detail(exact_table(), EXACT_COLUMNS).canonical(store().arrow_to_json),

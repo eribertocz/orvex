@@ -853,10 +853,11 @@ def test_another_writer_first_fails_the_run_and_records_it_after_the_rollback(
 
 
 def timed_out(transaction: Transaction) -> StoreError:
-    """What the store's guard leaves when the transaction's time limit expires mid-statement."""
-    return transaction._interrupted(
-        StoreError("STORE_TIMEOUT", "The transaction exceeded its time limit.", {})
-    )
+    """What the store leaves when the transaction's time limit expires mid-statement: the
+    statement's refusal, and a transaction that can no longer commit (the store's own guarantee,
+    #77), here through the contract's cancel."""
+    transaction.cancel()
+    return StoreError("STORE_TIMEOUT", "The transaction exceeded its time limit.", {})
 
 
 @pytest.mark.parametrize("where", ["count", "records"])
