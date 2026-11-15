@@ -92,7 +92,7 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
@@ -107,13 +107,13 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "use",
               "type": "orvex.contracts.semantic.interface.Use"
@@ -128,19 +128,19 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "use",
               "type": "orvex.contracts.semantic.interface.Use"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "stored",
               "type": "orvex.contracts.semantic.interface.Stored"
@@ -155,7 +155,7 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"

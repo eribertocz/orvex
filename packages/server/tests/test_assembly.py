@@ -298,7 +298,7 @@ def test_the_installed_modules_assemble() -> None:
 def test_the_server_does_not_start_when_assembly_is_refused(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def refuse(identity: object) -> None:
+    def refuse(identity: object, chosen: object = None) -> None:
         raise AssemblyRefused(["ASSEMBLY_CAPABILITY_MISSING: planted"])
 
     monkeypatch.setattr(cli, "check_installed_assembly", refuse)

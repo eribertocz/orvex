@@ -131,6 +131,7 @@ packages/contracts/src/orvex/contracts/   generated contract types
 !packages/contracts/src/orvex/contracts/kit_client.py           hand-written: counted (#486, interface contracts)
 !packages/contracts/src/orvex/contracts/kit_process.py          hand-written: counted (#486, interface contracts)
 !packages/contracts/src/orvex/contracts/version.py              hand-written: counted (#486, interface contracts)
+!packages/contracts/src/orvex/contracts/semantic/            hand-written: counted (#486, the semantic interface contracts)
 tests/contracts/generated/        generated contract fixtures
 !tests/contracts/generated/__init__.py                  hand-written: counted
 web/src/lib/contracts/            generated TypeScript types

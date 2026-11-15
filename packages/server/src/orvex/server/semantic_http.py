@@ -60,8 +60,8 @@ from orvex.semantic.receipt.viewer import CallerViewer
 from orvex.semantic.result import SemanticResult
 from orvex.semantic.result.cursors import SealedForm
 from orvex.server import evidence_records, lake_place, semantic_model
-from orvex.server.assembly import implementation_of
 from orvex.server.identity import Identity, load_identity
+from orvex.server.implementations import implementation_of
 from orvex.server.permission_state import permission_state
 from orvex.server.project import Project, ProjectLoadError, load_project
 from orvex.server.query_cancel import Cancel
@@ -211,7 +211,8 @@ def result_cache() -> ResultCache:
     """This process's result cache, of the implementation the server is assembled with
     (`assembly`, chosen by configuration only), bounded and on the monotonic clock."""
     implementation = implementation_of(load_identity(), "result-cache")
-    cache: ResultCache = implementation(RESULT_CACHE_BYTES, time.monotonic)  # type: ignore[operator]
+    built = implementation(max_bytes=RESULT_CACHE_BYTES, clock=time.monotonic)  # type: ignore[operator]
+    cache: ResultCache = built
     return cache
 
 

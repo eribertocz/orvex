@@ -1,7 +1,7 @@
 """The real substitution test of #486 G1: the server, assembled by configuration only with the
-independent `orvex-alternative-result-cache-ipc`, passes the same end-to-end result-cache suite
-as with the semantic module's cache, with no consumer file changed and no case or operation
-omitted; and each way to cheat that comparison is caught.
+independent alternative result cache (`conformance/alternatives/result_cache_ipc`), passes the
+same end-to-end result-cache suite as with the semantic module's cache, with no consumer file
+changed and no case or operation omitted; and each way to cheat that comparison is caught.
 
 The alternative is built and installed from its own source into a folder of this test, never
 into the environment, and only the run that uses it sees that folder.
@@ -12,15 +12,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
 import pytest
 from orvex.contracts.semantic.interface import RESULT_CACHE
 
+from tests.support.fixtures import frozen
 from tools.repository import REPOSITORY_ROOT, identity
 
 ALTERNATIVE = REPOSITORY_ROOT / "conformance" / "alternatives" / "result_cache_ipc"
@@ -53,9 +55,14 @@ def choice_variable() -> str:
 
 
 def install_alternative(target: Path) -> None:
+    """Build and install the alternative from a copy of its source, so the checkout is untouched."""
+    source = target.with_name("alternative-source")
+    shutil.copytree(
+        ALTERNATIVE, source, ignore=shutil.ignore_patterns("build", "*.egg-info", "__pycache__")
+    )
     command = [
         sys.executable, "-m", "pip", "install", "--quiet", "--no-deps",
-        "--no-build-isolation", "--target", str(target), str(ALTERNATIVE),
+        "--no-build-isolation", "--target", str(target), str(source),
     ]  # fmt: skip
     done = subprocess.run(command, capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stdout[-2000:] + done.stderr[-2000:]
@@ -115,7 +122,7 @@ def digest_problems(before: Mapping[str, str], after: Mapping[str, str]) -> list
 
 
 @pytest.fixture(scope="module")
-def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
+def runs(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, Any]]:
     work = tmp_path_factory.mktemp("substitution")
     before = consumer_digest()
     base = {k: v for k, v in os.environ.items() if k != choice_variable()}
@@ -127,11 +134,13 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
         work / "alternative.json",
         {**base, "PYTHONPATH": path, choice_variable(): ALTERNATIVE_MODULE},
     )
-    return {
+    found = {
         "original": original,
         "alternative": alternative,
         "digests": (before, middle, consumer_digest()),
     }
+    for _ in frozen(work):  # the runs' files stay as the runs left them
+        yield found
 
 
 def test_the_server_passes_the_same_suite_with_the_alternative(runs: dict[str, Any]) -> None:

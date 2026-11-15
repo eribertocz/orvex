@@ -2,8 +2,8 @@
 `orvex.contracts.semantic.interface`, which any implementation must pass in full.
 
 Run it with `verify_kit(RESULT_CACHE_KIT, maker(Implementation))`: each case gets a fresh
-implementation built as `Implementation(BOUND, CLOCK)`, with the kit's own clock set back to
-zero, so a case moves time only by `CLOCK.advance`.
+implementation built as `Implementation(max_bytes=BOUND, clock=CLOCK)`, with the kit's own
+clock set back to zero, so a case moves time only by `CLOCK.advance`.
 """
 
 from __future__ import annotations
@@ -54,12 +54,12 @@ class KitClock:
 CLOCK = KitClock()
 
 
-def maker(implementation: Callable[[int, Callable[[], float]], object]) -> Callable[[], object]:
+def maker(implementation: Callable[..., object]) -> Callable[[], object]:
     """What the kit runs each case on: a fresh implementation, on the kit's clock at zero."""
 
     def make() -> object:
         CLOCK.reset()
-        return implementation(BOUND, CLOCK)
+        return implementation(max_bytes=BOUND, clock=CLOCK)
 
     return make
 
@@ -114,10 +114,9 @@ def _same(found: Stored | None, stored: Stored) -> None:
         found.table.schema.equals(stored.table.schema, check_metadata=True),
         f"the schema changed: {found.table.schema} for {stored.table.schema}",
     )
-    _expect(found.table.equals(stored.table, check_metadata=True), "the table changed")
-    rows = [{k: (type(v), str(v)) for k, v in row.items()} for row in found.table.to_pylist()]
-    expected = [{k: (type(v), str(v)) for k, v in r.items()} for r in stored.table.to_pylist()]
-    _expect(rows == expected, f"a value, its type or its scale changed: {rows}")
+    # Arrow equality under an equal schema: every value bit for bit at its exact type (a
+    # decimal's precision and scale, a timestamp's unit and zone) and every NULL where it was.
+    _expect(found.table.equals(stored.table, check_metadata=True), "a value or a NULL changed")
     _expect(found.withheld == stored.withheld, f"the withheld policies changed: {found.withheld}")
     _expect(type(found.withheld) is tuple, "the withheld policies are not a tuple")
     _expect(found.estimated == stored.estimated, f"the estimate changed: {found.estimated}")

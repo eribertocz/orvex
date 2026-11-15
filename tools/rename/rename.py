@@ -92,7 +92,8 @@ def plan(root: Path, new: Names) -> tuple[dict[Path, str], list[tuple[Path, Path
 
     moves = [
         (source, source.with_name(new.namespace))
-        for source in sorted((root / "packages").glob(f"*/src/{old.namespace}"))
+        for folder in ("packages", "conformance/alternatives")  # every distribution's source
+        for source in sorted((root / folder).glob(f"*/src/{old.namespace}"))
         if old.namespace != new.namespace
     ]
     return edits, moves

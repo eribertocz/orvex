@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tools.checks.architecture import Finding
+from tools.checks.imports import dynamic_import, imported_names
 from tools.repository import REPOSITORY_ROOT, identity
 
 WINDOW = 4  # consecutive normalized lines that make a shared block
@@ -46,18 +47,15 @@ ALTERNATIVES = (
 
 
 def _imported(tree: ast.AST) -> list[tuple[str, int]]:
-    found: list[tuple[str, int]] = []
+    """Every absolute import, as the boundary rules read them, and a dynamic import of a name
+    not written as a constant (`<dynamic>`), which can never be shown to be allowed."""
+    found = imported_names(tree)
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            found.extend((alias.name, node.lineno) for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            found.append(("." if node.level else node.module or "", node.lineno))
-        elif isinstance(node, ast.Call) and getattr(
-            node.func, "attr", getattr(node.func, "id", "")
-        ) in {
-            "import_module",
-            "__import__",
-        }:
+        if dynamic_import(node) and not (
+            node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
             found.append(("<dynamic>", node.lineno))
     return found
 
@@ -69,6 +67,7 @@ def import_findings(
     own = f"{namespace}.{alternative.package}"
     allowed_roots = {*sys.stdlib_module_names, *alternative.third_party}
     findings = []
+    reported: set[int] = set()
     for name, line in _imported(ast.parse(source, filename=relative)):
         root = name.split(".")[0]
         if (
@@ -77,8 +76,10 @@ def import_findings(
             or name == own
             or name.startswith(f"{own}.")
             or (root != namespace and root in allowed_roots)
+            or line in reported
         ):
             continue
+        reported.add(line)
         findings.append(
             Finding(
                 "ALTERNATIVE_IMPORT_FORBIDDEN",

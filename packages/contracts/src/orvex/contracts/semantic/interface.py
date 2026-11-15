@@ -3,8 +3,9 @@ the semantic result cache must do, its value types and how its size is counted.
 
 `semantic` computes the key (the execution identity with the permission fingerprint, ADR-0030
 §6) before it calls the cache, so no security rule is in an implementation. An implementation
-is built by its composer as `Implementation(max_bytes, clock)`: `max_bytes` is its bound
-(at least one byte) and `clock` the monotonic seconds its entries' age is measured on. Then:
+is built by its composer as `Implementation(max_bytes=..., clock=...)`: `max_bytes` is its
+bound (at least one byte) and `clock` the monotonic seconds its entries' age is measured on.
+Then:
 
 - a `Use` without a key is a bypass: `get` finds nothing and `put` keeps nothing;
 - `get` hits only an entry put under an equal key, never a prefix or any other key;

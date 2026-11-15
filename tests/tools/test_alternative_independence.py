@@ -14,9 +14,10 @@ from tools.checks.alternative_independence import (
     independence_scan,
     shared_findings,
 )
-from tools.repository import REPOSITORY_ROOT
+from tools.repository import REPOSITORY_ROOT, identity
 
 ALTERNATIVE = ALTERNATIVES[0]
+NAMESPACE = str(identity(REPOSITORY_ROOT)["python_namespace"])
 ORIGINAL = REPOSITORY_ROOT / "packages/semantic/src/orvex/semantic/result_cache.py"
 
 
@@ -33,10 +34,11 @@ def test_the_real_alternative_is_independent() -> None:
         "from orvex.store.lake import Lake\n",
         "import duckdb\n",
         "import importlib\nimportlib.import_module('orvex.semantic.result_cache')\n",
+        "import importlib\nname = 'orvex.semantic'\nimportlib.import_module(name)\n",
     ],
 )
 def test_a_planted_import_fails(source: str) -> None:
-    found = import_findings(source, "x.py", ALTERNATIVE, "orvex")
+    found = import_findings(source, "x.py", ALTERNATIVE, NAMESPACE)
     assert [finding.code for finding in found] == ["ALTERNATIVE_IMPORT_FORBIDDEN"]
 
 
@@ -49,7 +51,7 @@ def test_a_planted_import_fails(source: str) -> None:
     ],
 )
 def test_the_allowed_imports_pass(source: str) -> None:
-    assert import_findings(source, "x.py", ALTERNATIVE, "orvex") == []
+    assert import_findings(source, "x.py", ALTERNATIVE, NAMESPACE) == []
 
 
 def test_a_block_copied_from_the_original_fails() -> None:
