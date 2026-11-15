@@ -1,8 +1,10 @@
 """Running a conformance kit (#486 G1, G3, G5): every case, each on a fresh implementation, in
 process and serialized, by consumers at N-1 and N, with nothing skipped.
 
-A run serves the implementation at the version it provides (`provided`) to a consumer at
-version `consumer`, which runs the cases that exist at its version. A case that exists at the
+A case that declares its own environment runs in its own process built from it
+(`kit_process`); every other case runs here (`kit_case`). A run serves the implementation at
+the version it provides (`provided`) to a consumer at version `consumer`, which runs the cases
+that exist at its version. A case that exists at the
 provided version must pass. A newer case (a consumer at N against a provider at N-1) must pass
 or be refused with CONTRACT_VERSION_UNSUPPORTED: never a wrong answer. Each run also sends the
 envelope cases the contract implies, which no implementation can pass by itself: a call whose
@@ -13,32 +15,18 @@ with CONTRACT_VERSION_UNSUPPORTED, both before the implementation is reached.
 
 from __future__ import annotations
 
-import functools
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Literal
 
 from .binding import Bound
 from .envelope import IDEMPOTENCY_KEY, REQUIRED
 from .interface import InterfaceContract, Operation
-from .interface_errors import ContractCallRefused, InterfaceContractError
-from .kit import Idempotent, Kit, KitCase
+from .interface_errors import InterfaceContractError
+from .kit import Kit
+from .kit_case import UNSUPPORTED, CaseResult, run_case
 from .kit_client import KitClient
+from .kit_process import run_case_in_its_own_process
 from .version import Version
-
-Outcome = Literal["passed", "refused", "failed"]
-UNSUPPORTED = "CONTRACT_VERSION_UNSUPPORTED"
-
-
-@dataclass(frozen=True, slots=True)
-class CaseResult:
-    id: str
-    outcome: Outcome
-    detail: str
-
-    @property
-    def passed(self) -> bool:
-        return self.outcome == "passed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,43 +54,6 @@ class _Reached:
 def binding_name(report: KitReport) -> str:
     binding = "serialized" if report.serialized else "in process"
     return f"{binding}, consumer {report.consumer}, provider {report.provided}"
-
-
-def _refused(error: BaseException) -> bool:
-    """A refusal by the binding itself: never one found down a `__cause__` chain, and never one
-    an implementation raised, which the binding turns into INTERFACE_ERROR_UNDECLARED."""
-    return type(error) is ContractCallRefused and error.code == UNSUPPORTED
-
-
-def _idempotent(client: KitClient, case: KitCase, check: Idempotent) -> None:
-    before = check.observe(client)
-    envelope = client.envelope(case.operation)
-    first = check.call(client, envelope)
-    once = check.observe(client)
-    second = check.call(client, envelope)
-    twice = check.observe(client)
-    if once == before:
-        raise AssertionError("KIT_IDEMPOTENCY_NO_EFFECT: the first call changed nothing")
-    if twice != once:
-        raise AssertionError(
-            "KIT_IDEMPOTENCY_BROKEN: one idempotency key had its effect twice: "
-            f"{once!r} became {twice!r}"
-        )
-    if second != first:
-        raise AssertionError(
-            f"KIT_IDEMPOTENCY_BROKEN: the repeated call answered {second!r}, first {first!r}"
-        )
-
-
-def _outcome(run: Callable[[], None]) -> tuple[Outcome, str]:
-    try:
-        run()
-    except KeyboardInterrupt, SystemExit:
-        raise
-    except BaseException as error:  # noqa: BLE001 - a failure or a skip: the kit has no skips
-        outcome: Outcome = "refused" if _refused(error) else "failed"
-        return outcome, f"{type(error).__name__}: {error}"
-    return "passed", ""
 
 
 def _envelope_changes(
@@ -174,14 +125,8 @@ def run_kit(
     for case in kit.cases:
         if not speaking.provides(kit.since(case)):
             continue
-        bound = Bound(kit.contract, make(), serialized=serialized, provided=served)
-        client = KitClient(bound, speaking, case.id)
-        check = case.check
-        if isinstance(check, Idempotent):
-            outcome, detail = _outcome(functools.partial(_idempotent, client, case, check))
-        else:
-            outcome, detail = _outcome(functools.partial(check, client))
-        results.append(CaseResult(case.id, outcome, detail))
+        run = run_case if case.environment is None else run_case_in_its_own_process
+        results.append(run(kit, case, make, serialized, speaking, served))
     envelope = _envelope_results(kit, make, serialized, speaking, served)
     return KitReport(
         kit.contract.name, serialized, speaking, served, tuple(results), tuple(envelope)

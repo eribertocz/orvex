@@ -5,7 +5,10 @@ A kit belongs to one interface contract. Each case has a stable id, the operatio
 its expectation in words (the guarantee the compatibility check holds to, #486 G3), the version
 it exists from, and either a check that receives a `KitClient` and raises when the guarantee
 fails, or an `Idempotent` pair for an operation that changes state: the call is sent twice with
-one idempotency key, and the effect must happen exactly once (#486 G3). The kit records how
+one idempotency key, and the effect must happen exactly once (#486 G3). A case may declare its
+own `CaseEnvironment` (variables and an extension directory): it then runs in a process of its
+own built from that declaration (`kit_process`), so a kit never patches an implementation's
+internals to reach a condition. The kit records how
 many cases it has; a kit whose cases differ from that count, that leaves an operation without a
 case, or an operation that changes state without an idempotency case, is refused when built.
 """
@@ -23,6 +26,7 @@ from .kit_client import KitClient
 from .version import Version
 
 CASE_ID = re.compile(r"[a-z][a-z0-9]*([.-][a-z0-9]+)*")
+VARIABLE = re.compile(r"[A-Z][A-Z0-9_]*")
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,12 +39,33 @@ class Idempotent:
 
 
 @dataclass(frozen=True, slots=True)
+class ExtensionDirectory:
+    """A fresh directory named by the environment variable `variable`: a copy of the directory
+    the variable `source` names in the kit's own environment (empty when `source` is None),
+    without the files of the extensions in `without`."""
+
+    variable: str
+    source: str | None = None
+    without: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CaseEnvironment:
+    """The environment a case runs in, in a process of its own built from this alone: its
+    variables, and at most one extension directory."""
+
+    variables: tuple[tuple[str, str], ...] = ()
+    extensions: ExtensionDirectory | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class KitCase:
     id: str
     operation: str
     expectation: str
     check: Callable[[KitClient], None] | Idempotent
     since: Version | None = None
+    environment: CaseEnvironment | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,10 +127,28 @@ class Kit:
                 "expectation": case.expectation,
                 "idempotency": isinstance(case.check, Idempotent),
                 "since": str(self.since(case)),
+                "environment": _environment(case.environment),
             }
             for case in self.cases
         }
         return {"recorded": self.recorded, "cases": cases}
+
+
+def _environment(environment: CaseEnvironment | None) -> dict[str, object] | None:
+    """A case's environment as plain data: part of what its expectation means."""
+    if environment is None:
+        return None
+    extensions = environment.extensions
+    return {
+        "variables": dict(environment.variables),
+        "extensions": None
+        if extensions is None
+        else {
+            "variable": extensions.variable,
+            "source": extensions.source,
+            "without": list(extensions.without),
+        },
+    }
 
 
 def _case_problem(kit: Kit, case: KitCase) -> str | None:
@@ -117,4 +160,11 @@ def _case_problem(kit: Kit, case: KitCase) -> str | None:
         return f"since {since} is not between {contract.since(operation)} and {contract.version}"
     if isinstance(case.check, Idempotent) and not operation.changes_state:
         return "an idempotency case needs an operation that changes state"
+    environment = case.environment
+    if environment is not None:
+        names = [name for name, _ in environment.variables]
+        if environment.extensions is not None:
+            names.append(environment.extensions.variable)
+        if len(set(names)) != len(names) or not all(VARIABLE.fullmatch(n) for n in names):
+            return "its environment names each variable once, in UPPER_SNAKE_CASE"
     return None
