@@ -245,31 +245,31 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "models",
               "type": "tuple[orvex.contracts.transform.models.Model, ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "sources",
               "type": "tuple[str, ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "databases",
               "type": "tuple[str, ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "direct",
               "type": "tuple[str, ...]"
@@ -284,25 +284,25 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "name",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "dependencies",
               "type": "dict[str, tuple[str, ...]]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "known",
               "type": "tuple[str, ...]"
@@ -317,19 +317,19 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "models",
               "type": "tuple[orvex.contracts.transform.models.Model, ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "columns",
               "type": "dict[str, tuple[tuple[str, str], ...]]"
@@ -344,19 +344,19 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "snapshot",
               "type": "int"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "run_id",
               "type": "str"
@@ -371,25 +371,25 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "model",
               "type": "orvex.contracts.transform.models.Model"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "models",
               "type": "tuple[orvex.contracts.transform.models.Model, ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "sql",
               "type": "str | None"
@@ -404,25 +404,25 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "model",
               "type": "orvex.contracts.transform.models.Model"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "project_zone",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "connection_types",
               "type": "dict[str, str]"
@@ -437,19 +437,19 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "folder",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "connections",
               "type": "dict[str, orvex.contracts.project.v1.ParquetConnection | orvex.contracts.project.v1.CsvConnection | orvex.contracts.project.v1.DuckdbConnection | orvex.contracts.project.v1.SqliteConnection | orvex.contracts.project.v1.PostgresConnection]"
@@ -464,25 +464,25 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "sql",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "time_column",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "known",
               "type": "tuple[orvex.contracts.transform.analysis.RelationColumns, ...]"
@@ -497,31 +497,31 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "snapshot",
               "type": "int"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "time_zone",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "limit",
               "type": "int"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "tables",
               "type": "tuple[tuple[str, str], ...]"
@@ -536,13 +536,13 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "sql",
               "type": "str"
@@ -557,19 +557,19 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "snapshot",
               "type": "int"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "tables",
               "type": "tuple[tuple[str, str], ...]"
@@ -584,13 +584,13 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "leftovers",
               "type": "tuple[tuple[str, str], ...]"
@@ -605,19 +605,19 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "tables",
               "type": "tuple[tuple[str, str], ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "models",
               "type": "tuple[orvex.contracts.transform.models.Model, ...]"
@@ -632,43 +632,43 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "scope",
               "type": "orvex.contracts.transform.analysis.LineageScope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "parent_run_id",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "runs",
               "type": "tuple[orvex.contracts.transform.analysis.LineageRun, ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "models",
               "type": "tuple[orvex.contracts.transform.models.Model, ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "connections",
               "type": "dict[str, orvex.contracts.project.v1.ParquetConnection | orvex.contracts.project.v1.CsvConnection | orvex.contracts.project.v1.DuckdbConnection | orvex.contracts.project.v1.SqliteConnection | orvex.contracts.project.v1.PostgresConnection]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "known",
               "type": "tuple[orvex.contracts.transform.analysis.RelationColumns, ...]"
@@ -683,13 +683,13 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "name",
               "type": "str"
@@ -704,19 +704,19 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "model_kind",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "source_kind",
               "type": "str"
@@ -731,31 +731,31 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "model",
               "type": "orvex.contracts.transform.models.Model"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "index",
               "type": "int"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "relation",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "staged",
               "type": "str | None"
@@ -770,19 +770,19 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "snapshot",
               "type": "int"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "tables",
               "type": "tuple[tuple[str, str], ...]"
@@ -797,25 +797,25 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "model",
               "type": "orvex.contracts.transform.models.Model"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "now",
               "type": "datetime.datetime"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "project_zone",
               "type": "str"
@@ -830,67 +830,67 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "models",
               "type": "tuple[orvex.contracts.transform.models.Model, ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "graph",
               "type": "orvex.contracts.transform.models.Graph"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "outputs",
               "type": "dict[str, tuple[tuple[str, str], ...]]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "existing",
               "type": "dict[str, tuple[tuple[str, str], ...] | None]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "since",
               "type": "dict[str, str]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "full_refresh",
               "type": "tuple[str, ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "previous",
               "type": "dict[str, str | None]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "differences",
               "type": "dict[str, tuple[orvex.contracts.transform.steps.Comparison, ...]]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "filtered",
               "type": "dict[str, str]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "databases",
               "type": "tuple[str, ...]"
@@ -905,25 +905,25 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "model",
               "type": "orvex.contracts.transform.models.Model"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "index",
               "type": "int"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "databases",
               "type": "tuple[str, ...]"
@@ -938,13 +938,13 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "records",
               "type": "tuple[orvex.contracts.run_record.v1.RunRecord, ...]"
@@ -959,61 +959,61 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "models",
               "type": "tuple[orvex.contracts.transform.models.Model, ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "order",
               "type": "tuple[str, ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "dependencies",
               "type": "dict[str, tuple[str, ...]]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "histories",
               "type": "dict[str, orvex.contracts.transform.scheduling.History]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "now",
               "type": "datetime.datetime"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "project_zone",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "started",
               "type": "datetime.datetime"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "last_run_start",
               "type": "datetime.datetime | None"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "held",
               "type": "dict[str, datetime.datetime]"
@@ -1028,19 +1028,19 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "model",
               "type": "orvex.contracts.transform.models.Model"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "known",
               "type": "tuple[orvex.contracts.transform.analysis.RelationColumns, ...]"
@@ -1055,25 +1055,25 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "kind",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "watermark",
               "type": "str | None"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "lookback",
               "type": "str | None"
@@ -1088,13 +1088,13 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "connections",
               "type": "dict[str, orvex.contracts.project.v1.ParquetConnection | orvex.contracts.project.v1.CsvConnection | orvex.contracts.project.v1.DuckdbConnection | orvex.contracts.project.v1.SqliteConnection | orvex.contracts.project.v1.PostgresConnection]"
@@ -1109,25 +1109,25 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "snapshot",
               "type": "int"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "model",
               "type": "orvex.contracts.transform.models.Model"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "kind",
               "type": "str"
@@ -1142,25 +1142,25 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "model",
               "type": "orvex.contracts.transform.models.Model"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "columns",
               "type": "dict[str, tuple[tuple[str, str], ...]]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "models",
               "type": "tuple[orvex.contracts.transform.models.Model, ...]"
@@ -1175,13 +1175,13 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "models",
               "type": "tuple[orvex.contracts.transform.models.Model, ...]"
@@ -1196,31 +1196,31 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "model",
               "type": "orvex.contracts.transform.models.Model"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "relation",
               "type": "str"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "columns",
               "type": "tuple[tuple[str, str], ...]"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "relations",
               "type": "dict[str, str]"
@@ -1235,13 +1235,13 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "sql",
               "type": "str"
@@ -1256,19 +1256,19 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "snapshot",
               "type": "int"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "model",
               "type": "orvex.contracts.transform.models.Model"
@@ -1283,19 +1283,19 @@
           "errors": [],
           "parameters": [
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "envelope",
               "type": "orvex.contracts.envelope.CallEnvelope"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "step",
               "type": "orvex.contracts.transform.steps.Watermark"
             },
             {
-              "default": false,
+              "default": null,
               "kind": "positional-or-keyword",
               "name": "value",
               "type": "str | None"
