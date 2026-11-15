@@ -20,7 +20,7 @@ from pathlib import Path
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
-from orvex.access.errors import AUDIT_KEY_UNSAFE, AccessError
+from orvex.contracts.access.errors import AUDIT_KEY_UNSAFE, AccessError
 
 _MAX_BYTES = 4096
 

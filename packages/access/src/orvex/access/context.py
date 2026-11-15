@@ -34,15 +34,12 @@ from typing import Any, Literal, Protocol
 
 from jsonschema import Draft202012Validator, ValidationError
 from jsonschema.validators import extend
+from orvex.contracts.access.errors import InvalidContext
 
 SCHEMA_FILE = "security-context-v1.json"
 DOMAIN = b"security-context/v1\n"
 FINGERPRINT = re.compile(r"sha256:[0-9a-f]{64}")
 Role = Literal["builder", "author", "viewer"]
-
-
-class InvalidContext(ValueError):
-    """A context that breaks `security-context` v1: the caller gets no access."""
 
 
 def _full_match(pattern: str) -> str:

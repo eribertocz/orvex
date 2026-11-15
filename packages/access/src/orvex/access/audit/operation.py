@@ -7,9 +7,9 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from orvex.access.audit.log import AuditLog
-from orvex.access.errors import AccessError
 from orvex.access.storage import retry
 from orvex.access.storage.store import Store, Transaction
+from orvex.contracts.access.errors import AccessError
 
 
 def audited[T](

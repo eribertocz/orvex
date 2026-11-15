@@ -18,7 +18,7 @@ import unicodedata
 
 from argon2 import PasswordHasher, Type, extract_parameters
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
-from orvex.access.errors import PASSWORD_REJECTED, AccessError
+from orvex.contracts.access.errors import PASSWORD_REJECTED, AccessError
 
 MINIMUM_LENGTH = 12
 MAXIMUM_LENGTH = 1024

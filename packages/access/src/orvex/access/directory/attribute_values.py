@@ -22,7 +22,7 @@ import re
 import unicodedata
 from typing import Any, Literal
 
-from orvex.access.errors import VALIDATION_FAILED, AccessError
+from orvex.contracts.access.errors import VALIDATION_FAILED, AccessError
 
 type Kind = Literal["text", "integer", "boolean", "list"]
 

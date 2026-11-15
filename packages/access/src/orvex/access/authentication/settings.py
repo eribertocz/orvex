@@ -27,8 +27,8 @@ from orvex.access.audit.operation import audited
 from orvex.access.directory import rules
 from orvex.access.directory import statements as directory_sql
 from orvex.access.directory.rules import refused
-from orvex.access.errors import VALIDATION_FAILED, AccessError
 from orvex.access.storage.store import Store, Transaction
+from orvex.contracts.access.errors import VALIDATION_FAILED, AccessError
 
 type Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 

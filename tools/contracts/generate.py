@@ -56,10 +56,13 @@ def namespace_contracts() -> Path:
 
 def generated_files_on_disk() -> set[Path]:
     """Every file under the generated roots, except the hand-written ones."""
-    python_version = re.compile(r"(__init__|v[1-9][0-9]*)\.py")
+    python_version = re.compile(r"v[1-9][0-9]*\.py")
     fixture = re.compile(r"[a-z0-9_]+_v[1-9][0-9]*\.py")
     typescript = re.compile(r"v[1-9][0-9]*\.ts")
     found = {p for p in namespace_contracts().glob("*/*.py") if python_version.fullmatch(p.name)}
+    # A package's `__init__.py` is generated with its versions; a package of hand-written
+    # interface contracts only (#486, `access`, `audit_log`) has none, and its own is hand-written.
+    found |= {p.parent / "__init__.py" for p in set(found) if (p.parent / "__init__.py").exists()}
     found |= set(namespace_contracts().glob("*/v*_data/**/*.json"))
     found |= {
         p

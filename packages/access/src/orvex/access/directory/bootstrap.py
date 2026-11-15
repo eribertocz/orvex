@@ -26,10 +26,10 @@ from orvex.access.directory import statements as sql
 from orvex.access.directory.names import checked_display_name, checked_user_name
 from orvex.access.directory.records import NewUser
 from orvex.access.directory.service import new_user_id
-from orvex.access.errors import ACCESS_FORBIDDEN, USER_NAME_TAKEN, AccessError
 from orvex.access.storage.instants import instant
 from orvex.access.storage.migrations import migrate
 from orvex.access.storage.store import Store, UniqueViolation
+from orvex.contracts.access.errors import ACCESS_FORBIDDEN, USER_NAME_TAKEN, AccessError
 
 
 class Bootstrap:

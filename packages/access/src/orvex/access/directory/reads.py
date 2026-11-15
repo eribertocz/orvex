@@ -28,16 +28,16 @@ from orvex.access.directory.attribute_sources import stored_attributes
 from orvex.access.directory.names import canonical_user_name
 from orvex.access.directory.records import Role, User
 from orvex.access.directory.rules import refused
-from orvex.access.errors import (
+from orvex.access.storage import retry
+from orvex.access.storage.instants import instant, parsed
+from orvex.access.storage.store import Store, Transaction
+from orvex.contracts.access.errors import (
     ACCESS_FORBIDDEN,
     LOOKUP_LIMITED,
     USER_NOT_FOUND,
     AccessError,
     not_found,
 )
-from orvex.access.storage import retry
-from orvex.access.storage.instants import instant, parsed
-from orvex.access.storage.store import Store, Transaction
 
 LOOKUP_BUDGET = 30
 LOOKUP_WINDOW = timedelta(minutes=1)

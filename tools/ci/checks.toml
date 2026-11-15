@@ -754,3 +754,18 @@ setup = ["python -m pip install --quiet pip==26.3"]
 name = "standalone-contracts"
 run = "python -m tools.ci.standalone contracts"
 local = true
+
+[[job]]
+workflow = "interfaces.yml"
+job = "standalone-access"
+kind = "check"
+required = true
+contexts = ["standalone-access"]
+digest = "49b78b531247dad2"
+setup = ["python -m pip install --quiet pip==26.3"]
+[[job.check]]
+# The access module installs and passes its own tests and kits alone, outside the repository,
+# with only the contracts distribution beside it (#486 G4).
+name = "standalone-access"
+run = "python -m tools.ci.standalone access"
+local = true

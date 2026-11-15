@@ -34,7 +34,11 @@ from orvex.access.directory import statements as directory_sql
 from orvex.access.directory.names import canonical_user_name
 from orvex.access.directory.records import User
 from orvex.access.directory.rules import refused
-from orvex.access.errors import (
+from orvex.access.oidc import group_mapping, provider_sessions
+from orvex.access.storage import retry
+from orvex.access.storage.instants import instant
+from orvex.access.storage.store import Store, Transaction
+from orvex.contracts.access.errors import (
     LOGIN_DELAYED,
     LOGIN_FAILED,
     SESSION_EXPIRED,
@@ -42,10 +46,6 @@ from orvex.access.errors import (
     AccessError,
     not_found,
 )
-from orvex.access.oidc import group_mapping, provider_sessions
-from orvex.access.storage import retry
-from orvex.access.storage.instants import instant
-from orvex.access.storage.store import Store, Transaction
 
 METHOD = {"method": "password"}
 

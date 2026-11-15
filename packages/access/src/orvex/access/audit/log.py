@@ -35,13 +35,6 @@ from jsonschema import Draft202012Validator
 from orvex.access.audit import chain
 from orvex.access.audit.canonical import NotInProfile, canonical
 from orvex.access.audit.signing_key import SigningKey
-from orvex.access.errors import (
-    AUDIT_EVENT_INVALID,
-    AUDIT_KEY_UNSAFE,
-    AUDIT_RETENTION_INVALID,
-    AUDIT_UNAVAILABLE,
-    AccessError,
-)
 from orvex.access.storage import retry
 from orvex.access.storage.instants import instant, parsed
 from orvex.access.storage.store import (
@@ -50,6 +43,13 @@ from orvex.access.storage.store import (
     Transaction,
     TransientConflict,
     UnreadableValue,
+)
+from orvex.contracts.access.errors import (
+    AUDIT_EVENT_INVALID,
+    AUDIT_KEY_UNSAFE,
+    AUDIT_RETENTION_INVALID,
+    AUDIT_UNAVAILABLE,
+    AccessError,
 )
 
 SCHEMA_FILE = "audit-event-v1.json"
@@ -451,6 +451,14 @@ class AuditLog:
         return how many events verified, or raise the first problem."""
         with self._store.transaction(read_only=True) as transaction:
             return self._verify(transaction, anchors)
+
+    def documents(self) -> list[str]:
+        """Every event's `audit-event` v1 document, as stored, in order."""
+        with self._store.transaction(read_only=True) as transaction:
+            rows = _read(
+                transaction, "audit_events", "SELECT document FROM audit_events ORDER BY seq"
+            )
+        return [str(document) for (document,) in rows]
 
     def verify_at_start(self) -> int:
         """`verify` against the log's own anchor file: what server mode checks before it serves

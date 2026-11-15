@@ -1,0 +1,19 @@
+# The manifest of this module (#486 §2.5, orvex.contracts.manifest): it provides the access and
+# audit-log interface contracts in full, from one implementation, and requires none.
+module = "access"
+
+[dependencies]
+runtime = ["argon2-cffi", "cryptography", "joserfc", "jsonschema", "orvex-contracts", "pg8000"]
+tests = ["pytest"]
+
+[[provides]]
+contract = "access"
+version = "1.0"
+capabilities = ["instance", "sign-in", "directory", "limits", "context", "oidc"]
+implementation = "Access"
+
+[[provides]]
+contract = "audit-log"
+version = "1.0"
+capabilities = ["instance", "record", "verify", "maintain"]
+implementation = "Access"

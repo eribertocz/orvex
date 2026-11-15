@@ -16,9 +16,9 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from orvex.access.oidc.failure import failed
 from orvex.access.storage.instants import instant, parsed
 from orvex.access.storage.store import Transaction
+from orvex.contracts.access.oidc_failure import failed
 
 LIFETIME = timedelta(minutes=10)
 _BYTES = 32  # 256 bits each

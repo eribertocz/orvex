@@ -131,6 +131,17 @@ packages/contracts/src/orvex/contracts/   generated contract types
 !packages/contracts/src/orvex/contracts/kit_client.py           hand-written: counted (#486, interface contracts)
 !packages/contracts/src/orvex/contracts/kit_process.py          hand-written: counted (#486, interface contracts)
 !packages/contracts/src/orvex/contracts/version.py              hand-written: counted (#486, interface contracts)
+!packages/contracts/src/orvex/contracts/access/__init__.py      hand-written: counted (#486 step 4)
+!packages/contracts/src/orvex/contracts/access/errors.py        hand-written: counted (#486 step 4)
+!packages/contracts/src/orvex/contracts/access/fetcher.py       hand-written: counted (#486 step 4)
+!packages/contracts/src/orvex/contracts/access/interface.py     hand-written: counted (#486 step 4)
+!packages/contracts/src/orvex/contracts/access/kit.py           hand-written: counted (#486 step 4)
+!packages/contracts/src/orvex/contracts/access/kit_world.py     hand-written: counted (#486 step 4)
+!packages/contracts/src/orvex/contracts/access/oidc_failure.py  hand-written: counted (#486 step 4)
+!packages/contracts/src/orvex/contracts/access/values.py        hand-written: counted (#486 step 4)
+!packages/contracts/src/orvex/contracts/audit_log/__init__.py   hand-written: counted (#486 step 4)
+!packages/contracts/src/orvex/contracts/audit_log/interface.py  hand-written: counted (#486 step 4)
+!packages/contracts/src/orvex/contracts/audit_log/kit.py        hand-written: counted (#486 step 4)
 tests/contracts/generated/        generated contract fixtures
 !tests/contracts/generated/__init__.py                  hand-written: counted
 web/src/lib/contracts/            generated TypeScript types

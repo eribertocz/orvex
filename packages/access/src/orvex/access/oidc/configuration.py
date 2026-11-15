@@ -29,7 +29,7 @@ from typing import cast
 from urllib.parse import urlsplit
 
 from orvex.access.directory.names import checked_group, checked_id
-from orvex.access.errors import OIDC_NOT_CONFIGURED, AccessError
+from orvex.contracts.access.errors import OIDC_NOT_CONFIGURED, AccessError
 
 ALLOWED_ALGORITHMS = ("RS256", "PS256", "ES256", "EdDSA")
 REFRESH_RANGE = (timedelta(minutes=5), timedelta(hours=24))

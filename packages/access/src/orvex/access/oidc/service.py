@@ -35,13 +35,13 @@ from orvex.access.authentication import settings as sign_in_settings
 from orvex.access.authentication.service import SignedIn
 from orvex.access.directory import statements as directory_sql
 from orvex.access.directory.records import User
-from orvex.access.errors import OIDC_FAILED, OIDC_NOT_CONFIGURED, AccessError
 from orvex.access.oidc import bindings, group_mapping, identities, provider_sessions, tokens
 from orvex.access.oidc.configuration import Configuration, Provider
 from orvex.access.oidc.discovery import Fetcher, Keys, Metadata, checked_metadata, discovery_url
-from orvex.access.oidc.failure import failed
 from orvex.access.storage import retry
 from orvex.access.storage.store import Store, Transaction
+from orvex.contracts.access.errors import OIDC_FAILED, OIDC_NOT_CONFIGURED, AccessError
+from orvex.contracts.access.oidc_failure import failed
 
 _LONGEST_PARAMETER = 4096
 _PARAMETER_REASONS = {
