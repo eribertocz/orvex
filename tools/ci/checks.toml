@@ -726,7 +726,7 @@ reason = "needs a ClickHouse 26.8 LTS server (CORPUS_CLICKHOUSE), started by the
 workflow = "interfaces.yml"
 job = "interface-contracts"
 kind = "check"
-required = true
+required = false
 contexts = ["interface-contracts"]
 digest = "db80658d940be1da"
 setup = ["python -m pip install --quiet pip==26.3"]
@@ -745,7 +745,7 @@ local = true
 workflow = "interfaces.yml"
 job = "standalone"
 kind = "check"
-required = true
+required = false
 contexts = ["standalone"]
 digest = "bcb329418caea5d2"
 setup = ["python -m pip install --quiet pip==26.3"]

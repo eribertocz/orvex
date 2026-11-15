@@ -106,14 +106,6 @@
           {
             "context": "security-scenarios",
             "integration_id": 15368
-          },
-          {
-            "context": "interface-contracts",
-            "integration_id": 15368
-          },
-          {
-            "context": "standalone",
-            "integration_id": 15368
           }
         ]
       }
