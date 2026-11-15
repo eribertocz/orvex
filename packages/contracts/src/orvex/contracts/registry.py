@@ -1,6 +1,7 @@
-"""The interface contracts and kits a contracts package ships, found by their place:
-`<package>.<name>.interface` holds `InterfaceContract` values and `<package>.<name>.kit` holds
-`Kit` values (ADR-0033)."""
+"""The interface contracts, kits and public test adapters a contracts package ships, found by
+their place: `<package>.<name>.interface` holds `InterfaceContract` values,
+`<package>.<name>.kit` holds `Kit` values and `<package>.<name>.adapter` holds
+`ContractAdapter` values (ADR-0033)."""
 
 from __future__ import annotations
 
@@ -9,6 +10,7 @@ import importlib.util
 import pkgutil
 from types import ModuleType
 
+from .adapter import ContractAdapter
 from .interface import InterfaceContract
 from .interface_errors import InterfaceContractError
 from .kit import Kit
@@ -22,11 +24,15 @@ def kits(package: ModuleType) -> dict[str, Kit]:
     return _declared(package, "kit", Kit)
 
 
-def _name(value: InterfaceContract | Kit) -> str:
+def adapters(package: ModuleType) -> dict[str, ContractAdapter]:
+    return _declared(package, "adapter", ContractAdapter)
+
+
+def _name(value: InterfaceContract | Kit | ContractAdapter) -> str:
     return value.name if isinstance(value, InterfaceContract) else value.contract.name
 
 
-def _declared[Declared: (InterfaceContract, Kit)](
+def _declared[Declared: (InterfaceContract, Kit, ContractAdapter)](
     package: ModuleType, place: str, kind: type[Declared]
 ) -> dict[str, Declared]:
     found: dict[str, Declared] = {}

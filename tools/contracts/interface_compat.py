@@ -6,12 +6,15 @@ Compares the record of this checkout with the record committed at the last produ
 (the newest `v<semver>` tag HEAD contains): within a major version a contract only grows. These
 fail, unless the major version went up: a removed contract (INTERFACE_CONTRACT_REMOVED), a
 lowered version (INTERFACE_VERSION_LOWERED), a removed operation (INTERFACE_OPERATION_REMOVED),
-a changed signature or capability of an operation (INTERFACE_SIGNATURE_CHANGED), a removed
-capability (INTERFACE_CAPABILITY_REMOVED), a removed or renamed error code
-(INTERFACE_ERROR_CODE_REMOVED), a removed kit case (INTERFACE_KIT_CASE_REMOVED) or a changed
-expectation (INTERFACE_KIT_EXPECTATION_CHANGED). Allowed: new contracts, operations,
-capabilities, error codes, kit cases and new parameters with a default. No release tag fails
-closed (INTERFACE_RELEASE_UNKNOWN); a release without a record released no interface contract.
+a changed signature, capability, state change or version of an operation
+(INTERFACE_SIGNATURE_CHANGED), a removed capability (INTERFACE_CAPABILITY_REMOVED), a removed
+or renamed error code (INTERFACE_ERROR_CODE_REMOVED), a removed kit case
+(INTERFACE_KIT_CASE_REMOVED), a changed expectation (INTERFACE_KIT_EXPECTATION_CHANGED), and an
+operation or kit case added since the release that claims to exist at the released version
+(INTERFACE_ADDITION_UNVERSIONED). Allowed: new contracts, and new operations, capabilities,
+error codes, kit cases and parameters with a default at a new minor version. No release tag
+fails closed (INTERFACE_RELEASE_UNKNOWN); a release without a record released no interface
+contract. Running N against N-1 in both directions is the kit's (`orvex.contracts.kit_run`).
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from orvex.contracts.interface import Version
+from orvex.contracts.version import Version
 
 from tools.contracts.interface_record import RECORD, current_record
 from tools.repository import REPOSITORY_ROOT
@@ -42,6 +45,11 @@ def _operation_problems(
             f"INTERFACE_SIGNATURE_CHANGED: {where} moved from capability "
             f"{old['capability']} to {new['capability']}"
         )
+    for part in ("changes_state", "since"):
+        if new[part] != old[part]:
+            problems.append(
+                f"INTERFACE_SIGNATURE_CHANGED: {where} {part} is {new[part]}, was {old[part]}"
+            )
     if new["returns"] != old["returns"]:
         problems.append(
             f"INTERFACE_SIGNATURE_CHANGED: {where} returns {new['returns']}, was {old['returns']}"
@@ -62,8 +70,28 @@ def _shape(parameter: dict[str, Any]) -> tuple[str, str, str]:
     return parameter["name"], parameter["kind"], parameter["type"]
 
 
+def _unversioned(name: str, old: dict[str, Any], new: dict[str, Any]) -> list[str]:
+    """Additions that claim to exist at the released version: a consumer at N-1 would expect
+    them from a provider that does not have them."""
+    released = Version.parse(old["version"])
+    added = [
+        (f"{name}.{operation}", entry["since"])
+        for operation, entry in sorted(new["operations"].items())
+        if operation not in old["operations"]
+    ] + [
+        (f"{name}: kit case {case}", entry["since"])
+        for case, entry in sorted(new["kit"]["cases"].items())
+        if case not in old["kit"]["cases"]
+    ]
+    return [
+        f"INTERFACE_ADDITION_UNVERSIONED: {where} is new since {released} and claims {since}"
+        for where, since in added
+        if Version.parse(since) <= released
+    ]
+
+
 def _contract_problems(name: str, old: dict[str, Any], new: dict[str, Any]) -> list[str]:
-    problems = []
+    problems = _unversioned(name, old, new)
     for operation, before in sorted(old["operations"].items()):
         after = new["operations"].get(operation)
         if after is None:

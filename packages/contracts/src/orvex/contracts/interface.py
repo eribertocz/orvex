@@ -2,7 +2,8 @@
 operations, inputs, outputs, errors, capabilities and version.
 
 An interface contract is a `typing.Protocol` whose public methods are the operations (their
-annotations are the inputs and outputs), plus an `InterfaceContract` that gives the contract a
+annotations are the inputs and outputs; the first parameter of each is the call envelope,
+`envelope: CallEnvelope`), plus an `InterfaceContract` that gives the contract a
 name and a `major.minor` version, groups the operations into capabilities, and lists the error
 codes each operation may raise through the contract's error type (built as
 `error_type(code, message, details)`). The declaration is checked when it is built: a refused
@@ -16,12 +17,13 @@ import re
 import typing
 from dataclasses import dataclass
 
+from .envelope import CallEnvelope
 from .interface_errors import InterfaceContractError
 from .serializable import crossing_problem, type_name
+from .version import Version
 
 NAME = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
 ERROR_CODE = re.compile(r"[A-Z][A-Z0-9]*(_[A-Z0-9]+)*")
-VERSION = re.compile(r"([1-9][0-9]*)\.(0|[1-9][0-9]*)")
 # A capability is either implemented in full or not provided: this code can never stand in for
 # an operation a contract declares (#486 G1).
 UNSUPPORTED_OPERATION = "UNSUPPORTED_OPERATION"
@@ -32,37 +34,17 @@ KINDS: dict[inspect._ParameterKind, str] = {
 }
 
 
-@dataclass(frozen=True, slots=True, order=True)
-class Version:
-    """A contract version: within a major version the contract only grows (append-only)."""
-
-    major: int
-    minor: int
-
-    @classmethod
-    def parse(cls, text: str) -> Version:
-        match = VERSION.fullmatch(text)
-        if match is None:
-            raise InterfaceContractError(
-                "INTERFACE_VERSION_INVALID", f"{text!r} is not a version: expected MAJOR.MINOR"
-            )
-        return cls(int(match[1]), int(match[2]))
-
-    def provides(self, required: Version) -> bool:
-        """An implementation at this version serves a consumer that requires `required`."""
-        return self.major == required.major and self.minor >= required.minor
-
-    def __str__(self) -> str:
-        return f"{self.major}.{self.minor}"
-
-
 @dataclass(frozen=True, slots=True)
 class Operation:
-    """One operation: its method name, the capability it belongs to and the codes it raises."""
+    """One operation: its method name, the capability it belongs to, the codes it raises,
+    whether it changes state (then every call carries an idempotency key) and the version it
+    exists from (`None`: the first version of the contract's major)."""
 
     name: str
     capability: str
     errors: tuple[str, ...] = ()
+    changes_state: bool = False
+    since: Version | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +70,10 @@ class InterfaceContract:
             "INTERFACE_OPERATION_UNKNOWN", f"contract {self.name} has no operation {name!r}"
         )
 
+    def since(self, operation: Operation) -> Version:
+        """The version `operation` exists from."""
+        return operation.since or Version(self.version.major, 0)
+
     def operations_of(self, capability: str) -> tuple[Operation, ...]:
         return tuple(o for o in self.operations if o.capability == capability)
 
@@ -110,6 +96,8 @@ class InterfaceContract:
             signature = self.signature(operation.name)
             operations[operation.name] = {
                 "capability": operation.capability,
+                "changes_state": operation.changes_state,
+                "since": str(self.since(operation)),
                 "errors": sorted(operation.errors),
                 "parameters": [
                     {
@@ -174,6 +162,13 @@ def _check_names(contract: InterfaceContract) -> None:
             raise _invalid(
                 contract, f"{operation.name}: capability {operation.capability!r} is undeclared"
             )
+        if operation.since is not None and not (
+            operation.since.major == contract.version.major and operation.since <= contract.version
+        ):
+            raise _invalid(
+                contract,
+                f"{operation.name}: since {operation.since} is not a version of {contract.version}",
+            )
         unknown = sorted(set(operation.errors) - set(contract.errors))
         if unknown:
             raise _invalid(
@@ -200,6 +195,16 @@ def _check_operations(contract: InterfaceContract) -> None:
         if not inspect.isfunction(member):
             raise _invalid(contract, f"{operation.name}: an operation is a plain method")
         signature = _signature(contract.protocol, operation.name)
+        first = next(iter(signature.parameters.values()), None)
+        if (
+            first is None
+            or first.name != "envelope"
+            or first.annotation is not CallEnvelope
+            or first.kind is inspect.Parameter.KEYWORD_ONLY
+        ):
+            raise _invalid(
+                contract, f"{operation.name}: the first parameter is `envelope: CallEnvelope`"
+            )
         for parameter in signature.parameters.values():
             if parameter.kind not in KINDS:
                 raise _invalid(contract, f"{operation.name}: *{parameter.name} cannot be described")
