@@ -15,10 +15,10 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
-from orvex.access.errors import AUDIT_UNAVAILABLE, AccessError
+from orvex.contracts.access.client import AccessClient
+from orvex.contracts.access.errors import AUDIT_UNAVAILABLE, AccessError
 from orvex.server import semantic_http
 
-from tests.support.access_directory import audit_events
 from tests.support.semantic_http import aggregate, detail
 
 from .test_server_semantic import MAPPED, SAME, Server, ask
@@ -29,7 +29,7 @@ SECRET = {"by_tariff", "mapped_tariffs", "policy.attribute_missing",
 
 
 def events(server: Server, *kinds: str) -> list[dict[str, Any]]:
-    return [e for e in audit_events(server.store) if e["kind"] in kinds]
+    return [e for e in server.instance.events() if e["kind"] in kinds]
 
 
 KINDS = ("policy.attribute_missing", "policy.mapping_missing")
@@ -70,7 +70,7 @@ def test_a_missing_attribute_records_one_event_and_the_caller_sees_none_of_it(
     assert event["details"] == {"dataset": "readings", "policy": "by_tariff", "receipt": receipt}
     assert not SECRET & tokens(answer)  # the generic sentence only
     assert event["id"] not in tokens(answer)
-    assert server.audit.verify() >= 1  # the chain holds after the event
+    assert server.access.verify() >= 1  # the chain holds after the event
 
 
 def ask_as(http: Any, query: dict[str, Any], accept: str = "application/json") -> Any:  # noqa: ANN401
@@ -140,8 +140,8 @@ def test_an_unrecordable_event_still_returns_the_empty_answer_and_is_counted(
     def refused(*_: object, **__: object) -> str:
         raise AccessError(AUDIT_UNAVAILABLE, "simulated", {})
 
-    monkeypatch.setattr(server.audit, "record_alone", refused)
-    before = server.audit.unrecorded
+    monkeypatch.setattr(AccessClient, "record", refused)
+    before = server.access.unrecorded()
     with caplog.at_level(logging.ERROR):
         failing = ask(http, detail(10))
     assert failing.status_code == 200, failing.text
@@ -152,7 +152,7 @@ def test_an_unrecordable_event_still_returns_the_empty_answer_and_is_counted(
     assert body == working
     # Withheld (#443, the only exception, #445 precision 5): its `query` event and its policy
     # event, each counted and logged once.
-    assert server.audit.unrecorded == before + 2
+    assert server.access.unrecorded() == before + 2
     lines = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
     assert lines == [
         "audit: a query event of project project-1 could not be recorded",

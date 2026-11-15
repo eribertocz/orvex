@@ -23,7 +23,6 @@ from orvex.server.identity import load_identity
 from orvex.server.server_app import checked_route_table, create_server_app
 from orvex.server.sign_in_http import cookie_name
 from orvex.server.versions import Versions
-
 from tests.support.access_directory import access_role, postgres_connection
 from tests.support.sign_in import PASSWORD, Clock
 
@@ -55,7 +54,7 @@ class Instance:
 
     def user(self, name: str) -> str:
         """A user with `PASSWORD`, set through their temporary one."""
-        created = self.directory.create_user(self.admin, name, name.title())
+        created = self.actor(self.admin).create_user(name, name.title())
         first = self.sign_in.login(name, created.temporary_password, "192.0.2.250")
         self.sign_in.change_password(
             first.session_id, created.temporary_password, PASSWORD, "192.0.2.250"
@@ -215,7 +214,7 @@ def test_without_a_live_session_an_api_route_is_session_expired(instance: Instan
 
 
 def test_a_temporary_password_session_may_only_change_it(instance: Instance) -> None:
-    created = instance.directory.create_user(instance.admin, "ana", "Ana")
+    created = instance.actor(instance.admin).create_user("ana", "Ana")
 
     @instance.app.get("/api/v1/projects")
     async def projects() -> dict[str, str]:

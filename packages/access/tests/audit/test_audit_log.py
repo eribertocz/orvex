@@ -10,6 +10,7 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from importlib.resources import files
+from typing import Any
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -282,3 +283,32 @@ def test_any_failure_after_commit_never_fails_the_committed_action(
     created = Directory(world.store, log).create_user(world.admin, "ana", "Ana")
     assert world.directory.user(created.id) is not None
     assert log.unanchored == 1
+
+
+def test_an_event_alone_is_written_once_when_its_first_attempt_conflicts(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The store gives up on the event's first attempt (a serialization conflict: nothing of it
+    committed) and the log writes it again: one event, never two, and the chain verifies."""
+    from orvex.access.storage.store import TransientConflict
+
+    original = world.audit.record
+    conflicts: list[str] = []
+
+    def conflicting(transaction: Any, kind: str, *args: Any, **kwargs: Any) -> str:  # noqa: ANN401
+        if kind == "access.refused" and not conflicts:
+            conflicts.append(kind)
+            raise TransientConflict("40001")
+        return original(transaction, kind, *args, **kwargs)
+
+    monkeypatch.setattr(world.audit, "record", conflicting)
+    before = len(world.events())
+    world.audit.record_alone(
+        "access.refused",
+        "u-1",
+        {"operation": "route", "code": "ACCESS_FORBIDDEN"},
+        outcome="refused",
+    )
+    assert conflicts == ["access.refused"]
+    assert [event["kind"] for event in world.events()[before:]] == ["access.refused"]
+    assert world.audit.verify() == len(world.events())

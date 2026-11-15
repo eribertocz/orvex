@@ -13,14 +13,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from orvex.access.authentication.query_limits import QueryLimits, RoleLimit
-from orvex.access.errors import AUDIT_UNAVAILABLE, AccessError
+from orvex.contracts.access.client import AccessClient
+from orvex.contracts.access.errors import AUDIT_UNAVAILABLE, AccessError
+from orvex.contracts.access.values import RoleLimit
 from orvex.semantic.execution import answer
 from orvex.server import semantic_delivery, semantic_http, semantic_jobs
 from orvex.server.query_cancel import Cancel
 from orvex.server.semantic_audit import record_query
 
-from tests.support.access_directory import audit_events
 from tests.support.semantic_http import detail, run
 
 from .test_server_semantic import MAPPED, SAME, Server, ask
@@ -71,7 +71,7 @@ def fetched(http: Any, job: str) -> Any:  # noqa: ANN401
 
 
 def queries(server: Server) -> list[dict[str, Any]]:
-    return [e for e in audit_events(server.store) if e["kind"] == "query"]
+    return [e for e in server.instance.events() if e["kind"] == "query"]
 
 
 def stages(server: Server) -> list[tuple[str, str | None]]:
@@ -189,14 +189,14 @@ def test_an_unrecordable_execution_fails_the_job_and_frees_its_slot(
 ) -> None:
     ana = server.author("ana", "finance")
     http = server.client("ana")
-    original = server.audit.record_alone
+    original = AccessClient.record
 
-    def refused(kind: str, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+    def refused(client: AccessClient, kind: str, *args: Any, **kwargs: Any) -> str:  # noqa: ANN401
         if kind == "query":
             raise AccessError(AUDIT_UNAVAILABLE, "The audit log cannot record.")
-        original(kind, *args, **kwargs)
+        return original(client, kind, *args, **kwargs)
 
-    monkeypatch.setattr(server.audit, "record_alone", refused)
+    monkeypatch.setattr(AccessClient, "record", refused)
     job = start(http, detail(10))
     failed = fetched(http, job)
     assert code(failed) == (503, AUDIT_UNAVAILABLE)
@@ -224,7 +224,7 @@ def test_a_mapping_removed_before_the_fetch_withdraws_the_answer(mapped: Server)
     assert "rows" not in withdrawn.text
     assert "answer" not in withdrawn.json()
     assert stages(mapped) == [("executed", job)]  # no delivery was made
-    (refusal,) = [e for e in audit_events(mapped.store) if e["kind"] == "access.refused"]
+    (refusal,) = [e for e in mapped.instance.events() if e["kind"] == "access.refused"]
     assert refusal["details"] == {"operation": "delivery", "code": "QUERY_RESULT_WITHDRAWN"}
     assert (refusal["actor"], refusal["outcome"]) == (ana, "refused")
     again = ask(http, detail(10))  # asked again: the permissions in force now
@@ -236,7 +236,7 @@ def test_an_attribute_changed_before_the_fetch_withdraws_the_answer(server: Serv
     http = server.client("ana")
     job = start(http, detail(10))
     until(lambda: ("executed", job) in stages(server))
-    server.attributes.set(server.builder, "project-1", ana, "tariff", "text", "commercial")
+    server.actor(server.builder).set_attribute("project-1", ana, "tariff", "text", "commercial")
     assert code(fetched(http, job)) == (409, "QUERY_RESULT_WITHDRAWN")
 
 
@@ -245,7 +245,7 @@ def test_a_group_removed_before_the_fetch_withdraws_the_answer(server: Server) -
     http = server.client("ana")
     job = start(http, detail(10))
     until(lambda: ("executed", job) in stages(server))
-    server.directory.remove_group_member(server.builder, "project-1", "finance", ana)
+    server.actor(server.builder).remove_group_member("project-1", "finance", ana)
     assert code(http.get(JOBS + job)) == (401, "SESSION_EXPIRED")  # the change ended it
     withdrawn = fetched(server.client("ana"), job)  # signed in again
     assert code(withdrawn) == (409, "QUERY_RESULT_WITHDRAWN")
@@ -261,9 +261,9 @@ def test_a_role_lowered_or_a_membership_removed_before_the_fetch_is_forbidden(
     job = start(http, detail(10))
     until(lambda: ("executed", job) in stages(server))
     if change == "role":
-        server.directory.change_role(server.builder, "project-1", ana, "viewer")
+        server.actor(server.builder).set_membership("project-1", ana, "viewer")
     else:
-        server.directory.remove_membership(server.builder, "project-1", ana)
+        server.actor(server.builder).remove_membership("project-1", ana)
     refused = http.get(JOBS + job)
     assert code(refused) == (401, "SESSION_EXPIRED")
     again = server.client("ana").get(JOBS + job, headers={"Accept": semantic_http.ARROW})
@@ -301,7 +301,7 @@ def test_a_running_job_holds_its_slot_and_a_cancel_frees_it_at_once(
     server: Server, gate: Gate
 ) -> None:
     ana = server.author("ana", "finance")
-    QueryLimits(server.store, server.audit).change(server.admin, {"author": RoleLimit(1, 60_000)})
+    server.actor(server.admin).change_query_limits({"author": RoleLimit(1, 60_000)})
     http = server.client("ana")
     job = start(http, detail(10))
     assert gate.entered.wait(30)  # running, its engine known: the managed lake
@@ -351,7 +351,7 @@ def test_a_revocation_after_a_fetch_applies_to_the_next_fetch(
         recording(*args)
         if args[3] == "delivered" and not revoked:
             revoked.append(True)
-            server.attributes.set(server.builder, "project-1", ana, "tariff", "text", "x")
+            server.actor(server.builder).set_attribute("project-1", ana, "tariff", "text", "x")
 
     monkeypatch.setattr(semantic_delivery, "record_query", recorded_then_revoked)
     assert fetched(http, job).status_code == 200  # decided before the revocation
@@ -370,7 +370,7 @@ def test_cancelling_an_uninterruptible_job_and_starting_again_never_exceeds_the_
 
     monkeypatch.setattr(Cancel, "known", uninterruptible)
     ana = server.author("ana", "finance")
-    QueryLimits(server.store, server.audit).change(server.admin, {"author": RoleLimit(1, 60_000)})
+    server.actor(server.admin).change_query_limits({"author": RoleLimit(1, 60_000)})
     http = server.client("ana")
     job = start(http, detail(10))
     assert gate.entered.wait(30)

@@ -33,8 +33,7 @@ from orvex.server.identity import load_identity
 from orvex.server.instance import home_variable
 from orvex.server.server_app import create_server_app
 from orvex.server.versions import Versions
-
-from tests.support.access_directory import access_role, audit_events, postgres_connection
+from tests.support.access_directory import access_role, postgres_connection
 from tests.support.sign_in import PASSWORD
 
 from .admin_instance import AdminInstance, admin_instance
@@ -132,7 +131,7 @@ def instance(
 
 
 def kinds(made: Instance) -> list[str]:
-    return [e["kind"] for e in audit_events(made.store)]
+    return [e["kind"] for e in made.instance.events()]
 
 
 def test_from_admin_create_to_a_builders_group_with_no_ui(
@@ -169,7 +168,7 @@ def test_from_admin_create_to_a_builders_group_with_no_ui(
         assert kind in seen, kind
     assert seen.count("auth.logout") >= 6  # every command signed out
     for secret in (temporary, bea_temporary, NEW):
-        assert secret not in str(audit_events(made.store))
+        assert secret not in str(made.instance.events())
         assert secret not in caplog.text
 
 

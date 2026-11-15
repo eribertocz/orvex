@@ -23,7 +23,6 @@ from orvex.server.admin_http import Administration
 from orvex.server.identity import load_identity
 from orvex.server.server_app import create_server_app
 from orvex.server.versions import Versions
-
 from tests.support.access_directory import access_role, postgres_connection
 from tests.support.oidc_provider import FakeFetcher, FakeProvider
 from tests.support.oidc_world import ENVIRONMENT, document
@@ -73,7 +72,7 @@ class AdminInstance:
         self.sign_in.change_password(signed.session_id, temporary, PASSWORD, "192.0.2.9")
 
     def person(self, name: str) -> str:
-        made = self.directory.create_user(self.admin, name, name.title())
+        made = self.actor(self.admin).create_user(name, name.title())
         self._changed(name, made.temporary_password)
         return made.id
 

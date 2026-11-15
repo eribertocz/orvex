@@ -15,7 +15,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
-from orvex.access.local import LocalRequest
+from orvex.contracts.access.values import LocalRequest
 from orvex.semantic.canonical import canonicalize
 from orvex.server import commands, semantic_http
 from orvex.server.app import LocalSemantic, create_app
@@ -44,6 +44,8 @@ from tests.support.semantic_http import (
     schema,
     write,
 )
+
+from .access_instance import local_contexts
 
 
 @pytest.fixture
@@ -146,7 +148,9 @@ def gated() -> tuple[LocalSemantic, TestClient]:
         "project-1",
         new_access(SLUG, PORT),
         semantic_http.Semantic(
-            Untouched(), semantic_http.local_context, semantic_http.session_settings()
+            Untouched(),
+            semantic_http.local_context(local_contexts()),
+            semantic_http.session_settings(),
         ),
     )
     return semantic, client(semantic)
@@ -590,7 +594,9 @@ def test_a_store_failure_is_a_500_with_a_request_id_only() -> None:
         "project-1",
         new_access(SLUG, PORT),
         semantic_http.Semantic(
-            Failing(), semantic_http.local_context, semantic_http.session_settings()
+            Failing(),
+            semantic_http.local_context(local_contexts()),
+            semantic_http.session_settings(),
         ),
     )
     http = client(semantic)
@@ -627,7 +633,9 @@ def test_a_lakes_data_refused_by_the_store_is_a_503_with_its_code_and_nothing_el
         "project-1",
         new_access(SLUG, PORT),
         semantic_http.Semantic(
-            Refused(), semantic_http.local_context, semantic_http.session_settings()
+            Refused(),
+            semantic_http.local_context(local_contexts()),
+            semantic_http.session_settings(),
         ),
     )
     http = client(semantic)

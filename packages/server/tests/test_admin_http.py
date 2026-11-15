@@ -12,7 +12,6 @@ import pytest
 from fastapi.testclient import TestClient
 from orvex.access.directory import reads
 
-from tests.support.access_directory import audit_events
 from tests.support.semantic_http import detail
 
 from .test_server_semantic import ORIGIN, SAME, Server, ask
@@ -31,7 +30,7 @@ def code(answer: Any) -> tuple[int, str]:  # noqa: ANN401
 
 
 def events(server: Server, kind: str) -> list[dict[str, Any]]:
-    return [e for e in audit_events(server.store) if e["kind"] == kind]
+    return [e for e in server.instance.events() if e["kind"] == kind]
 
 
 def refusals(server: Server) -> int:
@@ -46,11 +45,11 @@ def people(server: Server) -> dict[str, str]:
     """root (administrator), builder (p1), other (p2's Builder), ana (author), vera (viewer)."""
     found = {"root": server.admin, "builder": server.builder}
     found["other"] = server.person("other")
-    server.directory.add_membership(server.admin, "project-2", found["other"], "builder")
+    server.actor(server.admin).set_membership("project-2", found["other"], "builder")
     found["ana"] = server.author("ana")
     found["vera"] = server.viewer("vera")
     found["target"] = server.member("target", tariff=None, role="viewer")
-    server.attributes.set(server.builder, "project-1", found["target"], "region", "text", "s")
+    server.actor(server.builder).set_attribute("project-1", found["target"], "region", "text", "s")
     return found
 
 
@@ -105,9 +104,9 @@ def test_a_deactivated_administrators_session_changes_nothing(
     server: Server, people: dict[str, str]
 ) -> None:
     second = server.person("second")
-    server.directory.set_administrator(server.admin, second, True)
+    server.actor(server.admin).set_administrator(second, True)
     http = server.client("second")
-    server.directory.deactivate_user(server.admin, second)
+    server.actor(server.admin).deactivate_user(second)
     writes = [
         ("POST", f"{A}/users", {"user_name": "x", "display_name": "X"}),
         ("POST", f"{A}/users/{people['target']}/deactivate", {}),
@@ -191,11 +190,11 @@ def test_an_administrator_manages_a_user_end_to_end(server: Server, caplog: Any)
         404,
         "USER_NOT_FOUND",
     )
-    kinds = [e["kind"] for e in audit_events(server.store)]
+    kinds = [e["kind"] for e in server.instance.events()]
     for kind in ("user.created", "user.deactivated", "user.reactivated", "user.password_reset",
                  "user.administrator_granted"):  # fmt: skip
         assert kind in kinds
-    everything = caplog.text + str(audit_events(server.store))
+    everything = caplog.text + str(server.instance.events())
     assert temporary not in everything
     assert second not in everything
 
@@ -276,7 +275,7 @@ def test_a_group_and_an_attribute_change_the_next_answer(server: Server) -> None
 def test_a_builder_finds_a_user_by_exact_name_only(server: Server) -> None:
     newcomer = server.person("newcomer")
     gone = server.person("gone")
-    server.directory.deactivate_user(server.admin, gone)
+    server.actor(server.admin).deactivate_user(gone)
     builder = server.client("builder")
     found = builder.get(f"{A}/user-lookup", params={"user_name": "NEWCOMER"})
     assert found.json() == {"id": newcomer, "display_name": "Newcomer"}

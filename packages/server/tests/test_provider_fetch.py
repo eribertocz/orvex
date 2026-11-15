@@ -19,8 +19,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
-from orvex.access.errors import OIDC_FAILED, AccessError
 from orvex.access.oidc.configuration import Provider, parsed
+from orvex.contracts.access.errors import OIDC_FAILED, AccessError
 from orvex.server.provider_fetch import ProviderFetch, allowed
 
 HOST = "idp.test"

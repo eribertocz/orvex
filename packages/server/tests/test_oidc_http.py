@@ -24,7 +24,6 @@ from orvex.server.oidc_http import binding_cookie
 from orvex.server.server_app import create_server_app
 from orvex.server.sign_in_http import cookie_name
 from orvex.server.versions import Versions
-
 from tests.support.access_directory import access_role, postgres_connection
 from tests.support.oidc_provider import FakeFetcher, FakeProvider
 from tests.support.oidc_world import ENVIRONMENT, document
@@ -61,7 +60,7 @@ class Instance:
         return TestClient(self.app, base_url=ORIGIN, follow_redirects=False)
 
     def linked(self, name: str, subject: str) -> str:
-        user = self.directory.create_user(self.admin, name, name.title()).id
+        user = self.actor(self.admin).create_user(name, name.title()).id
         self.identities.link(self.admin, user, "corp", subject)
         return user
 

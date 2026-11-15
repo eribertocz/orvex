@@ -18,7 +18,6 @@ from orvex.server.audit_settings import audit_settings
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.instance import home_variable
-
 from tests.support.access_directory import access_role, audit_events, postgres_connection
 
 IDENTITY = load_identity()
