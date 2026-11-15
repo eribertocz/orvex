@@ -7,8 +7,8 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import ReadRequest
-from orvex.store.errors import StoreError
 from orvex.store.lake import Lake
 
 UHUGE_MAX = "340282366920938463463374607431768211455"

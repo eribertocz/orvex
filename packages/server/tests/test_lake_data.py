@@ -19,13 +19,13 @@ import duckdb
 import pytest
 from moto.server import ThreadedMotoServer
 from orvex.contracts.store.v1 import ReadRequest
+from orvex.contracts.store.values import Limits
 from orvex.server import commands, lake_place
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.project import load_project
-from orvex.store.lake import Limits, open_lake
-
-from tests.support import azurite
+from orvex.server.store_access import store
+from orvex.testing import azurite
 
 SLUG = load_identity().slug
 PROJECT = "version: 1\nname: Test\ntime_zone: UTC\n"
@@ -89,7 +89,7 @@ def problems(folder: Path) -> list[str]:
 
 def count(folder: Path) -> int:
     place = commands.lake_location(load_project(folder), home(folder))
-    lake = open_lake(place.location, LIMITS)
+    lake = store().open_lake(place.location, LIMITS)
     try:
         request = ReadRequest(
             kind="read",

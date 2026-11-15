@@ -175,12 +175,14 @@ def test_detail_pages_concatenate_to_every_row_exactly_once_in_order(
 def test_the_same_question_twice_is_the_same_answer(world: World, query: Document) -> None:
     """Semantic determinism (Owner correction 6): equal canonical results and equal execution
     fingerprints; volatile metadata (receipt ids, timings) is outside both."""
-    from orvex.store.json_encoding import arrow_to_json
+    from orvex.server.store_access import store
 
     with lake_of(world) as lake:
         first = ask(query, lake)
         second = ask(query, lake)
-    assert first.result.canonical(arrow_to_json) == second.result.canonical(arrow_to_json)
+    assert first.result.canonical(store().arrow_to_json) == second.result.canonical(
+        store().arrow_to_json
+    )
     one = first.receipt.document()
     two = second.receipt.document()
     assert one["execution_fingerprint"] == two["execution_fingerprint"]
@@ -191,13 +193,13 @@ def test_the_same_question_twice_is_the_same_answer(world: World, query: Documen
 @given(worlds(), aggregate_queries())
 def test_arrow_and_json_are_the_same_generated_answer(world: World, query: Document) -> None:
     """Owner correction 3 (HTTP): the #363 equivalence, on generated answers."""
-    from orvex.store.json_encoding import arrow_to_json
+    from orvex.server.store_access import store
 
     with lake_of(world) as lake:
         found = ask(query, lake)
     context = {**ce.viewer_context(), "role": "builder"}
     receipt = found.receipt.view(CallerViewer(COMPILED, NO_POLICIES, context))
-    document = {"result": json.loads(found.result.wire(arrow_to_json)), "receipt": receipt}
+    document = {"result": json.loads(found.result.wire(store().arrow_to_json)), "receipt": receipt}
     table = arrow_answer(found.result, receipt)
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, table.schema) as writer:

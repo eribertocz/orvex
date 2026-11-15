@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterator
 from types import SimpleNamespace
 
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     LocalLakeLocation,
     PostgresLakeLocation,
@@ -22,7 +23,6 @@ from orvex.contracts.store.v1 import (
 )
 from orvex.store import lake as lake_module
 from orvex.store import read_stream
-from orvex.store.errors import StoreError
 from orvex.store.lake import Guard, Lake, Limits, ReadHandle, open_lake
 
 ROUNDS = 50

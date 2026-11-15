@@ -36,6 +36,7 @@ from typing import IO
 
 import duckdb
 import pyarrow as pa
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     FileSourceAttachment,
     Parameter,
@@ -43,7 +44,6 @@ from orvex.contracts.store.v1 import (
     SqliteSourceAttachment,
 )
 from orvex.store.credentials import _source_tls
-from orvex.store.errors import StoreError
 from orvex.store.sql_text import literal as _quote
 
 DatabaseSource = FileSourceAttachment | SqliteSourceAttachment | PostgresSourceAttachment

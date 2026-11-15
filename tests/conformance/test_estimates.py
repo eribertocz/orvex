@@ -12,10 +12,10 @@ from typing import Any
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import StatementRequest, StatisticsRequest, StatisticsResult
 from orvex.semantic.estimates import estimate
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 from tests.conformance import test_detail_rows as detail

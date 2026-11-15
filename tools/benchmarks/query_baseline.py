@@ -55,7 +55,7 @@ from orvex.server.cli import free_port
 from orvex.server.identity import load_identity
 from orvex.server.instance import home_variable
 from orvex.server.project import load_project
-from orvex.store.json_encoding import arrow_to_json
+from orvex.server.store_access import store
 
 from tools.benchmarks import load_baseline
 
@@ -125,7 +125,7 @@ def lake_tables(folder: Path) -> dict[str, dict[str, int]]:
                         batch_size=1,
                     )
                 )
-                (row,) = json.loads("".join(arrow_to_json(counted)))["rows"]
+                (row,) = json.loads("".join(store().arrow_to_json(counted)))["rows"]
                 found[name] = {
                     "rows": int(row[0]),
                     "bytes": sum(int(f.bytes or 0) for f in table.files),
@@ -159,7 +159,7 @@ def reference_rows(folder: Path, sql: str) -> list[list[object]]:
                     kind="read", sql=sql, parameters=[], snapshot=snapshot, batch_size=65_536
                 )
             )
-            rows: list[list[object]] = json.loads("".join(arrow_to_json(reader)))["rows"]
+            rows: list[list[object]] = json.loads("".join(store().arrow_to_json(reader)))["rows"]
             return rows
         finally:
             lake.close()

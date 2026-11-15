@@ -9,8 +9,8 @@ import sys
 from pathlib import Path
 
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import Parameter, PostgresLakeLocation, ReadRequest, StatementRequest
-from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, open_lake
 
 LIMITS = Limits(

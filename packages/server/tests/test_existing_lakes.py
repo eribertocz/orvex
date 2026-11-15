@@ -19,14 +19,15 @@ from typing import Any
 import duckdb
 import pytest
 from orvex.access.local import LocalRequest
+from orvex.contracts.store.client_sources import open_existing_lake
+from orvex.contracts.store.errors import StoreError
 from orvex.server import cli, existing_lakes, semantic_http
 from orvex.server.commands import project_lock
 from orvex.server.existing_lakes import ExistingLakes, memory_share
 from orvex.server.identity import load_identity
 from orvex.server.instance import ProjectRegistry, home_variable
 from orvex.server.project import load_project
-from orvex.store.errors import StoreError
-from orvex.store.existing_lake import ExistingLake
+from orvex.server.store_access import store
 
 from .test_lake_separation import other_device  # noqa: F401 - a fixture
 from .test_semantic_model import extension, model, ran
@@ -154,13 +155,13 @@ def test_the_managed_lake_and_each_existing_lake_share_the_budget(
     monkeypatch.setattr(cli, "memory_limit", lambda: "900MB")
     monkeypatch.setattr(cli, "instance_directory", lambda identity: served.instance)
     given: list[str] = []
-    real = ExistingLake
+    real = open_existing_lake
 
-    def recorded(attachment: Any, *, memory_limit: str, threads: int) -> Any:  # noqa: ANN401
-        given.append(memory_limit)
-        return real(attachment, memory_limit=memory_limit, threads=threads)
+    def recorded(client: Any, attachment: Any, limits: Any) -> Any:  # noqa: ANN401
+        given.append(limits.memory_limit)
+        return real(client, attachment, limits)
 
-    monkeypatch.setattr(existing_lakes, "ExistingLake", recorded)
+    monkeypatch.setattr(existing_lakes, "open_existing_lake", recorded)
     opened_with: list[str | None] = []
     monkeypatch.setattr(
         cli, "open_existing", lambda home, place, memory=None: opened_with.append(memory)
@@ -324,21 +325,14 @@ def test_a_check_that_cannot_have_the_project_holds_a_new_snapshot_back(served: 
 def test_a_lake_that_cannot_be_attached_leaves_none_open(
     served: Served, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    closed: list[str] = []
-    real = ExistingLake.close
-
-    def close(self: ExistingLake) -> None:
-        closed.append(self.name)
-        real(self)
-
-    monkeypatch.setattr(ExistingLake, "close", close)
+    held = store().call("held").existing_lakes
     text = (served.folder / "connections.yaml").read_text()
     broken = Path(tempfile.mkdtemp(dir="/dev/shm")) / "missing.sqlite"
     second = connection(Owner(broken, served.owner.data)).replace("  billing:", "  zz_broken:")
     (served.folder / "connections.yaml").write_text(text + second)
     with pytest.raises(StoreError), opened(served):
         pass
-    assert closed == ["billing"]
+    assert store().call("held").existing_lakes == held  # nothing attached stays open
     shutil.rmtree(broken.parent, ignore_errors=True)
 
 

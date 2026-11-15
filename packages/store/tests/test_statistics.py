@@ -6,13 +6,13 @@ import json
 from collections.abc import Iterator
 
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     LakeLocation,
     StatementRequest,
     StatisticsRequest,
     StatisticsResult,
 )
-from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, open_lake
 
 LIMITS = Limits(

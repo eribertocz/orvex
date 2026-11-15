@@ -4,9 +4,10 @@ repository, with only the contracts distribution beside it.
     python -m tools.ci.standalone <module>
 
 In a temporary directory outside the checkout: copy the module's package, build its sdist and,
-from that sdist, its wheel (and the contracts wheel for any other module); create a clean
-virtual environment; install the wheels and the module's test dependencies, every version
-constrained to the lock file of this Python; run `tools/checks/module_dependencies.py` there;
+from that sdist, its wheel (and the contracts wheel for any other module, and the shared test
+helpers' wheel, `orvex-testing`, when its tests declare it); create a clean virtual
+environment; install the wheels and the module's test dependencies, every version constrained
+to the lock file of this Python; run `tools/checks/module_dependencies.py` there;
 and run the module's own tests with no repository configuration. A failed step, a failed test
 or a skipped test (STANDALONE_TESTS_SKIPPED: a test that did not run never counts) fails the job.
 """
@@ -24,7 +25,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from tools.ci.pins import pins
-from tools.repository import MODULES, REPOSITORY_ROOT, identity
+from tools.repository import MODULES, REPOSITORY_ROOT, TESTING, identity
 
 PIP = "pip==26.3"
 PYTEST_CONFIG = """[pytest]
@@ -108,7 +109,12 @@ def run(module: str) -> int:
         pinned = work / "constraints.txt"
         pinned.write_text("\n".join(constraints(lock_file())) + "\n", encoding="utf-8")
         manifest = (package / "src" / namespace / module / "module.toml").read_text("utf-8")
-        tests = tomllib.loads(manifest)["dependencies"]["tests"]
+        declared = tomllib.loads(manifest)["dependencies"]["tests"]
+        # The shared test helpers are never published: built from the checkout like the module.
+        testing = f"{slug}-{TESTING}"
+        if testing in declared:
+            wheels.append(build(REPOSITORY_ROOT / "packages" / TESTING, work))
+        tests = [name for name in declared if name != testing]
         _step(
             f"install {distribution}"
             + ("" if module == "contracts" else f" with only {slug}-contracts"),

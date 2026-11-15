@@ -34,6 +34,6 @@ jobs:
         env:
           PROPERTY_PROFILE: nightly
         run: |
-          python -m pytest -q -p tools.ci.timing --junitxml=junit.xml tests/properties
+          python -m pytest -q -p tools.ci.timing --junitxml=junit.xml tests/properties packages/store/tests/test_clickhouse_scanner_fuzzing.py
           # Each test's time to this log (#375): what test-trends.yml reads back.
           python -m tools.ci.durations emit junit.xml

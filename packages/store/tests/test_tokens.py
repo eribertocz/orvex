@@ -12,8 +12,8 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import Parameter, ParameterType
-from orvex.store.errors import StoreError
 from orvex.store.file_names import FOLDER_COST, PATTERN_BUDGET
 from orvex.store.parameters import _typed
 from orvex.store.sql_guard import (
@@ -24,8 +24,7 @@ from orvex.store.sql_guard import (
     _single_statement,
 )
 from orvex.store.sql_parser import PARSER_SPACES, _plain, _tokens
-
-from tests.support.bounds import FACTOR, SAFETY_NET, FolderReads, linear
+from orvex.testing.bounds import FACTOR, SAFETY_NET, FolderReads, linear
 
 
 def within_budget(reads: FolderReads) -> None:

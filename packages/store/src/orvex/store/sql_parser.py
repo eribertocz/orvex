@@ -7,7 +7,7 @@ from __future__ import annotations
 import threading
 
 import duckdb
-from orvex.store.errors import StoreError
+from orvex.contracts.store.errors import StoreError
 
 
 def _tokens(sql: str) -> list[tuple[int, duckdb.token_type]]:

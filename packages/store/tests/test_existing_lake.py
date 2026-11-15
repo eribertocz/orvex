@@ -17,6 +17,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     ExistingLakeAttachment,
     PostgresLakeLocation,
@@ -26,7 +27,6 @@ from orvex.contracts.store.v1 import (
     SqliteLakeLocation,
 )
 from orvex.store import existing_lake
-from orvex.store.errors import StoreError
 from orvex.store.existing_lake import ExistingLake
 
 MEMORY = "512MB"

@@ -18,15 +18,17 @@ from decimal import Decimal
 
 import pyarrow as pa
 import pytest
+from orvex.contracts.store.errors import StoreError
+from orvex.contracts.store.interface import REQUIRED_SETTINGS
 from orvex.contracts.store.v1 import Parameter
+from orvex.contracts.store.values import Budget, ClickHouseTarget
 from orvex.store import clickhouse
-from orvex.store.clickhouse import Budget, ClickHouse, ClickHouseTarget, duckdb_type
-from orvex.store.errors import StoreError
+from orvex.store.clickhouse import ClickHouse, duckdb_type
 
 BUDGET = Budget(timeout_ms=30_000, memory_bytes=2_000_000_000)
 SAFE = {
     "readonly": "1",
-    **clickhouse.REQUIRED_SETTINGS,
+    **REQUIRED_SETTINGS,
     "max_execution_time": "30",
     "max_memory_usage": "1000000000",
 }
@@ -134,7 +136,7 @@ WRONG = {
 
 
 def test_every_required_setting_has_a_wrong_value_case() -> None:
-    assert set(WRONG) == set(clickhouse.REQUIRED_SETTINGS)
+    assert set(WRONG) == set(REQUIRED_SETTINGS)
 
 
 @pytest.mark.parametrize(("name", "value"), sorted(WRONG.items()))

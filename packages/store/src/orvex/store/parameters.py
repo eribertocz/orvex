@@ -9,8 +9,8 @@ import math
 import re
 
 import duckdb
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import Parameter
-from orvex.store.errors import StoreError
 from orvex.store.sql_parser import _tokens
 
 INTEGER_RANGES = {

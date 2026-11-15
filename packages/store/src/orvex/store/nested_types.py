@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from duckdb.sqltypes import DuckDBPyType
-from orvex.store.errors import StoreError
+from orvex.contracts.store.errors import StoreError
 
 _NESTED = frozenset({"list", "array", "struct", "map", "union"})
 

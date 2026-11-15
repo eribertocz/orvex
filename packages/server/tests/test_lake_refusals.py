@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from orvex.contracts.store.errors import StoreError
 from orvex.server.lake_refusals import as_semantic
-from orvex.store.errors import StoreError
 
 
 def test_a_lakes_data_refused_keeps_the_connection_and_the_reason_only() -> None:

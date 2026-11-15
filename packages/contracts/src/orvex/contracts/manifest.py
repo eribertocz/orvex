@@ -35,6 +35,8 @@ from .version import Version
 # A module, or an alternative implementation, by its package path under the namespace.
 MODULE = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*")
 DISTRIBUTION = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?")
+# A test dependency may name its extras (`moto[server]`): what its own requirements need.
+WITH_EXTRAS = re.compile(rf"{DISTRIBUTION.pattern}(\[[a-z0-9]+(,[a-z0-9]+)*\])?")
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
@@ -63,8 +65,8 @@ class Manifest:
 
 
 def canonical(distribution: str) -> str:
-    """A distribution name in its normalized form (PEP 503)."""
-    return re.sub(r"[-_.]+", "-", distribution).lower()
+    """A distribution name in its normalized form (PEP 503), without its extras."""
+    return re.sub(r"[-_.]+", "-", distribution.partition("[")[0]).lower()
 
 
 def parse_manifest(text: str, source: str) -> Manifest:
@@ -102,11 +104,16 @@ def _strings(
     return tuple(value)
 
 
-def _distributions(value: object, where: str) -> tuple[str, ...]:
-    names = [canonical(name) for name in _strings(value, where, DISTRIBUTION)]
+def _distributions(
+    value: object, where: str, pattern: re.Pattern[str] = DISTRIBUTION
+) -> tuple[str, ...]:
+    """The distributions listed, normalized; with `WITH_EXTRAS`, each keeps its extras."""
+    listed = _strings(value, where, pattern)
+    names = [canonical(name) for name in listed]
     if len(set(names)) != len(names):
         raise ValueError(f"{where} names a distribution twice")
-    return tuple(sorted(names))
+    extras = [name[name.index("[") :] if "[" in name else "" for name in listed]
+    return tuple(sorted(f"{n}{e}" for n, e in zip(names, extras, strict=True)))
 
 
 def _capabilities(value: object, where: str) -> tuple[str, ...]:
@@ -160,7 +167,7 @@ def _manifest(data: dict[str, Any]) -> Manifest:
         tuple(provides),
         tuple(requires),
         _distributions(dependencies["runtime"], "dependencies.runtime"),
-        _distributions(dependencies["tests"], "dependencies.tests"),
+        _distributions(dependencies["tests"], "dependencies.tests", WITH_EXTRAS),
     )
 
 

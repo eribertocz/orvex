@@ -1,6 +1,7 @@
-"""Source isolation cost (#372 §5): landing one database-source table three ways.
+"""Source isolation cost (#372 §5), the store's own benchmark of its internals: landing one
+database-source table three ways.
 
-    python -m tools.benchmarks.source_stream --rows 10000000 --rows 50000000
+    python packages/store/benchmarks/source_stream.py --rows 10000000 --rows 50000000
 
 - `direct`: the source attached to the reading DuckDB instance and copied with
   `CREATE TABLE … AS`, the path a lake used before #372 (no isolation);

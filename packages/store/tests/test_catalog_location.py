@@ -15,6 +15,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     LocalLakeLocation,
     PostgresLakeLocation,
@@ -22,7 +23,6 @@ from orvex.contracts.store.v1 import (
     SqliteLakeLocation,
     StatementRequest,
 )
-from orvex.store.errors import StoreError
 from orvex.store.isolation import _sandbox_entries
 from orvex.store.lake import Lake, Limits, open_lake
 from orvex.store.locations import (

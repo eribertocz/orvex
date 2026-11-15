@@ -12,11 +12,11 @@ any other purpose, in any project of the instance. The **protected set** holds:
 The check runs both ways, across the instance, whenever a project's configuration is validated:
 a lake location that overlaps a protected location is refused, and so is a protected location
 declared later inside a lake location, in whichever order the projects were registered. The
-rules themselves are the store's (`orvex.store.separation`): whole path components after
-resolving, object storage by bucket and key, and no file system shared with a local data
-location or a SQLite catalog. Connections with the same catalog identity (host, port, database
-and schema, or one SQLite file by device and inode) and the same data location are one lake
-connected twice, never an overlap.
+rules themselves are the store's (its contract's `separation` capability): whole path
+components after resolving, object storage by bucket and key, and no file system shared with a
+local data location or a SQLite catalog. Connections with the same catalog identity (host,
+port, database and schema, or one SQLite file by device and inode) and the same data location
+are one lake connected twice, never an overlap.
 
 `protection` gives the store what an attachment needs: the roles in use elsewhere and the
 protected files and locations, built from the same set. Nothing is opened but the project files,
@@ -42,6 +42,7 @@ from orvex.contracts.project.v1 import (
     PostgresLakeCatalog,
     SqliteConnection,
 )
+from orvex.contracts.store.errors import StoreError, separation_refused
 from orvex.contracts.store.v1 import (
     CredentialsInUseItem,
     LocalLakeLocation,
@@ -60,8 +61,7 @@ from orvex.server.project import (
     ProjectLoadError,
     load_project,
 )
-from orvex.store import separation
-from orvex.store.errors import StoreError
+from orvex.server.store_access import store
 from pydantic import BaseModel, ValidationError
 
 CODE = "STORE_SOURCE_INVALID"
@@ -231,7 +231,7 @@ def problems(found: Instance, folder: Path) -> list[Problem]:
 def _own_credentials(found: Instance, lake: Lake) -> frozenset[str]:
     """The variables an object-storage lake's credential comes from (its catalog password
     aside)."""
-    if separation.is_object_storage(lake.data):
+    if store().is_object_storage(lake.data):
         for where, which, variables in found.secrets:
             if (where, which) == (lake.folder, lake.name):
                 return variables - lake.password
@@ -271,7 +271,7 @@ def protection(found: Instance, folder: Path, name: str) -> Protection:
     folder = folder.resolve()
     lake = next(item for item in found.lakes if item.folder == folder and item.name == name)
     if found.unreadable:
-        raise separation.refused(name, "another project of this instance cannot be read")
+        raise separation_refused(name, "another project of this instance cannot be read")
     places = [p for p in found.places if p.lake is None or not _one_lake(lake, p.lake)]
     roles = sorted({role for where, which, role in found.roles if (where, which) != (folder, name)})
     variables = sorted(
@@ -288,7 +288,7 @@ def protection(found: Instance, folder: Path, name: str) -> Protection:
         )
     except ValidationError:
         # The root folder (a file source's glob there) or a location the contract cannot hold.
-        raise separation.refused(
+        raise separation_refused(
             name, "a protected location is the root folder or cannot be compared"
         ) from None
 
@@ -362,8 +362,9 @@ def _one_lake(first: Lake, second: Lake) -> bool:
     """The same lake: same catalog identity and service, and the same data location."""
     if first.identity != second.identity:
         return False
+    client = store()
     try:
-        return separation.components(first.name, first.data) == separation.components(
+        return client.location_components(first.name, first.data) == client.location_components(
             second.name, second.data
         )
     except StoreError:
@@ -375,11 +376,11 @@ def _reason(lake: Lake, place: Place, *, devices: bool) -> str | None:
     try:
         if not devices:
             for location in filter(None, (lake.data, lake.catalog_file)):
-                if separation.overlaps(lake.name, location, place.location):
+                if store().locations_overlap(lake.name, location, place.location):
                     return "it overlaps a protected location"
             return None
         files = [place.location] if place.is_file else []
-        separation.check_apart(lake.name, lake.data, lake.catalog_file, [place.location], files)
+        store().check_apart(lake.name, lake.data, lake.catalog_file, [place.location], files)
     except StoreError as error:
         return str(error.details.get("reason", error.message))
     return None

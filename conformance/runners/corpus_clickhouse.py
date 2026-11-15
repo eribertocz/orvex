@@ -1,7 +1,7 @@
 """Running a corpus case on ClickHouse (P2-31 PR 4, #225; ADR-0027 §4, ADR-0028 §3): the case's
 tables loaded into a ClickHouse database with the mapped types, and the case answered there
 through the product's own wiring: the store's verified, read-only connection
-(`orvex.store.clickhouse`), the server's adapter (`clickhouse_adapter`) and the evidence its
+(its contract's `clickhouse`), the server's adapter (`clickhouse_adapter`) and the evidence its
 schedule verifies (`clickhouse_evidence`).
 
 The server is `CORPUS_CLICKHOUSE` (`host:port:user`, an administrator of a disposable server)
@@ -30,7 +30,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.client_sources import connect_clickhouse
+from orvex.contracts.store.interface import REQUIRED_SETTINGS
 from orvex.contracts.store.v1 import ReadRequest, TablesRequest
+from orvex.contracts.store.values import Budget, ClickHouseTarget
 from orvex.semantic.adapters import clickhouse as ch
 from orvex.semantic.adapters.clickhouse import CAPABILITIES as CLICKHOUSE_CAPABILITIES
 from orvex.semantic.compiler.compiled import CompiledModel
@@ -42,8 +46,7 @@ from orvex.server.clickhouse_adapter import ClickHouseAdapter
 from orvex.server.clickhouse_engines import tables
 from orvex.server.clickhouse_evidence import EvidenceSchedule, checked
 from orvex.server.identity import load_identity
-from orvex.store.clickhouse import REQUIRED_SETTINGS, Budget, ClickHouse, ClickHouseTarget
-from orvex.store.lake import Lake
+from orvex.server.store_access import store
 
 from conformance.runners import corpus_execution as ce
 
@@ -166,7 +169,7 @@ def clickhouse(
     with database() as (admin, name):
         load(admin, name, lake)
         target = ClickHouseTarget(admin.host, admin.port, name, name, READER_PASSWORD, tls=False)
-        engine = ClickHouse.connect(target, BUDGET)
+        engine = connect_clickhouse(store(), target, BUDGET)
         entry = EngineEntry(
             CONNECTION,
             "clickhouse",

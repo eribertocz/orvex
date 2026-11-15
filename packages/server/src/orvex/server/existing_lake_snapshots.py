@@ -31,8 +31,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import ExistingLakeAttachment, Snapshot
-from orvex.store.errors import StoreError
 
 MINIMUM = dt.timedelta(minutes=5)
 DEFAULT_SCHEDULE = "1h"
@@ -55,7 +55,7 @@ def period(text: str | None, *, minimum: dt.timedelta = dt.timedelta(0)) -> dt.t
 
 
 class Reads(Protocol):
-    """What the schedule asks of the lake (`orvex.store.existing_lake_reads.LakeReads`)."""
+    """What the schedule asks of the lake (`client_sources.ExistingLakeReads`)."""
 
     def latest(self) -> Snapshot: ...
 

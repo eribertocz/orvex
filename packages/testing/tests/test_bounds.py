@@ -7,8 +7,7 @@ import time
 from pathlib import Path
 
 import pytest
-
-from tests.support import bounds
+from orvex.testing import bounds
 
 
 def test_linear_work_passes_and_quadratic_work_fails() -> None:

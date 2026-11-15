@@ -54,3 +54,128 @@ jobs:
           python -m pip install --quiet -r pylock.toml
       - name: The contracts module alone, outside the repository
         run: python -m tools.ci.standalone contracts
+
+  standalone-store:
+    # The store alone (#486 §5 step 2): its wheel with only the contracts wheel, in a clean
+    # environment outside the repository, passing its own tests and its contract's kit, with
+    # the same disposable services its tests need in python.yml, so none is skipped.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # PostgreSQL catalog for the store tests (P1-02); a disposable database, not a secret.
+    services:
+      postgres:
+        # postgres:18.6-trixie
+        image: postgres@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+        env:
+          POSTGRES_PASSWORD: ci-disposable-database
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 5s --health-retries 30
+      # ClickHouse for the Direct Query tests (P2-31, #225); a disposable server, not a secret.
+      # The tests create their own read-only profiles, users and synthetic tables.
+      clickhouse:
+        # clickhouse/clickhouse-server:26.10.2.103 (#429: the latest stable)
+        image: clickhouse/clickhouse-server@sha256:b2bfa4d8399ee9973868cc5c1754cb506a6f4b86fbddc41010cc090beb55c85e
+        env:
+          CLICKHOUSE_USER: ci
+          CLICKHOUSE_PASSWORD: ci-disposable-database
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports: ["8123:8123"]
+        options: >-
+          --health-cmd "clickhouse-client --user ci --password ci-disposable-database --query 'SELECT 1'"
+          --health-interval 2s --health-timeout 5s --health-retries 60
+      # A ClickHouse of a version the store does not test, for the store kit's
+      # ENGINE_VERSION_UNTESTED case (#486); a disposable server, not a secret.
+      clickhouse-untested:
+        # clickhouse/clickhouse-server:26.9.25.15 (between the tested 26.8 and 26.10)
+        image: clickhouse/clickhouse-server@sha256:19bfacb135479a892551a8155cfbbc8211aedf2aa888cd91950b9ee7e76cc7e3
+        env:
+          CLICKHOUSE_USER: ci
+          CLICKHOUSE_PASSWORD: ci-disposable-database
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports: ["8124:8123"]
+        options: >-
+          --health-cmd "clickhouse-client --user ci --password ci-disposable-database --query 'SELECT 1'"
+          --health-interval 2s --health-timeout 5s --health-retries 60
+    env:
+      STORE_TEST_POSTGRES: host=localhost port=5432 dbname=postgres user=postgres
+      STORE_TEST_POSTGRES_PASSWORD: ci-disposable-database
+      STORE_TEST_CLICKHOUSE: localhost:8123:ci
+      STORE_TEST_CLICKHOUSE_PASSWORD: ci-disposable-database
+      # The PostgreSQL with TLS started below (#120), reached through 127.0.0.2: a host that is
+      # not the local machine for the catalog rule, so verify-full is required and tested.
+      STORE_TEST_POSTGRES_TLS: host=127.0.0.2 port=5433 dbname=postgres user=postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Start a PostgreSQL with TLS for the catalog tests (#120) and Azurite (#127)
+        # Started before the Python install and waited for after it (#373): the Azurite image
+        # downloads while Python and the lock file install.
+        # A certificate authority and a server certificate made for this job only: disposable,
+        # never committed, not secrets. The CA file is given to the tests by its path.
+        run: |
+          dir="$RUNNER_TEMP/postgres-tls"
+          mkdir -p "$dir"
+          cd "$dir"
+          openssl req -x509 -newkey rsa:3072 -nodes -days 2 -subj "/CN=ci-test-ca" \
+            -addext "basicConstraints=critical,CA:TRUE" \
+            -addext "keyUsage=critical,keyCertSign,cRLSign" \
+            -keyout ca.key -out ca.crt
+          openssl req -newkey rsa:3072 -nodes -subj "/CN=localhost" \
+            -keyout server.key -out server.csr
+          printf '%s\n' "basicConstraints=CA:FALSE" \
+            "keyUsage=critical,digitalSignature,keyEncipherment" \
+            "extendedKeyUsage=serverAuth" \
+            "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:127.0.0.2" > server.ext
+          openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 2 \
+            -extfile server.ext -out server.crt
+          rm ca.key server.csr
+          # The image's postgres user (uid 999) must own the key, readable by it only.
+          sudo chown 999:999 server.key server.crt
+          sudo chmod 600 server.key
+          # postgres:18.6-trixie, the same image as the service above.
+          docker run --detach --name postgres-tls --publish 5433:5432 \
+            --env POSTGRES_PASSWORD=ci-disposable-database \
+            --volume "$dir/server.crt:/tls/server.crt:ro" \
+            --volume "$dir/server.key:/tls/server.key:ro" \
+            postgres@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6 \
+            -c ssl=on -c ssl_cert_file=/tls/server.crt -c ssl_key_file=/tls/server.key
+          echo "STORE_TEST_POSTGRES_TLS_CA=$dir/ca.crt" >> "$GITHUB_ENV"
+          # azurite 3.37.0, blob service only, downloaded and started in the background; its
+          # output goes to a file the wait below shows when it fails.
+          nohup docker run --detach --name azurite --publish 10000:10000 \
+            mcr.microsoft.com/azure-storage/azurite@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5 \
+            azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --skipApiVersionCheck --loose \
+            > "$RUNNER_TEMP/azurite-start.log" 2>&1 &
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.15"
+      - name: Install the build tools from the lock file
+        run: |
+          python -m pip install --quiet pip==26.3
+          python -m pip install --quiet -r pylock.toml
+      - name: Install the store's DuckDB extensions, verified (#427)
+        run: python -m tools.ci.duckdb_extensions
+      - name: Wait for the PostgreSQL with TLS and Azurite
+        # The PostgreSQL is ready when it accepts TCP connections (the first start listens on a
+        # socket only). Azurite's development account is public and disposable, not a secret.
+        run: |
+          for attempt in $(seq 60); do
+            if docker exec postgres-tls pg_isready -U postgres -h 127.0.0.1 -q; then break; fi
+            sleep 1
+          done
+          docker exec postgres-tls pg_isready -U postgres -h 127.0.0.1
+          for attempt in $(seq 120); do
+            if curl --silent --output /dev/null http://127.0.0.1:10000/; then break; fi
+            sleep 1
+          done
+          if ! curl --silent --output /dev/null http://127.0.0.1:10000/; then
+            cat "$RUNNER_TEMP/azurite-start.log"
+            exit 1
+          fi
+          key="Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
+          echo "STORE_TEST_AZURE_CONNECTION_STRING=DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=$key;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;" >> "$GITHUB_ENV"
+      - name: The store module alone, outside the repository
+        run: python -m tools.ci.standalone store

@@ -23,12 +23,15 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     LocalLakeLocation,
     Parameter,
     ParameterType,
     StatementRequest,
 )
+from orvex.contracts.store.values import Limits
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.errors import SemanticError
@@ -37,9 +40,7 @@ from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.semantic.query.binding import Limits as QueryLimits
 from orvex.semantic.receipt import Key
-from orvex.store.errors import StoreError
-from orvex.store.json_encoding import arrow_to_json
-from orvex.store.lake import Lake, Limits, open_lake
+from orvex.server.store_access import store
 
 from conformance.runners import bi_platform_adapter as adapter
 
@@ -167,7 +168,7 @@ def case_lake(
 ) -> Iterator[Lake]:
     with tempfile.TemporaryDirectory() as folder:
         location = LocalLakeLocation(kind="lake_location", catalog="local", path=folder)
-        lake = open_lake(location, Limits("1GB", 2, 2, 0, 600_000))
+        lake = store().open_lake(location, Limits("1GB", 2, 2, 0, 600_000))
         try:
             load_tables(lake, inputs, catalog, schema)
             yield lake
@@ -179,7 +180,7 @@ def engine_for(lake: Lake, **change: Any) -> Engine:  # noqa: ANN401
     snapshot = lake.current_snapshot()
     arguments: dict[str, Any] = {
         "read": lake.read,
-        "encoder": arrow_to_json,
+        "encoder": store().arrow_to_json,
         "snapshot": {"id": snapshot.id, "committed_at": snapshot.committed_at.isoformat()},
         "engine_version": version("duckdb"),
         "result_key": RESULT_KEY,
@@ -217,7 +218,7 @@ def viewer_context(
 
 def rows_of(found: Answer) -> list[list[str | None]]:
     """The result's values as `store/v1` JSON text, positionally."""
-    document = json.loads(found.result.wire(arrow_to_json))
+    document = json.loads(found.result.wire(store().arrow_to_json))
     return [[None if v is None else str(v) for v in row] for row in document["rows"]]
 
 

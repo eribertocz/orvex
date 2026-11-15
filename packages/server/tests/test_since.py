@@ -6,12 +6,12 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import StatementRequest
 from orvex.server import run as run_command
 from orvex.server import run_metadata
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
-from orvex.store.errors import StoreError
 
 SLUG = load_identity().slug
 PROJECT = "version: 1\nname: Test\ntime_zone: America/La_Paz\n"

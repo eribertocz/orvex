@@ -47,7 +47,7 @@ import stat
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-from orvex.store.errors import StoreError
+from orvex.contracts.store.errors import separation_refused
 from orvex.store.locations import azure_pairs
 
 OBJECT_STORAGE = ("s3://", "gs://", "az://")
@@ -61,15 +61,6 @@ _FILE = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0
 
 type Identity = tuple[int, int]
 type Mount = tuple[int, Path, str]  # device, mount point, file-system type
-
-
-def refused(name: str, reason: str) -> StoreError:
-    return StoreError(
-        "STORE_SOURCE_INVALID",
-        f"Connection {name}: the lake cannot be shown apart from the instance's other files: "
-        f"{reason}.",
-        {"connection": name, "reason": reason},
-    )
 
 
 def is_object_storage(location: str) -> bool:
@@ -86,20 +77,24 @@ def components(name: str, location: str) -> tuple[str, ...]:
             if parts[-1] == "":
                 parts.pop()
             if not parts or any(part in {"", ".", ".."} for part in parts):
-                raise refused(name, "an object-storage location has an empty, . or .. segment")
+                raise separation_refused(
+                    name, "an object-storage location has an empty, . or .. segment"
+                )
             if scheme == "az://" and "." in parts[0]:
                 # A container name has no dot: this one names an account's endpoint.
-                raise refused(name, "an Azure location names an account instead of a container")
+                raise separation_refused(
+                    name, "an Azure location names an account instead of a container"
+                )
             return ("object", *parts)
     if _URL.match(location) or not os.path.isabs(location):
-        raise refused(name, "a location is neither an absolute path nor object storage")
+        raise separation_refused(name, "a location is neither an absolute path nor object storage")
     return ("local", *Path(os.path.realpath(location)).parts)
 
 
 def plain(name: str, path: str) -> str:
     """`path`, refused if it holds a NUL character (no file system path can)."""
     if "\x00" in path:
-        raise refused(name, "a location holds a NUL character")
+        raise separation_refused(name, "a location holds a NUL character")
     return path
 
 
@@ -126,9 +121,9 @@ def check_apart(
         plain(name, path)
     for location in protected:
         if overlaps(name, data_path, location):
-            raise refused(name, "its data location overlaps a protected location")
+            raise separation_refused(name, "its data location overlaps a protected location")
         if catalog is not None and overlaps(name, catalog, location):
-            raise refused(name, "its SQLite catalog lies in a protected location")
+            raise separation_refused(name, "its SQLite catalog lies in a protected location")
     local_data = not is_object_storage(data_path)
     if not local_data and catalog is None:
         return
@@ -141,7 +136,7 @@ def check_apart(
         for suffix in ("-wal", "-shm", "-journal", ".wal"):
             devices |= _device_if_present(name, path + suffix)
     if local_data and own_device(name, data_path, table) in devices:
-        raise refused(
+        raise separation_refused(
             name,
             "its data location is on a file system that holds a protected location, so a hard "
             "link there could reach a protected file",
@@ -149,15 +144,19 @@ def check_apart(
     if catalog is not None:
         holding = _holding(Path(os.path.realpath(catalog)), table)
         if holding is None or holding[2] not in LOCAL_FILE_SYSTEMS:
-            raise refused(name, f"its SQLite catalog is on {_kind(holding)}{_LOCAL_ONLY}")
+            raise separation_refused(
+                name, f"its SQLite catalog is on {_kind(holding)}{_LOCAL_ONLY}"
+            )
         for path in (catalog, *(catalog + suffix for suffix in ("-wal", "-shm", "-journal"))):
             found = _device_if_present(name, path)
             if path == catalog and not found:
-                raise refused(name, "its SQLite catalog does not exist")
+                raise separation_refused(name, "its SQLite catalog does not exist")
             if found != {holding[0]} and found:
-                raise refused(name, "its SQLite catalog's file system cannot be identified")
+                raise separation_refused(
+                    name, "its SQLite catalog's file system cannot be identified"
+                )
             if found & devices:
-                raise refused(
+                raise separation_refused(
                     name,
                     "its SQLite catalog is on a file system that holds a protected location, so "
                     "a hard link there could reach a protected file",
@@ -177,14 +176,14 @@ def own_device(name: str, folder: str, table: list[Mount] | None = None) -> int:
     try:
         status = os.stat(plain(name, folder))
     except OSError:
-        raise refused(name, "its data location cannot be examined") from None
+        raise separation_refused(name, "its data location cannot be examined") from None
     if not stat.S_ISDIR(status.st_mode):
-        raise refused(name, "its data location is not a folder")
+        raise separation_refused(name, "its data location is not a folder")
     holding = _holding(Path(os.path.realpath(folder)), table)
     if holding is None or holding[2] not in LOCAL_FILE_SYSTEMS:
-        raise refused(name, f"its data location is on {_kind(holding)}{_LOCAL_ONLY}")
+        raise separation_refused(name, f"its data location is on {_kind(holding)}{_LOCAL_ONLY}")
     if holding[0] != status.st_dev:
-        raise refused(
+        raise separation_refused(
             name, "its data location's file system cannot be identified from the mount table"
         )
     return status.st_dev
@@ -216,10 +215,10 @@ def check_files(
     for path in paths:
         plain(name, path)
         if not path.startswith(prefix):
-            raise refused(name, "a snapshot references a file outside its data location")
+            raise separation_refused(name, "a snapshot references a file outside its data location")
         parts = path[len(prefix) :].split("/")
         if any(part in {"", ".", ".."} for part in parts):
-            raise refused(name, "a snapshot references a file by an ambiguous path")
+            raise separation_refused(name, "a snapshot references a file by an ambiguous path")
         relative.append(parts)
     if folder is None or not relative:
         return
@@ -229,7 +228,7 @@ def check_files(
         opened[()] = root
         status = os.fstat(root)
         if (status.st_dev, status.st_ino) != folder:
-            raise refused(name, "its data folder was replaced after it was attached")
+            raise separation_refused(name, "its data folder was replaced after it was attached")
         for parts in relative:
             parent = root
             for depth in range(1, len(parts)):
@@ -243,11 +242,17 @@ def check_files(
             finally:
                 os.close(descriptor)
             if not stat.S_ISREG(status.st_mode):
-                raise refused(name, "a snapshot references something that is not a regular file")
+                raise separation_refused(
+                    name, "a snapshot references something that is not a regular file"
+                )
             if status.st_dev != folder[0]:
-                raise refused(name, "a snapshot references a file on another file system")
+                raise separation_refused(
+                    name, "a snapshot references a file on another file system"
+                )
             if (status.st_dev, status.st_ino) in protected:
-                raise refused(name, "a snapshot references a hard link to a protected file")
+                raise separation_refused(
+                    name, "a snapshot references a hard link to a protected file"
+                )
     finally:
         for descriptor in opened.values():
             with contextlib.suppress(OSError):
@@ -279,7 +284,7 @@ def _open(name: str, path: str, flags: int, folder: int | None) -> int:
             reason = "a snapshot references a file that does not exist"
         else:
             reason = f"a snapshot's file cannot be opened ({errno.errorcode.get(error.errno or 0)})"
-        raise refused(name, reason) from None
+        raise separation_refused(name, reason) from None
 
 
 def _is_link(path: str, folder: int | None) -> bool:
@@ -297,7 +302,7 @@ def _mounts(name: str) -> list[Mount]:
     try:
         text = MOUNTINFO.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        raise refused(name, "the mount table cannot be read on this platform") from None
+        raise separation_refused(name, "the mount table cannot be read on this platform") from None
     return parse_mounts(text)
 
 
@@ -331,15 +336,17 @@ def _devices_under(name: str, location: str, table: list[Mount]) -> set[int]:
             break
         except FileNotFoundError:
             if existing.parent == existing:
-                raise refused(name, "a protected location cannot be examined") from None
+                raise separation_refused(name, "a protected location cannot be examined") from None
             existing = existing.parent
         except OSError:
-            raise refused(name, "a protected location cannot be examined") from None
+            raise separation_refused(name, "a protected location cannot be examined") from None
     below = [mount for mount in table if _within(mount[1], resolved)]
     holding = _holding(existing, table)
     for mount in [holding, *below]:
         if mount is None or mount[2] not in LOCAL_FILE_SYSTEMS:
-            raise refused(name, f"a protected location is on {_kind(mount)}{_LOCAL_ONLY}")
+            raise separation_refused(
+                name, f"a protected location is on {_kind(mount)}{_LOCAL_ONLY}"
+            )
     return {device} | {mount[0] for mount in below}
 
 
@@ -349,7 +356,7 @@ def _device_if_present(name: str, path: str) -> set[int]:
     except FileNotFoundError:
         return set()
     except OSError:
-        raise refused(name, "a protected file cannot be examined") from None
+        raise separation_refused(name, "a protected file cannot be examined") from None
 
 
 def _within(path: Path, folder: Path) -> bool:
@@ -376,12 +383,14 @@ def check_credentials(
     is the boundary. `in_use` names every other variable of the instance, `values` their values
     where set. A lake without a credential of its own is refused."""
     if in_use is None:
-        raise refused(name, "the instance's credentials in use were not given")
+        raise separation_refused(name, "the instance's credentials in use were not given")
     mine = set().union(*(credential_values(value) for value in own.values()))
     if not mine:
-        raise refused(name, "its object storage has no credential of its own")
+        raise separation_refused(name, "its object storage has no credential of its own")
     if set(own) & set(in_use):
-        raise refused(name, "its object-storage credential is another connection's variable")
+        raise separation_refused(
+            name, "its object-storage credential is another connection's variable"
+        )
     for variable in in_use:
         if mine & credential_values(values.get(variable, "")):
-            raise refused(name, "its object-storage credential is another connection's")
+            raise separation_refused(name, "its object-storage credential is another connection's")

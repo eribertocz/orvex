@@ -43,11 +43,11 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from orvex.contracts.store.client import Lake
 from orvex.contracts.store.v1 import ReadRequest
 from orvex.server import commands, lake_place
 from orvex.server.identity import load_identity
 from orvex.server.project import load_project
-from orvex.store.lake import Lake
 
 SEED = 42
 GIT_DATE = "2025-01-01T00:00:00+00:00"

@@ -14,26 +14,29 @@ import textwrap
 import zoneinfo
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import duckdb
-import orvex.store.transaction as store_transaction
 import pytest
 from orvex.contracts.run_record.v1 import RunRecord
+from orvex.contracts.store.client import Lake, Transaction
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import LocalLakeLocation, ReadRequest, StatementRequest
 from orvex.server import commands, lake_open, maintenance
 from orvex.server import run as run_command
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.project import load_project
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake, Transaction, open_lake
+from orvex.server.store_access import store
 from orvex.transform.run_records import (
     history_request,
     last_run_request,
     model_history_request,
     record_statements,
 )
+
+from . import store_faults
 
 SLUG = load_identity().slug
 PROJECT = "version: 1\nname: Test\ntime_zone: America/La_Paz\n"
@@ -116,14 +119,6 @@ def records(folder: Path) -> list[dict[str, object]]:
     rows = [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
     lake.close()
     return rows
-
-
-def snapshot_of_token(folder: Path, token: str) -> int:
-    ((snapshot,),) = lake_rows(
-        folder,
-        f"SELECT snapshot_id FROM ducklake_snapshots('lake') WHERE commit_extra_info = '{token}'",
-    )
-    return int(str(snapshot))
 
 
 def latest_snapshot(folder: Path) -> int:
@@ -218,7 +213,7 @@ def recorded_lake(folder: Path, record: RunRecord) -> Iterator[Lake]:
     """A lake of its own, opened through the store's public API, holding `record`: the store
     binds every parameter of a statement or refuses it (#246 item 6)."""
     location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(folder))
-    lake = open_lake(location, lake_open._limits())
+    lake = store().open_lake(location, lake_open._limits())
     try:
         with lake.transaction() as transaction:
             for statement in record_statements([record]):
@@ -472,7 +467,7 @@ def test_run_failures_no_model_caused_are_recorded_with_their_reason(
 ) -> None:
     project(tmp_path, MODELS)
     lake = FakeLake(fail)
-    monkeypatch.setattr(lake_open, "open_lake", lambda *args, **kwargs: lake)
+    monkeypatch.setattr(lake_open, "store", lambda: SimpleNamespace(open_lake=lambda *a, **k: lake))
     exit_code, out = command(capsys, "run", str(tmp_path))
     assert exit_code == 1
     assert code in out
@@ -495,17 +490,20 @@ def test_the_record_names_the_run_s_own_snapshot_when_another_writer_commits_rig
     # #255: two clones sharing one lake; the other commits right after this run's commit. The
     # records name the run's snapshot, and rows are counted on it.
     project(tmp_path, MODELS)
-    real = store_transaction._commit
     injected: list[int] = []
 
-    def commit_then_another_writer(cursor: duckdb.DuckDBPyConnection) -> None:
-        real(cursor)
+    def commit_then_another_writer(call: store_faults.Call) -> object:
+        committed = call.proceed()
         if not injected:
             injected.append(1)
-            cursor.execute("CREATE TABLE lake.main.other_clone AS SELECT 1 AS x")  # own commit
+            call.another_writer("CREATE TABLE main.other_clone AS SELECT 1 AS x")
+        return committed
 
-    monkeypatch.setattr(store_transaction, "_commit", commit_then_another_writer)
-    code, out = command(capsys, "run", str(tmp_path))
+    undo = store_faults.around("commit", commit_then_another_writer)
+    try:
+        code, out = command(capsys, "run", str(tmp_path))
+    finally:
+        undo()
     assert code == 0, out
     recorded = printed_snapshot(out)
     rows = [r for r in records(tmp_path) if r["outcome"] == "success"]
@@ -526,8 +524,8 @@ def test_the_record_names_the_run_s_own_snapshot_when_another_writer_commits_rig
 CHILD = textwrap.dedent(
     """
     import os, sys
-    import orvex.store.lake as store_lake
-    import orvex.store.transaction as store_transaction
+    sys.path.insert(0, sys.argv[4])
+    import store_faults
     from orvex.server import run as run_command
     from orvex.server.cli import main
 
@@ -539,29 +537,23 @@ CHILD = textwrap.dedent(
         armed.append(True)
         return records(items)
 
-    committed = store_lake.Lake._committed
-
-    def killed(self, token):
+    def killed(call):
+        committed = call.proceed()
         if armed:  # the run's own commit just happened: the process ends here
             with open(token_file, "w", encoding="utf-8") as handle:
-                handle.write(token)
+                handle.write(str(committed.snapshot.id))
             os._exit(3)
-        return committed(self, token)
+        return committed
 
-    commit = store_transaction._commit
-
-    def another_writer_first(cursor):
+    def another_writer_first(call):
         if len(armed) == 1:  # the run's block ran: another writer commits the same table
-            other = cursor.cursor()
-            other.execute("DROP TABLE lake.s.a")
-            other.close()
-        commit(cursor)
+            call.send("rollback", *call.arguments)
+            call.another_writer("DROP TABLE s.a")
+            raise store_faults.conflict()
+        return call.proceed()
 
     run_command.record_statements = arming
-    if mode == "kill":
-        store_lake.Lake._committed = killed
-    else:
-        store_transaction._commit = another_writer_first
+    store_faults.around("commit", killed if mode == "kill" else another_writer_first)
     code = main(["run", folder])
     with open(token_file, "w", encoding="utf-8") as handle:
         handle.write(f"{code} {len(armed)}")
@@ -573,7 +565,7 @@ def child_run(folder: Path, mode: str, result: Path) -> subprocess.CompletedProc
     """`run` in a process of its own, stopped or disturbed as `mode` says. A process of its own:
     DuckDB 2.0.0 keeps a local catalog attached in the process after a commit conflict."""
     return subprocess.run(
-        [sys.executable, "-c", CHILD, str(folder), mode, str(result)],
+        [sys.executable, "-c", CHILD, str(folder), mode, str(result), str(Path(__file__).parent)],
         capture_output=True,
         text=True,
         env=os.environ.copy(),
@@ -587,7 +579,7 @@ def test_a_kill_right_after_the_commit_leaves_data_and_records(tmp_path: Path) -
     token_file = tmp_path / "token"
     child = child_run(folder, "kill", token_file)
     assert child.returncode == 3, child.stderr
-    committed = snapshot_of_token(folder, token_file.read_text(encoding="utf-8"))
+    committed = int(token_file.read_text(encoding="utf-8"))
     assert lake_rows(folder, "SELECT count(*) FROM lake.s.a") == [(5,)]
     rows = records(folder)
     assert [(r["model"], r["outcome"]) for r in rows] == [
@@ -604,18 +596,21 @@ def test_ctrl_c_right_after_the_commit_adds_no_failed_record(
     # Criterion 1b: the run is committed and recorded; the interruption still goes on.
     project(tmp_path, MODELS)
     armed = armed_on_records(monkeypatch)
-    tokens: list[str] = []
-    real = Lake._committed
+    snapshots: list[int] = []
 
-    def interrupted(self: Lake, token: str) -> object:
+    def interrupted(call: store_faults.Call) -> object:
+        committed = call.proceed()
         if armed:
-            tokens.append(token)
+            snapshots.append(committed.snapshot.id)
             raise KeyboardInterrupt
-        return real(self, token)
+        return committed
 
-    monkeypatch.setattr(Lake, "_committed", interrupted)
-    with pytest.raises(KeyboardInterrupt):
-        main(["run", str(tmp_path)])
+    undo = store_faults.around("commit", interrupted)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            main(["run", str(tmp_path)])
+    finally:
+        undo()
     out = capsys.readouterr().out
     run_id = re.search(r"^run (\S+)$", out, re.MULTILINE)
     assert run_id
@@ -626,7 +621,7 @@ def test_ctrl_c_right_after_the_commit_adds_no_failed_record(
         (run_id.group(1), "s.b", "success"),
         (run_id.group(1), "s.c", "success"),
     ]
-    assert {r["snapshot_id"] for r in rows} == {snapshot_of_token(tmp_path, tokens[0])}
+    assert {r["snapshot_id"] for r in rows} == {snapshots[0]}
 
 
 def test_ctrl_c_before_the_commit_commits_nothing_and_records_the_run_failed(
@@ -635,16 +630,20 @@ def test_ctrl_c_before_the_commit_commits_nothing_and_records_the_run_failed(
     # Criterion 2.
     project(tmp_path, MODELS)
     armed = armed_on_records(monkeypatch)
-    real = store_transaction._commit
 
-    def interrupted(cursor: duckdb.DuckDBPyConnection) -> None:
+    def interrupted(call: store_faults.Call) -> object:
         if armed and len(armed) == 1:
+            # As the store does on an interrupt inside its commit: nothing is committed.
+            call.send("rollback", *call.arguments)
             raise KeyboardInterrupt
-        real(cursor)
+        return call.proceed()
 
-    monkeypatch.setattr(store_transaction, "_commit", interrupted)
-    with pytest.raises(KeyboardInterrupt):
-        main(["run", str(tmp_path)])
+    undo = store_faults.around("commit", interrupted)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            main(["run", str(tmp_path)])
+    finally:
+        undo()
     capsys.readouterr()
     assert [(r["outcome"], r["error_code"], r["snapshot_id"]) for r in records(tmp_path)] == [
         ("failed", "STORE_CANCELLED", None)
@@ -854,10 +853,11 @@ def test_another_writer_first_fails_the_run_and_records_it_after_the_rollback(
 
 
 def timed_out(transaction: Transaction) -> StoreError:
-    """What the store's guard leaves when the transaction's time limit expires mid-statement."""
-    return transaction._interrupted(
-        StoreError("STORE_TIMEOUT", "The transaction exceeded its time limit.", {})
-    )
+    """What the store leaves when the transaction's time limit expires mid-statement: the
+    statement's refusal, and a transaction that can no longer commit (the store's own guarantee,
+    #77), here through the contract's cancel."""
+    transaction.cancel()
+    return StoreError("STORE_TIMEOUT", "The transaction exceeded its time limit.", {})
 
 
 @pytest.mark.parametrize("where", ["count", "records"])

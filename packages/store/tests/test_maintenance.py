@@ -11,6 +11,7 @@ from pathlib import Path
 import duckdb
 import pyarrow as pa
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     LocalLakeLocation,
     PostgresLakeLocation,
@@ -18,7 +19,6 @@ from orvex.contracts.store.v1 import (
     SqliteLakeLocation,
     StatementRequest,
 )
-from orvex.store.errors import StoreError
 from orvex.store.lake import Lake
 
 # The shared contract tests run on every catalog, SQLite included (#120).

@@ -10,7 +10,7 @@ import json
 from typing import Any
 
 import pytest
-from orvex.store.errors import StoreError
+from orvex.contracts.store.errors import StoreError
 from orvex.store.existing_lake_guard import guarded
 from orvex.store.read_tree import _read_tree, _walk, pin_tables
 

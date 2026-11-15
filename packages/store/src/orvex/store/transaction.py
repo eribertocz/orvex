@@ -14,11 +14,11 @@ from collections.abc import Callable, Iterator, Sequence
 
 import duckdb
 import pyarrow as pa
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import CommitResult, Parameter, Snapshot, StatementRequest
 from orvex.store import source_worker
 from orvex.store.catalog_values import _single_value
 from orvex.store.ctrl_c import _on_ctrl_c, _user_interrupt
-from orvex.store.errors import StoreError
 from orvex.store.lake_names import LAKE, METADATA
 from orvex.store.limits import Guard
 from orvex.store.parameters import _bound, _typed

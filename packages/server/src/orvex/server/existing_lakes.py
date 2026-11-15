@@ -3,7 +3,7 @@
 
 With the development switch on (`development_switch`), every `ducklake` connection of the served
 project is attached when the server starts: a DuckDB instance of its own per lake
-(`orvex.store.existing_lake`), its guarded reads, its verified-snapshot schedule
+(the store contract's existing lakes), its guarded reads, its verified-snapshot schedule
 (`existing_lake_snapshots`) and its adapter (`existing_lake_adapter`). With the switch off, none
 is, and a dataset on one is `UNSUPPORTED_OPERATION` (`operation: route`).
 
@@ -36,7 +36,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orvex.contracts.project.v1 import DucklakeConnection
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.client_sources import ExistingLakeReads, open_existing_lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import ExistingLakeAttachment, Snapshot
+from orvex.contracts.store.values import ExistingLakeLimits
 from orvex.server import existing_lake_attachments
 from orvex.server.existing_lake_adapter import ExistingLakeAdapter
 from orvex.server.existing_lake_evidence import violated
@@ -44,10 +48,7 @@ from orvex.server.existing_lake_snapshots import SnapshotSchedule
 from orvex.server.project import ProjectLoadError
 from orvex.server.semantic_http import ProjectBusy, ProjectSource, Refused
 from orvex.server.semantic_model import ExternalTables
-from orvex.store.errors import StoreError
-from orvex.store.existing_lake import ExistingLake
-from orvex.store.existing_lake_reads import LakeReads
-from orvex.store.lake import Lake
+from orvex.server.store_access import store
 
 log = logging.getLogger(__name__)
 POLL_SECONDS = 30.0  # how often the thread looks for a due schedule (each is at least 5m)
@@ -71,7 +72,7 @@ def ducklake_connections(connections: Mapping[str, object]) -> dict[str, Ducklak
 
 @dataclass(frozen=True, slots=True)
 class _Lake:
-    reads: LakeReads
+    reads: ExistingLakeReads
     schedule: SnapshotSchedule
     adapter: ExistingLakeAdapter
 
@@ -82,7 +83,7 @@ class ExistingLakes:
     def __init__(self, now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC)) -> None:
         self._now = now
         self._lakes: dict[str, _Lake] = {}
-        self._opened: list[ExistingLake] = []
+        self._opened: list[ExistingLakeReads] = []
         # During a check: the served project, and its managed lake or why it could not be had.
         self._source: ProjectSource | None = None
         self._held: Lake | str | None = None
@@ -93,9 +94,9 @@ class ExistingLakes:
     def add(
         self,
         name: str,
-        lake: ExistingLake,
+        lake: ExistingLakeReads,
         schedule: Callable[[Callable[[Snapshot], str | None]], SnapshotSchedule],
-        reads: LakeReads,
+        reads: ExistingLakeReads,
         engine_version: str,
     ) -> None:
         """`lake`, its reads, and its schedule made with this composition's evidence."""
@@ -234,14 +235,14 @@ def opened(
     try:
         for name, connection in sorted(ducklake_connections(connections).items()):
             current = existing_lake_attachments.current(directory, folder, slug, name, connection)
-            lake = ExistingLake(current(), memory_limit=memory_limit, threads=threads)
-            reads = LakeReads(lake, timeout_ms=timeout_ms)
+            limits = ExistingLakeLimits(memory_limit, threads, timeout_ms)
+            reads = open_existing_lake(store(), current(), limits)
 
             def schedule(
                 evidence: Callable[[Snapshot], str | None],
                 name: str = name,
                 connection: DucklakeConnection = connection,
-                reads: LakeReads = reads,
+                reads: ExistingLakeReads = reads,
                 current: Callable[[], ExistingLakeAttachment] = current,
             ) -> SnapshotSchedule:
                 return SnapshotSchedule(
@@ -254,7 +255,7 @@ def opened(
                     freshness=connection.freshness,
                 )
 
-            lakes.add(name, lake, schedule, reads, engine_version)
+            lakes.add(name, reads, schedule, reads, engine_version)
         yield lakes
     finally:
         lakes.close()

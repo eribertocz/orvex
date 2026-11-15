@@ -15,13 +15,14 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import ReadRequest
+from orvex.contracts.store.values import Limits
 from orvex.server import commands, lake_open, lake_place, mounts
 from orvex.server.cli import main
 from orvex.server.identity import load_identity
 from orvex.server.project import ProjectLoadError, load_project
-from orvex.store.errors import StoreError
-from orvex.store.lake import Limits, open_lake
+from orvex.server.store_access import store
 
 SLUG = load_identity().slug
 PASSWORD_ENV = "STORE_TEST_POSTGRES_PASSWORD"
@@ -72,7 +73,7 @@ def home(folder: Path) -> Path:
 def count(folder: Path) -> int:
     """The model's rows, read through the project's own lake location."""
     place = commands.lake_location(load_project(folder), home(folder))
-    lake = open_lake(place.location, LIMITS)
+    lake = store().open_lake(place.location, LIMITS)
     try:
         request = ReadRequest(
             kind="read",

@@ -11,8 +11,8 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from orvex.testing.fixtures import frozen, private_copy
 
-from tests.support.fixtures import frozen, private_copy
 from tools.benchmarks.load_baseline import (
     APPENDED,
     Step,

@@ -16,12 +16,12 @@ from typing import cast
 
 import duckdb
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.server import commands, lake_open, lake_place, project_check, run_metadata, scheduler
 from orvex.server import run as run_command
 from orvex.server.cli import main
 from orvex.server.identity import Identity, load_identity
 from orvex.server.scheduler import schedule
-from orvex.store.errors import StoreError
 
 SLUG = load_identity().slug
 PROJECT = "version: 1\nname: Test\ntime_zone: UTC\n"

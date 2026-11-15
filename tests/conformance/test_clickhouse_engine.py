@@ -1,5 +1,5 @@
 """The ClickHouse engine wired as the product wires it (P2-31 PR 4, #225; ADR-0027 §4 to §8):
-the store's verified read-only connection (`orvex.store.clickhouse`), the server's adapter
+the store's verified read-only connection (the store contract's `clickhouse`), the server's adapter
 (`orvex.server.clickhouse_adapter`) and its evidence schedule (`clickhouse_evidence`), asked
 through `orvex.semantic.execution.answer` as `server` asks.
 
@@ -24,6 +24,9 @@ from typing import Any
 
 import pytest
 import yaml
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.client_sources import ClickHouse, connect_clickhouse
+from orvex.contracts.store.values import Budget, ClickHouseTarget
 from orvex.semantic import execution
 from orvex.semantic.adapters import clickhouse as ch
 from orvex.semantic.adapters.clickhouse import CAPABILITIES as CLICKHOUSE_CAPABILITIES
@@ -41,8 +44,7 @@ from orvex.semantic.query.binding import bind_query
 from orvex.server.clickhouse_adapter import ClickHouseAdapter
 from orvex.server.clickhouse_engines import tables
 from orvex.server.clickhouse_evidence import EvidenceSchedule, checked
-from orvex.store.clickhouse import Budget, ClickHouse, ClickHouseTarget
-from orvex.store.lake import Lake
+from orvex.server.store_access import store
 
 from conformance.runners import corpus_execution as ce
 from tests.conformance import test_clickhouse_adapter as base
@@ -69,7 +71,7 @@ def engine(server: base.Server, monkeypatch: pytest.MonkeyPatch) -> ClickHouse: 
     user, password = server.reader  # type: ignore[attr-defined]
     monkeypatch.setenv(PASSWORD, password)
     target = ClickHouseTarget(server.host, server.port, server.database, user, PASSWORD, tls=False)
-    return ClickHouse.connect(target, BUDGET)
+    return connect_clickhouse(store(), target, BUDGET)
 
 
 def routing_of(compiled: CompiledModel) -> Routing:

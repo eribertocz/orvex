@@ -34,6 +34,8 @@ import pyarrow.compute as pc
 import pyarrow.ipc
 import pytest
 from hypothesis import HealthCheck, given, settings
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import Parameter, ParameterType, StatementRequest
 from orvex.semantic import execution, external
 from orvex.semantic.adapters import clickhouse as ch
@@ -53,8 +55,7 @@ from orvex.semantic.policies import PolicyModel
 from orvex.semantic.query.binding import Limits as QueryLimits
 from orvex.semantic.query.binding import bind_query
 from orvex.semantic.result.descriptors import arrow_type
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake
+from orvex.testing.environment import unavailable
 
 from conformance.runners import bi_platform_adapter
 from conformance.runners import corpus_execution as ce
@@ -63,7 +64,6 @@ from tests.conformance import test_exact_arithmetic as exact_case
 from tests.conformance import test_row_policies as rp
 from tests.conformance.test_execution import no_policies
 from tests.properties import exact as generated_exact
-from tests.support.environment import unavailable
 from tests.support.policies import VENDORS, extension
 
 Document = dict[str, Any]

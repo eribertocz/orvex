@@ -10,8 +10,8 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from orvex.testing.fixtures import frozen
 
-from tests.support.fixtures import frozen
 from tools.synthetic.generate import PRICES, TABLES, SyntheticError, generate
 
 ROOT = Path(__file__).resolve().parents[2]

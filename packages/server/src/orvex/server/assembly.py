@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import threading
 from collections.abc import Mapping, Sequence
 from importlib.resources import files
 
+from orvex.contracts.binding import Bound
 from orvex.contracts.interface import InterfaceContract
 from orvex.contracts.manifest import Manifest, Provided, parse_manifest
 from orvex.contracts.registry import interface_contracts
@@ -228,3 +230,37 @@ def check_installed_assembly(identity: Identity, chosen: Mapping[str, str] | Non
         load_implementations(identity.python_namespace, manifests),
         chosen,
     )
+
+
+_PROVIDERS: dict[tuple[str, str], Bound] = {}
+_PROVIDERS_LOCK = threading.Lock()
+
+
+def provider(identity: Identity, contract: str, chosen: Mapping[str, str] | None = None) -> Bound:
+    """The implementation of `contract` the checked assembly chose, built once per process and
+    reached through the in-process binding: what it holds open is shared by every consumer of
+    the process."""
+    namespace = identity.python_namespace
+    with _PROVIDERS_LOCK:
+        found = _PROVIDERS.get((namespace, contract))
+        if found is not None:
+            return found
+        manifests = installed_manifests(identity, chosen)
+        contracts = interface_contracts(importlib.import_module(f"{namespace}.contracts"))
+        implementations = load_implementations(namespace, manifests)
+        check_assembly(manifests, contracts, implementations, chosen)
+        choice = (chosen or {}).get(contract)
+        offered = [
+            key
+            for key in implementations
+            if key[1] == contract and (choice is None or key[0] == choice)
+        ]
+        if len(offered) != 1 or contract not in contracts:
+            raise AssemblyRefused(
+                [f"ASSEMBLY_NO_IMPLEMENTATION: {contract}: {len(offered)} modules provide it"]
+            )
+        made = implementations[offered[0]]
+        assert isinstance(made, type)  # the assembly check refuses anything else
+        found = Bound(contracts[contract], made(), serialized=False)
+        _PROVIDERS[(namespace, contract)] = found
+        return found

@@ -13,6 +13,7 @@ import pyarrow as pa
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from orvex.contracts.store.client import Lake
 from orvex.contracts.store.v1 import ChangesRequest, ReadRequest
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.errors import SemanticError
@@ -25,7 +26,6 @@ from orvex.server import semantic_http, semantic_model
 from orvex.server.app import LocalSemantic, create_app
 from orvex.server.local_access import new_access
 from orvex.server.versions import Versions
-from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners.semantic_corpus import CORPUS, ROOT

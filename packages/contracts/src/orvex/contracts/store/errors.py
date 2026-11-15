@@ -1,4 +1,5 @@
-"""Errors of the store contract (`contracts/store/v1`, `ErrorCode`)."""
+"""The store contract's error type and its builders (`contracts/store/v1`, `ErrorCode`): a
+stable code, a message and details, with every registered secret redacted (#256)."""
 
 from __future__ import annotations
 
@@ -71,7 +72,21 @@ class StoreError(Exception):
         )
 
 
-def _source_not_found(source: FileSourceAttachment | SqliteSourceAttachment) -> StoreError:
+SNAPSHOT_CHANGED = "snapshot_changed"  # `reason`: an existing lake's snapshot is no longer served
+FILE_REFUSED = "file_refused"  # `reason`: the sandbox refused a file an existing lake named
+
+
+def separation_refused(name: str, reason: str) -> StoreError:
+    """A lake that cannot be shown apart from the instance's other files (P2-30)."""
+    return StoreError(
+        "STORE_SOURCE_INVALID",
+        f"Connection {name}: the lake cannot be shown apart from the instance's other files: "
+        f"{reason}.",
+        {"connection": name, "reason": reason},
+    )
+
+
+def source_not_found(source: FileSourceAttachment | SqliteSourceAttachment) -> StoreError:
     return StoreError(
         "SOURCE_NOT_FOUND",
         f"No file matches the path of source {source.name}.",

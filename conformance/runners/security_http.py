@@ -30,11 +30,11 @@ from orvex.access.authentication.settings import Settings
 from orvex.access.directory import Bootstrap, Directory
 from orvex.access.directory.attributes import Attributes
 from orvex.access.storage import SqliteStore
+from orvex.contracts.store.client import Lake
 from orvex.server import semantic_http, semantic_model
 from orvex.server.identity import load_identity
 from orvex.server.server_app import ServedProject, create_server_app
 from orvex.server.versions import Versions
-from orvex.store.lake import Lake
 
 from conformance.runners import security_fixtures as sf
 from conformance.runners.security_engines import Received, column_name, managed_delete

@@ -15,8 +15,8 @@ from collections.abc import Iterator
 import duckdb
 import pyarrow as pa
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import StatementRequest
-from orvex.store.errors import StoreError
 from orvex.store.lake import Transaction
 
 SCHEMA = pa.schema([("amount", pa.string()), ("n", pa.int64())])

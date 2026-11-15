@@ -4,7 +4,7 @@ the names its sources may not take.
 
 from __future__ import annotations
 
-from orvex.store.errors import StoreError
+from orvex.contracts.store.errors import StoreError
 
 LAKE = "lake"
 METADATA_PREFIX = "__ducklake_metadata"

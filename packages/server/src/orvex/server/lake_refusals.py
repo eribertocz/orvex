@@ -10,8 +10,8 @@ Any other store error is not a refusal of the data: it stays an internal error.
 
 from __future__ import annotations
 
+from orvex.contracts.store.errors import StoreError
 from orvex.semantic.errors import SemanticError
-from orvex.store.errors import StoreError
 
 CODE = "STORE_SOURCE_INVALID"
 UNKNOWN = "checks_failed"  # the reason when the store gave none

@@ -15,7 +15,7 @@ import os
 import urllib.request
 import xml.etree.ElementTree as ElementTree
 
-from tests.support.environment import unavailable
+from orvex.testing.environment import unavailable
 
 VARIABLE = "STORE_TEST_AZURE_CONNECTION_STRING"
 VERSION = "2021-08-06"

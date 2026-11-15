@@ -9,6 +9,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import duckdb
+from orvex.contracts.store.errors import StoreError, source_not_found
 from orvex.contracts.store.v1 import (
     AzureStorage,
     FileSourceAttachment,
@@ -18,7 +19,6 @@ from orvex.contracts.store.v1 import (
     S3Storage,
     SqliteLakeLocation,
 )
-from orvex.store.errors import StoreError, _source_not_found
 from orvex.store.file_sources import view_query
 from orvex.store.lake_names import LAKE
 from orvex.store.locations import AnyLakeLocation, _sandbox_folder, _Storage, _with_root_cert
@@ -75,7 +75,7 @@ class Isolation:
         matched = self._one("SELECT list(file ORDER BY file) FROM glob($path)", {"path": path})
         matched_files = matched[0] if matched else None
         if not isinstance(matched_files, list) or not matched_files:
-            raise _source_not_found(source)
+            raise source_not_found(source)
         # DuckDB's readers expand `*`, `?` and `[` in each listed name again: `r[1].parquet`
         # would be read as `r1.parquet` (measured on 2.0.0). Such a name is refused, as #82
         # specifies; a bracket class (`r[[]1].parquet`) would read it literally (#232).

@@ -9,6 +9,9 @@ from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MODULES = ("store", "transform", "semantic", "access", "dashboards", "mcp", "server", "contracts")
+# The test-only distribution of shared test helpers (#486 §2 item 4): never shipped, not a
+# module; only tests may import it.
+TESTING = "testing"
 _SKIPPED_DIRECTORIES = {
     ".git",
     ".venv",

@@ -16,9 +16,9 @@ from typing import ClassVar, cast
 
 import duckdb
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import ReadRequest
 from orvex.store import lake as lake_module
-from orvex.store.errors import StoreError
 from orvex.store.lake import Admission, Guard, Lake, ReadHandle
 
 LONG = "SELECT range AS n FROM range(100000000)"

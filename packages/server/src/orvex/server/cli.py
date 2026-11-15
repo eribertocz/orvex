@@ -19,6 +19,7 @@ from types import FrameType
 
 import uvicorn
 from orvex.contracts.interface_errors import InterfaceContractError
+from orvex.contracts.store.errors import StoreError
 from orvex.server import clickhouse_engines, development_switch, existing_lakes
 from orvex.server.admin_command import add_admin_parser, admin
 from orvex.server.app import LocalSemantic, create_app
@@ -61,7 +62,6 @@ from orvex.server.versions import (
     current_versions,
     installed_declarations,
 )
-from orvex.store.errors import StoreError
 
 LOCAL_HOST = "127.0.0.1"
 COMMANDS = frozenset({"validate", "run", "runs", "schedule", "maintain", "evidence", "admin"})

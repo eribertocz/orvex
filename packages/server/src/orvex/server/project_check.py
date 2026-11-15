@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from orvex.contracts.model_config.v1 import Reconciliation
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     LocalLakeLocation,
     Parameter,
@@ -32,8 +34,7 @@ from orvex.server.lake_open import _limits, lake_location
 from orvex.server.lake_place import Place
 from orvex.server.problems import Problem
 from orvex.server.project import Project, ProjectLoadError, load_project
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake, open_lake
+from orvex.server.store_access import store
 from orvex.transform import auto_filter, incremental, model_tests, reconciliation, schedule
 from orvex.transform.graph import (
     Graph,
@@ -166,7 +167,7 @@ def _bind(
     try:
         location = LocalLakeLocation(kind="lake_location", catalog="local", path=str(scratch))
         try:
-            lake = open_lake(location, _limits(), source_attachments(project.sources))
+            lake = store().open_lake(location, _limits(), source_attachments(project.sources))
         except StoreError as error:
             return {}, {}, {}, [_store_problem(error, ".", "")]
         try:

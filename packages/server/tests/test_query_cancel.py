@@ -8,8 +8,8 @@ import threading
 from typing import Any
 
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.server.query_cancel import Cancel
-from orvex.store.errors import StoreError
 
 
 class Handle:

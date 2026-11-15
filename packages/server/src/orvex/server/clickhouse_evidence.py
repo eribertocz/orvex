@@ -19,6 +19,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import pyarrow as pa
+from orvex.contracts.store.client_sources import ClickHouse
 from orvex.semantic.adapters.clickhouse import ClickHouseChecks
 from orvex.semantic.compiler.compiled import CompiledModel
 from orvex.semantic.engines import Routing
@@ -26,7 +27,6 @@ from orvex.semantic.evidence import EvidenceRecord, verify
 from orvex.semantic.external import LIVE
 from orvex.semantic.ossie import sql
 from orvex.server.existing_lake_snapshots import period
-from orvex.store.clickhouse import ClickHouse
 
 MINIMUM = dt.timedelta(hours=1)
 DEFAULT_SCHEDULE = "1d"

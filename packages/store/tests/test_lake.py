@@ -12,12 +12,12 @@ from typing import Any
 import duckdb
 import pyarrow as pa
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import LocalLakeLocation, Parameter, ReadRequest, StatementRequest
-from orvex.store.errors import StoreError
-from orvex.store.json_encoding import arrow_to_json
 from orvex.store.lake import FOLDER_COST, PATTERN_BUDGET, Lake, Limits, open_lake
+from orvex.testing.bounds import SAFETY_NET, FolderReads
 
-from tests.support.bounds import SAFETY_NET, FolderReads
+from .contract_client import store_client
 
 # The shared contract tests run on every catalog, SQLite included (#120).
 EVERY_CATALOG = True
@@ -532,7 +532,7 @@ def test_lake_results_encode_exactly_to_json(lake: Lake) -> None:
         snapshot=lake.current_snapshot().id,
         batch_size=16,
     )
-    document = json.loads("".join(arrow_to_json(lake.read(request))))
+    document = json.loads("".join(store_client().arrow_to_json(lake.read(request))))
     assert document["columns"] == [
         {"name": "u", "type": "UHUGEINT"},
         {"name": "h", "type": "HUGEINT"},

@@ -13,11 +13,11 @@ from tempfile import TemporaryDirectory
 from typing import Any, cast
 
 import pytest
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import StatisticsRequest, StatisticsResult
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.evidence import verify
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners.semantic_corpus import CORPUS, ROOT

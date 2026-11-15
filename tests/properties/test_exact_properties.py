@@ -17,10 +17,10 @@ import pytest
 import yaml
 from hypothesis import example, given
 from hypothesis import strategies as st
+from orvex.contracts.store.errors import StoreError
 from orvex.semantic import SemanticError
 from orvex.semantic.execution import answer
 from orvex.semantic.policies import read_policies
-from orvex.store.errors import StoreError
 
 from conformance.runners import corpus_execution as ce
 from tests.properties import exact

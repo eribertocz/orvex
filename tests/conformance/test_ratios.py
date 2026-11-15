@@ -9,11 +9,11 @@ from typing import Any
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from orvex.contracts.store.errors import StoreError
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie.reader import read
-from orvex.store.errors import StoreError
 
 from conformance.runners import corpus_execution as ce
 from tests.conformance.test_execution import ask, corpus_case, lake_for, tiny_lake

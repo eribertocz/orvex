@@ -10,6 +10,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from orvex.contracts.store.errors import StoreError, register_secret
 from orvex.contracts.store.v1 import (
     AzureStorage,
     GcsStorage,
@@ -19,7 +20,6 @@ from orvex.contracts.store.v1 import (
     S3Storage,
     SqliteLakeLocation,
 )
-from orvex.store.errors import StoreError, register_secret
 
 # Any password key (password=, sslpassword=, ?password=) and any URI form (user:pw@host) is
 # refused: the password may only come from `password_env`.

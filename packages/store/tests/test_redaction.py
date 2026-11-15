@@ -6,7 +6,7 @@ import json
 import urllib.parse
 
 import pytest
-from orvex.store.errors import StoreError, redact, register_secret
+from orvex.contracts.store.errors import StoreError, redact, register_secret
 
 SECRET = "pa'ss\"wo\\rd ü&="
 

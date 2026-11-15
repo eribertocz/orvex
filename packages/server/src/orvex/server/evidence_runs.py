@@ -24,6 +24,8 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     Parameter,
     ParameterType,
@@ -42,8 +44,6 @@ from orvex.server.evidence_records import (
 )
 from orvex.server.problems import Problem
 from orvex.server.semantic_model import SemanticModel
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake
 
 BUDGET_MS = 600_000  # per verification of a project: what is left over stays `declared`
 

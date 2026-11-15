@@ -2,10 +2,10 @@
 ADR-0027 §4, §5, §7, §8).
 
 With the development switch on (`development_switch.clickhouse`), every `clickhouse` connection
-of the served project is connected and verified when the server starts (`orvex.store.clickhouse`:
-a tested version, a read-only profile, the settings that decide exact meaning, limits within
-the budget below). A connection that fails verification is that error for every question on
-it, never a weaker connection. With the switch off, none is, and a dataset on one is
+of the served project is connected and verified when the server starts (the store contract's
+`clickhouse`: a tested version, a read-only profile, the settings that decide exact meaning,
+limits within the budget below). A connection that fails verification is that error for every
+question on it, never a weaker connection. With the switch off, none is, and a dataset on one is
 `UNSUPPORTED_OPERATION` (`operation: route`).
 
 - **Questions** (`pinned`): each connection's tables as its catalog lists them now, with its
@@ -26,7 +26,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 
 from orvex.contracts.project.v1 import ClickhouseConnection
+from orvex.contracts.store.client_sources import ClickHouse, connect_clickhouse
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import LakeTable, TablesResult
+from orvex.contracts.store.values import Budget, ClickHouseTarget
 from orvex.semantic.evidence import EvidenceRecord
 from orvex.server.clickhouse_adapter import ClickHouseAdapter
 from orvex.server.clickhouse_evidence import EvidenceSchedule, checked
@@ -34,8 +37,7 @@ from orvex.server.existing_lakes import memory_share
 from orvex.server.project import ProjectLoadError
 from orvex.server.semantic_http import ProjectBusy, ProjectSource, Refused
 from orvex.server.semantic_model import ExternalTables
-from orvex.store.clickhouse import Budget, ClickHouse, ClickHouseTarget
-from orvex.store.errors import StoreError
+from orvex.server.store_access import store
 
 log = logging.getLogger(__name__)
 POLL_SECONDS = 60.0  # how often the thread looks for a due schedule (each is at least 1h)
@@ -121,6 +123,12 @@ class ClickHouseEngines:
         """`engine` (or why it could not be verified) and its evidence schedule."""
         made = EvidenceSchedule(name, schedule, lambda now: self._verified(name, now))
         self._connections[name] = _Connection(engine, made)
+
+    def close(self) -> None:
+        """Let every verified connection go at the store."""
+        for connection in self._connections.values():
+            if isinstance(connection.engine, ClickHouse):
+                connection.engine.close()
 
     def schedule(self, name: str) -> EvidenceSchedule:
         return self._connections[name].schedule
@@ -208,8 +216,13 @@ def opened(
     budget = Budget(timeout_ms=timeout_ms, memory_bytes=memory_bytes(memory_limit))
     for name, connection in sorted(clickhouse_connections(connections).items()):
         try:
-            engine: ClickHouse | StoreError = ClickHouse.connect(target(connection), budget)
+            engine: ClickHouse | StoreError = connect_clickhouse(
+                store(), target(connection), budget
+            )
         except StoreError as error:
             engine = error
         engines.add(name, engine, connection.evidence_schedule)
-    yield engines
+    try:
+        yield engines
+    finally:
+        engines.close()

@@ -22,10 +22,10 @@ from typing import Any
 import duckdb
 from hypothesis import settings
 from hypothesis import strategies as st
+from orvex.contracts.store.client import Lake
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.ossie.reader import read
-from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 from tests.properties.world import NIGHTLY, PROFILE

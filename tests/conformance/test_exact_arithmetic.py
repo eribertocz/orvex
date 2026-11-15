@@ -14,6 +14,7 @@ from typing import Any
 import duckdb
 import pytest
 import yaml
+from orvex.contracts.store.client import Lake
 from orvex.semantic import SemanticError
 from orvex.semantic.adapters import duckdb as duckdb_adapter
 from orvex.semantic.compiler.catalog import SourceColumn
@@ -27,7 +28,6 @@ from orvex.semantic.planning import plan
 from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.semantic.query.binding import Limits as QueryLimits
 from orvex.semantic.query.binding import bind_query
-from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 from tests.support.policies import VENDORS, extension

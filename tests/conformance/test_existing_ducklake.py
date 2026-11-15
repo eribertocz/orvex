@@ -8,6 +8,7 @@ reads and its snapshot schedule, and are compared with the same question on the 
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import json
 import shutil
@@ -21,12 +22,15 @@ from typing import Any
 import duckdb
 import jsonschema
 import pytest
+from orvex.contracts.store.client_sources import ExistingLakeReads, open_existing_lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     ExistingLakeAttachment,
     ProtectedLocation,
     Snapshot,
     SqliteLakeLocation,
 )
+from orvex.contracts.store.values import ExistingLakeLimits
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
 from orvex.semantic.engines import EngineEntry, Routing
 from orvex.semantic.errors import SemanticError
@@ -38,15 +42,13 @@ from orvex.server.engine_catalog import EXISTING_DUCKLAKE_CAPABILITIES
 from orvex.server.existing_lake_adapter import ExistingLakeAdapter
 from orvex.server.existing_lake_evidence import violated
 from orvex.server.existing_lake_snapshots import SnapshotSchedule
-from orvex.store.errors import StoreError
-from orvex.store.existing_lake import ExistingLake
-from orvex.store.existing_lake_reads import LakeReads
+from orvex.server.store_access import store
+from orvex.testing.environment import unavailable
 
 from conformance.runners import corpus_execution as ce
 from tests.conformance import test_row_policies as rp
 from tests.conformance.test_direct_query import CASES, ZONE, routed
 from tests.conformance.test_execution import ask
-from tests.support.environment import unavailable
 from tests.support.policies import VENDORS, extension
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -97,11 +99,14 @@ class Owner:
         connection.close()
 
 
+LIMITS = ExistingLakeLimits(memory_limit="512MB", threads=1, timeout_ms=60_000)
+
+
 @dataclass
 class Engine:
     owner: Owner
-    lake: ExistingLake
-    reads: LakeReads
+    lake: ExistingLakeReads
+    reads: ExistingLakeReads
     schedule: SnapshotSchedule
     adapter: ExistingLakeAdapter
     attachment: ExistingLakeAttachment
@@ -150,8 +155,7 @@ def make_attachment(owner: Owner, protected: list[str]) -> ExistingLakeAttachmen
 @pytest.fixture
 def engine(owner: Owner, tmp_path: Path) -> Iterator[Engine]:
     made = make_attachment(owner, [str(tmp_path / "project")])
-    lake = ExistingLake(made, memory_limit="512MB", threads=1)
-    reads = LakeReads(lake, timeout_ms=60_000)
+    lake = reads = open_existing_lake(store(), made, LIMITS)
     holds: list[str] = []
     current = {"attachment": made}
     schedule = SnapshotSchedule(
@@ -391,8 +395,7 @@ def test_a_snapshot_with_violated_evidence_is_held_back_and_the_previous_one_ser
     made = make_attachment(owner, [str(tmp_path / "project")])
     routing = routed(("sales", ENTRY), ("customers", ENTRY))
     compiled = evidenced()
-    with ExistingLake(made, memory_limit="512MB", threads=1) as lake:
-        reads = LakeReads(lake, timeout_ms=60_000)
+    with contextlib.closing(open_existing_lake(store(), made, LIMITS)) as reads:
 
         def evidence(snapshot: Snapshot) -> str | None:
             return violated(
@@ -448,8 +451,7 @@ def test_a_snapshot_whose_files_fail_is_held_back(engine: Engine, tmp_path: Path
 def test_a_protected_location_registered_later_stops_serving(owner: Owner, tmp_path: Path) -> None:
     made = make_attachment(owner, [str(tmp_path / "project")])
     current = {"attachment": made}
-    with ExistingLake(made, memory_limit="512MB", threads=1) as lake:
-        reads = LakeReads(lake, timeout_ms=60_000)
+    with contextlib.closing(open_existing_lake(store(), made, LIMITS)) as reads:
         schedule = SnapshotSchedule(
             PROJECT,
             "warehouse",

@@ -19,11 +19,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import ChangesRequest
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.policies import PolicyModel
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake
 
 
 @dataclass(frozen=True, slots=True)

@@ -15,6 +15,7 @@ import pytest
 import yaml
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from orvex.contracts.store.client import Lake
 from orvex.contracts.store.v1 import StatementRequest
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import compile_model
@@ -23,7 +24,6 @@ from orvex.semantic.errors import SemanticError
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.semantic.result.cursors import SealedForm
-from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 from tests.conformance import test_conformed as conformed

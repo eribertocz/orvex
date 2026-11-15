@@ -24,6 +24,8 @@ from orvex.contracts.maintenance_record.v1 import (
     RunError,
     Versions,
 )
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     MaintenanceReport,
     Parameter,
@@ -36,8 +38,6 @@ from orvex.server.identity import Identity
 from orvex.server.locking import LOCK_FILE, project_lock
 from orvex.server.problems import Problem
 from orvex.server.project import Project, ProjectLoadError, load_project
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake
 
 TABLE = "_meta.maintenance_runs"
 DEFAULT_RETENTION = "90d"

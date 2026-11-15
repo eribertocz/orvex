@@ -12,7 +12,7 @@
    through absolute imports, relative imports, and imports inside functions or `if`/`try`
    blocks. Imports under `if TYPE_CHECKING:` are typing-only: a cycle made only of them is not
    reported.
-3. FACADE_IMPORTED (a failure): an internal module importing its package's façade (`store.lake`,
+3. FACADE_IMPORTED (a failure): an internal module importing its package's façade (`store.api`,
    `server.commands`). A cycle or a façade import that exists before its split (#246, PR 2 and
    3) is listed in `file-size-exceptions.toml` (`[cycle]`, `[facade]`) with the issue that removes
    it; an entry that no longer applies fails, so the lists only shrink.
@@ -35,7 +35,8 @@ from tools.repository import REPOSITORY_ROOT
 
 LIMIT = 800
 EXCEPTIONS = Path(__file__).with_name("file-size-exceptions.toml")
-FACADES = {"store": "lake", "server": "commands"}
+# Each package's public face; the store's is its contract implementation (#486).
+FACADES = {"store": "api", "server": "commands"}
 
 
 @dataclass(frozen=True, slots=True)

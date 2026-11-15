@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterator
 
 import duckdb
 import pytest
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import (
     LocalLakeLocation,
     PostgresLakeLocation,
@@ -19,7 +20,6 @@ from orvex.contracts.store.v1 import (
 )
 from orvex.store import read_tree
 from orvex.store import transaction as transaction_module
-from orvex.store.errors import StoreError
 from orvex.store.lake import Lake, Limits, Transaction, open_lake
 
 type Location = LocalLakeLocation | PostgresLakeLocation

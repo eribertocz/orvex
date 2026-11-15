@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import TablesRequest, TablesResult
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.compiler.compiled import CompiledModel, compile_model
@@ -36,8 +38,6 @@ from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.server.engine_catalog import engine_catalog
 from orvex.server.problems import Problem
 from orvex.server.regular_file import read_regular_file
-from orvex.store.errors import StoreError
-from orvex.store.lake import Lake
 
 FOLDER = "semantic"
 POLICIES = "security.yaml"

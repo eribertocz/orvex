@@ -25,8 +25,8 @@ from collections.abc import Collection, Sequence
 from typing import Any
 
 import duckdb
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import Parameter
-from orvex.store.errors import StoreError
 from orvex.store.lake_names import LAKE
 from orvex.store.parameters import _bound, _typed
 from orvex.store.read_tree import _is_lake_table, _read_tree, _scoped

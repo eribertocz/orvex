@@ -29,6 +29,12 @@ PLANTED = {
     "dunder": ("tools/y.py", '__import__("orvex.mcp.server")\n'),
     "api outside assembly": ("packages/server/src/orvex/server/y.py", "import orvex.store.api\n"),
     "internal in assembly": (ASSEMBLY, "from orvex.store.lake import x\n"),
+    "test helpers in a runner": ("conformance/runners/y.py", "import orvex.testing.environment\n"),
+    "test helpers in a tool": ("tools/z.py", "from orvex.testing.fixtures import frozen\n"),
+    "a server internal beside the assembly": (
+        "tests/x/test_w.py",
+        "from orvex.server.assembly import provider\nfrom orvex.server import cli\n",
+    ),
 }
 
 
@@ -56,6 +62,23 @@ ALLOWED = {
     "relative": ("packages/server/src/orvex/server/x.py", "from . import cli\n"),
     "third party": ("tools/x.py", "import duckdb\nfrom tools.repository import identity\n"),
     "computed dynamic import": ("tools/x.py", "import importlib\nimportlib.import_module(name)\n"),
+    "test helpers in a repository test": (
+        "tests/x/t.py",
+        "from orvex.testing.bounds import linear\n",
+    ),
+    "test helpers in a server test": (
+        "packages/server/tests/t.py",
+        "from orvex.testing import azurite\n",
+    ),
+    "the composition root from a test": (
+        "tests/x/t.py",
+        "from orvex.server.assembly import provider\n",
+    ),
+    "the composition root from a runner": (
+        "conformance/runners/x.py",
+        "import orvex.server.assembly\n",
+    ),
+    "the composition root from a tool": ("tools/x.py", "from orvex.server import assembly\n"),
 }
 
 
@@ -81,9 +104,9 @@ def test_the_scan_covers_the_consumers_and_leaves_the_modules_to_the_module_rule
     summary = consumer_summary(found)
     assert summary.startswith(f"consumer boundaries (report mode until #486 step 7): {len(found)}")
     assert "server 4" in summary
-    assert "runners 1" in summary
-    assert "tools 2" in summary
-    assert "tests 2" in summary
+    assert "runners 2" in summary
+    assert "tools 3" in summary
+    assert "tests 3" in summary
 
 
 def test_report_mode_prints_every_violation_and_does_not_fail(
@@ -98,6 +121,21 @@ def test_report_mode_prints_every_violation_and_does_not_fail(
     for relative, _ in PLANTED.values():
         assert f"CONSUMER_BOUNDARY_VIOLATION: {relative}:" in out
     assert "consumer boundaries (report mode until #486 step 7)" in out
+
+
+def test_server_code_importing_the_test_helpers_fails_as_a_module_violation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The server's code is product code too: the blocking module rule catches it, not only the
+    # consumer report.
+    empty = tmp_path / "empty.toml"
+    empty.write_text("")
+    files = {"packages/server/src/orvex/server/z.py": "from orvex.testing import bounds\n"}
+    (tmp_path / "r").mkdir()
+    assert run(make_repository(tmp_path / "r", files), empty, empty) == 1
+    assert "MODULE_BOUNDARY_VIOLATION: packages/server/src/orvex/server/z.py:1" in (
+        capsys.readouterr().out
+    )
 
 
 def test_a_module_boundary_violation_still_fails(tmp_path: Path) -> None:

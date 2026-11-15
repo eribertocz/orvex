@@ -1,3 +1,2574 @@
 {
-  "contracts": {}
+  "contracts": {
+    "store": {
+      "capabilities": [
+        "clickhouse",
+        "encoding",
+        "existing-lake",
+        "lake",
+        "maintenance",
+        "read",
+        "separation",
+        "write"
+      ],
+      "errors": [
+        "ENGINE_SETTING_REQUIRED",
+        "ENGINE_VERSION_UNTESTED",
+        "SOURCE_NOT_FOUND",
+        "SOURCE_NOT_READ_ONLY",
+        "STORE_BUSY",
+        "STORE_CANCELLED",
+        "STORE_CATALOG_UNAVAILABLE",
+        "STORE_CONNECTION_FAILED",
+        "STORE_EXTENSION_UNAVAILABLE",
+        "STORE_LIMITS_REQUIRED",
+        "STORE_LOCATION_INVALID",
+        "STORE_PARAMETER_INVALID",
+        "STORE_QUERY_FAILED",
+        "STORE_SECRET_INLINE",
+        "STORE_SECRET_MISSING",
+        "STORE_SNAPSHOT_EXPIRED",
+        "STORE_SNAPSHOT_NOT_FOUND",
+        "STORE_SOURCE_FAILED",
+        "STORE_SOURCE_INVALID",
+        "STORE_STATEMENT_INVALID",
+        "STORE_TIMEOUT",
+        "STORE_TLS_REQUIRED",
+        "STORE_TRANSACTION_CONFLICT",
+        "STORE_TYPE_UNSUPPORTED",
+        "UNSUPPORTED_SOURCE_TYPE"
+      ],
+      "kit": {
+        "cases": {
+          "begin.idempotent": {
+            "environment": null,
+            "expectation": "one key begins one transaction",
+            "idempotency": true,
+            "operation": "begin",
+            "since": "1.0"
+          },
+          "begin.raises.store-busy": {
+            "environment": null,
+            "expectation": "begin refuses with STORE_BUSY",
+            "idempotency": false,
+            "operation": "begin",
+            "since": "1.0"
+          },
+          "begin.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "begin refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "begin",
+            "since": "1.0"
+          },
+          "begin.raises.store-statement-invalid": {
+            "environment": null,
+            "expectation": "begin refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "begin",
+            "since": "1.0"
+          },
+          "begin.raises.store-timeout": {
+            "environment": null,
+            "expectation": "begin refuses with STORE_TIMEOUT",
+            "idempotency": false,
+            "operation": "begin",
+            "since": "1.0"
+          },
+          "cancel-read.idempotent": {
+            "environment": null,
+            "expectation": "one key cancels once",
+            "idempotency": true,
+            "operation": "cancel_read",
+            "since": "1.0"
+          },
+          "cancel-read.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "cancel_read refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "cancel_read",
+            "since": "1.0"
+          },
+          "cancel-transaction.idempotent": {
+            "environment": null,
+            "expectation": "one key cancels once",
+            "idempotency": true,
+            "operation": "cancel_transaction",
+            "since": "1.0"
+          },
+          "cancel-transaction.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "cancel_transaction refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "cancel_transaction",
+            "since": "1.0"
+          },
+          "cancel-transaction.rolls-back": {
+            "environment": null,
+            "expectation": "a cancelled transaction never commits",
+            "idempotency": false,
+            "operation": "cancel_transaction",
+            "since": "1.0"
+          },
+          "changes.raises.store-busy": {
+            "environment": null,
+            "expectation": "changes refuses with STORE_BUSY",
+            "idempotency": false,
+            "operation": "changes",
+            "since": "1.0"
+          },
+          "changes.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "changes refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "changes",
+            "since": "1.0"
+          },
+          "changes.raises.store-snapshot-expired": {
+            "environment": null,
+            "expectation": "changes refuses with STORE_SNAPSHOT_EXPIRED",
+            "idempotency": false,
+            "operation": "changes",
+            "since": "1.0"
+          },
+          "changes.raises.store-snapshot-not-found": {
+            "environment": null,
+            "expectation": "changes refuses with STORE_SNAPSHOT_NOT_FOUND",
+            "idempotency": false,
+            "operation": "changes",
+            "since": "1.0"
+          },
+          "changes.raises.store-statement-invalid": {
+            "environment": null,
+            "expectation": "changes refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "changes",
+            "since": "1.0"
+          },
+          "changes.removed": {
+            "environment": null,
+            "expectation": "removed rows are counted; `since` after `snapshot` refused",
+            "idempotency": false,
+            "operation": "changes",
+            "since": "1.0"
+          },
+          "check-apart.protected": {
+            "environment": null,
+            "expectation": "a lake inside a protected location is refused",
+            "idempotency": false,
+            "operation": "check_apart",
+            "since": "1.0"
+          },
+          "check-apart.raises.store-source-invalid": {
+            "environment": null,
+            "expectation": "check_apart refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "check_apart",
+            "since": "1.0"
+          },
+          "clickhouse-catalog.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "clickhouse_catalog refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "clickhouse_catalog",
+            "since": "1.0"
+          },
+          "clickhouse-columns.raises.source-not-found": {
+            "environment": null,
+            "expectation": "clickhouse_columns refuses with SOURCE_NOT_FOUND",
+            "idempotency": false,
+            "operation": "clickhouse_columns",
+            "since": "1.0"
+          },
+          "clickhouse-columns.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "clickhouse_columns refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "clickhouse_columns",
+            "since": "1.0"
+          },
+          "clickhouse-columns.raises.unsupported-source-type": {
+            "environment": null,
+            "expectation": "clickhouse_columns refuses with UNSUPPORTED_SOURCE_TYPE",
+            "idempotency": false,
+            "operation": "clickhouse_columns",
+            "since": "1.0"
+          },
+          "clickhouse-estimate.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "clickhouse_estimate refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "clickhouse_estimate",
+            "since": "1.0"
+          },
+          "clickhouse-estimate.raises.store-statement-invalid": {
+            "environment": null,
+            "expectation": "clickhouse_estimate refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "clickhouse_estimate",
+            "since": "1.0"
+          },
+          "clickhouse-now.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "clickhouse_now refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "clickhouse_now",
+            "since": "1.0"
+          },
+          "close-clickhouse.harmless": {
+            "environment": null,
+            "expectation": "closing what is not held changes nothing",
+            "idempotency": false,
+            "operation": "close_clickhouse",
+            "since": "1.0"
+          },
+          "close-existing-lake.idempotent": {
+            "environment": null,
+            "expectation": "one key detaches once",
+            "idempotency": true,
+            "operation": "close_existing_lake",
+            "since": "1.0"
+          },
+          "close-existing-lake.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "close_existing_lake refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "close_existing_lake",
+            "since": "1.0"
+          },
+          "close-lake.idempotent": {
+            "environment": null,
+            "expectation": "one key closes once",
+            "idempotency": true,
+            "operation": "close_lake",
+            "since": "1.0"
+          },
+          "close-lake.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "close_lake refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "close_lake",
+            "since": "1.0"
+          },
+          "close-read.idempotent": {
+            "environment": null,
+            "expectation": "one key lets a read go once",
+            "idempotency": true,
+            "operation": "close_read",
+            "since": "1.0"
+          },
+          "close-read.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "close_read refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "close_read",
+            "since": "1.0"
+          },
+          "commit.idempotent": {
+            "environment": null,
+            "expectation": "one key commits once and answers the same",
+            "idempotency": true,
+            "operation": "commit",
+            "since": "1.0"
+          },
+          "commit.raises.store-cancelled": {
+            "environment": null,
+            "expectation": "commit refuses with STORE_CANCELLED",
+            "idempotency": false,
+            "operation": "commit",
+            "since": "1.0"
+          },
+          "commit.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "commit refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "commit",
+            "since": "1.0"
+          },
+          "commit.raises.store-query-failed": {
+            "environment": null,
+            "expectation": "commit refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "commit",
+            "since": "1.0"
+          },
+          "commit.raises.store-timeout": {
+            "environment": null,
+            "expectation": "commit refuses with STORE_TIMEOUT",
+            "idempotency": false,
+            "operation": "commit",
+            "since": "1.0"
+          },
+          "commit.raises.store-transaction-conflict": {
+            "environment": null,
+            "expectation": "commit refuses with STORE_TRANSACTION_CONFLICT",
+            "idempotency": false,
+            "operation": "commit",
+            "since": "1.0"
+          },
+          "connect-clickhouse.raises.engine-setting-required": {
+            "environment": null,
+            "expectation": "connect_clickhouse refuses with ENGINE_SETTING_REQUIRED",
+            "idempotency": false,
+            "operation": "connect_clickhouse",
+            "since": "1.0"
+          },
+          "connect-clickhouse.raises.engine-version-untested": {
+            "environment": {
+              "extensions": null,
+              "variables": {
+                "STORE_KIT_UNTESTED_PASSWORD": "ci-disposable-database"
+              }
+            },
+            "expectation": "connect_clickhouse refuses with ENGINE_VERSION_UNTESTED, in the environment the case declares",
+            "idempotency": false,
+            "operation": "connect_clickhouse",
+            "since": "1.0"
+          },
+          "connect-clickhouse.raises.source-not-read-only": {
+            "environment": null,
+            "expectation": "connect_clickhouse refuses with SOURCE_NOT_READ_ONLY",
+            "idempotency": false,
+            "operation": "connect_clickhouse",
+            "since": "1.0"
+          },
+          "connect-clickhouse.raises.store-connection-failed": {
+            "environment": null,
+            "expectation": "connect_clickhouse refuses with STORE_CONNECTION_FAILED",
+            "idempotency": false,
+            "operation": "connect_clickhouse",
+            "since": "1.0"
+          },
+          "connect-clickhouse.raises.store-secret-missing": {
+            "environment": null,
+            "expectation": "connect_clickhouse refuses with STORE_SECRET_MISSING",
+            "idempotency": false,
+            "operation": "connect_clickhouse",
+            "since": "1.0"
+          },
+          "connect-clickhouse.raises.store-tls-required": {
+            "environment": null,
+            "expectation": "connect_clickhouse refuses with STORE_TLS_REQUIRED",
+            "idempotency": false,
+            "operation": "connect_clickhouse",
+            "since": "1.0"
+          },
+          "current-snapshot.after-commit": {
+            "environment": null,
+            "expectation": "the snapshot a commit made is current",
+            "idempotency": false,
+            "operation": "current_snapshot",
+            "since": "1.0"
+          },
+          "current-snapshot.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "current_snapshot refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "current_snapshot",
+            "since": "1.0"
+          },
+          "describe-source.landed-types": {
+            "environment": null,
+            "expectation": "a source's columns as they land; an unknown source refused",
+            "idempotency": false,
+            "operation": "describe_source",
+            "since": "1.0"
+          },
+          "describe-source.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "describe_source refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "describe_source",
+            "since": "1.0"
+          },
+          "describe-source.raises.store-query-failed": {
+            "environment": null,
+            "expectation": "describe_source refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "describe_source",
+            "since": "1.0"
+          },
+          "describe-source.raises.store-source-invalid": {
+            "environment": null,
+            "expectation": "describe_source refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "describe_source",
+            "since": "1.0"
+          },
+          "describe-source.raises.store-statement-invalid": {
+            "environment": null,
+            "expectation": "describe_source refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "describe_source",
+            "since": "1.0"
+          },
+          "describe.binder-only": {
+            "environment": null,
+            "expectation": "a SELECT's columns from the binder; anything else refused",
+            "idempotency": false,
+            "operation": "describe",
+            "since": "1.0"
+          },
+          "describe.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "describe refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "describe",
+            "since": "1.0"
+          },
+          "describe.raises.store-query-failed": {
+            "environment": null,
+            "expectation": "describe refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "describe",
+            "since": "1.0"
+          },
+          "describe.raises.store-statement-invalid": {
+            "environment": null,
+            "expectation": "describe refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "describe",
+            "since": "1.0"
+          },
+          "execute.idempotent": {
+            "environment": null,
+            "expectation": "one key inserts once",
+            "idempotency": true,
+            "operation": "execute",
+            "since": "1.0"
+          },
+          "execute.raises.store-cancelled": {
+            "environment": null,
+            "expectation": "execute refuses with STORE_CANCELLED",
+            "idempotency": false,
+            "operation": "execute",
+            "since": "1.0"
+          },
+          "execute.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "execute refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "execute",
+            "since": "1.0"
+          },
+          "execute.raises.store-query-failed": {
+            "environment": null,
+            "expectation": "execute refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "execute",
+            "since": "1.0"
+          },
+          "execute.raises.store-statement-invalid": {
+            "environment": null,
+            "expectation": "execute refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "execute",
+            "since": "1.0"
+          },
+          "execute.raises.store-timeout": {
+            "environment": null,
+            "expectation": "execute refuses with STORE_TIMEOUT",
+            "idempotency": false,
+            "operation": "execute",
+            "since": "1.0"
+          },
+          "existing-committed-at.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "existing_committed_at refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "existing_committed_at",
+            "since": "1.0"
+          },
+          "existing-latest.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "existing_latest refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "existing_latest",
+            "since": "1.0"
+          },
+          "existing-latest.reads": {
+            "environment": null,
+            "expectation": "latest, verify, committed-at, columns, views and a read, exact",
+            "idempotency": false,
+            "operation": "existing_latest",
+            "since": "1.0"
+          },
+          "existing-table-columns.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "existing_table_columns refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "existing_table_columns",
+            "since": "1.0"
+          },
+          "existing-table-columns.raises.store-source-invalid": {
+            "environment": null,
+            "expectation": "existing_table_columns refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "existing_table_columns",
+            "since": "1.0"
+          },
+          "existing-verify.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "existing_verify refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "existing_verify",
+            "since": "1.0"
+          },
+          "existing-verify.raises.store-source-invalid": {
+            "environment": null,
+            "expectation": "existing_verify refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "existing_verify",
+            "since": "1.0"
+          },
+          "existing-views.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "existing_views refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "existing_views",
+            "since": "1.0"
+          },
+          "held.lists-open": {
+            "environment": null,
+            "expectation": "what is held is listed; a closed lake is let go and refused",
+            "idempotency": false,
+            "operation": "held",
+            "since": "1.0"
+          },
+          "is-object-storage.schemes": {
+            "environment": null,
+            "expectation": "s3://, gs:// and az:// only, case as written",
+            "idempotency": false,
+            "operation": "is_object_storage",
+            "since": "1.0"
+          },
+          "json-frame.columns": {
+            "environment": null,
+            "expectation": "the columns with their DuckDB types and the closing tail; no type is refused",
+            "idempotency": false,
+            "operation": "json_frame",
+            "since": "1.0"
+          },
+          "json-frame.raises.store-type-unsupported": {
+            "environment": null,
+            "expectation": "json_frame refuses with STORE_TYPE_UNSUPPORTED",
+            "idempotency": false,
+            "operation": "json_frame",
+            "since": "1.0"
+          },
+          "json-rows.exact": {
+            "environment": null,
+            "expectation": "exact text, NULL as null, rows separated",
+            "idempotency": false,
+            "operation": "json_rows",
+            "since": "1.0"
+          },
+          "json-rows.raises.store-type-unsupported": {
+            "environment": null,
+            "expectation": "json_rows refuses with STORE_TYPE_UNSUPPORTED",
+            "idempotency": false,
+            "operation": "json_rows",
+            "since": "1.0"
+          },
+          "land.idempotent": {
+            "environment": null,
+            "expectation": "one key lands once",
+            "idempotency": true,
+            "operation": "land",
+            "since": "1.0"
+          },
+          "land.raises.store-cancelled": {
+            "environment": null,
+            "expectation": "land refuses with STORE_CANCELLED",
+            "idempotency": false,
+            "operation": "land",
+            "since": "1.0"
+          },
+          "land.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "land refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "land",
+            "since": "1.0"
+          },
+          "land.raises.store-query-failed": {
+            "environment": null,
+            "expectation": "land refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "land",
+            "since": "1.0"
+          },
+          "land.raises.store-source-invalid": {
+            "environment": null,
+            "expectation": "land refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "land",
+            "since": "1.0"
+          },
+          "land.raises.store-timeout": {
+            "environment": null,
+            "expectation": "land refuses with STORE_TIMEOUT",
+            "idempotency": false,
+            "operation": "land",
+            "since": "1.0"
+          },
+          "load-arrow.exact": {
+            "environment": null,
+            "expectation": "a DECIMAL and a NULL are loaded exactly",
+            "idempotency": false,
+            "operation": "load_arrow",
+            "since": "1.0"
+          },
+          "load-arrow.idempotent": {
+            "environment": null,
+            "expectation": "one key loads once",
+            "idempotency": true,
+            "operation": "load_arrow",
+            "since": "1.0"
+          },
+          "load-arrow.raises.store-cancelled": {
+            "environment": null,
+            "expectation": "load_arrow refuses with STORE_CANCELLED",
+            "idempotency": false,
+            "operation": "load_arrow",
+            "since": "1.0"
+          },
+          "load-arrow.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "load_arrow refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "load_arrow",
+            "since": "1.0"
+          },
+          "load-arrow.raises.store-query-failed": {
+            "environment": null,
+            "expectation": "load_arrow refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "load_arrow",
+            "since": "1.0"
+          },
+          "load-arrow.raises.store-timeout": {
+            "environment": null,
+            "expectation": "load_arrow refuses with STORE_TIMEOUT",
+            "idempotency": false,
+            "operation": "load_arrow",
+            "since": "1.0"
+          },
+          "location-components.parts": {
+            "environment": null,
+            "expectation": "object storage and local paths by parts; anything else refused",
+            "idempotency": false,
+            "operation": "location_components",
+            "since": "1.0"
+          },
+          "location-components.raises.store-source-invalid": {
+            "environment": null,
+            "expectation": "location_components refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "location_components",
+            "since": "1.0"
+          },
+          "locations-overlap.prefix": {
+            "environment": null,
+            "expectation": "inside overlaps, a sibling with the same prefix does not",
+            "idempotency": false,
+            "operation": "locations_overlap",
+            "since": "1.0"
+          },
+          "locations-overlap.raises.store-source-invalid": {
+            "environment": null,
+            "expectation": "locations_overlap refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "locations_overlap",
+            "since": "1.0"
+          },
+          "maintain.idempotent": {
+            "environment": null,
+            "expectation": "one key maintains once and answers the same",
+            "idempotency": true,
+            "operation": "maintain",
+            "since": "1.0"
+          },
+          "maintain.raises.store-busy": {
+            "environment": null,
+            "expectation": "maintain refuses with STORE_BUSY",
+            "idempotency": false,
+            "operation": "maintain",
+            "since": "1.0"
+          },
+          "maintain.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "maintain refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "maintain",
+            "since": "1.0"
+          },
+          "open-existing-lake.idempotent": {
+            "environment": null,
+            "expectation": "one key attaches once",
+            "idempotency": true,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-existing-lake.raises.engine-version-untested": {
+            "environment": null,
+            "expectation": "open_existing_lake refuses with ENGINE_VERSION_UNTESTED",
+            "idempotency": false,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-existing-lake.raises.store-connection-failed": {
+            "environment": null,
+            "expectation": "open_existing_lake refuses with STORE_CONNECTION_FAILED",
+            "idempotency": false,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-existing-lake.raises.store-extension-unavailable": {
+            "environment": {
+              "extensions": {
+                "source": null,
+                "variable": "HOME",
+                "without": []
+              },
+              "variables": {
+                "HTTPS_PROXY": "http://127.0.0.1:1",
+                "HTTP_PROXY": "http://127.0.0.1:1"
+              }
+            },
+            "expectation": "open_existing_lake refuses with STORE_EXTENSION_UNAVAILABLE, in the environment the case declares",
+            "idempotency": false,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-existing-lake.raises.store-limits-required": {
+            "environment": null,
+            "expectation": "open_existing_lake refuses with STORE_LIMITS_REQUIRED",
+            "idempotency": false,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-existing-lake.raises.store-location-invalid": {
+            "environment": null,
+            "expectation": "open_existing_lake refuses with STORE_LOCATION_INVALID",
+            "idempotency": false,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-existing-lake.raises.store-secret-missing": {
+            "environment": null,
+            "expectation": "open_existing_lake refuses with STORE_SECRET_MISSING",
+            "idempotency": false,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-existing-lake.raises.store-source-invalid": {
+            "environment": null,
+            "expectation": "open_existing_lake refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-existing-lake.raises.store-tls-required": {
+            "environment": null,
+            "expectation": "open_existing_lake refuses with STORE_TLS_REQUIRED",
+            "idempotency": false,
+            "operation": "open_existing_lake",
+            "since": "1.0"
+          },
+          "open-lake.idempotent": {
+            "environment": null,
+            "expectation": "one key opens one lake",
+            "idempotency": true,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "open-lake.raises.source-not-found": {
+            "environment": null,
+            "expectation": "open_lake refuses with SOURCE_NOT_FOUND",
+            "idempotency": false,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "open-lake.raises.store-catalog-unavailable": {
+            "environment": null,
+            "expectation": "open_lake refuses with STORE_CATALOG_UNAVAILABLE",
+            "idempotency": false,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "open-lake.raises.store-extension-unavailable": {
+            "environment": {
+              "extensions": {
+                "source": null,
+                "variable": "HOME",
+                "without": []
+              },
+              "variables": {
+                "HTTPS_PROXY": "http://127.0.0.1:1",
+                "HTTP_PROXY": "http://127.0.0.1:1"
+              }
+            },
+            "expectation": "open_lake refuses with STORE_EXTENSION_UNAVAILABLE, in the environment the case declares",
+            "idempotency": false,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "open-lake.raises.store-limits-required": {
+            "environment": null,
+            "expectation": "open_lake refuses with STORE_LIMITS_REQUIRED",
+            "idempotency": false,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "open-lake.raises.store-location-invalid": {
+            "environment": null,
+            "expectation": "open_lake refuses with STORE_LOCATION_INVALID",
+            "idempotency": false,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "open-lake.raises.store-secret-inline": {
+            "environment": null,
+            "expectation": "open_lake refuses with STORE_SECRET_INLINE",
+            "idempotency": false,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "open-lake.raises.store-secret-missing": {
+            "environment": null,
+            "expectation": "open_lake refuses with STORE_SECRET_MISSING",
+            "idempotency": false,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "open-lake.raises.store-source-invalid": {
+            "environment": null,
+            "expectation": "open_lake refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "open-lake.raises.store-tls-required": {
+            "environment": null,
+            "expectation": "open_lake refuses with STORE_TLS_REQUIRED",
+            "idempotency": false,
+            "operation": "open_lake",
+            "since": "1.0"
+          },
+          "read-batch.ends": {
+            "environment": null,
+            "expectation": "every row once, then None; a forged read is refused",
+            "idempotency": false,
+            "operation": "read_batch",
+            "since": "1.0"
+          },
+          "read-batch.raises.store-cancelled": {
+            "environment": null,
+            "expectation": "read_batch refuses with STORE_CANCELLED",
+            "idempotency": false,
+            "operation": "read_batch",
+            "since": "1.0"
+          },
+          "read-batch.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "read_batch refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "read_batch",
+            "since": "1.0"
+          },
+          "read-batch.raises.store-query-failed": {
+            "environment": null,
+            "expectation": "read_batch refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "read_batch",
+            "since": "1.0"
+          },
+          "read-batch.raises.store-timeout": {
+            "environment": null,
+            "expectation": "read_batch refuses with STORE_TIMEOUT",
+            "idempotency": false,
+            "operation": "read_batch",
+            "since": "1.0"
+          },
+          "rollback.discards": {
+            "environment": null,
+            "expectation": "a rolled-back transaction writes nothing and is let go",
+            "idempotency": false,
+            "operation": "rollback",
+            "since": "1.0"
+          },
+          "rollback.idempotent": {
+            "environment": null,
+            "expectation": "one key rolls back once",
+            "idempotency": true,
+            "operation": "rollback",
+            "since": "1.0"
+          },
+          "rollback.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "rollback refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "rollback",
+            "since": "1.0"
+          },
+          "snapshot.kept-or-none": {
+            "environment": null,
+            "expectation": "a kept snapshot is found; an unknown or negative id is None",
+            "idempotency": false,
+            "operation": "snapshot",
+            "since": "1.0"
+          },
+          "snapshot.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "snapshot refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "snapshot",
+            "since": "1.0"
+          },
+          "start-clickhouse-read.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "start_clickhouse_read refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "start_clickhouse_read",
+            "since": "1.0"
+          },
+          "start-clickhouse-read.raises.store-query-failed": {
+            "environment": null,
+            "expectation": "start_clickhouse_read refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "start_clickhouse_read",
+            "since": "1.0"
+          },
+          "start-clickhouse-read.raises.store-statement-invalid": {
+            "environment": null,
+            "expectation": "start_clickhouse_read refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "start_clickhouse_read",
+            "since": "1.0"
+          },
+          "start-existing-read.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "start_existing_read refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "start_existing_read",
+            "since": "1.0"
+          },
+          "start-existing-read.raises.store-query-failed": {
+            "environment": null,
+            "expectation": "start_existing_read refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "start_existing_read",
+            "since": "1.0"
+          },
+          "start-existing-read.raises.store-source-invalid": {
+            "environment": null,
+            "expectation": "start_existing_read refuses with STORE_SOURCE_INVALID",
+            "idempotency": false,
+            "operation": "start_existing_read",
+            "since": "1.0"
+          },
+          "start-existing-read.raises.store-statement-invalid": {
+            "environment": null,
+            "expectation": "start_existing_read refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "start_existing_read",
+            "since": "1.0"
+          },
+          "start-read.exact": {
+            "environment": null,
+            "expectation": "DECIMAL, HUGEINT, TIMESTAMPTZ and NULL are read exactly",
+            "idempotency": false,
+            "operation": "start_read",
+            "since": "1.0"
+          },
+          "start-read.parameters": {
+            "environment": null,
+            "expectation": "a parameter is bound by name with its type",
+            "idempotency": false,
+            "operation": "start_read",
+            "since": "1.0"
+          },
+          "start-read.raises.store-busy": {
+            "environment": null,
+            "expectation": "start_read refuses with STORE_BUSY",
+            "idempotency": false,
+            "operation": "start_read",
+            "since": "1.0"
+          },
+          "start-read.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "start_read refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "start_read",
+            "since": "1.0"
+          },
+          "start-read.raises.store-snapshot-expired": {
+            "environment": null,
+            "expectation": "start_read refuses with STORE_SNAPSHOT_EXPIRED",
+            "idempotency": false,
+            "operation": "start_read",
+            "since": "1.0"
+          },
+          "start-read.raises.store-snapshot-not-found": {
+            "environment": null,
+            "expectation": "start_read refuses with STORE_SNAPSHOT_NOT_FOUND",
+            "idempotency": false,
+            "operation": "start_read",
+            "since": "1.0"
+          },
+          "start-read.raises.store-statement-invalid": {
+            "environment": null,
+            "expectation": "start_read refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "start_read",
+            "since": "1.0"
+          },
+          "statistics.counts": {
+            "environment": null,
+            "expectation": "every row is counted; an unknown table refused",
+            "idempotency": false,
+            "operation": "statistics",
+            "since": "1.0"
+          },
+          "statistics.raises.store-busy": {
+            "environment": null,
+            "expectation": "statistics refuses with STORE_BUSY",
+            "idempotency": false,
+            "operation": "statistics",
+            "since": "1.0"
+          },
+          "statistics.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "statistics refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "statistics",
+            "since": "1.0"
+          },
+          "statistics.raises.store-snapshot-expired": {
+            "environment": null,
+            "expectation": "statistics refuses with STORE_SNAPSHOT_EXPIRED",
+            "idempotency": false,
+            "operation": "statistics",
+            "since": "1.0"
+          },
+          "statistics.raises.store-snapshot-not-found": {
+            "environment": null,
+            "expectation": "statistics refuses with STORE_SNAPSHOT_NOT_FOUND",
+            "idempotency": false,
+            "operation": "statistics",
+            "since": "1.0"
+          },
+          "statistics.raises.store-statement-invalid": {
+            "environment": null,
+            "expectation": "statistics refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "statistics",
+            "since": "1.0"
+          },
+          "table-columns.as-of": {
+            "environment": null,
+            "expectation": "the columns as of the snapshot asked",
+            "idempotency": false,
+            "operation": "table_columns",
+            "since": "1.0"
+          },
+          "table-columns.raises.store-busy": {
+            "environment": null,
+            "expectation": "table_columns refuses with STORE_BUSY",
+            "idempotency": false,
+            "operation": "table_columns",
+            "since": "1.0"
+          },
+          "table-columns.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "table_columns refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "table_columns",
+            "since": "1.0"
+          },
+          "table-columns.raises.store-snapshot-expired": {
+            "environment": null,
+            "expectation": "table_columns refuses with STORE_SNAPSHOT_EXPIRED",
+            "idempotency": false,
+            "operation": "table_columns",
+            "since": "1.0"
+          },
+          "table-columns.raises.store-snapshot-not-found": {
+            "environment": null,
+            "expectation": "table_columns refuses with STORE_SNAPSHOT_NOT_FOUND",
+            "idempotency": false,
+            "operation": "table_columns",
+            "since": "1.0"
+          },
+          "tables.lower-cased": {
+            "environment": null,
+            "expectation": "every table, lower-cased, in order",
+            "idempotency": false,
+            "operation": "tables",
+            "since": "1.0"
+          },
+          "tables.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "tables refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "tables",
+            "since": "1.0"
+          },
+          "value.first-cell": {
+            "environment": null,
+            "expectation": "the first cell as text; None when there is no row",
+            "idempotency": false,
+            "operation": "value",
+            "since": "1.0"
+          },
+          "value.raises.store-cancelled": {
+            "environment": null,
+            "expectation": "value refuses with STORE_CANCELLED",
+            "idempotency": false,
+            "operation": "value",
+            "since": "1.0"
+          },
+          "value.raises.store-parameter-invalid": {
+            "environment": null,
+            "expectation": "value refuses with STORE_PARAMETER_INVALID",
+            "idempotency": false,
+            "operation": "value",
+            "since": "1.0"
+          },
+          "value.raises.store-query-failed": {
+            "environment": null,
+            "expectation": "value refuses with STORE_QUERY_FAILED",
+            "idempotency": false,
+            "operation": "value",
+            "since": "1.0"
+          },
+          "value.raises.store-statement-invalid": {
+            "environment": null,
+            "expectation": "value refuses with STORE_STATEMENT_INVALID",
+            "idempotency": false,
+            "operation": "value",
+            "since": "1.0"
+          },
+          "value.raises.store-timeout": {
+            "environment": null,
+            "expectation": "value refuses with STORE_TIMEOUT",
+            "idempotency": false,
+            "operation": "value",
+            "since": "1.0"
+          }
+        },
+        "recorded": 156
+      },
+      "name": "store",
+      "operations": {
+        "begin": {
+          "capability": "write",
+          "changes_state": true,
+          "errors": [
+            "STORE_BUSY",
+            "STORE_PARAMETER_INVALID",
+            "STORE_STATEMENT_INVALID",
+            "STORE_TIMEOUT"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.LakeHandle"
+            }
+          ],
+          "returns": "orvex.contracts.store.values.TransactionHandle",
+          "since": "1.0"
+        },
+        "cancel_read": {
+          "capability": "read",
+          "changes_state": true,
+          "errors": [
+            "STORE_PARAMETER_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "read",
+              "type": "orvex.contracts.store.values.ReadHandle"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "cancel_transaction": {
+          "capability": "write",
+          "changes_state": true,
+          "errors": [
+            "STORE_PARAMETER_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "transaction",
+              "type": "orvex.contracts.store.values.TransactionHandle"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "changes": {
+          "capability": "lake",
+          "changes_state": false,
+          "errors": [
+            "STORE_BUSY",
+            "STORE_PARAMETER_INVALID",
+            "STORE_SNAPSHOT_EXPIRED",
+            "STORE_SNAPSHOT_NOT_FOUND",
+            "STORE_STATEMENT_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.LakeHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "request",
+              "type": "orvex.contracts.store.v1.ChangesRequest"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.ChangesResult",
+          "since": "1.0"
+        },
+        "check_apart": {
+          "capability": "separation",
+          "changes_state": false,
+          "errors": [
+            "STORE_SOURCE_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "name",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "data_path",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "catalog",
+              "type": "str | None"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "protected",
+              "type": "tuple[str, ...]"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "protected_files",
+              "type": "tuple[str, ...]"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "clickhouse_catalog": {
+          "capability": "clickhouse",
+          "changes_state": false,
+          "errors": [
+            "STORE_PARAMETER_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "engine",
+              "type": "orvex.contracts.store.values.ClickHouseHandle"
+            }
+          ],
+          "returns": "orvex.contracts.store.values.ClickHouseCatalog",
+          "since": "1.0"
+        },
+        "clickhouse_columns": {
+          "capability": "clickhouse",
+          "changes_state": false,
+          "errors": [
+            "SOURCE_NOT_FOUND",
+            "STORE_PARAMETER_INVALID",
+            "UNSUPPORTED_SOURCE_TYPE"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "engine",
+              "type": "orvex.contracts.store.values.ClickHouseHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "table",
+              "type": "str"
+            }
+          ],
+          "returns": "tuple[orvex.contracts.store.values.SourceColumn, ...]",
+          "since": "1.0"
+        },
+        "clickhouse_estimate": {
+          "capability": "clickhouse",
+          "changes_state": false,
+          "errors": [
+            "STORE_PARAMETER_INVALID",
+            "STORE_STATEMENT_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "engine",
+              "type": "orvex.contracts.store.values.ClickHouseHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "sql",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "parameters",
+              "type": "tuple[orvex.contracts.store.v1.Parameter, ...]"
+            }
+          ],
+          "returns": "tuple[dict[str, str | int | float | bool | None], ...]",
+          "since": "1.0"
+        },
+        "clickhouse_now": {
+          "capability": "clickhouse",
+          "changes_state": false,
+          "errors": [
+            "STORE_PARAMETER_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "engine",
+              "type": "orvex.contracts.store.values.ClickHouseHandle"
+            }
+          ],
+          "returns": "datetime.datetime",
+          "since": "1.0"
+        },
+        "close_clickhouse": {
+          "capability": "clickhouse",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "engine",
+              "type": "orvex.contracts.store.values.ClickHouseHandle"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "close_existing_lake": {
+          "capability": "existing-lake",
+          "changes_state": true,
+          "errors": [
+            "STORE_PARAMETER_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.ExistingLakeHandle"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "close_lake": {
+          "capability": "lake",
+          "changes_state": true,
+          "errors": [
+            "STORE_PARAMETER_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.LakeHandle"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "close_read": {
+          "capability": "read",
+          "changes_state": true,
+          "errors": [
+            "STORE_PARAMETER_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "read",
+              "type": "orvex.contracts.store.values.ReadHandle"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "commit": {
+          "capability": "write",
+          "changes_state": true,
+          "errors": [
+            "STORE_CANCELLED",
+            "STORE_PARAMETER_INVALID",
+            "STORE_QUERY_FAILED",
+            "STORE_TIMEOUT",
+            "STORE_TRANSACTION_CONFLICT"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "transaction",
+              "type": "orvex.contracts.store.values.TransactionHandle"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.CommitResult",
+          "since": "1.0"
+        },
+        "connect_clickhouse": {
+          "capability": "clickhouse",
+          "changes_state": false,
+          "errors": [
+            "ENGINE_SETTING_REQUIRED",
+            "ENGINE_VERSION_UNTESTED",
+            "SOURCE_NOT_READ_ONLY",
+            "STORE_CONNECTION_FAILED",
+            "STORE_SECRET_MISSING",
+            "STORE_TLS_REQUIRED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "target",
+              "type": "orvex.contracts.store.values.ClickHouseTarget"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "budget",
+              "type": "orvex.contracts.store.values.Budget"
+            }
+          ],
+          "returns": "orvex.contracts.store.values.ClickHouseHandle",
+          "since": "1.0"
+        },
+        "current_snapshot": {
+          "capability": "lake",
+          "changes_state": false,
+          "errors": [
+            "STORE_PARAMETER_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.LakeHandle"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.Snapshot",
+          "since": "1.0"
+        },
+        "describe": {
+          "capability": "lake",
+          "changes_state": false,
+          "errors": [
+            "STORE_PARAMETER_INVALID",
+            "STORE_QUERY_FAILED",
+            "STORE_STATEMENT_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.LakeHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "sql",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "parameters",
+              "type": "tuple[orvex.contracts.store.v1.Parameter, ...]"
+            }
+          ],
+          "returns": "tuple[tuple[str, str], ...]",
+          "since": "1.0"
+        },
+        "describe_source": {
+          "capability": "lake",
+          "changes_state": false,
+          "errors": [
+            "STORE_PARAMETER_INVALID",
+            "STORE_QUERY_FAILED",
+            "STORE_SOURCE_INVALID",
+            "STORE_STATEMENT_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.LakeHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "name",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "sql",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "parameters",
+              "type": "tuple[orvex.contracts.store.v1.Parameter, ...]"
+            }
+          ],
+          "returns": "tuple[tuple[str, str], ...]",
+          "since": "1.0"
+        },
+        "execute": {
+          "capability": "write",
+          "changes_state": true,
+          "errors": [
+            "STORE_CANCELLED",
+            "STORE_PARAMETER_INVALID",
+            "STORE_QUERY_FAILED",
+            "STORE_STATEMENT_INVALID",
+            "STORE_TIMEOUT"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "transaction",
+              "type": "orvex.contracts.store.values.TransactionHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "request",
+              "type": "orvex.contracts.store.v1.StatementRequest"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "existing_committed_at": {
+          "capability": "existing-lake",
+          "changes_state": false,
+          "errors": [
+            "STORE_PARAMETER_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.ExistingLakeHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "snapshot",
+              "type": "int"
+            }
+          ],
+          "returns": "datetime.datetime | None",
+          "since": "1.0"
+        },
+        "existing_latest": {
+          "capability": "existing-lake",
+          "changes_state": false,
+          "errors": [
+            "STORE_PARAMETER_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.ExistingLakeHandle"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.Snapshot",
+          "since": "1.0"
+        },
+        "existing_table_columns": {
+          "capability": "existing-lake",
+          "changes_state": false,
+          "errors": [
+            "STORE_PARAMETER_INVALID",
+            "STORE_SOURCE_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.ExistingLakeHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "snapshot",
+              "type": "orvex.contracts.store.v1.Snapshot"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.TablesResult",
+          "since": "1.0"
+        },
+        "existing_verify": {
+          "capability": "existing-lake",
+          "changes_state": false,
+          "errors": [
+            "STORE_PARAMETER_INVALID",
+            "STORE_SOURCE_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.ExistingLakeHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "snapshot",
+              "type": "orvex.contracts.store.v1.Snapshot"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "current",
+              "type": "orvex.contracts.store.v1.ExistingLakeAttachment"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.Snapshot",
+          "since": "1.0"
+        },
+        "existing_views": {
+          "capability": "existing-lake",
+          "changes_state": false,
+          "errors": [
+            "STORE_PARAMETER_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.ExistingLakeHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "snapshot",
+              "type": "orvex.contracts.store.v1.Snapshot"
+            }
+          ],
+          "returns": "tuple[str, ...]",
+          "since": "1.0"
+        },
+        "held": {
+          "capability": "lake",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            }
+          ],
+          "returns": "orvex.contracts.store.values.Held",
+          "since": "1.0"
+        },
+        "is_object_storage": {
+          "capability": "separation",
+          "changes_state": false,
+          "errors": [],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "location",
+              "type": "str"
+            }
+          ],
+          "returns": "bool",
+          "since": "1.0"
+        },
+        "json_frame": {
+          "capability": "encoding",
+          "changes_state": false,
+          "errors": [
+            "STORE_TYPE_UNSUPPORTED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "schema",
+              "type": "pyarrow.lib.Table"
+            }
+          ],
+          "returns": "orvex.contracts.store.values.JsonFrame",
+          "since": "1.0"
+        },
+        "json_rows": {
+          "capability": "encoding",
+          "changes_state": false,
+          "errors": [
+            "STORE_TYPE_UNSUPPORTED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "rows",
+              "type": "pyarrow.lib.Table"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "first",
+              "type": "bool"
+            }
+          ],
+          "returns": "tuple[str, ...]",
+          "since": "1.0"
+        },
+        "land": {
+          "capability": "write",
+          "changes_state": true,
+          "errors": [
+            "STORE_CANCELLED",
+            "STORE_PARAMETER_INVALID",
+            "STORE_QUERY_FAILED",
+            "STORE_SOURCE_INVALID",
+            "STORE_TIMEOUT"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "transaction",
+              "type": "orvex.contracts.store.values.TransactionHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "source",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "sql",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "parameters",
+              "type": "tuple[orvex.contracts.store.v1.Parameter, ...]"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "schema",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "table",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "timeout_ms",
+              "type": "int | None"
+            }
+          ],
+          "returns": "int",
+          "since": "1.0"
+        },
+        "load_arrow": {
+          "capability": "write",
+          "changes_state": true,
+          "errors": [
+            "STORE_CANCELLED",
+            "STORE_PARAMETER_INVALID",
+            "STORE_QUERY_FAILED",
+            "STORE_TIMEOUT"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "transaction",
+              "type": "orvex.contracts.store.values.TransactionHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "schema",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "table",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "data",
+              "type": "pyarrow.lib.Table"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "columns",
+              "type": "tuple[tuple[str, str], ...]"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "timeout_ms",
+              "type": "int | None"
+            }
+          ],
+          "returns": "int",
+          "since": "1.0"
+        },
+        "location_components": {
+          "capability": "separation",
+          "changes_state": false,
+          "errors": [
+            "STORE_SOURCE_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "name",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "location",
+              "type": "str"
+            }
+          ],
+          "returns": "tuple[str, ...]",
+          "since": "1.0"
+        },
+        "locations_overlap": {
+          "capability": "separation",
+          "changes_state": false,
+          "errors": [
+            "STORE_SOURCE_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "name",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "first",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "second",
+              "type": "str"
+            }
+          ],
+          "returns": "bool",
+          "since": "1.0"
+        },
+        "maintain": {
+          "capability": "maintenance",
+          "changes_state": true,
+          "errors": [
+            "STORE_BUSY",
+            "STORE_PARAMETER_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.LakeHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "expire_before",
+              "type": "datetime.datetime"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "orphans_before",
+              "type": "datetime.datetime"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.MaintenanceReport",
+          "since": "1.0"
+        },
+        "open_existing_lake": {
+          "capability": "existing-lake",
+          "changes_state": true,
+          "errors": [
+            "ENGINE_VERSION_UNTESTED",
+            "STORE_CONNECTION_FAILED",
+            "STORE_EXTENSION_UNAVAILABLE",
+            "STORE_LIMITS_REQUIRED",
+            "STORE_LOCATION_INVALID",
+            "STORE_SECRET_MISSING",
+            "STORE_SOURCE_INVALID",
+            "STORE_TLS_REQUIRED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "attachment",
+              "type": "orvex.contracts.store.v1.ExistingLakeAttachment"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "limits",
+              "type": "orvex.contracts.store.values.ExistingLakeLimits"
+            }
+          ],
+          "returns": "orvex.contracts.store.values.ExistingLakeHandle",
+          "since": "1.0"
+        },
+        "open_lake": {
+          "capability": "lake",
+          "changes_state": true,
+          "errors": [
+            "SOURCE_NOT_FOUND",
+            "STORE_CATALOG_UNAVAILABLE",
+            "STORE_EXTENSION_UNAVAILABLE",
+            "STORE_LIMITS_REQUIRED",
+            "STORE_LOCATION_INVALID",
+            "STORE_SECRET_INLINE",
+            "STORE_SECRET_MISSING",
+            "STORE_SOURCE_INVALID",
+            "STORE_TLS_REQUIRED"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "location",
+              "type": "orvex.contracts.store.v1.LocalLakeLocation | orvex.contracts.store.v1.SqliteLakeLocation | orvex.contracts.store.v1.PostgresLakeLocation"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "limits",
+              "type": "orvex.contracts.store.values.Limits"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "sources",
+              "type": "tuple[orvex.contracts.store.v1.FileSourceAttachment | orvex.contracts.store.v1.SqliteSourceAttachment | orvex.contracts.store.v1.PostgresSourceAttachment, ...]"
+            }
+          ],
+          "returns": "orvex.contracts.store.values.LakeHandle",
+          "since": "1.0"
+        },
+        "read_batch": {
+          "capability": "read",
+          "changes_state": false,
+          "errors": [
+            "STORE_CANCELLED",
+            "STORE_PARAMETER_INVALID",
+            "STORE_QUERY_FAILED",
+            "STORE_TIMEOUT"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "read",
+              "type": "orvex.contracts.store.values.ReadHandle"
+            }
+          ],
+          "returns": "pyarrow.lib.Table | None",
+          "since": "1.0"
+        },
+        "rollback": {
+          "capability": "write",
+          "changes_state": true,
+          "errors": [
+            "STORE_PARAMETER_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "transaction",
+              "type": "orvex.contracts.store.values.TransactionHandle"
+            }
+          ],
+          "returns": "None",
+          "since": "1.0"
+        },
+        "snapshot": {
+          "capability": "lake",
+          "changes_state": false,
+          "errors": [
+            "STORE_PARAMETER_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.LakeHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "snapshot_id",
+              "type": "int"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.Snapshot | None",
+          "since": "1.0"
+        },
+        "start_clickhouse_read": {
+          "capability": "clickhouse",
+          "changes_state": false,
+          "errors": [
+            "STORE_PARAMETER_INVALID",
+            "STORE_QUERY_FAILED",
+            "STORE_STATEMENT_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "engine",
+              "type": "orvex.contracts.store.values.ClickHouseHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "sql",
+              "type": "str"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "parameters",
+              "type": "tuple[orvex.contracts.store.v1.Parameter, ...]"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "columns",
+              "type": "tuple[tuple[str, str], ...]"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "timeout_ms",
+              "type": "int | None"
+            }
+          ],
+          "returns": "orvex.contracts.store.values.ReadHandle",
+          "since": "1.0"
+        },
+        "start_existing_read": {
+          "capability": "existing-lake",
+          "changes_state": false,
+          "errors": [
+            "STORE_PARAMETER_INVALID",
+            "STORE_QUERY_FAILED",
+            "STORE_SOURCE_INVALID",
+            "STORE_STATEMENT_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.ExistingLakeHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "request",
+              "type": "orvex.contracts.store.v1.ReadRequest"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "committed_at",
+              "type": "datetime.datetime"
+            }
+          ],
+          "returns": "orvex.contracts.store.values.ReadHandle",
+          "since": "1.0"
+        },
+        "start_read": {
+          "capability": "read",
+          "changes_state": false,
+          "errors": [
+            "STORE_BUSY",
+            "STORE_PARAMETER_INVALID",
+            "STORE_SNAPSHOT_EXPIRED",
+            "STORE_SNAPSHOT_NOT_FOUND",
+            "STORE_STATEMENT_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.LakeHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "request",
+              "type": "orvex.contracts.store.v1.ReadRequest"
+            }
+          ],
+          "returns": "orvex.contracts.store.values.ReadHandle",
+          "since": "1.0"
+        },
+        "statistics": {
+          "capability": "lake",
+          "changes_state": false,
+          "errors": [
+            "STORE_BUSY",
+            "STORE_PARAMETER_INVALID",
+            "STORE_SNAPSHOT_EXPIRED",
+            "STORE_SNAPSHOT_NOT_FOUND",
+            "STORE_STATEMENT_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.LakeHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "request",
+              "type": "orvex.contracts.store.v1.StatisticsRequest"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.StatisticsResult",
+          "since": "1.0"
+        },
+        "table_columns": {
+          "capability": "lake",
+          "changes_state": false,
+          "errors": [
+            "STORE_BUSY",
+            "STORE_PARAMETER_INVALID",
+            "STORE_SNAPSHOT_EXPIRED",
+            "STORE_SNAPSHOT_NOT_FOUND"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.LakeHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "request",
+              "type": "orvex.contracts.store.v1.TablesRequest"
+            }
+          ],
+          "returns": "orvex.contracts.store.v1.TablesResult",
+          "since": "1.0"
+        },
+        "tables": {
+          "capability": "lake",
+          "changes_state": false,
+          "errors": [
+            "STORE_PARAMETER_INVALID"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "lake",
+              "type": "orvex.contracts.store.values.LakeHandle"
+            }
+          ],
+          "returns": "tuple[tuple[str, str], ...]",
+          "since": "1.0"
+        },
+        "value": {
+          "capability": "write",
+          "changes_state": false,
+          "errors": [
+            "STORE_CANCELLED",
+            "STORE_PARAMETER_INVALID",
+            "STORE_QUERY_FAILED",
+            "STORE_STATEMENT_INVALID",
+            "STORE_TIMEOUT"
+          ],
+          "parameters": [
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "envelope",
+              "type": "orvex.contracts.envelope.CallEnvelope"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "transaction",
+              "type": "orvex.contracts.store.values.TransactionHandle"
+            },
+            {
+              "default": null,
+              "kind": "positional-or-keyword",
+              "name": "request",
+              "type": "orvex.contracts.store.v1.StatementRequest"
+            }
+          ],
+          "returns": "str | None",
+          "since": "1.0"
+        }
+      },
+      "version": "1.0"
+    }
+  }
 }

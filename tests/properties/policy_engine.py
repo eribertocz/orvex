@@ -14,11 +14,11 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from orvex.contracts.store.client import Lake
 from orvex.semantic.compiler.catalog import SourceColumn
 from orvex.semantic.execution import Answer, answer
 from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.semantic.result.cursors import SealedForm
-from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 from conformance.runners.security_engines import column_name

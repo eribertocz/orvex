@@ -160,7 +160,7 @@ def test_a_cycle_through_typing_only_imports_is_not_reported(tmp_path: Path) -> 
 
 
 def test_an_internal_module_importing_the_facade_fails(tmp_path: Path) -> None:
-    root = _package(tmp_path, {"__init__.py": "", "lake.py": "", "x.py": "from . import lake\n"})
+    root = _package(tmp_path, {"__init__.py": "", "api.py": "", "x.py": "from . import api\n"})
     assert _codes(structure.imports(root)) == [("error", "FACADE_IMPORTED")]
 
 
@@ -172,10 +172,10 @@ def test_a_listed_cycle_or_facade_import_passes_and_a_stale_one_fails(tmp_path: 
     )
     files = {
         "__init__.py": "",
-        "lake.py": "",
+        "api.py": "",
         "a.py": "from . import b\n",
         "b.py": "from . import a\n",
-        "x.py": "from . import lake\n",
+        "x.py": "from . import api\n",
     }
     found = structure.imports(_package(tmp_path, files, exceptions))
     assert sorted((f.code, f.path) for f in found) == [

@@ -12,7 +12,7 @@ import re
 from collections.abc import Iterator
 
 import duckdb
-from orvex.store.errors import StoreError
+from orvex.contracts.store.errors import StoreError
 from orvex.store.sql_parser import _parser
 
 _GLOB = re.compile(r"[*?\[]")

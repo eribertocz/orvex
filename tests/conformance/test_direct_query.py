@@ -18,6 +18,7 @@ import jsonschema
 import pyarrow as pa
 import pytest
 import yaml
+from orvex.contracts.store.client import Lake
 from orvex.contracts.store.v1 import Parameter, ReadRequest, StatementRequest
 from orvex.semantic.adapters.duckdb import PhysicalQuery, PolicyValues, compile_plan
 from orvex.semantic.compiler.compiled import compile_model
@@ -33,7 +34,6 @@ from orvex.semantic.execution import Answer, Progress, answer, prepare
 from orvex.semantic.ossie.reader import read
 from orvex.semantic.policies import PolicyModel, read_policies
 from orvex.semantic.receipt.viewer import CallerViewer
-from orvex.store.lake import Lake
 
 from conformance.runners import corpus_execution as ce
 from tests.conformance import test_row_policies as rp

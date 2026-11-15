@@ -83,6 +83,8 @@ select = [
 "tools/**/*.py" = ["T20"]
 # Conformance runners are command-line programs that report through stdout.
 "conformance/runners/*.py" = ["T20"]
+# A module's own benchmarks of its internals are command-line programs that report through stdout.
+"packages/*/benchmarks/*.py" = ["T20"]
 # The command line prints its user-facing output.
 "packages/server/src/*/server/cli.py" = ["T20"]
 # Generated contract types carry the contracts' descriptions verbatim.

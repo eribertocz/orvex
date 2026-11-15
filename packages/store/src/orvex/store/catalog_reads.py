@@ -11,8 +11,8 @@ from collections.abc import Callable
 from typing import Any
 
 import duckdb
+from orvex.contracts.store.errors import StoreError
 from orvex.contracts.store.v1 import TableStatistics
-from orvex.store.errors import StoreError
 from orvex.store.lake_names import LAKE
 from orvex.store.sql_text import identifier as _identifier
 

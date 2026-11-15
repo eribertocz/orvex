@@ -7,8 +7,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from orvex.contracts.store.errors import StoreError, source_not_found
 from orvex.contracts.store.v1 import SqliteSourceAttachment
-from orvex.store.errors import StoreError, _source_not_found
 
 
 def sqlite_backup(source: SqliteSourceAttachment, copy: Path) -> None:
@@ -16,7 +16,7 @@ def sqlite_backup(source: SqliteSourceAttachment, copy: Path) -> None:
     pages only, no statement and no schema SQL is run on the original."""
     path = Path(source.path)
     if not path.is_file():
-        raise _source_not_found(source)
+        raise source_not_found(source)
     uri = path.absolute().as_uri() + "?mode=ro"
     try:
         original = sqlite3.connect(uri, uri=True)

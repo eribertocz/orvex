@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import IO
 
+from orvex.contracts.store.errors import StoreError
 from orvex.server import lake_open, lake_place, project_check, semantic_model
 from orvex.server.error_problems import _load_problem, _store_problem
 from orvex.server.identity import load_identity
@@ -13,7 +14,6 @@ from orvex.server.locking import ProjectLocked, project_lock
 from orvex.server.problems import Problem
 from orvex.server.project import ProjectLoadError
 from orvex.server.project_check import Checked
-from orvex.store.errors import StoreError
 from orvex.transform.graph import compiled_sql
 
 

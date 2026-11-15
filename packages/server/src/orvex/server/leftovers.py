@@ -5,8 +5,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from orvex.contracts.store.client import Lake
 from orvex.contracts.store.v1 import Parameter, ParameterType, StatementRequest
-from orvex.store.lake import Lake
 from orvex.transform.incremental import WATERMARKS
 from orvex.transform.models import NAME, Model
 

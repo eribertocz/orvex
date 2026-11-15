@@ -21,7 +21,7 @@ from orvex.server import commands, semantic_http
 from orvex.server.app import LocalSemantic, create_app
 from orvex.server.local_access import LocalAccess, new_access, serving
 from orvex.server.project import load_project
-from orvex.store.json_encoding import arrow_to_json
+from orvex.server.store_access import store
 
 from tests.support.semantic_http import (
     BASE,
@@ -390,7 +390,7 @@ def assert_equivalent(as_json: dict[str, Any], table: pa.Table) -> None:
     assert metadata[semantic_http.RECEIPT_KEY] == canonicalize(as_json["receipt"])
     assert json.loads(metadata[b"semantic.cell_states"]) == result.get("cell_states", [])
     text = "".join(
-        arrow_to_json(pa.RecordBatchReader.from_batches(table.schema, table.to_batches()))
+        store().arrow_to_json(pa.RecordBatchReader.from_batches(table.schema, table.to_batches()))
     )
     values = json.loads(text)["rows"]
     states = {(s["row"], s["column"]) for s in result.get("cell_states", [])}
@@ -577,7 +577,7 @@ def test_the_exchange_never_redirects_to_another_host() -> None:
 
 
 def test_a_store_failure_is_a_500_with_a_request_id_only() -> None:
-    from orvex.store.errors import StoreError
+    from orvex.contracts.store.errors import StoreError
 
     class Failing:
         def session(self) -> Any:  # noqa: ANN401
@@ -610,7 +610,7 @@ def test_a_lakes_data_refused_by_the_store_is_a_503_with_its_code_and_nothing_el
     """#447 (SEC-DQ-010, -011, -014, -015): an existing lake whose data does not pass its checks
     reaches the caller as `STORE_SOURCE_INVALID` with the connection, never as an internal
     error, and nothing of the store's message or details (files, DuckDB) comes with it."""
-    from orvex.store.errors import StoreError
+    from orvex.contracts.store.errors import StoreError
 
     class Refused:
         def session(self) -> Any:  # noqa: ANN401
@@ -669,7 +669,7 @@ def test_cell_states_and_the_others_row_are_the_same_in_arrow_and_json() -> None
     states = [CellState(2, 0, "others"), CellState(2, 2, "undefined_at_total")]
     result = built(data, columns, states=states, others_row=2)
     receipt = {"kind": "receipt"}
-    document = {"result": json.loads(result.wire(arrow_to_json)), "receipt": receipt}
+    document = {"result": json.loads(result.wire(store().arrow_to_json)), "receipt": receipt}
     sink = pa.BufferOutputStream()
     answer = semantic_http.arrow_answer(result, receipt)
     with pa.ipc.new_stream(sink, answer.schema) as writer:

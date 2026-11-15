@@ -47,6 +47,8 @@ from orvex.access.server_context import (
     role_of,
 )
 from orvex.access.storage.store import Store
+from orvex.contracts.store.client import Lake
+from orvex.contracts.store.errors import StoreError
 from orvex.semantic.catalog.building import catalog_for_context
 from orvex.semantic.errors import SemanticError
 from orvex.semantic.execution import Answer, Engine, answer
@@ -65,9 +67,7 @@ from orvex.server.project import Project, ProjectLoadError, load_project
 from orvex.server.query_cancel import Cancel
 from orvex.server.query_slots import QuerySlots, Slot
 from orvex.server.semantic_model import ExternalTables
-from orvex.store.errors import StoreError
-from orvex.store.json_encoding import arrow_to_json
-from orvex.store.lake import Lake
+from orvex.server.store_access import store
 
 ARROW = "application/vnd.apache.arrow.stream"
 ENVELOPE_KEY = b"semantic.envelope"
@@ -332,7 +332,7 @@ class Asked:
     context: Mapping[str, Any] = field(default_factory=dict)
 
     def json_document(self) -> dict[str, Any]:
-        result: dict[str, Any] = json.loads(self.found.result.wire(arrow_to_json))
+        result: dict[str, Any] = json.loads(self.found.result.wire(store().arrow_to_json))
         return {"result": result, "receipt": self.receipt}
 
     def arrow_table(self) -> pa.Table:
@@ -402,7 +402,7 @@ def _question(
 
     engine = Engine(
         read=read,
-        encoder=arrow_to_json,
+        encoder=store().arrow_to_json,
         snapshot=pinned,
         engine_version=settings.engine_version,
         result_key=settings.result_key,
