@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import os
-import select
+import selectors
 import signal
 import socket
 import threading
@@ -56,16 +56,18 @@ def _on_ctrl_c(on_interrupt: Callable[[], None] | None, pressed: list[bool]) -> 
         return lambda: None
 
     def watch() -> None:
-        while not stop.is_set():
-            ready, _, _ = select.select([receiver], [], [], 0.2)
-            if not ready:
-                continue
-            with contextlib.suppress(OSError):
-                received = receiver.recv(256)
-                if earlier != -1:
-                    os.write(earlier, received)  # whoever watched signals before still sees them
-                if signal.SIGINT in received:
-                    interrupt()
+        # A selector, not `select.select`: a process with 1,024 open files or more is fine.
+        with selectors.DefaultSelector() as selector:
+            selector.register(receiver, selectors.EVENT_READ)
+            while not stop.is_set():
+                if not selector.select(0.2):
+                    continue
+                with contextlib.suppress(OSError):
+                    received = receiver.recv(256)
+                    if earlier != -1:  # whoever watched signals before still sees them
+                        os.write(earlier, received)
+                    if signal.SIGINT in received:
+                        interrupt()
 
     watcher = threading.Thread(target=watch, name="load-ctrl-c", daemon=True)
     watcher.start()
