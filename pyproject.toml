@@ -9,7 +9,7 @@ runtime = [
   "argon2-cffi==25.1.0",
   "cryptography==50.0.2",
   "duckdb==2.0.0",
-  "fastapi==0.162.3",
+  "fastapi==0.162.7",
   "jsonschema==4.26.0",
   "pg8000==1.31.6",
   "pyarrow==26.0.1",
