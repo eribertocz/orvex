@@ -33,7 +33,7 @@ dev = [
   "ruff==0.17.4",
   "setuptools==84.2.1",
   "types-jsonschema==4.26.0.20261006",
-  "types-pyyaml==6.0.12.20261103",
+  "types-pyyaml==6.0.12.20261113",
 ]
 
 # Branch coverage of the critical sources (#429): measured on the whole suite only, the same on
