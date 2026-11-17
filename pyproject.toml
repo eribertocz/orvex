@@ -20,7 +20,7 @@ runtime = [
 ]
 dev = [
   "coverage==7.17.2",
-  "datamodel-code-generator==0.92.0",
+  "datamodel-code-generator==0.96.0",
   "flask==3.1.3",
   "flask-cors==6.0.5",
   "httpx2==2.16.0",
