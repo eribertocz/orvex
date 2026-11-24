@@ -2,14 +2,14 @@
 # Built in CI on pull requests that change it (job `docker-build`); not published (P9-08).
 
 # python:3.15.2-slim-trixie (digest from docker-library/repo-info, 2026-10-27)
-FROM python:3.15.2-slim-trixie@sha256:197f6622a70b727a4e61bdac13a73b4e2b914b896aa5a729ceb1f45a09bde5fa AS build
+FROM python:3.15.2-slim-trixie@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928 AS build
 WORKDIR /source
 COPY packages/ packages/
 RUN for package in packages/*/; do \
         python -m pip wheel --no-cache-dir --no-deps --wheel-dir /wheels "$package"; \
     done
 
-FROM python:3.15.2-slim-trixie@sha256:197f6622a70b727a4e61bdac13a73b4e2b914b896aa5a729ceb1f45a09bde5fa
+FROM python:3.15.2-slim-trixie@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 COPY --from=build /wheels /wheels
 RUN python -m pip install --no-cache-dir /wheels/*.whl \
     && rm -rf /wheels \
